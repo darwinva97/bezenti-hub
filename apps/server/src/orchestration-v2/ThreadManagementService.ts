@@ -60,6 +60,7 @@ import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as Path from "effect/Path";
@@ -764,6 +765,8 @@ const makeWith = Effect.fn("ThreadManagementService.make")(function* (
     ensureProjectionTranscript(threadId).pipe(
       Effect.andThen(orchestrator.getThreadSnapshot(threadId)),
     );
+  // Full-thread exports can otherwise hold every SQLite reader and stall ordinary thread opens.
+  const transcriptExportPermits = yield* Semaphore.make(2);
   const getThreadTranscript = Effect.fn("orchestrationV2.threadManagement.getThreadTranscript")(
     function* (threadId: ThreadId) {
       const { projection } = yield* getThreadSnapshot(threadId);
@@ -789,6 +792,7 @@ const makeWith = Effect.fn("ThreadManagementService.make")(function* (
       }
       return transcript;
     },
+    transcriptExportPermits.withPermits(1),
   );
   const getThreadSnapshotWindow: ThreadManagementServiceShape["getThreadSnapshotWindow"] = (
     threadId,

@@ -1,3 +1,4 @@
+import { deriveProviderInstanceConfigMap } from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -2050,6 +2051,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       });
 
       const environment = yield* resolveProviderInstanceTerminalEnvironment({
+        deriveProviderInstanceConfigMap,
         serverSettings,
         path,
         rawProviderInstanceId: instanceId,

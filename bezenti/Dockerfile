@@ -84,7 +84,7 @@ RUN mkdir -p /opt/t3 \
  && tar -xzf /tmp/t3.tar.gz -C /opt/t3 --strip-components=1 --no-same-owner \
  && rm /tmp/t3.tar.gz \
  && ln -s /opt/t3/t3 /usr/local/bin/t3 \
- && test "$(t3 --version)" = "$T3_VERSION"
+ && test "$(t3 --version)" = "t3 v$T3_VERSION"
 
 LABEL org.opencontainers.image.source="https://github.com/darwinva97/bezenti-hub" \
       org.opencontainers.image.description="Hub de bezenti (T3 Code Hub)" \

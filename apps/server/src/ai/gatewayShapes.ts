@@ -212,6 +212,28 @@ export const bodyTemplate = (json: Record<string, unknown>) => {
     Buffer.from(`${before}${JSON.stringify(upstreamModel)}${after}`, "utf8");
 };
 
+const asSystem = (items: unknown) =>
+  Array.isArray(items)
+    ? items.map((item: unknown) =>
+        typeof item === "object" &&
+        item !== null &&
+        (item as { readonly role?: unknown }).role === "developer"
+          ? { ...item, role: "system" }
+          : item,
+      )
+    : items;
+
+/**
+ * An OpenAI body for an OpenAI-compatible upstream (DeepSeek, OpenRouter…): OpenAI's `developer`
+ * role as `system`. Those upstreams know the Chat Completions roles only and refuse `developer`,
+ * which Codex sends; CLIProxyAPI passes the role through. Chat `messages` and Responses `input`.
+ */
+export const systemForDeveloper = (json: Record<string, unknown>): Record<string, unknown> => ({
+  ...json,
+  ...(Array.isArray(json.messages) ? { messages: asSystem(json.messages) } : {}),
+  ...(Array.isArray(json.input) ? { input: asSystem(json.input) } : {}),
+});
+
 /** What CLIProxyAPI is asked for: always one account's prefix, never the client's own text. */
 export const upstreamModelOf = (accountId: AiAccountId, model: string) =>
   `${aiAccountPrefixOf(accountId)}/${model}`;

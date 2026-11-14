@@ -255,6 +255,8 @@ export const hubWith = Effect.fn(function* (
                 readonly authOk: boolean;
                 readonly headerNames: ReadonlyArray<string>;
                 readonly bodyKeys: ReadonlyArray<string>;
+                /** The roles of its `messages` (or `input` items), in order. */
+                readonly roles: ReadonlyArray<string>;
               },
           )
       : [];

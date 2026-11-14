@@ -36,6 +36,7 @@ import {
   parseRequestedModel,
   planRoute,
   type RoutableAccount,
+  systemForDeveloper,
   upstreamErrorMessage,
   upstreamModelOf,
 } from "./gatewayShapes.ts";
@@ -491,14 +492,23 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
         route.route.endsWith("/chat/completions") &&
         json.stream === true &&
         streamOptions?.include_usage !== true;
-      const bodyFor =
-        route.pathModel === undefined
-          ? bodyTemplate(
-              askUsage
-                ? { ...json, stream_options: { ...streamOptions, include_usage: true } }
-                : json,
-            )
-          : () => body.success;
+      const asked = askUsage
+        ? { ...json, stream_options: { ...streamOptions, include_usage: true } }
+        : json;
+      const plainBody = route.pathModel === undefined ? bodyTemplate(asked) : () => body.success;
+      // An OpenAI-compatible upstream is asked with `system` for `developer`; written at most once.
+      let compatibleBody: ReturnType<typeof bodyTemplate> | undefined;
+      const bodyFor = (account: RoutableAccount, upstreamModel: string) => {
+        if (
+          shape !== "openai" ||
+          route.pathModel !== undefined ||
+          account.provider !== "openai-compatible"
+        ) {
+          return plainBody(upstreamModel);
+        }
+        compatibleBody ??= bodyTemplate(systemForDeveloper(asked));
+        return compatibleBody(upstreamModel);
+      };
       const forwarded: Record<string, string> = {};
       for (const name of FORWARDED_REQUEST_HEADERS) {
         const value = request.headers[name];
@@ -515,7 +525,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
             ).pipe(
               HttpClientRequest.setHeaders({ ...forwarded, "accept-encoding": "identity" }),
               HttpClientRequest.bearerToken(Redacted.value(endpoint.value.clientKey)),
-              HttpClientRequest.bodyUint8Array(bodyFor(upstreamModel), "application/json"),
+              HttpClientRequest.bodyUint8Array(bodyFor(account, upstreamModel), "application/json"),
             ),
           )
           .pipe(

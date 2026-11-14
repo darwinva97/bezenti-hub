@@ -275,7 +275,7 @@ if (mode === "decoy") {
         try { body = JSON.parse(raw.toString("utf8") || "{}"); } catch { body = {}; }
         const model = geminiCall !== null ? decodeURIComponent(geminiCall[1]) : String(body.model ?? "");
         const authOk = auth === "Bearer " + clientKey;
-        fs.appendFileSync(path.join(dir, "fake-ai-requests.jsonl"), JSON.stringify({ path: aiUrl.pathname, search: aiUrl.search, model, authOk, headerNames: Object.keys(request.headers).sort(), bodyKeys: Object.keys(body).sort() }) + String.fromCharCode(10));
+        fs.appendFileSync(path.join(dir, "fake-ai-requests.jsonl"), JSON.stringify({ path: aiUrl.pathname, search: aiUrl.search, model, authOk, headerNames: Object.keys(request.headers).sort(), bodyKeys: Object.keys(body).sort(), roles: (Array.isArray(body.messages) ? body.messages : Array.isArray(body.input) ? body.input : []).map((item) => item && item.role).filter((role) => typeof role === "string") }) + String.fromCharCode(10));
         if (!authOk) return send(response, 401, { error: { message: "Missing API key" } });
         if (![...modelIds(), ...tokenModelIds()].includes(model)) return send(response, 400, { error: { message: "unknown provider for model " + model } });
         const accountId = model.slice("acct-".length, model.indexOf("/"));

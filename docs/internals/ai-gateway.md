@@ -317,7 +317,10 @@ rest, so any other door (ticket 06's relay included) reuses it.
   an SSE event or a JSON-array element (Gemini's stream without `alt=sse`), and reads the tokens
   (SSE events, array elements, a plain answer whole up to 1 MiB, past that its tail). An OpenAI
   chat stream without `stream_options.include_usage` gets it from the Hub, and the usage chunk the
-  client did not ask for is dropped. An upstream error is answered in the client's shape: the provider's words
+  client did not ask for is dropped. An OpenAI-compatible account (DeepSeek, OpenRouter…) is asked
+  with the role `system` where the client said `developer`, in chat `messages` and Responses
+  `input`: those upstreams refuse `developer` (422), which Codex sends, and CLIProxyAPI passes the
+  role through. An upstream error is answered in the client's shape: the provider's words
   for a 4xx (emails, URLs, keys, token shapes and `acct-…/` removed), a fixed sentence for auth,
   quota and 5xx.
 - **Account in use:** `AiGatewayActivity.noteInUse` keeps each Thread's last account and model

@@ -97,8 +97,12 @@ ENV T3CODE_HOME=/datos \
     T3CODE_SANDBOX_RUNTIME=off \
     HOME=/home/t3
 
+# arranque.sh saca de los logs el token de emparejamiento de cada arranque (ver el script).
+# tini -g: las señales van a todo el grupo (t3 y el filtro), así t3 se apaga limpio.
+COPY --chmod=0755 bezenti/arranque.sh /usr/local/bin/bezenti-arranque
+
 USER 1000:1000
 WORKDIR /home/t3
 EXPOSE 3773
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/t3"]
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/bezenti-arranque"]
 CMD ["serve"]

@@ -20,6 +20,11 @@ README de `darwinva97/infra-contabo`.
   (`scripts/build-cli-archive.ts`, con su prueba `scripts/smoke-cli-archive.ts`). `hub` es Debian 12 slim con
   ese mismo árbol en `/opt/t3` (el ejecutable lleva Node 26.12.1 dentro), git, ssh, certificados,
   util-linux y tini; usuario 1000:1000; sin Chromium. `archivo` solo sirve para sacar el `.tar.gz`.
+- `arranque.sh`: punto de entrada de la imagen. Ejecuta `t3 <args>` y quita de su salida el token de
+  emparejamiento que `t3 serve` imprime en cada arranque (con su QR): vale 5 minutos y, aun con el Owner
+  creado, deja emparejar un dispositivo **como el Owner**, y los logs los leen VictoriaLogs, Grafana,
+  Backstage… El enlace queda en `/tmp/t3-acceso` dentro del contenedor (solo el usuario del Hub; se
+  pierde al reiniciar): `kubectl -n bezenti-hub exec deploy/bezenti-hub -- cat /tmp/t3-acceso`.
 - `Dockerfile.dockerignore`: lo que no entra en el contexto (`.git`, `.repos`, `node_modules`…).
 - `../.github/workflows/bezenti.yml`: el CI (ver su cabecera).
 

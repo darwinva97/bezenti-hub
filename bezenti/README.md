@@ -33,7 +33,8 @@ README de `darwinva97/infra-contabo`.
 Cada push a `main` produce la versión `<versión de apps/server/package.json>-bezenti.<número de ejecución>`
 (por ejemplo `0.1.7-bezenti.3`) y, **de la misma compilación**:
 
-- la imagen `ghcr.io/darwinva97/bezenti-hub:sha-<7>` (también `:v<versión>` y `:latest`);
+- la imagen `ghcr.io/darwinva97/bezenti-hub:v<versión>` (también `:sha-<7>` y `:latest`; se despliega
+  `v<versión>` porque `sha-<7>` se repite al relanzar el mismo commit);
 - la Release `v<versión>` de este repo con `t3-<versión>-linux-x64.tar.gz` y `SHA256SUMS`.
 
 El CI anota las dos cosas en infra-contabo (`manifiestos/bezenti-hub/workloads.yaml`: la imagen y la anotación

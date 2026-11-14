@@ -5,14 +5,15 @@
 #               el despliegue: proxies de confianza, clave maestra, instalación por SSH.
 # 2. imagen     compila con bezenti/Dockerfile (Debian 12, Node 26.12.1) una sola vez y saca dos cosas
 #               de la MISMA compilación:
-#                 - ghcr.io/darwinva97/bezenti-hub:sha-<7> y :latest (el Hub del clúster),
+#                 - ghcr.io/darwinva97/bezenti-hub:v<versión>, :sha-<7> y :latest (el Hub del clúster),
 #                 - la CLI `t3` para Linux x64 como Release `v<versión>` de este repo, con SHA256SUMS,
 #                   que es lo que scripts/install.sh y «Add over SSH» descargan con
 #                   T3CODE_RELEASE_BASE_URL=https://github.com/darwinva97/bezenti-hub/releases/download
 #               Versión: <versión de apps/server/package.json>-bezenti.<número de ejecución>.
 #               El Hub y la VPS dedicada tienen que tener EXACTAMENTE la misma.
 # 3. desplegar  cambia en darwinva97/infra-contabo (manifiestos/bezenti-hub/workloads.yaml) la línea
-#               `# bezenti-hub-image` y la anotación `# bezenti-hub-version`; ArgoCD lo despliega.
+#               `# bezenti-hub-image` (tag v<versión>, único) y la anotación `# bezenti-hub-version`;
+#               ArgoCD lo despliega.
 #
 # Secreto INFRA_DEPLOY_KEY: clave SSH de despliegue con escritura SOLO sobre darwinva97/infra-contabo.
 # Los demás workflows (los del original) están desactivados en este fork: usan runners de Blacksmith.
@@ -175,13 +176,15 @@ jobs:
           repository: darwinva97/infra-contabo
           ssh-key: ${{ secrets.INFRA_DEPLOY_KEY }}
 
+      # Se despliega el tag v<versión>, único por ejecución: sha-<7> se repite si se relanza el mismo
+      # commit (workflow_dispatch) y el nodo podría seguir con la imagen anterior en caché.
       - name: Actualizar imagen y versión en infra-contabo
         env:
-          TAG: ${{ needs.verificar.outputs.tag }}
           VERSION: ${{ needs.verificar.outputs.version }}
           ARCHIVO: manifiestos/bezenti-hub/workloads.yaml
         run: |
           set -euo pipefail
+          TAG="v${VERSION}"
           if [ ! -f "$ARCHIVO" ]; then
             echo "::warning title=Sin desplegar::$ARCHIVO no existe en infra-contabo; ${IMAGE}:${TAG} está publicada pero no anotada."
             exit 0

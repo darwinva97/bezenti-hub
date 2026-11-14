@@ -65,6 +65,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   FolderIcon,
+  LayersIcon,
   ListFilterIcon,
   PlusIcon,
   SettingsIcon,
@@ -147,10 +148,10 @@ import {
 import {
   readThreadShell,
   useAllEnvironmentProjectSnapshotsReady,
-  useProjects,
   useServerConfigs,
-  useQuietThreadShells,
 } from "../state/entities";
+import { setShowAllSpaces } from "../state/currentSpace";
+import { useSidebarSpaceFilter } from "../hooks/useSidebarSpaceFilter";
 import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
@@ -402,6 +403,16 @@ function resolveDraggedOrders(input: {
         ).map(threadShellKey)
       : undefined,
   };
+}
+
+/** The Projects both the project scope and the Space filter list; null when neither narrows. */
+function intersectProjectKeys(
+  scoped: ReadonlySet<string> | null,
+  inSpace: ReadonlySet<string> | null,
+): ReadonlySet<string> | null {
+  if (inSpace === null) return scoped;
+  if (scoped === null) return inSpace;
+  return new Set([...scoped].filter((key) => inSpace.has(key)));
 }
 
 function routeThreadOnly(
@@ -817,12 +828,12 @@ function isOptimisticDropReleased(input: {
 }
 
 // Build maps in a hook so the compiler can prove they are frozen and cache them.
-function useSidebarLookups() {
-  const projects = useProjects();
+function useSidebarLookups(source: ReturnType<typeof useSidebarSpaceFilter>) {
+  const { projects } = source;
   const environments = useEnvironmentIdentities();
   const serverConfigs = useServerConfigs();
   const providerEntriesByEnvironment = useAtomValue(sidebarProviderEntriesAtom);
-  const projectGroups = useSidebarProjectGroups();
+  const projectGroups = useSidebarProjectGroups(source);
   const environmentLabelById = new Map(
     environments.map((environment) => [environment.environmentId, environment.label] as const),
   );
@@ -910,6 +921,19 @@ function readRouteThreadKey(router: AnyRouter): string | null {
 }
 
 export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
+  const routeTarget = useThreadRouteTarget();
+  const routeDraftThread = useComposerDraftStore((store) =>
+    routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
+  );
+  const routeThreadRef = resolveActiveThreadRouteRef(routeTarget, routeDraftThread);
+  const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  // Only the current Space's Projects and Threads are listed, apart from the open one.
+  const spaceFilter = useSidebarSpaceFilter({
+    openThreadEnvironmentId: routeThreadRef?.environmentId ?? null,
+    openThreadId: routeThreadRef?.threadId ?? null,
+    openDraftEnvironmentId: routeDraftThread?.environmentId ?? null,
+    openDraftProjectId: routeDraftThread?.projectId ?? null,
+  });
   const {
     projects,
     serverConfigs,
@@ -920,7 +944,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectDisplayNameByKey,
     projectGroupByScopeKey,
     projectScopeItems: lookupProjectScopeItems,
-  } = useSidebarLookups();
+  } = useSidebarLookups(spaceFilter);
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1014,10 +1038,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
   const acknowledgeWoke = useAcknowledgeThreadWoke();
-  const routeTarget = useThreadRouteTarget();
-  const routeDraftThread = useComposerDraftStore((store) =>
-    routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
-  );
   const environmentMachineById = useEnvironmentMachines();
   const projectGroupsRef = useRef(projectGroups);
   const persistedProjectScopeKeys = useUiStateStore((store) => store.sidebarProjectScopeKeys);
@@ -1077,8 +1097,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const shortcutModifiers = useShortcutModifierState();
   const terminalFocused = useTerminalFocus();
   const openAddProjectCommandPalette = () => openCommandPalette({ open: "add-project" });
-  const routeThreadRef = resolveActiveThreadRouteRef(routeTarget, routeDraftThread);
-  const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
 
   // A selection made under one scope can hold threads the next scope hides.
   // The viewport outlives the scope and does not anchor, so a new list starts at the top.
@@ -1113,7 +1131,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             ),
           ),
         );
-  const threads = useQuietThreadShells();
+  const threads = spaceFilter.threads;
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -1192,7 +1210,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   });
   const scopedProjectGroups = revealWidensScope ? [] : chosenProjectGroups;
   const scopedProjectRefs = scopedProjectGroups.flatMap((project) => project.memberProjectRefs);
-  const scopedProjectKeys = revealWidensScope ? null : chosenScopeProjectKeys;
+  // Older settled threads and drafts are scoped by Project too, so the Space filter narrows them.
+  const scopedProjectKeys = intersectProjectKeys(
+    revealWidensScope ? null : chosenScopeProjectKeys,
+    spaceFilter.projectKeys,
+  );
   const threadSearch = useThreadSearch(
     connectedEnvironmentIds,
     threadSearchQuery,
@@ -3001,6 +3023,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
+              spaceScope={
+                spaceFilter.canToggleAllSpaces ? (
+                  <SidebarHeaderIconButton
+                    label="All Spaces"
+                    tooltip={
+                      spaceFilter.showAllSpaces
+                        ? "Showing every Space. Click to show only the current Space"
+                        : "Showing the current Space. Click to show every Space"
+                    }
+                    aria-pressed={spaceFilter.showAllSpaces}
+                    data-active={spaceFilter.showAllSpaces}
+                    onClick={() => {
+                      clearSelection();
+                      setShowAllSpaces(!spaceFilter.showAllSpaces);
+                      scrollSidebarToTop(sidebarContentRef.current);
+                    }}
+                  >
+                    <LayersIcon />
+                  </SidebarHeaderIconButton>
+                ) : null
+              }
               projectScope={
                 <Combobox
                   items={projectScopeItems}

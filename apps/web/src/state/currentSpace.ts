@@ -9,6 +9,7 @@ import {
   type ThreadRoleSubject,
   threadRolePermissions,
 } from "@t3tools/client-runtime/spaces/role-permissions";
+import { showAllSpacesStorageKey } from "@t3tools/client-runtime/spaces/space-filter";
 import {
   chooseCurrentSpace,
   createOrganization,
@@ -43,12 +44,22 @@ function storeSpace(view: SpaceDirectoryView, spaceId: SpaceId) {
   }
 }
 
+function readStoredShowAllSpaces(view: SpaceDirectoryView): boolean {
+  try {
+    return window.localStorage.getItem(showAllSpacesStorageKey(view.userId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
 interface CurrentSpaceState {
   readonly environmentId: EnvironmentId | null;
   readonly view: SpaceDirectoryView | null;
   readonly currentSpaceId: SpaceId | null;
   /** The last load failed; the previous Spaces and choice stay in place. */
   readonly loadFailed: boolean;
+  /** «All Spaces»: the sidebar lists every Space instead of only the current one. Kept per User. */
+  readonly showAllSpaces: boolean;
 }
 
 export const useCurrentSpace = create<CurrentSpaceState>(() => ({
@@ -56,7 +67,21 @@ export const useCurrentSpace = create<CurrentSpaceState>(() => ({
   view: null,
   currentSpaceId: null,
   loadFailed: false,
+  showAllSpaces: false,
 }));
+
+export function setShowAllSpaces(showAll: boolean) {
+  const { view } = useCurrentSpace.getState();
+  if (view !== null) {
+    try {
+      if (showAll) window.localStorage.setItem(showAllSpacesStorageKey(view.userId), "1");
+      else window.localStorage.removeItem(showAllSpacesStorageKey(view.userId));
+    } catch {
+      // Without storage the choice lasts until reload.
+    }
+  }
+  useCurrentSpace.setState({ showAllSpaces: showAll });
+}
 
 /** Null when the User has no Space to work in yet. */
 export function selectSpace(spaceId: SpaceId | null) {
@@ -79,6 +104,7 @@ export async function loadSpaces(environmentId: EnvironmentId): Promise<void> {
       view: null,
       currentSpaceId: null,
       loadFailed: false,
+      showAllSpaces: false,
     });
     return;
   }
@@ -87,7 +113,12 @@ export async function loadSpaces(environmentId: EnvironmentId): Promise<void> {
     return;
   }
   const previous = useCurrentSpace.getState().currentSpaceId;
-  useCurrentSpace.setState({ environmentId, view, loadFailed: false });
+  useCurrentSpace.setState({
+    environmentId,
+    view,
+    loadFailed: false,
+    showAllSpaces: readStoredShowAllSpaces(view),
+  });
   selectSpace(chooseCurrentSpace(view, previous ?? readStoredSpace(view)));
 }
 

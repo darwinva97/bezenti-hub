@@ -261,6 +261,12 @@ sidebar; new projects and threads go there, and a thread started in a project
 joins that project's Space. Each person's choice is remembered in their browser. The Owner creates organizations from the same
 selector with **Create organization**.
 
+The sidebar lists only the projects and threads of the current Space. The thread
+you have open stays listed even if it belongs to another Space, and the current
+Space does not change by itself. Turn on **All Spaces** next to the sidebar
+search to list every Space at once; the choice is remembered per person in the
+browser. Without Spaces, such as on a local install, the sidebar lists everything.
+
 You see the projects and threads of your Personal space and of every
 organization you belong to, whoever created them, and nothing else. Work in an
 archived organization disappears for its members. The Owner sees everything.

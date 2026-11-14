@@ -9,11 +9,17 @@ import { useProjects, useQuietThreadShells } from "../state/entities";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
 
-export function useSidebarProjectGroups() {
-  const projects = useProjects();
+/** `source` narrows the Projects and Threads, such as to the current Space; default is all. */
+export function useSidebarProjectGroups(source?: {
+  readonly projects: ReturnType<typeof useProjects>;
+  readonly threads: ReturnType<typeof useQuietThreadShells>;
+}) {
+  const allProjects = useProjects();
   // Activity order lags a running thread's streaming ticks until its next
   // real change; reading every tick re-rendered the whole sidebar with it.
-  const threads = useQuietThreadShells();
+  const allThreads = useQuietThreadShells();
+  const projects = source?.projects ?? allProjects;
+  const threads = source?.threads ?? allThreads;
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const sortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const groupingSettings = useClientSettings(selectProjectGroupingSettings);

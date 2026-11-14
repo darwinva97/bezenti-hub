@@ -5,14 +5,18 @@
  * in only to the host whose key has the fingerprint the Owner confirmed. Errors carry fixed
  * messages, never what ssh2 or the key said.
  */
+import * as NodeModule from "node:module";
+
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
-// ssh2 is CommonJS: Node sees only its default export.
-import ssh2, { type ConnectConfig } from "ssh2";
+import type * as Ssh2 from "ssh2";
+import type { ConnectConfig } from "ssh2";
 
 import { hostKeyFingerprint, shellQuote } from "./sshInstallScripts.ts";
 
+// ssh2 is external to the CLI bundle (its CommonJS reads __dirname); a single-executable loads it from disk only with require.
+const ssh2 = NodeModule.createRequire(import.meta.url)("ssh2") as typeof Ssh2;
 const { Client, utils: SshUtils } = ssh2;
 type Client = InstanceType<typeof Client>;
 

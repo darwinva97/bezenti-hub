@@ -1,0 +1,12 @@
+# Contexto de bezenti/Dockerfile (BuildKit lee <Dockerfile>.dockerignore junto al Dockerfile).
+.git
+.repos
+.scratch
+.t3
+**/node_modules
+**/dist
+**/dist-exe
+**/.vite-plus
+native/*/target
+release
+release-cli

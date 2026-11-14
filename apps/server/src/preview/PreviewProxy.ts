@@ -4,12 +4,20 @@
  * over its Environment channel (`preview.proxyHttp`, `preview.proxySocket`); the Hub machine runs
  * them in process. Bodies travel as base64, in chunks small enough for one frame each.
  */
+import * as NodeModule from "node:module";
+
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { fetch as undiciFetch, WebSocket as UndiciWebSocket } from "undici";
+import type * as Undici from "undici";
+
+// undici is external to the CLI bundle; Node single-executables can load it from disk only with require.
+const undici = NodeModule.createRequire(import.meta.url)("undici") as typeof Undici;
+const undiciFetch = undici.fetch;
+const UndiciWebSocket = undici.WebSocket;
+type UndiciWebSocket = Undici.WebSocket;
 
 /** The largest body chunk one stream item carries. */
 const PREVIEW_PROXY_CHUNK_BYTES = 64 * 1024;

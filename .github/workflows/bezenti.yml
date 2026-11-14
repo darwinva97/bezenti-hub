@@ -1,0 +1,197 @@
+# CI de bezenti (solo en este fork, darwinva97/bezenti-hub). Ver bezenti/README.md.
+#
+# En cada push a main (y a mano):
+# 1. verificar  comprobación de tipos del servidor (falla solo con errores) y pruebas de lo que toca
+#               el despliegue: proxies de confianza, clave maestra, instalación por SSH.
+# 2. imagen     compila con bezenti/Dockerfile (Debian 12, Node 26.12.1) una sola vez y saca dos cosas
+#               de la MISMA compilación:
+#                 - ghcr.io/darwinva97/bezenti-hub:sha-<7> y :latest (el Hub del clúster),
+#                 - la CLI `t3` para Linux x64 como Release `v<versión>` de este repo, con SHA256SUMS,
+#                   que es lo que scripts/install.sh y «Add over SSH» descargan con
+#                   T3CODE_RELEASE_BASE_URL=https://github.com/darwinva97/bezenti-hub/releases/download
+#               Versión: <versión de apps/server/package.json>-bezenti.<número de ejecución>.
+#               El Hub y la VPS dedicada tienen que tener EXACTAMENTE la misma.
+# 3. desplegar  cambia en darwinva97/infra-contabo (manifiestos/bezenti-hub/workloads.yaml) la línea
+#               `# bezenti-hub-image` y la anotación `# bezenti-hub-version`; ArgoCD lo despliega.
+#
+# Secreto INFRA_DEPLOY_KEY: clave SSH de despliegue con escritura SOLO sobre darwinva97/infra-contabo.
+# Los demás workflows (los del original) están desactivados en este fork: usan runners de Blacksmith.
+name: bezenti
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bezenti-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/darwinva97/bezenti-hub
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      # Sin .repos (referencias vendorizadas con gitlinks huérfanos), como hace el original.
+      - name: Checkout
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach FETCH_HEAD
+
+      - id: version
+        run: |
+          base=$(jq -r .version apps/server/package.json)
+          echo "version=${base}-bezenti.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Dependencias
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=t3... --filter=@t3tools/scripts...
+
+      # effect-tsgo sale con error también por avisos que ya trae el original: aquí solo cuentan los errores.
+      - name: Tipos del servidor
+        working-directory: apps/server
+        run: |
+          set +e
+          vp exec effect-tsgo tsrs --noEmit > "$RUNNER_TEMP/tipos.log" 2>&1
+          grep -E "error TS[0-9]+" "$RUNNER_TEMP/tipos.log" && { echo "::error::Hay errores de tipos"; exit 1; }
+          echo "Sin errores de tipos ($(grep -c 'warning TS' "$RUNNER_TEMP/tipos.log") avisos heredados)."
+
+      - name: Pruebas
+        working-directory: apps/server
+        run: >-
+          vp test run
+          src/auth/clientConnection.test.ts
+          src/auth/ServerSecretStore.encryption.test.ts
+          src/environments/sshInstall/sshInstallScripts.test.ts
+          src/environments/HubWithEnvironments.sshInstall.test.ts
+
+  imagen:
+    needs: verificar
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      packages: write
+    env:
+      VERSION: ${{ needs.verificar.outputs.version }}
+      TAG: ${{ needs.verificar.outputs.tag }}
+    steps:
+      - name: Checkout
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach FETCH_HEAD
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Primero el archivo de la CLI; la segunda llamada reutiliza la etapa `compilar` del mismo builder.
+      - name: Compilar y sacar la CLI
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: bezenti/Dockerfile
+          target: archivo
+          build-args: T3_VERSION=${{ env.VERSION }}
+          outputs: type=local,dest=salida
+          cache-from: type=gha,scope=bezenti-hub
+          cache-to: type=gha,scope=bezenti-hub,mode=max
+
+      - name: Imagen del Hub
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: bezenti/Dockerfile
+          target: hub
+          build-args: T3_VERSION=${{ env.VERSION }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.TAG }}
+            ${{ env.IMAGE }}:v${{ env.VERSION }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+          cache-from: type=gha,scope=bezenti-hub
+
+      - name: Release de la CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd salida
+          ls -la
+          sha256sum t3-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          notas="CLI \`t3\` ${VERSION} para Linux x64, la misma que corre el Hub (imagen ${IMAGE}:${TAG}, commit ${GITHUB_SHA}).
+          Instalar en una máquina (ver bezenti/README.md):
+          \`T3CODE_VERSION=${VERSION} T3CODE_RELEASE_BASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/download sh scripts/install.sh\`"
+          if gh release view "v${VERSION}" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "v${VERSION}" t3-*.tar.gz SHA256SUMS --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "v${VERSION}" t3-*.tar.gz SHA256SUMS -R "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "bezenti ${VERSION}" --notes "$notas" --latest
+          fi
+
+  desplegar:
+    needs: [verificar, imagen]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: desplegar-bezenti-hub
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: darwinva97/infra-contabo
+          ssh-key: ${{ secrets.INFRA_DEPLOY_KEY }}
+
+      - name: Actualizar imagen y versión en infra-contabo
+        env:
+          TAG: ${{ needs.verificar.outputs.tag }}
+          VERSION: ${{ needs.verificar.outputs.version }}
+          ARCHIVO: manifiestos/bezenti-hub/workloads.yaml
+        run: |
+          set -euo pipefail
+          if [ ! -f "$ARCHIVO" ]; then
+            echo "::warning title=Sin desplegar::$ARCHIVO no existe en infra-contabo; ${IMAGE}:${TAG} está publicada pero no anotada."
+            exit 0
+          fi
+          sed -i -E "s|(image: ghcr.io/darwinva97/bezenti-hub:)[^ ]*( # bezenti-hub-image)|\1${TAG}\2|" "$ARCHIVO"
+          sed -i -E "s|(bezenti.com/t3-version: \")[^\"]*(\" # bezenti-hub-version)|\1${VERSION}\2|" "$ARCHIVO"
+          git diff
+          grep -q "image: ghcr.io/darwinva97/bezenti-hub:${TAG} # bezenti-hub-image" "$ARCHIVO" \
+            || { echo "::error::Falta la línea '# bezenti-hub-image' en $ARCHIVO"; exit 1; }
+          grep -q "bezenti.com/t3-version: \"${VERSION}\" # bezenti-hub-version" "$ARCHIVO" \
+            || { echo "::error::Falta la línea '# bezenti-hub-version' en $ARCHIVO"; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "bezenti-hub: ${VERSION} (${TAG})" || echo "sin cambios"
+          git pull --rebase -q && git push -q

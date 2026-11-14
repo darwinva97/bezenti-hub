@@ -14,6 +14,8 @@ const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   "node-addon-api",
   "bufferutil",
   "utf-8-validate",
+  // CommonJS that reads __dirname, which an ESM bundle lacks (SSH install, SshClient.ts).
+  "ssh2",
 ] as const;
 
 // Match Cursor dependency boundaries so zod does not externalize zod-to-json-schema.

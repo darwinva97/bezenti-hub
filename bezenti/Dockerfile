@@ -45,15 +45,16 @@ COPY . .
 # `vp install` ejecuta el `prepare` del repo (vp config), que espera un repositorio git.
 RUN git init -q . && node --version
 
-ARG T3_VERSION
-RUN test -n "$T3_VERSION" || { echo "Falta --build-arg T3_VERSION" >&2; exit 1; } \
- && node scripts/update-release-package-versions.ts "$T3_VERSION"
-
 RUN vp install --filter=t3... --filter=@t3tools/scripts...
 
 RUN cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml \
  && mkdir -p /tmp/resource-monitor/linux-x64 \
  && cp native/resource-monitor/target/release/t3-resource-monitor /tmp/resource-monitor/linux-x64/
+
+# La versión va después de instalar (el script necesita las dependencias), como en release.yml.
+ARG T3_VERSION
+RUN test -n "$T3_VERSION" || { echo "Falta --build-arg T3_VERSION" >&2; exit 1; } \
+ && node scripts/update-release-package-versions.ts "$T3_VERSION"
 
 # Mismos pasos que release.yml / release-desktop.yml del original para Linux x64.
 RUN vp run --filter t3 build \

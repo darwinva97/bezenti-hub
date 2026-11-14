@@ -30,6 +30,7 @@ export {
   environmentUnavailableReason,
   noPlacementReason,
   placeableEnvironments,
+  providersOnEnvironment,
   shownEnvironmentStatus,
   threadEnvironmentState,
 } from "@t3tools/client-runtime/environment/hub-environments";
@@ -52,6 +53,23 @@ export function useActiveEnvironment(
   const read = () => JSON.stringify(activeEnvironmentOf(poller.snapshot(), environmentId));
   const key = useSyncExternalStore(poller.subscribe, read, read);
   return JSON.parse(key) as ActiveEnvironmentView | null;
+}
+
+/**
+ * What a machine offers Threads (its kind, name and providers), kept live like
+ * `useActiveEnvironment`: a heartbeat that changes nothing of it re-renders nothing.
+ */
+export function useEnvironmentOffer(
+  environmentId: EnvironmentId | null | undefined,
+): Pick<HubEnvironmentSummary, "kind" | "name" | "providers"> | null {
+  const read = () => {
+    const found = poller.snapshot().find((environment) => environment.id === environmentId);
+    return found === undefined
+      ? "null"
+      : JSON.stringify({ kind: found.kind, name: found.name, providers: found.providers });
+  };
+  const key = useSyncExternalStore(poller.subscribe, read, read);
+  return JSON.parse(key) as Pick<HubEnvironmentSummary, "kind" | "name" | "providers"> | null;
 }
 
 /** Whether the list has been read (and the last read did not fail). */
@@ -88,12 +106,12 @@ export function useHasJoinedEnvironments(): boolean {
 /**
  * Where the Hub will start a new Thread nobody placed (`previewThreadPlacement`), among the
  * `placeableEnvironments` of its Space. The Hub machine is listed only while it runs Threads.
- * Null: nowhere.
+ * A null provider asks where it runs before one is chosen. Null: nowhere.
  */
 export function previewDefaultEnvironment(input: {
   readonly environments: ReadonlyArray<HubEnvironmentSummary>;
   readonly preferredEnvironmentId: EnvironmentId | null;
-  readonly providerInstanceId: ProviderInstanceId;
+  readonly providerInstanceId: ProviderInstanceId | null;
   readonly userId: UserId | null;
   /** Why the Hub runs no Sandboxes (its list says); a Sandbox then takes nothing, as on the Hub. */
   readonly sandboxesUnavailable?: string | null;
@@ -108,9 +126,12 @@ export function previewDefaultEnvironment(input: {
         ? undefined
         : {
             ...preferred,
+            // A machine dedicated to the Space is used like its Sandbox (`placeableEnvironments`
+            // already kept only the Space's own); the Hub checks `environment.use` either way.
             usable:
               preferred.kind === "hub" ||
               preferred.kind === "sandbox" ||
+              preferred.mode === "dedicated" ||
               preferred.ownerUserId === input.userId,
           },
     providerInstanceId: input.providerInstanceId,

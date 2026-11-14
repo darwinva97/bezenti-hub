@@ -388,9 +388,11 @@ import {
   SANDBOX_FAILED_LABEL,
   SANDBOX_RETRY_LABEL,
   SANDBOX_STARTING_LABEL,
+  providersOnEnvironment,
   refreshHubEnvironments,
   threadEnvironmentState,
   useActiveEnvironment,
+  useEnvironmentOffer,
 } from "../environments/primary/useHubEnvironments";
 import { startHubEnvironment } from "../environments/primary/hubEnvironments";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
@@ -1221,18 +1223,23 @@ export default function ChatView(props: ChatViewProps) {
   // A draft asks where it will be placed (its chosen machine, else the Hub's default for it).
   const draftPlacement = useDraftPlacement({
     draftThreadId: isServerThread || !activeThread ? null : activeThread.id,
-    providerInstanceId: activeThread?.modelSelection.instanceId ?? null,
     preferredEnvironmentId: activeProject?.preferredEnvironmentId ?? null,
     spaceId: activeProject?.spaceId ?? null,
   });
+  const threadMachineId = isServerThread
+    ? (activeThread?.activeEnvironmentId ?? null)
+    : draftPlacement.environmentId;
   const aiAccountPicker = useAiAccountPicker({
     environmentId: providerEnvironmentId,
     spaceId: isServerThread ? (activeProject?.spaceId ?? null) : draftPlacement.spaceId,
-    threadEnvironmentId: isServerThread
-      ? (activeThread?.activeEnvironmentId ?? null)
-      : draftPlacement.environmentId,
+    threadEnvironmentId: threadMachineId,
   });
-  const providerStatuses = applyAiAccountsToProviders(hubProviderStatuses, aiAccountPicker);
+  // The providers of the machine the Thread runs on, not the Hub's own (it may run no agents).
+  const threadMachine = useEnvironmentOffer(threadMachineId);
+  const providerStatuses = applyAiAccountsToProviders(
+    providersOnEnvironment(hubProviderStatuses, threadMachine),
+    aiAccountPicker,
+  );
   const draftAiAccountKey = isServerThread ? null : (activeThread?.id ?? null);
   const [draftAiAccount, setDraftAiAccount] = useState<{
     readonly key: string;
@@ -3933,16 +3940,14 @@ export default function ChatView(props: ChatViewProps) {
                                   : {
                                       trailing: (
                                         <>
-                                          {activeProviderInstanceId === null ? null : (
-                                            <HubEnvironmentSelector
-                                              draftThreadId={activeThread.id}
-                                              providerInstanceId={activeProviderInstanceId}
-                                              preferredEnvironmentId={
-                                                activeProject?.preferredEnvironmentId ?? null
-                                              }
-                                              spaceId={activeProject?.spaceId ?? null}
-                                            />
-                                          )}
+                                          <HubEnvironmentSelector
+                                            draftThreadId={activeThread.id}
+                                            providerInstanceId={activeProviderInstanceId}
+                                            preferredEnvironmentId={
+                                              activeProject?.preferredEnvironmentId ?? null
+                                            }
+                                            spaceId={activeProject?.spaceId ?? null}
+                                          />
                                           <ComposerContextPermissions
                                             environmentId={environmentId}
                                             runtimeMode={runtimeMode}

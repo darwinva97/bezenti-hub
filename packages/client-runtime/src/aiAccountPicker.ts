@@ -156,7 +156,8 @@ function gatewayModelsOf(
 /**
  * The providers as the composer offers them when AI accounts decide: ready with an allowed
  * account (its models for a gateway agent), else unusable with the reason; the machine's own
- * login (its auth status, sign-in prompts) never counts.
+ * login (its auth status, sign-in prompts) never counts. An account does not put an agent on a
+ * machine that lacks it (`providersOnEnvironment`).
  */
 export function applyAiAccountsToProviders(
   providers: ReadonlyArray<ServerProvider>,
@@ -164,7 +165,13 @@ export function applyAiAccountsToProviders(
 ): ReadonlyArray<ServerProvider> {
   if (picker == null || !picker.applies) return providers;
   return providers.map((provider) => {
-    if (!aiAccountsDecide(provider.driver, picker) || !provider.enabled) return provider;
+    if (
+      !aiAccountsDecide(provider.driver, picker) ||
+      !provider.enabled ||
+      provider.availability === "unavailable"
+    ) {
+      return provider;
+    }
     const accounts = aiAccountsFor(provider.driver, picker);
     const { setup: _setup, message: _message, ...withoutSetup } = provider;
     if (accounts.length === 0) {

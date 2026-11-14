@@ -100,10 +100,11 @@ type PlacementCandidate = Pick<HubEnvironmentSummary, "id" | "kind" | "status" |
  * Whether a new Thread can start on the Environment now: the User may use it, it is online (a
  * Sandbox counts while stopped or starting, not once its start failed: the Hub starts it for the
  * work) and it has the provider, as far as it is known (a Sandbox that never ran reported none).
+ * A null provider (none chosen yet) asks only where the Thread can run.
  */
 export function canStartThreadOn(
   candidate: PlacementCandidate,
-  providerInstanceId: string,
+  providerInstanceId: string | null,
   /** Whether the Hub runs Sandboxes at all: one it cannot run takes no Thread. */
   sandboxesRun = true,
 ): boolean {
@@ -116,6 +117,7 @@ export function canStartThreadOn(
   } else if (candidate.status !== "online") {
     return false;
   }
+  if (providerInstanceId === null) return true;
   const provider = candidate.providers.find((entry) => entry.instanceId === providerInstanceId);
   return provider !== undefined && provider.enabled && provider.installed;
 }
@@ -128,7 +130,7 @@ export function canStartThreadOn(
  */
 export function previewThreadPlacement(input: {
   readonly preferred: PlacementCandidate | undefined;
-  readonly providerInstanceId: string;
+  readonly providerInstanceId: string | null;
   /** Whether the Hub machine runs Threads; the Hub lists it only then. */
   readonly hubMachine: boolean;
   /** The Space's Sandbox, when the User may run Threads there. */

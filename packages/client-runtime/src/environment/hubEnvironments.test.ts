@@ -26,6 +26,7 @@ import {
   moveCandidates,
   moveProgressView,
   placeableEnvironments,
+  providersOnEnvironment,
   threadEnvironmentState,
 } from "./hubEnvironments.ts";
 
@@ -285,6 +286,16 @@ describe("a Space's Sandbox in the composer", () => {
         ProviderInstanceId.make("claudeAgent"),
       ),
     ).toBe("Provider not available");
+    // Before the composer has a provider, a running one is offered all the same.
+    expect(environmentUnavailableReason({ ...acme, status: "online" }, null)).toBeNull();
+    expect(environmentUnavailableReason(laptop, null)).toBe("Offline");
+  });
+
+  it("offers the Hub's providers until it has run and reported its own", () => {
+    const hubProviders = [{ instanceId: "codex" }] as never;
+    expect(providersOnEnvironment(hubProviders, acme)).toBe(hubProviders);
+    expect(providersOnEnvironment(hubProviders, hub)).toBe(hubProviders);
+    expect(providersOnEnvironment(hubProviders, null)).toBe(hubProviders);
   });
 });
 

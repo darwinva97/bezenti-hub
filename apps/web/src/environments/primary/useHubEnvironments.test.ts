@@ -93,6 +93,19 @@ describe("previewDefaultEnvironment", () => {
     expect(preview([sandbox, offline])).toBe(sandbox.id);
     expect(preview([offline])).toBeNull();
     expect(preview([])).toBeNull();
+    // A machine dedicated to the Space is everyone's there, like its Sandbox: it belongs to no User.
+    const dedicated = machine("hub-vps", { mode: "dedicated", ownerUserId: null });
+    for (const providerInstanceId of [claude, null]) {
+      expect(
+        previewDefaultEnvironment({
+          environments: [dedicated],
+          preferredEnvironmentId: dedicated.id,
+          providerInstanceId,
+          userId: ada,
+          sandboxesUnavailable: "Sandboxes are turned off on this Hub.",
+        }),
+      ).toBe(dedicated.id);
+    }
     // A preferred Sandbox that never ran counts: it starts for the Thread.
     expect(
       previewDefaultEnvironment({

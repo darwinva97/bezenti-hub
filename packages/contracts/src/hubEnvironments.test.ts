@@ -56,6 +56,17 @@ describe("previewThreadPlacement", () => {
       expect(onHub(unavailable)).toBe(HUB_MACHINE_ENVIRONMENT_ID);
       expect(inSandbox(unavailable)).toBe(sandbox);
     }
+    // Before a provider is chosen, only whether it can run Threads at all.
+    const anyProvider = (candidate: ReturnType<typeof preferred>) =>
+      previewThreadPlacement({
+        preferred: candidate,
+        providerInstanceId: null,
+        hubMachine: false,
+        spaceSandbox: undefined,
+      });
+    expect(anyProvider(preferred({ providers: [] }))).toBe(laptop);
+    expect(anyProvider(preferred({ status: "offline" }))).toBeNull();
+    expect(anyProvider(preferred({ usable: false }))).toBeNull();
   });
 
   it("falls back to the Space's Sandbox, and to nothing on a Hub that runs neither", () => {

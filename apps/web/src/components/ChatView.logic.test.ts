@@ -10,7 +10,9 @@ import {
 } from "./ChatView.logic";
 import { recallCheckoutIsRepo, rememberCheckoutIsRepo } from "./ChatView.logic";
 import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
-import { deriveProviderInstanceEntries } from "../providerInstances";
+import { applyAiAccountsToProviders } from "@t3tools/client-runtime/ai-account-picker";
+import { providersOnEnvironment } from "@t3tools/client-runtime/environment/hub-environments";
+import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import { ensureInlineContextReferences } from "../lib/composerContextReferences";
 import { terminalContextReference } from "../lib/composerContextRecords";
 import {
@@ -667,6 +669,73 @@ describe("resolveComposerProviderSelection", () => {
     });
 
     expect(selection.selectedProviderEntry).toBeUndefined();
+  });
+
+  it("offers a new Thread the providers of the machine it runs on, not the Hub's", () => {
+    // A Hub that runs no agents has no CLIs: its Codex and Claude are «Not found».
+    const notFound = (driver: string): ServerProvider => ({
+      ...entry(driver).snapshot,
+      installed: false,
+      status: "error",
+      auth: { status: "unknown" },
+      message: "CLI not detected on PATH.",
+    });
+    const hubProviders = [notFound("codex"), notFound("claudeAgent"), notFound("opencode")];
+    const summary = (driver: string, installed: boolean) => ({
+      instanceId: ProviderInstanceId.make(driver),
+      provider: ProviderDriverKind.make(driver),
+      displayName: null,
+      enabled: installed,
+      installed,
+      version: installed ? "1.0.0" : null,
+      capabilities: { runtimeModes: [], conversationRollback: false, textGeneration: false },
+    });
+    const dedicated = {
+      kind: "external" as const,
+      name: "hub-vps",
+      providers: [summary("codex", true), summary("claudeAgent", true), summary("opencode", false)],
+    };
+    // The Owner's DeepSeek account, allowed in the Space: turns there run on AI accounts.
+    const picker = {
+      applies: true,
+      spaceName: "Bezenti",
+      accounts: [
+        {
+          id: "deepseek" as never,
+          name: "DeepSeek",
+          type: "api-key" as const,
+          provider: "openai-compatible" as const,
+          priority: 1,
+          models: ["deepseek-chat"],
+        },
+      ],
+    };
+    const select = (providers: ReadonlyArray<ServerProvider>) =>
+      resolveComposerProviderSelection({
+        entries: deriveProviderInstanceEntries(providers),
+        candidateInstanceIds: [NO_PROVIDER_MODEL_SELECTION.instanceId],
+        lockedProvider: null,
+        lockedInstanceId: undefined,
+      }).selectedProviderEntry;
+
+    // The Hub's own catalog: nothing to send with, so no Environment selector either.
+    expect(select(applyAiAccountsToProviders(hubProviders, picker))).toBeUndefined();
+
+    const offered = applyAiAccountsToProviders(
+      providersOnEnvironment(hubProviders, dedicated),
+      picker,
+    );
+    expect(select(offered)?.instanceId).toBe("codex");
+    expect(offered.find((provider) => provider.driver === "codex")?.models).toEqual([
+      expect.objectContaining({ slug: "deepseek-chat" }),
+    ]);
+    // An account does not put an agent on a machine that lacks it.
+    const opencode = deriveProviderInstanceEntries(offered).find(
+      (candidate) => candidate.driverKind === "opencode",
+    );
+    expect(opencode).toMatchObject({ enabled: false, isAvailable: false });
+    // Without AI accounts the machine's own sign-in is used; the Hub cannot see it.
+    expect(select(providersOnEnvironment(hubProviders, dedicated))?.instanceId).toBe("codex");
   });
 });
 

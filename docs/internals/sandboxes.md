@@ -194,6 +194,10 @@ While off, the Hub machine runs nothing, whatever asks:
 - The Hub machine is not in the Environments list, and choosing it (a new Thread or a move) is
   refused (`hub-machine`). A Project's «Preferred environment» offers no preference, named after the
   Space's Sandbox, and the User's own machines.
+- Its own provider catalog (no CLIs: «Not found») is not what a Thread can use. The composer
+  offers the providers of the machine the Thread runs on, a draft's being where it would be placed
+  (`useDraftPlacement`, before any provider is chosen), as that machine reports them in the
+  Environments list (`providersOnEnvironment`); the Hub's settings still say which are enabled.
 - With no Sandboxes either, a new Thread nobody placed is refused, never run on the Hub:
   «No Environment can run this Thread: <why>» (`no-environment`). The why is the Sandbox runtime's
   own (`sandboxRuntimeFromConfig`: no rootless Podman or image, the Hub not on loopback only,

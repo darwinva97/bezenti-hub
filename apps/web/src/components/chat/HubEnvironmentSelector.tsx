@@ -41,11 +41,12 @@ function useNewThreadSpaceId(projectSpaceId: SpaceId | null): SpaceId | null {
 
 /**
  * Spec 4 ticket 08: where a draft will run (the User's pick, else the Hub's default for it) and
- * the Space it is claimed in, so its AI-account picker asks about that machine. Null: unknown.
+ * the Space it is claimed in, so its composer offers that machine's providers and its AI-account
+ * picker asks about it. Asked before a provider is chosen: the composer then offers only that
+ * machine's, so the Hub places the Thread there too. Null: unknown.
  */
 export function useDraftPlacement(input: {
   readonly draftThreadId: string | null;
-  readonly providerInstanceId: ProviderInstanceId | null;
   readonly preferredEnvironmentId: EnvironmentId | null;
   readonly spaceId: SpaceId | null;
 }): { readonly environmentId: EnvironmentId | null; readonly spaceId: SpaceId | null } {
@@ -56,11 +57,10 @@ export function useDraftPlacement(input: {
   const chosen = useHubEnvironmentChoice(input.draftThreadId ?? "");
   if (input.draftThreadId === null) return { environmentId: null, spaceId };
   if (chosen !== undefined) return { environmentId: chosen, spaceId };
-  if (input.providerInstanceId === null) return { environmentId: null, spaceId };
   const placed = previewDefaultEnvironment({
     environments: placeableEnvironments(all, spaceId),
     preferredEnvironmentId: input.preferredEnvironmentId,
-    providerInstanceId: input.providerInstanceId,
+    providerInstanceId: null,
     userId,
     sandboxesUnavailable: unavailable,
   });
@@ -84,7 +84,7 @@ export function useNoPlacementMessage(input: {
   const ready = useHubEnvironmentsReady();
   const unavailable = useSandboxesUnavailable();
   const chosen = useHubEnvironmentChoice(input.draftThreadId ?? "");
-  if (!ready || input.draftThreadId === null || input.providerInstanceId === null) return null;
+  if (!ready || input.draftThreadId === null) return null;
   if (chosen !== undefined) return null;
   const placed = previewDefaultEnvironment({
     environments: placeableEnvironments(all, spaceId),
@@ -108,7 +108,8 @@ export const HubEnvironmentSelector = memo(function HubEnvironmentSelector({
   spaceId,
 }: {
   draftThreadId: string;
-  providerInstanceId: ProviderInstanceId;
+  /** Null until the composer has a provider: the machines are offered all the same. */
+  providerInstanceId: ProviderInstanceId | null;
   preferredEnvironmentId: EnvironmentId | null;
   /** The Project's Space; null for a Project from before Spaces, the Owner's Personal space. */
   spaceId: SpaceId | null;

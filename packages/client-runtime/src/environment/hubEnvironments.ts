@@ -11,6 +11,7 @@ import {
   type OrchestrationV2ThreadMove,
   type OrchestrationV2ThreadMoveStep,
   type ProviderInstanceId,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
@@ -425,10 +426,10 @@ export function activeEnvironmentLabel(environment: ActiveEnvironmentView): stri
     : `${environment.name}, ${ENVIRONMENT_STATUS_LABELS[environment.status].toLowerCase()}`;
 }
 
-/** Why a Thread could not run on the Environment, or null when it can. */
+/** Why a Thread could not run on the Environment, or null when it can (any provider, for null). */
 export function environmentUnavailableReason(
   environment: HubEnvironmentSummary,
-  providerInstanceId: ProviderInstanceId,
+  providerInstanceId: ProviderInstanceId | null,
 ): string | null {
   if (environment.kind === "hub") return null;
   // A Space's Sandbox that is not running starts when a Thread is sent to it.
@@ -436,11 +437,63 @@ export function environmentUnavailableReason(
   if (environment.status !== "online") {
     return environment.status === "reconnecting" ? "Reconnecting" : "Offline";
   }
+  if (providerInstanceId === null) return null;
   const provider = environment.providers.find((entry) => entry.instanceId === providerInstanceId);
   if (provider === undefined || !provider.installed || !provider.enabled) {
     return "Provider not available";
   }
   return null;
+}
+
+/**
+ * The providers a Thread can use on the machine it runs on. The Hub reports its own machine's,
+ * where it runs no agents and has no CLIs; whether one is there is the machine's to say, as it
+ * reports it to the Hub. A Sandbox that never ran reported none: the Hub's stand in until it has.
+ */
+export function providersOnEnvironment(
+  providers: ReadonlyArray<ServerProvider>,
+  environment: Pick<HubEnvironmentSummary, "kind" | "name" | "providers"> | null | undefined,
+): ReadonlyArray<ServerProvider> {
+  if (environment == null || environment.kind === "hub" || environment.providers.length === 0) {
+    return providers;
+  }
+  return providers.map((provider) => {
+    const there = environment.providers.find((entry) => entry.instanceId === provider.instanceId);
+    // The Hub's sign-in, install and update state describe the Hub's machine, not this one.
+    const {
+      setup: _setup,
+      message: _message,
+      unavailableReason: _unavailableReason,
+      installedVersion: _installedVersion,
+      versionAdvisory: _versionAdvisory,
+      compatibilityAdvisory: _compatibilityAdvisory,
+      updateState: _updateState,
+      ...rest
+    } = provider;
+    if (there !== undefined && there.enabled && there.installed) {
+      return {
+        ...rest,
+        enabled: true,
+        installed: true,
+        version: there.version,
+        status: "ready",
+        auth: { status: "unknown" },
+        availability: "available",
+      };
+    }
+    const reason = `Not available on ${environment.name}.`;
+    return {
+      ...rest,
+      enabled: there?.enabled ?? false,
+      installed: false,
+      version: null,
+      status: "error",
+      auth: { status: "unknown" },
+      message: reason,
+      availability: "unavailable",
+      unavailableReason: reason,
+    };
+  });
 }
 
 /** What each step of a move is doing, as the Thread and the move dialog say it. */

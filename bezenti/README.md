@@ -5,10 +5,10 @@ Este repositorio (`darwinva97/bezenti-hub`) es el fork que usa bezenti de
 Todo lo propio de bezenti está en esta carpeta y en `.github/workflows/bezenti.yml`; el resto del repo es
 el código de Eijun (más los arreglos de compilación de abajo).
 
-| Pieza | Dónde | Qué |
-|---|---|---|
-| Hub | clúster k3s de `darwinva97/infra-contabo`, namespace `bezenti-hub` | `https://claude.bezenti.com` (temporal; luego `code.bezenti.com`). Guarda personas, permisos, hilos y secretos. **No ejecuta agentes.** |
-| Máquina dedicada | VPS `hub-vps` (72.60.66.80), usuario `t3` | Ejecuta el trabajo de la organización `bezenti` dentro de un Sandbox (Podman sin root). |
+| Pieza            | Dónde                                                              | Qué                                                                                                                                     |
+| ---------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Hub              | clúster k3s de `darwinva97/infra-contabo`, namespace `bezenti-hub` | `https://claude.bezenti.com` (temporal; luego `code.bezenti.com`). Guarda personas, permisos, hilos y secretos. **No ejecuta agentes.** |
+| Máquina dedicada | VPS `hub-vps` (72.60.66.80), usuario `t3`                          | Ejecuta el trabajo de la organización `bezenti` dentro de un Sandbox (Podman sin root).                                                 |
 
 Documentación completa del despliegue (red, Access, Owner, VPS, riesgos): sección «T3 Code Hub» del
 README de `darwinva97/infra-contabo`.
@@ -62,16 +62,27 @@ tres cosas rompían el ejecutable único de Node:
 
 Conviene proponérselos a Eijun para que no haga falta mantenerlos aquí.
 
+## Arreglos de comportamiento (también para proponer a Eijun)
+
+- **Hilos nuevos en un Hub sin agentes** (2026-11-14). El composer ofrecía los providers de la máquina del
+  Hub (sin CLIs: «Not found»), así que un borrador nunca tenía provider («Enable a provider in Settings to
+  send a message») ni selector de Environment. Ahora ofrece los de la máquina donde correrá el hilo (la
+  elegida, o la preferida del proyecto / el Sandbox), tal como esa máquina los reporta en la lista de
+  Environments (`providersOnEnvironment` en `packages/client-runtime/src/environment/hubEnvironments.ts`), y
+  la vista previa de colocación cuenta una máquina dedicada al Space como utilizable (antes solo las
+  personales del propio usuario). Archivos: `ChatView.tsx`, `HubEnvironmentSelector.tsx`,
+  `useHubEnvironments.ts`, `aiAccountPicker.ts`, `packages/contracts/src/hubEnvironments.ts` y sus pruebas.
+
 ## Traer cambios de Eijun sin perder lo nuestro
 
-Lo nuestro vive en archivos que Eijun no toca (`bezenti/`, `.github/workflows/bezenti.yml`) más los tres
+Lo nuestro vive en archivos que Eijun no toca (`bezenti/`, `.github/workflows/bezenti.yml`) más los
 arreglos de arriba, así que un merge normal casi nunca da conflictos:
 
 ```bash
 git remote add eijun https://github.com/EijunnN/bezenti-hub.git   # una vez
 git fetch eijun
 git checkout -b actualizar-eijun origin/main
-git merge eijun/main            # si hay conflicto en los 3 archivos de arriba: quedarse con lo de Eijun
+git merge eijun/main            # si hay conflicto en los archivos de arriba: quedarse con lo de Eijun
                                 # si él ya lo arregló, o reaplicar nuestro cambio si no
 git push -u origin actualizar-eijun
 # revisar, y fusionar en main: el CI compila, publica imagen + Release y despliega el Hub

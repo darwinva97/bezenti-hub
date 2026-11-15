@@ -134,6 +134,15 @@ Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
 { "key": "mod+j", "command": "terminal.toggle", "when": "terminalOpen && !terminalFocus" }
 ```
 
+## Thread tabs
+
+`mod+alt+]` and `mod+alt+[` move to the next and previous tab, `mod+alt+1` through
+`mod+alt+9` jump to a tab by position, and `mod+alt+w` closes the current tab. These avoid
+the browser's own tab shortcuts. In the desktop app `ctrl+tab` and `ctrl+shift+tab` also
+switch tabs. `mod+w` stays with the terminal and right panel, so it does not close tabs. In the
+tab strip, arrow keys move between tabs, Enter opens one and Delete closes it. Change these under
+**Thread Tab** in Settings → Keybindings.
+
 ## Find in the current thread
 
 `chat.find` searches conversation messages and proposed plans in the active thread. Entering a

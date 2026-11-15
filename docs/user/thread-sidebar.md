@@ -61,6 +61,19 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+## Thread tabs
+
+The top of the chat area is a strip of tabs, one per open thread, with the project icon, the
+title and a dot for working, waiting for you, or failed. Opening a thread from the sidebar
+reuses the current tab; a thread that is already open just gets its tab back. Middle-click a
+sidebar row to open it in a background tab, or press **+** to start a new thread in a new tab.
+Drag tabs to reorder them; the strip scrolls sideways when they do not fit.
+
+Closing a tab only removes it from the strip. The thread keeps running and stays in the sidebar.
+Tabs are remembered per user on each Hub, and a tab whose thread was deleted or archived is
+dropped. They do not depend on the sidebar's Space filter. On narrow screens the header keeps
+the plain title without tabs.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.

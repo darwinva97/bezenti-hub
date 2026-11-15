@@ -6,6 +6,8 @@ import * as Option from "effect/Option";
 import { Navigate, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+import { tabKey } from "@t3tools/client-runtime/thread-tabs";
+import { dropThreadTab } from "../state/threadTabs";
 import ChatView from "./ChatView";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { SidebarInset } from "./ui/sidebar";
@@ -127,6 +129,13 @@ export function ThreadRouteView({
     if (renderState === "missing") {
       const { clearPendingFileDropsForThread } = useSidebarPendingFileDropStore.getState();
       clearPendingFileDropsForThread(target.threadRef);
+      dropThreadTab(
+        tabKey({
+          kind: "thread",
+          environmentId: target.threadRef.environmentId,
+          threadId: target.threadRef.threadId,
+        }),
+      );
       if (environmentHasAnyThreads && !background) {
         void navigate({ to: "/", replace: true });
       }

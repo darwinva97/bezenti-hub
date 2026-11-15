@@ -28,23 +28,25 @@ import { useStableCallback } from "../../hooks/useStableCallback";
 import { startNewThreadInNewTab } from "../../lib/startNewThreadInNewTab";
 import { cn } from "../../lib/utils";
 import {
-  useAllEnvironmentShellsBootstrapped,
   useHiddenThreadKeys,
   useProject,
   useQuietThreadShell,
   useQuietThreadShells,
 } from "../../state/entities";
 import {
+  closeOtherThreadTabs,
   closeThreadTab,
   moveThreadTab,
   navigateToThreadTab,
   pruneThreadTabsStore,
   selectThreadTabsScope,
+  setThreadTabTitle,
   syncThreadTabsRoute,
   threadTabRef,
   useThreadTabsScope,
   useThreadTabsStore,
 } from "../../state/threadTabs";
+import { readLocalApi } from "../../localApi";
 import { useUiStateStore } from "../../uiStateStore";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { resolveThreadLastVisitedAt, resolveThreadStatusPill } from "../Sidebar.logic";
@@ -57,6 +59,7 @@ const DRAG_MODIFIERS = [restrictToHorizontalAxis, restrictToFirstScrollableAnces
 interface TabHandlers {
   readonly onActivate: (tab: ThreadTab) => void;
   readonly onClose: (key: string) => void;
+  readonly onMenu: (key: string, position: { x: number; y: number }) => void;
 }
 
 const ThreadTabItem = memo(function ThreadTabItem(
@@ -69,7 +72,7 @@ const ThreadTabItem = memo(function ThreadTabItem(
     label: ReactNode;
   },
 ) {
-  const { tab, selected, alone, onActivate, onClose } = props;
+  const { tab, selected, alone, onActivate, onClose, onMenu } = props;
   const key = tabKey(tab);
   const threadRef = tab.kind === "thread" ? threadTabRef(tab) : null;
   const shell = useQuietThreadShell(threadRef);
@@ -94,7 +97,15 @@ const ThreadTabItem = memo(function ThreadTabItem(
         },
       })
     : null;
-  const title = shell?.title ?? (tab.kind === "draft" ? "New thread" : "Thread");
+  const title =
+    shell?.title ??
+    (tab.kind === "thread" ? tab.title : undefined) ??
+    (tab.kind === "draft" ? "New thread" : "Thread");
+  const shellTitle = shell?.title;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- remembers the title in the persisted tab store for when the Thread is off the client lists
+  useEffect(() => {
+    if (shellTitle !== undefined) setThreadTabTitle(key, shellTitle);
+  }, [key, shellTitle]);
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: key });
 
   return (
@@ -123,6 +134,13 @@ const ThreadTabItem = memo(function ThreadTabItem(
       onMouseDown={(event: ReactMouseEvent) => {
         if (event.button === 1) event.preventDefault();
       }}
+      onContextMenu={(event: ReactMouseEvent) => {
+        // The open Thread's menu belongs to the header; another tab gets its own, never that one.
+        if (selected) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onMenu(key, { x: event.clientX, y: event.clientY });
+      }}
       onKeyDown={(event: ReactKeyboardEvent) => {
         if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
@@ -134,6 +152,11 @@ const ThreadTabItem = memo(function ThreadTabItem(
         }
       }}
       {...listeners}
+      onPointerDown={(event) => {
+        // Selecting text in the rename field must not start a drag.
+        if (event.target instanceof Element && event.target.closest("input, textarea")) return;
+        listeners?.onPointerDown?.(event);
+      }}
     >
       <PanelTabCloseButton label={`Close ${title}`} onClick={() => onClose(key)}>
         {project ? (
@@ -153,38 +176,47 @@ const ThreadTabItem = memo(function ThreadTabItem(
       {props.label ?? (
         <Tooltip>
           <TooltipTrigger render={<span className="min-w-0 flex-1 truncate">{title}</span>} />
-          <TooltipPopup side="bottom">{title}</TooltipPopup>
+          <TooltipPopup side="bottom">
+            {project ? `${project.title} · ${title}` : title}
+          </TooltipPopup>
         </Tooltip>
       )}
     </div>
   );
 });
 
-/** Drops the tabs of Threads that are gone or hidden once the shells are known. */
+/**
+ * Drops a tab only on a positive sign that its Thread is deleted, archived or hidden, or that its
+ * draft is gone. A Thread merely missing from the client lists (older settled ones, a snapshot
+ * that is cached or empty while the Hub is unreachable) keeps its tab.
+ */
 function ThreadTabsPruner(props: { routeKey: string }) {
-  const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const shells = useQuietThreadShells();
   const hidden = useHiddenThreadKeys();
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors the live thread list and draft store into the persisted tab store
+  const tabs = useThreadTabsStore((state) => state.tabs);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors the thread lists and draft store into the persisted tab store
   useEffect(() => {
-    if (!bootstrapped) return;
-    const live = new Set(
-      shells
-        .filter((shell) => shell.deletedAt == null && shell.archivedAt == null)
-        .map((shell) =>
-          tabKey({ kind: "thread", environmentId: shell.environmentId, threadId: shell.id }),
-        ),
-    );
-    for (const key of hidden) live.delete(`t\u0000${key}`);
+    const gone = new Set<string>();
+    for (const shell of shells) {
+      if (shell.deletedAt == null && shell.archivedAt == null) continue;
+      gone.add(tabKey({ kind: "thread", environmentId: shell.environmentId, threadId: shell.id }));
+    }
+    for (const key of hidden) gone.add(`t\u0000${key}`);
     const drafts = useComposerDraftStore.getState();
     pruneThreadTabsStore(
       (tab) =>
         tab.kind === "thread"
-          ? live.has(tabKey(tab))
+          ? !gone.has(tabKey(tab))
           : drafts.getDraftSession(DraftId.make(tab.draftId)) != null,
       props.routeKey,
     );
-  }, [bootstrapped, shells, hidden, props.routeKey]);
+  }, [
+    shells,
+    hidden,
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Tabs loaded from storage after the lists are known are checked too.
+    tabs,
+    props.routeKey,
+  ]);
   return null;
 }
 
@@ -210,7 +242,12 @@ export function ThreadTabStrip(props: {
   activeTab: ThreadTab;
   /** The open Thread's title controls (rename, actions menu), shown on its tab. */
   activeLabel: ReactNode;
+  /** The open Thread's Project, named on the new-thread button. */
+  activeProjectName?: string | null | undefined;
 }) {
+  const newThreadLabel = props.activeProjectName
+    ? `New thread in ${props.activeProjectName}`
+    : "New tab";
   const router = useRouter();
   const scope = useThreadTabsScope();
   const tabs = useThreadTabsStore((state) => state.tabs);
@@ -240,6 +277,22 @@ export function ThreadTabStrip(props: {
     if (!useThreadTabsStore.getState().tabs.some((entry) => tabKey(entry) === tabKey(tab))) return;
     void navigateToThreadTab(router, tab);
   });
+  const showTabMenu = useStableCallback((key: string, position: { x: number; y: number }) => {
+    const api = readLocalApi();
+    if (!api) return;
+    void api.contextMenu
+      .show(
+        [
+          { id: "close", label: "Close tab" },
+          { id: "close-others", label: "Close other tabs" },
+        ],
+        position,
+      )
+      .then((action) => {
+        if (action === "close") void closeThreadTab(router, key);
+        else if (action === "close-others") void closeOtherThreadTabs(router, key);
+      });
+  });
   const close = useStableCallback((key: string) => {
     void closeThreadTab(router, key);
   });
@@ -267,13 +320,13 @@ export function ThreadTabStrip(props: {
   const selectedKnown = tabs.some((tab) => tabKey(tab) === routeKey);
   const tabbableKey = selectedKnown ? routeKey : tabs[0] ? tabKey(tabs[0]) : null;
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-1 [-webkit-app-region:no-drag]">
+    <div className="flex min-w-0 flex-1 items-center gap-1">
       <ThreadTabsPruner routeKey={routeKey} />
       <div
         role="tablist"
         aria-label="Open threads"
         data-thread-tabs
-        className="flex min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="flex min-w-0 items-center gap-0.5 overflow-x-auto [-webkit-app-region:no-drag] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         onKeyDown={handleKeyDown}
         onWheel={handleWheel}
       >
@@ -299,6 +352,7 @@ export function ThreadTabStrip(props: {
                   label={key === routeKey ? props.activeLabel : null}
                   onActivate={activate}
                   onClose={close}
+                  onMenu={showTabMenu}
                 />
               );
             })}
@@ -309,17 +363,17 @@ export function ThreadTabStrip(props: {
         <TooltipTrigger
           render={
             <Button
-              aria-label="New tab"
+              aria-label={newThreadLabel}
               variant="ghost"
               size="icon-xs"
-              className="shrink-0"
+              className="shrink-0 [-webkit-app-region:no-drag]"
               onClick={openNewTab}
             />
           }
         >
           <PlusIcon />
         </TooltipTrigger>
-        <TooltipPopup side="bottom">New thread in a new tab</TooltipPopup>
+        <TooltipPopup side="bottom">{newThreadLabel} (new tab)</TooltipPopup>
       </Tooltip>
     </div>
   );

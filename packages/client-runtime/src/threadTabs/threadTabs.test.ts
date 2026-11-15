@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   activateTab,
   adjacentTab,
+  closeOtherTabs,
   closeTab,
   emptyThreadTabs,
   moveTab,
@@ -11,6 +12,7 @@ import {
   parseStoredThreadTabs,
   pruneThreadTabs,
   serializeThreadTabs,
+  setTabTitle,
   syncThreadTabsToRoute,
   tabAtIndex,
   tabKey,
@@ -111,6 +113,29 @@ describe("closing", () => {
   it("ignores a tab that is not open", () => {
     const state = stateOf([a], a);
     expect(closeTab(state, tabKey(b))).toBe(state);
+  });
+});
+
+describe("closing the others", () => {
+  it("keeps one tab and makes it active", () => {
+    const next = closeOtherTabs(stateOf([a, b, c], a), tabKey(c));
+    expect(names(next)).toEqual([tabKey(c)]);
+    expect(next.activeKey).toBe(tabKey(c));
+  });
+
+  it("changes nothing for a lone active tab or an unknown one", () => {
+    const state = stateOf([a], a);
+    expect(closeOtherTabs(state, tabKey(a))).toBe(state);
+    expect(closeOtherTabs(state, tabKey(b))).toBe(state);
+  });
+});
+
+describe("titles", () => {
+  it("remembers a Thread's last title and survives storage", () => {
+    const next = setTabTitle(stateOf([a, b], a), tabKey(b), "Fix login");
+    expect(next.tabs[1]).toEqual({ ...b, title: "Fix login" });
+    expect(parseStoredThreadTabs(serializeThreadTabs(next))).toEqual(next);
+    expect(setTabTitle(next, tabKey(b), "Fix login")).toBe(next);
   });
 });
 

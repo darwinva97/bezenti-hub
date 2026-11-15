@@ -498,8 +498,14 @@ export const ChatHeader = memo(function ChatHeader({
         <>
           <ThreadTabStrip
             activeTab={activeTab}
+            activeProjectName={activeProjectName}
             activeLabel={
-              <span className="flex min-w-0 flex-1 items-center font-medium text-foreground">
+              <span className="flex min-w-0 flex-1 items-center gap-1 font-medium text-foreground">
+                {activeProjectName ? (
+                  <span className="max-w-20 shrink-0 truncate font-normal text-muted-foreground">
+                    {activeProjectName} ·
+                  </span>
+                ) : null}
                 {titleControl}
               </span>
             }

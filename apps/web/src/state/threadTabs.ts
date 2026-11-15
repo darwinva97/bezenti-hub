@@ -1,4 +1,5 @@
 import {
+  closeOtherTabs,
   closeTab,
   emptyThreadTabs,
   moveTab,
@@ -6,6 +7,7 @@ import {
   parseStoredThreadTabs,
   pruneThreadTabs,
   serializeThreadTabs,
+  setTabTitle,
   syncThreadTabsToRoute,
   tabKey,
   threadTabsStorageKey,
@@ -75,10 +77,17 @@ export function selectThreadTabsScope(scope: string | null) {
 /** `scope` for the signed-in User on the connected Hub, null until both are loaded. */
 export function useThreadTabsScope(): string | null {
   const hubEnvironmentId = useHubEnvironmentId();
-  const spacesLoaded = useCurrentSpace((state) => state.environmentId !== null);
-  const userId = useCurrentSpace((state) => state.view?.userId ?? null);
-  if (hubEnvironmentId === null || !spacesLoaded) return null;
-  return threadTabsStorageKey(userId ?? "local", hubEnvironmentId);
+  // `local` is only for a server with no Users; while the directory loads or failed, whose tabs
+  // these are is unknown, so none are read or written.
+  const userId = useCurrentSpace((state) =>
+    state.view !== null
+      ? state.view.userId
+      : state.environmentId !== null && !state.loadFailed
+        ? "local"
+        : null,
+  );
+  if (hubEnvironmentId === null || userId === null) return null;
+  return threadTabsStorageKey(userId, hubEnvironmentId);
 }
 
 export function syncThreadTabsRoute(routeTab: ThreadTab | null) {
@@ -112,6 +121,15 @@ export function openThreadTabInBackground(tab: ThreadTab) {
   commit(openInNewTab(useThreadTabsStore.getState(), tab, { activate: false }));
 }
 
+export function setThreadTabTitle(key: string, title: string) {
+  commit(setTabTitle(useThreadTabsStore.getState(), key, title));
+}
+
+/** Forgets a tab of a Thread known to be gone, without moving the route. */
+export function dropThreadTab(key: string) {
+  commit(closeTab(useThreadTabsStore.getState(), key));
+}
+
 export function moveThreadTab(key: string, toIndex: number) {
   commit(moveTab(useThreadTabsStore.getState(), key, toIndex));
 }
@@ -136,10 +154,14 @@ export function routeThreadTab(router: AnyRouter): ThreadTab | null {
 }
 
 /** Moves the route to `tab`; the strip follows from the route. */
-export function navigateToThreadTab(router: AnyRouter, tab: ThreadTab) {
+export function navigateToThreadTab(router: AnyRouter, tab: ThreadTab, replace = false) {
   return tab.kind === "thread"
-    ? router.navigate({ to: "/$threadId", params: { threadId: tab.threadId } })
-    : router.navigate({ to: "/draft/$draftId", params: { draftId: DraftId.make(tab.draftId) } });
+    ? router.navigate({ to: "/$threadId", params: { threadId: tab.threadId }, replace })
+    : router.navigate({
+        to: "/draft/$draftId",
+        params: { draftId: DraftId.make(tab.draftId) },
+        replace,
+      });
 }
 
 /**
@@ -153,6 +175,17 @@ export function closeThreadTab(router: AnyRouter, key: string) {
   commit(next);
   if (routeTab === null || tabKey(routeTab) !== key) return;
   const neighbour = next.tabs.find((tab) => tabKey(tab) === next.activeKey);
-  if (neighbour === undefined) return router.navigate({ to: "/" });
-  return navigateToThreadTab(router, neighbour);
+  // Replaced, so Back does not return to the Thread whose tab was just closed.
+  if (neighbour === undefined) return router.navigate({ to: "/", replace: true });
+  return navigateToThreadTab(router, neighbour, true);
+}
+
+/** Closes every tab but `key`'s; the route follows when the open Thread's tab was closed. */
+export function closeOtherThreadTabs(router: AnyRouter, key: string) {
+  const routeTab = routeThreadTab(router);
+  const next = closeOtherTabs(useThreadTabsStore.getState(), key);
+  commit(next);
+  const kept = next.tabs.find((tab) => tabKey(tab) === key);
+  if (kept === undefined || (routeTab !== null && tabKey(routeTab) === key)) return;
+  return navigateToThreadTab(router, kept, true);
 }

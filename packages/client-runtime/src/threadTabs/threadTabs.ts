@@ -6,6 +6,8 @@ export type ThreadTab =
       readonly kind: "thread";
       readonly environmentId: string;
       readonly threadId: string;
+      /** The last title seen, shown while the Thread is not in the client's lists. */
+      readonly title?: string;
     }
   | { readonly kind: "draft"; readonly draftId: string };
 
@@ -70,6 +72,23 @@ export function closeTab(state: ThreadTabsState, key: string): ThreadTabsState {
   const tabs = state.tabs.filter((_, at) => at !== index);
   if (state.activeKey !== key) return { tabs, activeKey: state.activeKey };
   return { tabs, activeKey: neighbourKey(state.tabs, index) };
+}
+
+/** Keeps `key` and closes the rest; it becomes the active tab. */
+export function closeOtherTabs(state: ThreadTabsState, key: string): ThreadTabsState {
+  const kept = state.tabs.filter((tab) => tabKey(tab) === key);
+  if (kept.length === 0 || (state.tabs.length === 1 && state.activeKey === key)) return state;
+  return { tabs: kept, activeKey: key };
+}
+
+export function setTabTitle(state: ThreadTabsState, key: string, title: string): ThreadTabsState {
+  const index = indexOfKey(state, key);
+  const tab = state.tabs[index];
+  if (tab === undefined || tab.kind !== "thread" || tab.title === title) return state;
+  return {
+    tabs: state.tabs.map((entry, at) => (at === index ? { ...tab, title } : entry)),
+    activeKey: state.activeKey,
+  };
 }
 
 export function moveTab(state: ThreadTabsState, key: string, toIndex: number): ThreadTabsState {
@@ -154,7 +173,12 @@ function parseStoredTab(value: unknown): ThreadTab | null {
   if (typeof value !== "object" || value === null) return null;
   const entry = value as Record<string, unknown>;
   if (entry.kind === "thread" && isText(entry.environmentId) && isText(entry.threadId)) {
-    return { kind: "thread", environmentId: entry.environmentId, threadId: entry.threadId };
+    return {
+      kind: "thread",
+      environmentId: entry.environmentId,
+      threadId: entry.threadId,
+      ...(isText(entry.title) ? { title: entry.title } : {}),
+    };
   }
   if (entry.kind === "draft" && isText(entry.draftId)) {
     return { kind: "draft", draftId: entry.draftId };

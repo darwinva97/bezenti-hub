@@ -428,6 +428,8 @@ function routeThreadOnly(
 function useSidebarThreads(input: {
   readonly projectScopeKey: string | null;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
+  // Projects in the current Space: the older settled shelf loads and counts only those.
+  readonly spaceProjectKeys: ReadonlySet<string> | null;
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
@@ -441,6 +443,7 @@ function useSidebarThreads(input: {
   const {
     projectScopeKey,
     scopedProjectKeys,
+    spaceProjectKeys,
     serverConfigs,
     connectedEnvironmentIds,
     optimisticDrop,
@@ -515,7 +518,10 @@ function useSidebarThreads(input: {
     partition;
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
-    scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
+    scopes: olderSettledScopes(
+      [...serverConfigs.keys()],
+      intersectProjectKeys(scopedProjectKeys, spaceProjectKeys),
+    ),
     expanded: settledShelfExpanded,
     visibleCount: settledVisibleCount,
   });
@@ -1210,11 +1216,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   });
   const scopedProjectGroups = revealWidensScope ? [] : chosenProjectGroups;
   const scopedProjectRefs = scopedProjectGroups.flatMap((project) => project.memberProjectRefs);
-  // Older settled threads and drafts are scoped by Project too, so the Space filter narrows them.
-  const scopedProjectKeys = intersectProjectKeys(
-    revealWidensScope ? null : chosenScopeProjectKeys,
-    spaceFilter.projectKeys,
-  );
+  const scopedProjectKeys = revealWidensScope ? null : chosenScopeProjectKeys;
   const threadSearch = useThreadSearch(
     connectedEnvironmentIds,
     threadSearchQuery,
@@ -1223,6 +1225,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : { projectIds: scopedProjectRefs.map((projectRef) => projectRef.projectId) },
   );
   const routeDraftIdForRows = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
+  const hiddenProjectKeys = spaceFilter.hiddenProjectKeys;
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
     let count = 0;
     for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
@@ -1238,6 +1241,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ) {
         continue;
       }
+      if (hiddenProjectKeys?.has(`${session.environmentId}:${session.projectId}`)) continue;
       count += 1;
     }
     return count;
@@ -1363,6 +1367,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   } = useSidebarThreads({
     projectScopeKey,
     scopedProjectKeys,
+    spaceProjectKeys: spaceFilter.spaceProjectKeys,
     serverConfigs,
     connectedEnvironmentIds,
     optimisticDrop,
@@ -3483,6 +3488,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           projectByKey={projectByKey}
                           projectDisplayNameByKey={projectDisplayNameByKey}
                           scopedProjectKeys={scopedProjectKeys}
+                          hiddenProjectKeys={hiddenProjectKeys}
                           routeDraftId={routeDraftIdForRows}
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}

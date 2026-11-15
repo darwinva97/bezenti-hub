@@ -143,6 +143,8 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   scopedProjectKeys: ReadonlySet<string> | null;
+  /** Projects the Space filter hides; their drafts are hidden too. */
+  hiddenProjectKeys?: ReadonlySet<string> | null;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
   onDraftContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
@@ -184,6 +186,9 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
         props.scopedProjectKeys !== null &&
         !props.scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
       ) {
+        continue;
+      }
+      if (props.hiddenProjectKeys?.has(`${session.environmentId}:${session.projectId}`)) {
         continue;
       }
       if (draftKey === props.routeDraftId) {

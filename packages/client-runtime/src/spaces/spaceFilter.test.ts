@@ -3,7 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   effectiveSpaceFilter,
-  filterBySpace,
+  filterProjectsBySpace,
+  filterThreadsBySpace,
+  hiddenProjectKeys,
+  inSpaceProjectKeys,
   showAllSpacesStorageKey,
   threadSpaceId,
 } from "./spaceFilter.ts";
@@ -62,117 +65,79 @@ describe("showAllSpacesStorageKey", () => {
   });
 });
 
-describe("filterBySpace", () => {
+describe("space filtering", () => {
   const projects = [project("p-acme", acme), project("p-personal", personal)];
   const threads = [
     thread("t-acme", "p-acme"),
     thread("t-personal", "p-personal"),
     thread("t-own", "p-personal", acme),
   ];
+  type Open = Array<{ environmentId: string; threadId: string }>;
+  const threadsIn = (spaceId: SpaceId | null, openThreads: Open = [], list = threads) =>
+    filterThreadsBySpace({ spaceId, environmentId: env, threads: list, projects, openThreads });
+  const projectsIn = (spaceId: SpaceId | null, keepProjectKeys: string[] = [], list = projects) =>
+    filterProjectsBySpace({ spaceId, environmentId: env, projects: list, keepProjectKeys });
 
-  it("keeps only the Threads and Projects of the Space", () => {
-    const result = filterBySpace({
-      spaceId: acme,
-      environmentId: env,
-      projects,
-      threads,
-      openThreads: [],
-      openProject: null,
-    });
-    expect(ids(result.threads)).toEqual(["t-acme", "t-own"]);
-    // The Personal Project stays because it hosts a Thread of Acme.
-    expect(ids(result.projects)).toEqual(["p-acme", "p-personal"]);
+  it("keeps the Threads of the Space, by own Space first and else the Project's", () => {
+    expect(ids(threadsIn(acme))).toEqual(["t-acme", "t-own"]);
+    expect(ids(threadsIn(personal))).toEqual(["t-personal"]);
   });
 
-  it("drops a Project with nothing of the Space", () => {
-    const result = filterBySpace({
-      spaceId: personal,
-      environmentId: env,
-      projects,
-      threads: [thread("t-acme", "p-acme"), thread("t-personal", "p-personal")],
-      openThreads: [],
-      openProject: null,
-    });
-    expect(ids(result.threads)).toEqual(["t-personal"]);
-    expect(ids(result.projects)).toEqual(["p-personal"]);
+  it("keeps the Projects of the Space, and those asked to stay", () => {
+    expect(ids(projectsIn(personal))).toEqual(["p-personal"]);
+    expect(ids(projectsIn(personal, [`${env}:p-acme`]))).toEqual(["p-acme", "p-personal"]);
   });
 
   it("shows items whose Space is unknown", () => {
-    const result = filterBySpace({
-      spaceId: acme,
-      environmentId: env,
-      projects: [project("p-old"), project("p-null", null)],
-      threads: [thread("t-old", "p-old"), thread("t-missing", "p-gone")],
-      openThreads: [],
-      openProject: null,
-    });
-    expect(ids(result.threads)).toEqual(["t-old", "t-missing"]);
-    expect(ids(result.projects)).toEqual(["p-old", "p-null"]);
+    const loose = [project("p-old"), project("p-null", null)];
+    expect(ids(projectsIn(acme, [], loose))).toEqual(["p-old", "p-null"]);
+    const looseThreads = [thread("t-old", "p-old"), thread("t-missing", "p-gone")];
+    expect(ids(threadsIn(acme, [], looseThreads))).toEqual(["t-old", "t-missing"]);
   });
 
-  it("returns the same arrays when there is nothing to filter by", () => {
-    const result = filterBySpace({
-      spaceId: null,
-      environmentId: env,
-      projects,
-      threads,
-      openThreads: [],
-      openProject: null,
-    });
-    expect(result.threads).toBe(threads);
-    expect(result.projects).toBe(projects);
-  });
-
-  it("returns the same arrays when everything is kept", () => {
+  it("returns the same arrays when there is nothing to filter by or to drop", () => {
+    expect(threadsIn(null)).toBe(threads);
+    expect(projectsIn(null)).toBe(projects);
     const own = [project("p", acme)];
+    expect(projectsIn(acme, [], own)).toBe(own);
     const mine = [thread("t", "p")];
-    const result = filterBySpace({
-      spaceId: acme,
-      environmentId: env,
-      projects: own,
-      threads: mine,
-      openThreads: [],
-      openProject: null,
-    });
-    expect(result.threads).toBe(mine);
-    expect(result.projects).toBe(own);
+    expect(threadsIn(acme, [], mine)).toBe(mine);
   });
 
-  it("keeps the open Thread and its Project even from another Space", () => {
-    const result = filterBySpace({
-      spaceId: personal,
-      environmentId: env,
-      projects,
-      threads: [thread("t-acme", "p-acme"), thread("t-other", "p-acme")],
-      openThreads: [{ environmentId: env, threadId: "t-acme" }],
-      openProject: null,
-    });
-    expect(ids(result.threads)).toEqual(["t-acme"]);
-    expect(ids(result.projects)).toEqual(["p-acme", "p-personal"]);
+  it("keeps the open Thread and a whole chain of open ancestors from another Space", () => {
+    const chain = [thread("a", "p-acme"), thread("b", "p-acme"), thread("c", "p-acme"), ...threads];
+    const open = ["a", "b", "c"].map((threadId) => ({ environmentId: env, threadId }));
+    expect(ids(threadsIn(personal, open, chain))).toEqual(["a", "b", "c", "t-personal"]);
   });
 
-  it("keeps the Project of an open draft", () => {
-    const result = filterBySpace({
-      spaceId: personal,
-      environmentId: env,
-      projects,
-      threads: [],
-      openThreads: [],
-      openProject: { environmentId: env, projectId: "p-acme" },
-    });
-    expect(ids(result.projects)).toEqual(["p-acme", "p-personal"]);
+  it("keeps a Thread whose Project entity is missing", () => {
+    const lost = [thread("t-lost", "p-gone", acme)];
+    expect(ids(threadsIn(personal, [{ environmentId: env, threadId: "t-lost" }], lost))).toEqual([
+      "t-lost",
+    ]);
   });
 
   it("leaves other environments alone, whose Spaces are not this filter's", () => {
-    const result = filterBySpace({
-      spaceId: acme,
-      environmentId: env,
-      projects: [project("p", personal, "env-2")],
-      threads: [thread("t", "p", personal, "env-2")],
-      openThreads: [],
-      openProject: null,
-    });
-    expect(ids(result.threads)).toEqual(["t"]);
-    expect(ids(result.projects)).toEqual(["p"]);
+    const foreign = [thread("t", "p", personal, "env-2")];
+    expect(ids(threadsIn(acme, [], foreign))).toEqual(["t"]);
+    expect(ids(projectsIn(acme, [], [project("p", personal, "env-2")]))).toEqual(["p"]);
+  });
+
+  it("keeps the filtered Projects array across calls with the same inputs", () => {
+    expect(projectsIn(personal, [`${env}:p-acme`])).toBe(projectsIn(personal, [`${env}:p-acme`]));
+    expect(projectsIn(personal)).toBe(projectsIn(personal));
+  });
+
+  it("lists the Projects in the Space apart from those merely kept", () => {
+    const keys = inSpaceProjectKeys({ spaceId: personal, environmentId: env, projects });
+    expect([...(keys ?? [])]).toEqual([`${env}:p-personal`]);
+    expect(inSpaceProjectKeys({ spaceId: null, environmentId: env, projects })).toBeNull();
+    expect(inSpaceProjectKeys({ spaceId: personal, environmentId: env, projects })).toBe(keys);
+  });
+
+  it("names the Projects the filter hides", () => {
+    const kept = projectsIn(personal);
+    expect([...(hiddenProjectKeys(projects, kept) ?? [])]).toEqual([`${env}:p-acme`]);
+    expect(hiddenProjectKeys(projects, projects)).toBeNull();
   });
 });

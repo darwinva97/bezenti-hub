@@ -1,8 +1,9 @@
 import type { ThemeProposal } from "@t3tools/shared/themeProposal";
-import { PaletteIcon } from "lucide-react";
+import { PaletteIcon, TriangleAlertIcon } from "lucide-react";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { useTheme } from "../../hooks/useTheme";
+import { THEME_CSS_RECOVERY_SHORTCUT } from "../../themeCssRecovery";
 import {
   applyThemeProposal,
   getThemeProposalState,
@@ -10,25 +11,38 @@ import {
   stopThemeProposalPreview,
   subscribeThemeProposals,
   themeProposalAppliedHere,
+  themeProposalCssFromInput,
   themeProposalDefinition,
   themeProposalReadable,
   undoThemeProposal,
+  type ThemeProposalApplyResult,
 } from "../../themeProposalApply";
 import { Button } from "../ui/button";
 
+export const THEME_PROPOSAL_CSS_WARNING =
+  "Includes custom CSS: it can change how anything on the page looks, including buttons";
+
+function cssSize(length: number): string {
+  return length < 1024 ? `${length} characters` : `${(length / 1024).toFixed(1)} KB`;
+}
+
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+
 /**
  * A theme an agent proposed. Showing it changes nothing; Preview, Apply and Undo act only in this
- * browser, for whoever clicks. `actions` is false where the viewer cannot act, such as a guest link.
- * The preview and the applied records are shared by every card (themeProposalApply's store).
+ * browser. `actions` is false where the viewer cannot act, such as a guest link. A proposal's CSS
+ * is read on the first Preview or Apply with `loadCssInput` (the stored tool call's input).
  */
 export function ThemeProposalCard({
   itemId,
   proposal,
   actions,
+  loadCssInput,
 }: {
   readonly itemId: string;
   readonly proposal: ThemeProposal;
   readonly actions: boolean;
+  readonly loadCssInput?: (() => Promise<unknown>) | undefined;
 }) {
   const { theme } = useTheme();
   const shared = useSyncExternalStore(
@@ -37,6 +51,8 @@ export function ThemeProposalCard({
     getThemeProposalState,
   );
   const [message, setMessage] = useState<string | null>(null);
+  const [css, setCss] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const definition = themeProposalDefinition(proposal);
   const readable = themeProposalReadable(proposal);
   const previewing = shared.previewing === itemId;
@@ -51,15 +67,47 @@ export function ThemeProposalCard({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- unmount cleanup only: this card's preview, painted on the document, must end when the card leaves the screen
   useEffect(() => () => stopThemeProposalPreview(itemId), [itemId]);
 
-  const togglePreview = () => {
-    if (previewing) stopThemeProposalPreview(itemId);
-    else previewThemeProposal(itemId, proposal);
+  /** The proposal's CSS, loaded once and checked; undefined for a colors-only proposal. */
+  const loadCss = async (): Promise<
+    | { readonly ok: true; readonly css: string | undefined }
+    | { readonly ok: false; readonly message: string }
+  > => {
+    if (proposal.css === undefined) return { ok: true, css: undefined };
+    if (css !== null) return { ok: true, css };
+    if (loadCssInput === undefined) {
+      return { ok: false, message: "The proposal's CSS cannot be loaded here." };
+    }
+    setLoading(true);
+    try {
+      const found = themeProposalCssFromInput(proposal, await loadCssInput());
+      if (found.ok) setCss(found.css);
+      return found;
+    } catch {
+      return { ok: false, message: "The proposal's CSS could not be loaded." };
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const apply = () => {
-    const result = applyThemeProposal(itemId, proposal);
+  const act = async (run: (css: string | undefined) => ThemeProposalApplyResult) => {
+    const loaded = await loadCss();
+    if (!loaded.ok) {
+      setMessage(loaded.message);
+      return;
+    }
+    const result = run(loaded.css);
     setMessage(result.ok ? null : result.message);
   };
+
+  const togglePreview = () => {
+    if (previewing) {
+      stopThemeProposalPreview(itemId);
+      return;
+    }
+    void act((loaded) => previewThemeProposal(itemId, proposal, loaded));
+  };
+
+  const apply = () => void act((loaded) => applyThemeProposal(itemId, proposal, loaded));
 
   const undo = () => {
     setMessage(undoThemeProposal(itemId) ? null : "The previous theme could not be restored.");
@@ -92,6 +140,22 @@ export function ThemeProposalCard({
           </p>
         </div>
       </div>
+      {proposal.css === undefined ? null : (
+        <div
+          data-theme-proposal-css=""
+          className="mt-2 flex items-start gap-1.5 text-xs text-warning-foreground"
+        >
+          <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+          <p className="min-w-0">
+            {THEME_PROPOSAL_CSS_WARNING} ({cssSize(proposal.css.length)}).{" "}
+            <span className="text-muted-foreground">
+              If it hides the page, press{" "}
+              {isMac ? THEME_CSS_RECOVERY_SHORTCUT.mac : THEME_CSS_RECOVERY_SHORTCUT.other} or open
+              the app with ?safe-theme=1.
+            </span>
+          </p>
+        </div>
+      )}
       {actions ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {applied ? (
@@ -100,13 +164,13 @@ export function ThemeProposalCard({
             </Button>
           ) : (
             <>
-              <Button size="xs" disabled={!readable} onClick={apply}>
+              <Button size="xs" disabled={!readable || loading} onClick={apply}>
                 Apply to my appearance
               </Button>
               <Button
                 size="xs"
                 variant="ghost"
-                disabled={!readable}
+                disabled={!readable || loading}
                 aria-pressed={previewing}
                 onClick={togglePreview}
               >
@@ -115,7 +179,11 @@ export function ThemeProposalCard({
             </>
           )}
           <span className="text-xs text-muted-foreground">
-            {applied ? "Applied in this browser only." : "Only you, in this browser."}
+            {loading
+              ? "Loading the CSS…"
+              : applied
+                ? "Applied in this browser only."
+                : "Only you, in this browser."}
           </span>
         </div>
       ) : null}

@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { render } from "../test/render";
-import { ThemeProposalCard } from "./components/chat/ThemeProposalCard";
+import { THEME_PROPOSAL_CSS_WARNING, ThemeProposalCard } from "./components/chat/ThemeProposalCard";
+import { ThemeCssSafeModeNotice } from "./components/ThemeCssSafeModeNotice";
 import { readThemeSelection, setAppearanceMode, setTheme } from "./hooks/useTheme";
+import {
+  forgetAllThemeCss,
+  hasStoredThemeCss,
+  initThemeCssSafeMode,
+  storedThemeCss,
+  THEME_CSS_STYLE_ELEMENT_ID,
+  themeCssSha256,
+} from "./themeCss";
+import { installThemeCssRecoveryShortcut } from "./themeCssRecovery";
 import { getCustomThemes, removeCustomThemes } from "./themePalette";
 import {
   applyThemeProposal,
+  dropThemeCss,
+  THEME_BEFORE_CSS_STORAGE_KEY,
   themeProposalAppliedHere,
+  themeProposalCssFromInput,
   themeProposalThemeId,
   undoThemeProposal,
 } from "./themeProposalApply";
@@ -20,13 +33,34 @@ const NIGHT = {
   accent: "#3ddc84",
 } as const;
 
+const CSS =
+  "[data-css-probe] { color: rgb(1, 2, 3) !important; } @keyframes t3probe { to { opacity: 0.5 } }";
+const withCss = (css: string) => ({
+  ...NIGHT,
+  name: "Night CSS",
+  css: { length: css.length, sha256: themeCssSha256(css) },
+});
+const NIGHT_CSS = withCss(CSS);
+const styleElement = () => document.getElementById(THEME_CSS_STYLE_ELEMENT_ID);
+
 function resetBrowserTheme() {
+  initThemeCssSafeMode("");
+  forgetAllThemeCss();
   removeCustomThemes(getCustomThemes().map((theme) => theme.id));
   setTheme("grove");
   setAppearanceMode("light");
   for (const key of Object.keys(window.localStorage)) {
     if (key.startsWith("t3code:theme-proposal-applied:")) window.localStorage.removeItem(key);
   }
+  window.localStorage.removeItem(THEME_BEFORE_CSS_STORAGE_KEY);
+}
+
+/** An element the test CSS colors, removed when the test ends. */
+function cssProbe(): HTMLElement & Disposable {
+  const probe = document.createElement("div");
+  probe.dataset.cssProbe = "";
+  document.body.append(probe);
+  return Object.assign(probe, { [Symbol.dispose]: () => probe.remove() });
 }
 
 /** A known theme for one test, put back when it ends. */
@@ -189,5 +223,203 @@ describe("the theme proposal card", () => {
     );
     const card = screen.container.querySelector<HTMLElement>("[data-theme-proposal-card]")!;
     expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
+  });
+});
+
+describe("custom CSS in a proposal", () => {
+  it("applies the CSS through one style element, and Undo removes it and its stored copy", () => {
+    using _theme = freshBrowserTheme();
+    using probe = cssProbe();
+    const before = readThemeSelection();
+
+    expect(applyThemeProposal("item:css", NIGHT_CSS, CSS)).toEqual({ ok: true });
+    const id = themeProposalThemeId(NIGHT_CSS);
+    expect(id).not.toBe(themeProposalThemeId(NIGHT));
+    expect(storedThemeCss(id)).toBe(CSS);
+    expect(document.querySelectorAll(`#${THEME_CSS_STYLE_ELEMENT_ID}`)).toHaveLength(1);
+    expect(getComputedStyle(probe).color).toBe("rgb(1, 2, 3)");
+
+    expect(undoThemeProposal("item:css")).toBe(true);
+    expect(styleElement()).toBeNull();
+    expect(storedThemeCss(id)).toBeNull();
+    expect(hasStoredThemeCss()).toBe(false);
+    expect(readThemeSelection()).toEqual(before);
+    expect(getComputedStyle(probe).color).not.toBe("rgb(1, 2, 3)");
+  });
+
+  it("removes the style element when another theme is picked, and brings it back with the theme", () => {
+    using _theme = freshBrowserTheme();
+    applyThemeProposal("item:css", NIGHT_CSS, CSS);
+    setTheme("ember");
+    expect(styleElement()).toBeNull();
+    setTheme(themeProposalThemeId(NIGHT_CSS));
+    expect(styleElement()?.textContent).toContain("rgb(1, 2, 3)");
+  });
+
+  it("re-refuses in the browser what today's rules refuse, and any CSS but the proposal's", () => {
+    using _theme = freshBrowserTheme();
+    const before = readThemeSelection();
+    const leaky = '[data-css-probe] { background: url("https://evil.example/a") }';
+    const escaped = "[data-css-probe] { background: u\\72l(https://evil.example/a) }";
+    for (const [proposal, css] of [
+      [withCss(leaky), leaky],
+      [withCss(escaped), escaped],
+      [NIGHT_CSS, `${CSS} `],
+      [NIGHT_CSS, undefined],
+    ] as const) {
+      const result = applyThemeProposal("item:bad-css", proposal, css);
+      expect(result.ok).toBe(false);
+      expect(styleElement()).toBeNull();
+      expect(hasStoredThemeCss()).toBe(false);
+      expect(readThemeSelection()).toEqual(before);
+    }
+  });
+
+  it("finds the CSS in the stored call wherever the adapter put it, by digest alone", () => {
+    const found = (input: unknown) => themeProposalCssFromInput(NIGHT_CSS, input);
+    expect(found({ ...NIGHT, css: CSS })).toEqual({ ok: true, css: CSS });
+    expect(found({ server: "t3-code", tool: "t3_theme_propose", arguments: { css: CSS } })).toEqual(
+      { ok: true, css: CSS },
+    );
+    expect(found(JSON.stringify({ arguments: { css: CSS } }))).toEqual({ ok: true, css: CSS });
+    expect(found({ css: `${CSS} ` }).ok).toBe(false);
+    expect(found({ note: CSS.toUpperCase() }).ok).toBe(false);
+    const leaky = ".x { background: url(https://evil.example/a) }";
+    expect(themeProposalCssFromInput(withCss(leaky), { css: leaky })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("not accepted today"),
+    });
+  });
+
+  it("recovers by the keyboard shortcut even when the CSS hides the whole page", () => {
+    using _theme = freshBrowserTheme();
+    using _shortcut = { [Symbol.dispose]: installThemeCssRecoveryShortcut() };
+    const before = readThemeSelection();
+    const hideAll = "body { display: none !important; }";
+    expect(applyThemeProposal("item:hide", withCss(hideAll), hideAll)).toEqual({ ok: true });
+    expect(getComputedStyle(document.body).display).toBe("none");
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        code: "Digit0",
+        key: ")",
+        ctrlKey: true,
+        altKey: true,
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+    expect(styleElement()).toBeNull();
+    expect(getComputedStyle(document.body).display).not.toBe("none");
+    expect(hasStoredThemeCss()).toBe(false);
+    expect(readThemeSelection()).toEqual(before);
+  });
+
+  it("leaves a theme without CSS alone when the CSS is dropped", () => {
+    using _theme = freshBrowserTheme();
+    applyThemeProposal("item:css", NIGHT_CSS, CSS);
+    setTheme("ember");
+    dropThemeCss();
+    expect(readThemeSelection().theme).toBe("ember");
+    expect(hasStoredThemeCss()).toBe(false);
+  });
+
+  it("opens with ?safe-theme=1 showing no custom CSS, and offers to remove it", async () => {
+    using _theme = freshBrowserTheme();
+    const before = readThemeSelection();
+    applyThemeProposal("item:css", NIGHT_CSS, CSS);
+    expect(styleElement()).not.toBeNull();
+
+    initThemeCssSafeMode("?safe-theme=1");
+    expect(styleElement()).toBeNull();
+    // Repaints in safe mode keep it off.
+    setTheme(themeProposalThemeId(NIGHT_CSS));
+    expect(styleElement()).toBeNull();
+
+    await using screen = await render(<ThemeCssSafeModeNotice />);
+    await screen.getByRole("button", { name: "Remove custom theme CSS" }).click();
+    expect(hasStoredThemeCss()).toBe(false);
+    expect(readThemeSelection()).toEqual(before);
+    await expect
+      .element(screen.getByText("Safe theme: no custom theme CSS is saved in this browser."))
+      .toBeVisible();
+
+    initThemeCssSafeMode("");
+    setTheme(themeProposalThemeId(NIGHT_CSS));
+    expect(styleElement()).toBeNull();
+  });
+});
+
+describe("the theme proposal card with CSS", () => {
+  it("says it carries CSS and its size, restyles nothing until clicked, and previews, applies, undoes", async () => {
+    using _theme = freshBrowserTheme();
+    using probe = cssProbe();
+    const before = readThemeSelection();
+    let loads = 0;
+    await using screen = await render(
+      <ThemeProposalCard
+        itemId="item:css-card"
+        proposal={NIGHT_CSS}
+        actions
+        loadCssInput={async () => {
+          loads += 1;
+          return { arguments: { ...NIGHT, css: CSS } };
+        }}
+      />,
+    );
+    await expect
+      .element(screen.getByText(THEME_PROPOSAL_CSS_WARNING, { exact: false }))
+      .toBeVisible();
+    await expect
+      .element(screen.getByText(`${CSS.length} characters`, { exact: false }))
+      .toBeVisible();
+    expect(styleElement()).toBeNull();
+    expect(loads).toBe(0);
+
+    await screen.getByRole("button", { name: "Preview" }).click();
+    await expect.element(screen.getByRole("button", { name: "Stop preview" })).toBeVisible();
+    expect(getComputedStyle(probe).color).toBe("rgb(1, 2, 3)");
+    expect(readThemeSelection()).toEqual(before);
+    await screen.getByRole("button", { name: "Stop preview" }).click();
+    expect(styleElement()).toBeNull();
+
+    await screen.getByRole("button", { name: "Apply to my appearance" }).click();
+    await expect.element(screen.getByRole("button", { name: "Undo" })).toBeVisible();
+    expect(getComputedStyle(probe).color).toBe("rgb(1, 2, 3)");
+    expect(loads).toBe(1);
+
+    await screen.getByRole("button", { name: "Undo" }).click();
+    expect(styleElement()).toBeNull();
+    expect(readThemeSelection()).toEqual(before);
+  });
+
+  it("applies nothing when the stored call does not hold the proposal's CSS", async () => {
+    using _theme = freshBrowserTheme();
+    const before = readThemeSelection();
+    await using screen = await render(
+      <ThemeProposalCard
+        itemId="item:css-missing"
+        proposal={NIGHT_CSS}
+        actions
+        loadCssInput={async () => ({ css: "[data-css-probe] { color: red }" })}
+      />,
+    );
+    await screen.getByRole("button", { name: "Apply to my appearance" }).click();
+    await expect
+      .element(screen.getByText("The proposal's CSS could not be found in this Thread."))
+      .toBeVisible();
+    expect(styleElement()).toBeNull();
+    expect(readThemeSelection()).toEqual(before);
+  });
+
+  it("shows a guest the CSS warning and no buttons", async () => {
+    using _theme = freshBrowserTheme();
+    await using screen = await render(
+      <ThemeProposalCard itemId="item:css-guest" proposal={NIGHT_CSS} actions={false} />,
+    );
+    await expect
+      .element(screen.getByText(THEME_PROPOSAL_CSS_WARNING, { exact: false }))
+      .toBeVisible();
+    expect(screen.container.querySelectorAll("button")).toHaveLength(0);
   });
 });

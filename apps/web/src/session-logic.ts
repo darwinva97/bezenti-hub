@@ -144,6 +144,10 @@ export type TimelineEntry = (
       readonly createdAt: string;
       readonly runId: RunId | null;
       readonly themeProposal: ThemeProposal;
+      /** Where the proposal's CSS is read from: the stored tool call. */
+      readonly sourceThreadId: ThreadId;
+      readonly itemId: TurnItemId;
+      readonly revision: string;
     }
   | {
       readonly id: string;
@@ -724,7 +728,8 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
       continue;
     }
 
-    // A colors-only theme an agent proposed: a card each viewer may apply in their own browser.
+    // A theme an agent proposed: a card each viewer may apply in their own browser. The Hub kept
+    // its CSS on the wire only if its own tool sealed it.
     const themeProposal =
       item.type === "dynamic_tool" && item.status === "completed"
         ? themeProposalFromToolItem(item)
@@ -736,6 +741,9 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         createdAt,
         runId: item.runId,
         themeProposal,
+        sourceThreadId: row.sourceThreadId,
+        itemId: row.sourceItemId,
+        revision: turnItemDetailRevision(item),
         ...attemptMetadata,
       });
       continue;

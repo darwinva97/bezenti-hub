@@ -73,6 +73,7 @@ import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as PreviewProfiles from "./preview/PreviewProfiles.ts";
+import * as ThemeProposalSeal from "./mcp/toolkits/theme/themeProposalSeal.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as PreviewAgentActivity from "./preview/PreviewAgentActivity.ts";
 import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
@@ -734,6 +735,8 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
   Layer.provideMerge(AssetSigner.layer),
+  // Before any Thread is projected: a theme proposal's CSS reaches clients only under this seal.
+  Layer.provideMerge(ThemeProposalSeal.layerInstallKey),
   Layer.provideMerge(ServerSecretStore.layer),
 );
 

@@ -139,6 +139,10 @@
       "types": "./src/themeProposal.ts",
       "import": "./src/themeProposal.ts"
     },
+    "./themeCss": {
+      "types": "./src/themeCss.ts",
+      "import": "./src/themeCss.ts"
+    },
     "./favicon": {
       "types": "./src/favicon.ts",
       "import": "./src/favicon.ts"

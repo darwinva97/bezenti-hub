@@ -49,6 +49,7 @@ import { appAtomRegistry } from "./rpc/atomRegistry";
 import { primaryServerConfigAtom } from "./state/server";
 import { environmentShell } from "./state/shell";
 import { installChatRouteCommands } from "./shortcuts/chatRouteCommands";
+import { installThemeCssRecoveryShortcut } from "./themeCssRecovery";
 import { startWorkspaceFocus } from "./lib/workspaceFocus";
 import { installCommandPaletteCommands } from "./shortcuts/commandPaletteCommands";
 import { registerOpenFavoriteEditorCommand } from "./components/chat/OpenInPickerShortcut";
@@ -177,6 +178,8 @@ export function startAppServices(): AppRouter {
 
   installDesktopPasteAsText(window.desktopBridge, window);
 
+  // The way out of custom theme CSS, before anything renders that CSS could hide.
+  installThemeCssRecoveryShortcut();
   startClientAppearance();
   startDocumentTitle();
   startEnvironmentThemeRepaint();

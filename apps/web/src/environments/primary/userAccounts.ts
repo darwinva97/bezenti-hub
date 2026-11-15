@@ -22,6 +22,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { runPrimaryHttp } from "../../lib/runtime";
+import { dropThemeCss } from "../../themeProposalApply";
 import { PrimaryEnvironmentHttpClient } from "./httpClient";
 
 export class UserSignInError extends Schema.TaggedError<UserSignInError>()("UserSignInError", {
@@ -301,7 +302,12 @@ export async function signInWithRecoveryCode(code: string): Promise<void> {
 }
 
 export async function signOut(): Promise<void> {
-  await request((client) => client.auth.signOut({ headers: {} }));
+  try {
+    await request((client) => client.auth.signOut({ headers: {} }));
+  } finally {
+    // Custom theme CSS never outlives a session: whoever signs in next is not restyled by it.
+    dropThemeCss();
+  }
 }
 
 export function fetchInvitationPreview(token: string): Promise<InvitationPreview> {

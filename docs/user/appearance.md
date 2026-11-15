@@ -58,7 +58,8 @@ change. Export your theme as JSON to share it.
 
 Ask the agent in a thread to give T3 Code a new look, for example "make T3 Code look like a
 late-night terminal". It does not change anything itself: it proposes a theme, which appears as a
-card in the thread with its name, appearance (light or dark), and colors.
+card in the thread with its name, appearance (light or dark), colors, and whether it carries custom
+CSS.
 
 - **Preview** shows the theme in your window until you stop the preview.
 - **Apply to my appearance** adds the theme to your custom themes and selects it.
@@ -74,12 +75,45 @@ What an agent can and cannot do:
 
 - It can propose a name, light or dark, a background color and an accent color. T3 Code derives
   every other color from those two and checks that text stays readable.
-- It cannot add CSS, fonts, images or individual colors, cannot change the server's default theme,
-  and cannot change anyone's appearance. A proposal that would be hard to read (a dark theme on a
-  mid-grey or light background, or an accent that disappears on the background) is refused.
+- It can add custom CSS, up to 50,000 characters: animations, borders, shapes, spacing, hiding or
+  moving parts of the page.
+- It cannot add individual colors, cannot change the server's default theme, and cannot change
+  anyone's appearance. A proposal that would be hard to read (a dark theme on a mid-grey or light
+  background, or an accent that disappears on the background) is refused.
 
 To go back at any time, use **Undo** on the card, choose another theme in **Settings → Appearance**,
 or press **Cmd+Option+A** on macOS or **Ctrl+Alt+A** on Windows/Linux to open the theme picker.
+
+### Custom CSS
+
+A card whose proposal carries CSS says **Includes custom CSS: it can change how anything on the
+page looks, including buttons**, with its size. Read it before you click: CSS can hide, move or
+relabel anything, an Approve or Deny button included. Apply only CSS you asked for, from an agent
+you trust. Preview and Apply work as for colors; **Undo** removes the CSS completely.
+
+The CSS cannot load or send anything. T3 Code refuses a proposal whose CSS uses `url()` (except an
+inline `data:image` in PNG, JPEG, GIF, WebP or AVIF, or a `#id` reference), `@import`,
+`@font-face`, `image-set()`, `image()`, `src`, `attr()`, `expression()`, `behavior`,
+`-moz-binding`, any backslash escape, or at-rules other than `@media`, `@supports`, `@container`,
+`@layer` and `@keyframes`. The server checks it when the agent proposes, and your browser checks it
+again with today's rules before Preview or Apply, also for an old card.
+
+Only a proposal made by this T3 Code server's own theme tool keeps its CSS. A card that comes from
+another tool, even one with the same name, shows its colors only.
+
+The CSS is kept only in the browser or desktop app where you applied it, with that custom theme. It
+is not exported with the theme, not sent to the server, and not seen by anyone else. Choosing another
+theme turns it off; choosing that theme again turns it back on. Signing out removes all custom
+theme CSS from that browser.
+
+If the CSS makes T3 Code unusable, two ways out work without seeing the page:
+
+- Press **Cmd+Option+Shift+0** on macOS or **Ctrl+Alt+Shift+0** on Windows/Linux. It removes all
+  custom theme CSS from this browser and, if a theme with CSS was showing, goes back to the theme
+  you had before you first applied one. It works wherever the focus is, and cannot be rebound.
+- Open T3 Code with `?safe-theme=1` at the end of its address, for example
+  `https://your-server/?safe-theme=1`. It loads with no custom theme CSS and offers **Remove custom
+  theme CSS**. Until you reload without it, custom CSS stays off.
 
 ## Environment themes
 

@@ -6,6 +6,7 @@ import { useSyncExternalStore } from "react";
 import {
   applyThemePalette,
   CUSTOM_THEMES_STORAGE_KEY,
+  getCustomThemes,
   invalidateCustomThemes,
   canonicalThemePreference,
   isKnownThemePreference,
@@ -25,6 +26,7 @@ import {
   type ThemeHalves,
   type ThemePreferenceMode,
 } from "../themePalette";
+import { showThemeCss, storedThemeCss, THEME_CSS_STORAGE_KEY } from "../themeCss";
 
 type Theme = ThemePreference;
 type ThemeSnapshot = {
@@ -333,7 +335,14 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
     appearanceMode,
     themeHalves,
   );
-  applyThemePalette(resolveThemeHalf(theme, themeHalves, resolvedAppearance), resolvedAppearance);
+  const shownTheme = resolveThemeHalf(theme, themeHalves, resolvedAppearance);
+  applyThemePalette(shownTheme, resolvedAppearance);
+  // The custom CSS of the theme being shown, if it has any; any other theme removes it.
+  showThemeCss(
+    getCustomThemes().some((custom) => custom.id === shownTheme)
+      ? storedThemeCss(shownTheme)
+      : null,
+  );
   document.documentElement.classList.toggle("dark", resolvedAppearance === "dark");
   lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode, themeHalves };
   syncBrowserChromeTheme();
@@ -452,6 +461,10 @@ function handleStorageChange(e: StorageEvent) {
   } else if (e.key === THEME_APPEARANCE_MODE_STORAGE_KEY || e.key === THEME_HALVES_STORAGE_KEY) {
     applyTheme(getStored(), { suppressTransitions: true });
     emitChange();
+  } else if (e.key === THEME_CSS_STORAGE_KEY) {
+    // Another tab applied or dropped custom CSS.
+    lastAppliedTheme = null;
+    applyTheme(getStored(), { suppressTransitions: true });
   } else if (e.key === CUSTOM_THEMES_STORAGE_KEY || e.key === null) {
     if (e.key === null) themeStorageReadFailure = null;
     invalidateCustomThemes();

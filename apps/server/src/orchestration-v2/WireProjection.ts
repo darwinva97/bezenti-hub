@@ -20,6 +20,7 @@ import {
   toolOutputImages,
   toolOutputIndicatesFailure,
 } from "@t3tools/shared/toolOutput";
+import { keepSealedThemeProposalCss } from "../mcp/toolkits/theme/themeProposalSeal.ts";
 
 // A checkpoint over vendored or generated trees can list 15k+ files; the card needs a prefix.
 const MAX_WIRE_CHECKPOINT_FILES = 200;
@@ -200,7 +201,8 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
       };
     case "dynamic_tool": {
       const { output: rawOutput, ...projected } = item;
-      const output = compactDynamicToolOutput(rawOutput);
+      // A theme proposal keeps its CSS only when this Hub sealed it.
+      const output = keepSealedThemeProposalCss(compactDynamicToolOutput(rawOutput));
       return {
         ...projected,
         input: summarizeDynamicValue(item.input),

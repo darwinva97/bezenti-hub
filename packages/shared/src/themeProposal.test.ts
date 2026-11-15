@@ -53,6 +53,36 @@ describe("theme proposals", () => {
     expect(themeProposalsEqual(NIGHT, { ...NIGHT, accent: "#3ddc85" })).toBe(false);
   });
 
+  it("reads a proposal's CSS size and digest, and drops a malformed one to colors only", () => {
+    const css = { length: 120, sha256: "a".repeat(64) };
+    expect(readThemeProposal({ ...NIGHT, css })).toEqual({ ...NIGHT, css });
+    for (const bad of [
+      { length: 0, sha256: "a".repeat(64) },
+      { length: 50_001, sha256: "a".repeat(64) },
+      { length: 1.5, sha256: "a".repeat(64) },
+      { length: 120, sha256: "A".repeat(64) },
+      { length: 120, sha256: "a".repeat(63) },
+      "body { display: none }",
+    ]) {
+      expect(readThemeProposal({ ...NIGHT, css: bad })).toEqual(NIGHT);
+    }
+    expect(themeProposalsEqual({ ...NIGHT, css }, NIGHT)).toBe(false);
+    expect(themeProposalsEqual({ ...NIGHT, css }, { ...NIGHT, css: { ...css } })).toBe(true);
+  });
+
+  it("keeps the Hub's seal next to a proposal in the compacted output, and nothing else", () => {
+    const css = { length: 120, sha256: "b".repeat(64) };
+    const seal = "s".repeat(43);
+    const compacted = compactDynamicToolOutput({
+      structuredContent: { themeProposal: { ...NIGHT, css }, themeProposalSeal: seal, next: "x" },
+    });
+    expect(compacted).toEqual({ themeProposal: { ...NIGHT, css }, themeProposalSeal: seal });
+    expect(
+      compactDynamicToolOutput({ themeProposal: NIGHT, themeProposalSeal: "not a seal" }),
+    ).toEqual({ themeProposal: NIGHT });
+    expect(compactDynamicToolOutput({ themeProposalSeal: seal })).toBeUndefined();
+  });
+
   it("keeps a proposal through the compacted tool output, only for t3_theme_propose", () => {
     const output = { structuredContent: { themeProposal: NIGHT, next: "shown as a card" } };
     expect(compactDynamicToolOutput(output)?.themeProposal).toEqual(NIGHT);

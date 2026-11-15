@@ -16,7 +16,12 @@ import {
   type McpAppReference,
 } from "./mcpApp.ts";
 import { resolveT3McpToolId } from "./t3McpToolPresentation.ts";
-import { readThemeProposal, THEME_PROPOSE_TOOL_NAME, type ThemeProposal } from "./themeProposal.ts";
+import {
+  readThemeProposal,
+  THEME_PROPOSAL_SEAL_PATTERN,
+  THEME_PROPOSE_TOOL_NAME,
+  type ThemeProposal,
+} from "./themeProposal.ts";
 
 const MAX_PARSED_BYTES = 16_384;
 const MAX_METADATA_BYTES = 8_192;
@@ -47,6 +52,11 @@ interface CompactToolOutput {
   status?: "rolled_back";
   htmlRender?: HtmlRenderReference;
   themeProposal?: ThemeProposal;
+  /**
+   * The Hub's seal over `themeProposal`. The Hub checks it when it projects an item for clients
+   * and drops the proposal's CSS without a valid one (themeProposalSeal.ts in apps/server).
+   */
+  themeProposalSeal?: string;
   [MCP_APP_OUTPUT_KEY]?: McpAppReference;
   thread?: { threadId: string };
   threads?: Array<{ threadId?: string; status?: "rolled_back" }>;
@@ -139,7 +149,13 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
     const htmlRender = readHtmlRenderReference(data.htmlRender);
     if (htmlRender !== undefined) output.htmlRender = htmlRender;
     const themeProposal = readThemeProposal(data.themeProposal);
-    if (themeProposal !== undefined) output.themeProposal = themeProposal;
+    if (themeProposal !== undefined) {
+      output.themeProposal = themeProposal;
+      const seal = data.themeProposalSeal;
+      if (typeof seal === "string" && THEME_PROPOSAL_SEAL_PATTERN.test(seal)) {
+        output.themeProposalSeal = seal;
+      }
+    }
     const mcpApp = readMcpAppReference(data[MCP_APP_OUTPUT_KEY]);
     if (mcpApp !== undefined) output[MCP_APP_OUTPUT_KEY] = mcpApp;
     const nestedThreadId = Predicate.isObject(data.thread)
@@ -200,7 +216,12 @@ export function htmlRenderFromToolItem(item: {
   return output?.isError ? undefined : output?.htmlRender;
 }
 
-/** A colors-only theme `t3_theme_propose` returned; only that tool's results count. */
+/**
+ * A theme `t3_theme_propose` returned; only that tool's results count. Read it from an item the Hub
+ * projected for clients: a tool name alone cannot prove the Hub's tool answered (a provider can
+ * have its own server named t3-code, and some adapters report bare tool names), so the Hub keeps
+ * a proposal's CSS on the wire only when its own seal over the proposal checks out.
+ */
 export function themeProposalFromToolItem(item: {
   readonly toolName: string | null | undefined;
   readonly output?: unknown;

@@ -639,6 +639,9 @@ type MessagesTimelineRowContent =
       id: string;
       createdAt: string;
       themeProposal: ThemeProposal;
+      sourceThreadId: ThreadId;
+      itemId: TurnItemId;
+      revision: string;
     }
   | {
       kind: "mcp-app";
@@ -1975,6 +1978,9 @@ export function deriveMessagesTimelineRows(input: {
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         themeProposal: timelineEntry.themeProposal,
+        sourceThreadId: timelineEntry.sourceThreadId,
+        itemId: timelineEntry.itemId,
+        revision: timelineEntry.revision,
       });
       continue;
     }
@@ -2560,7 +2566,11 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "theme-proposal": {
       const bt = b as typeof a;
-      return a.createdAt === bt.createdAt && themeProposalsEqual(a.themeProposal, bt.themeProposal);
+      return (
+        a.createdAt === bt.createdAt &&
+        a.revision === bt.revision &&
+        themeProposalsEqual(a.themeProposal, bt.themeProposal)
+      );
     }
 
     case "mcp-app": {

@@ -10,6 +10,10 @@ import { ProposedPlanCard } from "./ProposedPlanCard";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
 import { ThemeProposalCard } from "./ThemeProposalCard";
+import * as Effect from "effect/Effect";
+import { AtomRegistry } from "effect/reactivity";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { orchestrationEnvironment } from "../../state/orchestration";
 import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
@@ -277,12 +281,29 @@ export function ThemeProposalTimelineRow({
   row: Extract<TimelineRow, { kind: "theme-proposal" }>;
 }) {
   const ctx = use(TimelineRowCtx);
+  const environmentId = ctx.activeThreadEnvironmentId;
+  // The CSS stays in the stored tool call; it is read only when the viewer previews or applies.
+  const loadCssInput =
+    ctx.themeProposalActions && row.themeProposal.css !== undefined
+      ? () =>
+          Effect.runPromise(
+            AtomRegistry.getResult(
+              appAtomRegistry,
+              orchestrationEnvironment.turnItem({
+                environmentId,
+                input: { threadId: row.sourceThreadId, itemId: row.itemId, revision: row.revision },
+              }),
+              { suspendOnWaiting: true },
+            ).pipe(Effect.timeout("30 seconds")),
+          ).then((result) => (result.item?.type === "dynamic_tool" ? result.item.input : undefined))
+      : undefined;
   return (
     <div className="min-w-0 px-1">
       <ThemeProposalCard
         itemId={row.id}
         proposal={row.themeProposal}
         actions={ctx.themeProposalActions}
+        loadCssInput={loadCssInput}
       />
     </div>
   );

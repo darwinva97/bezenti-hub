@@ -73,12 +73,14 @@ import { formatRelativeTimeLabel, parseTimestampDate } from "../../timestampForm
 import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { useThreadRolePermissions } from "../../state/currentSpace";
+import { openThreadTabInBackground } from "../../state/threadTabs";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
   animateSidebarLayoutChanges,
   hasUnseenCompletion,
+  isSidebarNestedLinkClick,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
   resolveSidebarThreadStatus,
@@ -841,6 +843,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const handleClick = (event: ReactMouseEvent) => {
     onThreadClick(event, threadRef);
   };
+  // Middle-click opens the Thread as a background tab, like a link; Ctrl and Cmd clicks select rows.
+  const handleMiddleMouseDown = (event: ReactMouseEvent) => {
+    if (event.button === 1) event.preventDefault();
+  };
+  const handleAuxClick = (event: ReactMouseEvent) => {
+    if (event.button !== 1 || isSidebarNestedLinkClick(event.target)) return;
+    event.preventDefault();
+    openThreadTabInBackground({
+      kind: "thread",
+      environmentId: threadRef.environmentId,
+      threadId: threadRef.threadId,
+    });
+  };
   const handleAcknowledgeWokeClick = (event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1281,6 +1296,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
+                onMouseDown={handleMiddleMouseDown}
+                onAuxClick={handleAuxClick}
                 onContextMenu={handleContextMenu}
               />
             }
@@ -1470,6 +1487,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               onClick={handleClick}
               onDoubleClick={handleDoubleClick}
               onKeyDown={handleKeyDown}
+              onMouseDown={handleMiddleMouseDown}
+              onAuxClick={handleAuxClick}
               onContextMenu={handleContextMenu}
             />
           }

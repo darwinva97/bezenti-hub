@@ -3478,6 +3478,8 @@ export default function ChatView(props: ChatViewProps) {
               activeThreadEnvironmentId={activeThread.environmentId}
               activeThreadId={activeThread.id}
               isServerThread={isServerThread}
+              showThreadTabs={!isMobileViewport}
+              activeDraftId={draftId}
               activeThreadTitle={activeThread.title}
               activeEnvironment={isServerThread ? threadActiveEnvironment : null}
               environmentState={threadEnvState}

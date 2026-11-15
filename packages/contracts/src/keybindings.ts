@@ -20,6 +20,19 @@ export const THREAD_JUMP_KEYBINDING_COMMANDS = [
 ] as const;
 export type ThreadJumpKeybindingCommand = (typeof THREAD_JUMP_KEYBINDING_COMMANDS)[number];
 
+export const THREAD_TAB_JUMP_KEYBINDING_COMMANDS = [
+  "threadTab.jump.1",
+  "threadTab.jump.2",
+  "threadTab.jump.3",
+  "threadTab.jump.4",
+  "threadTab.jump.5",
+  "threadTab.jump.6",
+  "threadTab.jump.7",
+  "threadTab.jump.8",
+  "threadTab.jump.9",
+] as const;
+export type ThreadTabJumpKeybindingCommand = (typeof THREAD_TAB_JUMP_KEYBINDING_COMMANDS)[number];
+
 export const MODEL_PICKER_JUMP_KEYBINDING_COMMANDS = [
   "modelPicker.jump.1",
   "modelPicker.jump.2",
@@ -45,6 +58,13 @@ const THREAD_KEYBINDING_COMMANDS = [
   "thread.pin",
   "thread.undo",
   ...THREAD_JUMP_KEYBINDING_COMMANDS,
+] as const;
+
+const THREAD_TAB_KEYBINDING_COMMANDS = [
+  "threadTab.next",
+  "threadTab.previous",
+  "threadTab.close",
+  ...THREAD_TAB_JUMP_KEYBINDING_COMMANDS,
 ] as const;
 
 const MODEL_PICKER_KEYBINDING_COMMANDS = [
@@ -113,6 +133,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "usage.period.quarter",
   ...MODEL_PICKER_KEYBINDING_COMMANDS,
   ...THREAD_KEYBINDING_COMMANDS,
+  ...THREAD_TAB_KEYBINDING_COMMANDS,
 ] as const;
 
 export const SCRIPT_RUN_COMMAND_PATTERN = Schema.TemplateLiteral([

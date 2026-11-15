@@ -7,13 +7,15 @@ import {
 } from "@t3tools/contracts";
 import type { ThreadAiAccountLabel } from "@t3tools/client-runtime/ai-account-picker";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { ThreadTab } from "@t3tools/client-runtime/thread-tabs";
 import { ThreadMoveBadge } from "./MoveThreadDialog";
+import { ThreadTabStrip } from "./ThreadTabStrip";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, CornerLeftUpIcon } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -72,6 +74,10 @@ interface ChatHeaderProps {
    */
   aiAccount?: ThreadAiAccountLabel | null | undefined;
   isServerThread: boolean;
+  /** Shows the Thread tab strip in place of the Project / title breadcrumb. */
+  showThreadTabs?: boolean | undefined;
+  /** The draft this header is for, when it is not a server Thread. */
+  activeDraftId?: string | null | undefined;
   activeProject: EnvironmentProject | null;
   parentThreadLink: { threadId: ThreadId; title: string } | null;
   onOpenThread: (threadId: ThreadId) => void;
@@ -102,6 +108,8 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadMove,
   aiAccount,
   isServerThread,
+  showThreadTabs,
+  activeDraftId,
   activeProject,
   parentThreadLink,
   onOpenThread,
@@ -110,6 +118,11 @@ export const ChatHeader = memo(function ChatHeader({
   onOpenProjectSettings,
   onFindInThread,
 }: ChatHeaderProps) {
+  const activeTab: ThreadTab | undefined = showThreadTabs
+    ? activeDraftId
+      ? { kind: "draft", draftId: activeDraftId }
+      : { kind: "thread", environmentId: activeThreadEnvironmentId, threadId: activeThreadId }
+    : undefined;
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const interfaceFont = useClientSettings((settings) => settings.fontFamilySans);
@@ -305,6 +318,173 @@ export const ChatHeader = memo(function ChatHeader({
       setRenaming(null);
     }
   };
+  const titleControl = (
+    <>
+      {renamingTitle !== null ? (
+        <input
+          autoFocus
+          dir="auto"
+          aria-label="Thread title"
+          className="min-w-0 flex-1 rounded-sm bg-transparent text-sm font-medium text-foreground outline-none ring-1 ring-inset ring-ring/50 focus:ring-ring"
+          defaultValue={renamingTitle}
+          onBlur={(event) => {
+            if (renameCommittedRef.current) return;
+            if (
+              event.relatedTarget instanceof HTMLElement &&
+              event.relatedTarget.closest("button")
+            ) {
+              setRenaming(null);
+              return;
+            }
+            commitRename(event.currentTarget.value);
+          }}
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={handleRenameKeyDown}
+        />
+      ) : isServerThread ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                ref={titleButtonRef}
+                type="button"
+                aria-label={`Thread actions for ${activeThreadTitle}`}
+                aria-haspopup="menu"
+                onClick={openMenuFromTitle}
+                onDoubleClick={canOperateThread ? handleTitleDoubleClick : undefined}
+                onBlur={cancelPendingTitleMenu}
+                className="group/thread-title inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              />
+            }
+          >
+            <h2 className="min-w-0" dir={textDirection(activeThreadTitle)}>
+              <WorkspaceBreadcrumbText>{activeThreadTitle}</WorkspaceBreadcrumbText>
+            </h2>
+            <ChevronDownIcon
+              aria-hidden
+              data-thread-title-chevron
+              className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/thread-title:opacity-100 group-focus-visible/thread-title:opacity-100"
+            />
+          </TooltipTrigger>
+          <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
+        </Tooltip>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <h2
+                aria-label={activeThreadTitle}
+                className="min-w-0 flex-1"
+                dir={textDirection(activeThreadTitle)}
+              />
+            }
+          >
+            <WorkspaceBreadcrumbText>{activeThreadTitle}</WorkspaceBreadcrumbText>
+          </TooltipTrigger>
+          <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
+        </Tooltip>
+      )}
+    </>
+  );
+  const statusBadges = (
+    <>
+      {renamingTitle === null && activeEnvironment?.needsEnvironment ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Badge
+                variant="warning"
+                size="sm"
+                role="status"
+                data-environment-state="needs-environment"
+                aria-label={`Active environment: none. ${NEEDS_ENVIRONMENT_LABEL}`}
+              />
+            }
+          >
+            <EnvironmentStatusDot status="offline" />
+            {NEEDS_ENVIRONMENT_LABEL}
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            The machine this Thread ran on was removed or no longer runs Threads. Its history is
+            kept; move it to another Environment to continue.
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {renamingTitle === null && activeEnvironment && !activeEnvironment.needsEnvironment ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Badge
+                variant="outline"
+                size="sm"
+                data-environment-status={activeEnvironment.status}
+                aria-label={`Active environment: ${activeEnvironmentLabel(activeEnvironment)}`}
+              />
+            }
+          >
+            <EnvironmentStatusDot status={activeEnvironment.status} />
+            {activeEnvironment.name}
+            {activeEnvironment.status === "online"
+              ? null
+              : ` · ${activeEnvironmentStatusLabel(activeEnvironment)}`}
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            Runs on {activeEnvironment.name} · {activeEnvironmentStatusLabel(activeEnvironment)}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {renamingTitle === null && aiAccount ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Badge
+                variant="outline"
+                size="sm"
+                data-ai-account={aiAccount.id}
+                aria-label={`AI account in use: ${aiAccount.name}`}
+              />
+            }
+          >
+            {aiAccount.name}
+            {aiAccount.model === null ? null : ` · ${aiAccount.model}`}
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            The agent uses the Hub's AI account {aiAccount.name}
+            {aiAccount.model === null ? "" : ` with ${aiAccount.model}`}. No login of the machine is
+            used.
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {renamingTitle === null && environmentState === "paused-offline" && activeEnvironment ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Badge
+                variant="warning"
+                size="sm"
+                role="status"
+                data-environment-state="paused-offline"
+                aria-label={PAUSED_OFFLINE_LABEL}
+              />
+            }
+          >
+            {PAUSED_OFFLINE_LABEL}
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {activeEnvironment.name} is{" "}
+            {activeEnvironmentStatusLabel(activeEnvironment).toLowerCase()}. The turn goes on when
+            it comes back; messages you send are queued until then, or until you move the Thread.
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {renamingTitle === null ? (
+        <ThreadMoveBadge
+          move={activeThreadMove ?? null}
+          threadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
+        />
+      ) : null}
+    </>
+  );
   return (
     <div
       ref={breadcrumbContainerRef}
@@ -314,234 +494,110 @@ export const ChatHeader = memo(function ChatHeader({
       )}
       onContextMenu={handleHeaderContextMenu}
     >
-      <WorkspaceBreadcrumb
-        ariaLabel="Thread breadcrumb"
-        className="flex-1 overflow-clip [overflow-clip-margin:2px]"
-      >
-        {activeProject ? (
-          <>
-            <WorkspaceBreadcrumbItem className="shrink">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={`New thread in ${activeProjectName}`}
-                      onClick={onNewThreadInProject}
-                      className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    />
-                  }
-                >
-                  <ProjectFavicon project={activeProject} className="size-3.5" />
-                  <WorkspaceBreadcrumbText className="max-w-40">
-                    {activeProjectName}
-                  </WorkspaceBreadcrumbText>
-                </TooltipTrigger>
-                <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
-              </Tooltip>
-            </WorkspaceBreadcrumbItem>
-            <WorkspaceBreadcrumbSeparator>
-              <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
-            </WorkspaceBreadcrumbSeparator>
-          </>
-        ) : null}
-        {parentThreadLink ? (
-          <>
-            <WorkspaceBreadcrumbItem>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={`Open parent thread: ${parentThreadLink.title}`}
-                      onClick={() => onOpenThread(parentThreadLink.threadId)}
-                      className="inline-flex min-w-0 max-w-full cursor-pointer items-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    />
-                  }
-                >
-                  <WorkspaceBreadcrumbText
-                    aria-hidden
-                    className={collapseParentTitle ? "w-0" : undefined}
-                  >
-                    {parentThreadLink.title}
-                  </WorkspaceBreadcrumbText>
-                  {collapseParentTitle ? (
-                    <span aria-hidden data-parent-breadcrumb-ellipsis>
-                      ...
-                    </span>
-                  ) : null}
-                </TooltipTrigger>
-                <TooltipPopup side="top">{parentThreadLink.title}</TooltipPopup>
-              </Tooltip>
-            </WorkspaceBreadcrumbItem>
-            <WorkspaceBreadcrumbSeparator>
-              <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
-            </WorkspaceBreadcrumbSeparator>
-          </>
-        ) : null}
-        <WorkspaceBreadcrumbItem current className="min-w-10 flex-1">
-          {renamingTitle !== null ? (
-            <input
-              autoFocus
-              dir="auto"
-              aria-label="Thread title"
-              className="min-w-0 flex-1 rounded-sm bg-transparent text-sm font-medium text-foreground outline-none ring-1 ring-inset ring-ring/50 focus:ring-ring"
-              defaultValue={renamingTitle}
-              onBlur={(event) => {
-                if (renameCommittedRef.current) return;
-                if (
-                  event.relatedTarget instanceof HTMLElement &&
-                  event.relatedTarget.closest("button")
-                ) {
-                  setRenaming(null);
-                  return;
-                }
-                commitRename(event.currentTarget.value);
-              }}
-              onFocus={(event) => event.currentTarget.select()}
-              onKeyDown={handleRenameKeyDown}
-            />
-          ) : isServerThread ? (
+      {activeTab ? (
+        <>
+          <ThreadTabStrip
+            activeTab={activeTab}
+            activeLabel={
+              <span className="flex min-w-0 flex-1 items-center font-medium text-foreground">
+                {titleControl}
+              </span>
+            }
+          />
+          {parentThreadLink ? (
             <Tooltip>
               <TooltipTrigger
                 render={
                   <button
-                    ref={titleButtonRef}
                     type="button"
-                    aria-label={`Thread actions for ${activeThreadTitle}`}
-                    aria-haspopup="menu"
-                    onClick={openMenuFromTitle}
-                    onDoubleClick={canOperateThread ? handleTitleDoubleClick : undefined}
-                    onBlur={cancelPendingTitleMenu}
-                    className="group/thread-title inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    aria-label={`Open parent thread: ${parentThreadLink.title}`}
+                    onClick={() => onOpenThread(parentThreadLink.threadId)}
+                    className="inline-flex max-w-40 shrink-0 cursor-pointer items-center gap-1 rounded-sm text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   />
                 }
               >
-                <h2 className="min-w-0" dir={textDirection(activeThreadTitle)}>
-                  <WorkspaceBreadcrumbText>{activeThreadTitle}</WorkspaceBreadcrumbText>
-                </h2>
-                <ChevronDownIcon
-                  aria-hidden
-                  data-thread-title-chevron
-                  className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/thread-title:opacity-100 group-focus-visible/thread-title:opacity-100"
-                />
+                <CornerLeftUpIcon aria-hidden className="size-3 shrink-0" />
+                <span aria-hidden className="truncate">
+                  {parentThreadLink.title}
+                </span>
               </TooltipTrigger>
-              <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
-            </Tooltip>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <h2
-                    aria-label={activeThreadTitle}
-                    className="min-w-0 flex-1"
-                    dir={textDirection(activeThreadTitle)}
-                  />
-                }
-              >
-                <WorkspaceBreadcrumbText>{activeThreadTitle}</WorkspaceBreadcrumbText>
-              </TooltipTrigger>
-              <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
-            </Tooltip>
-          )}
-          {renamingTitle === null && activeEnvironment?.needsEnvironment ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Badge
-                    variant="warning"
-                    size="sm"
-                    role="status"
-                    data-environment-state="needs-environment"
-                    aria-label={`Active environment: none. ${NEEDS_ENVIRONMENT_LABEL}`}
-                  />
-                }
-              >
-                <EnvironmentStatusDot status="offline" />
-                {NEEDS_ENVIRONMENT_LABEL}
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                The machine this Thread ran on was removed or no longer runs Threads. Its history is
-                kept; move it to another Environment to continue.
-              </TooltipPopup>
+              <TooltipPopup side="top">Parent thread: {parentThreadLink.title}</TooltipPopup>
             </Tooltip>
           ) : null}
-          {renamingTitle === null && activeEnvironment && !activeEnvironment.needsEnvironment ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Badge
-                    variant="outline"
-                    size="sm"
-                    data-environment-status={activeEnvironment.status}
-                    aria-label={`Active environment: ${activeEnvironmentLabel(activeEnvironment)}`}
-                  />
-                }
-              >
-                <EnvironmentStatusDot status={activeEnvironment.status} />
-                {activeEnvironment.name}
-                {activeEnvironment.status === "online"
-                  ? null
-                  : ` · ${activeEnvironmentStatusLabel(activeEnvironment)}`}
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                Runs on {activeEnvironment.name} · {activeEnvironmentStatusLabel(activeEnvironment)}
-              </TooltipPopup>
-            </Tooltip>
+          <div className="flex shrink-0 items-center gap-1.5">{statusBadges}</div>
+        </>
+      ) : (
+        <WorkspaceBreadcrumb
+          ariaLabel="Thread breadcrumb"
+          className="flex-1 overflow-clip [overflow-clip-margin:2px]"
+        >
+          {activeProject ? (
+            <>
+              <WorkspaceBreadcrumbItem className="shrink">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={`New thread in ${activeProjectName}`}
+                        onClick={onNewThreadInProject}
+                        className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      />
+                    }
+                  >
+                    <ProjectFavicon project={activeProject} className="size-3.5" />
+                    <WorkspaceBreadcrumbText className="max-w-40">
+                      {activeProjectName}
+                    </WorkspaceBreadcrumbText>
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
+                </Tooltip>
+              </WorkspaceBreadcrumbItem>
+              <WorkspaceBreadcrumbSeparator>
+                <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
+              </WorkspaceBreadcrumbSeparator>
+            </>
           ) : null}
-          {renamingTitle === null && aiAccount ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Badge
-                    variant="outline"
-                    size="sm"
-                    data-ai-account={aiAccount.id}
-                    aria-label={`AI account in use: ${aiAccount.name}`}
-                  />
-                }
-              >
-                {aiAccount.name}
-                {aiAccount.model === null ? null : ` · ${aiAccount.model}`}
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                The agent uses the Hub's AI account {aiAccount.name}
-                {aiAccount.model === null ? "" : ` with ${aiAccount.model}`}. No login of the
-                machine is used.
-              </TooltipPopup>
-            </Tooltip>
+          {parentThreadLink ? (
+            <>
+              <WorkspaceBreadcrumbItem>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={`Open parent thread: ${parentThreadLink.title}`}
+                        onClick={() => onOpenThread(parentThreadLink.threadId)}
+                        className="inline-flex min-w-0 max-w-full cursor-pointer items-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      />
+                    }
+                  >
+                    <WorkspaceBreadcrumbText
+                      aria-hidden
+                      className={collapseParentTitle ? "w-0" : undefined}
+                    >
+                      {parentThreadLink.title}
+                    </WorkspaceBreadcrumbText>
+                    {collapseParentTitle ? (
+                      <span aria-hidden data-parent-breadcrumb-ellipsis>
+                        ...
+                      </span>
+                    ) : null}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{parentThreadLink.title}</TooltipPopup>
+                </Tooltip>
+              </WorkspaceBreadcrumbItem>
+              <WorkspaceBreadcrumbSeparator>
+                <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
+              </WorkspaceBreadcrumbSeparator>
+            </>
           ) : null}
-          {renamingTitle === null && environmentState === "paused-offline" && activeEnvironment ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Badge
-                    variant="warning"
-                    size="sm"
-                    role="status"
-                    data-environment-state="paused-offline"
-                    aria-label={PAUSED_OFFLINE_LABEL}
-                  />
-                }
-              >
-                {PAUSED_OFFLINE_LABEL}
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                {activeEnvironment.name} is{" "}
-                {activeEnvironmentStatusLabel(activeEnvironment).toLowerCase()}. The turn goes on
-                when it comes back; messages you send are queued until then, or until you move the
-                Thread.
-              </TooltipPopup>
-            </Tooltip>
-          ) : null}
-          {renamingTitle === null ? (
-            <ThreadMoveBadge
-              move={activeThreadMove ?? null}
-              threadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
-            />
-          ) : null}
-        </WorkspaceBreadcrumbItem>
-      </WorkspaceBreadcrumb>
+          <WorkspaceBreadcrumbItem current className="min-w-10 flex-1">
+            {titleControl}
+            {statusBadges}
+          </WorkspaceBreadcrumbItem>
+        </WorkspaceBreadcrumb>
+      )}
       {isServerThread ? (
         <ThreadSecrets environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
       ) : null}

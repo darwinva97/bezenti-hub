@@ -1,4 +1,9 @@
-import { AuthPreviewOperateScope, type EnvironmentId } from "@t3tools/contracts";
+import {
+  AuthPreviewOperateScope,
+  THREAD_TAB_JUMP_KEYBINDING_COMMANDS,
+  type EnvironmentId,
+} from "@t3tools/contracts";
+import { adjacentTab, tabAtIndex, tabKey } from "@t3tools/client-runtime/thread-tabs";
 import type { AnyRouter } from "@tanstack/react-router";
 
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
@@ -20,6 +25,12 @@ import { readProjects, readThreadShell } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { readEnvironmentScope } from "../state/session";
+import {
+  closeThreadTab,
+  navigateToThreadTab,
+  routeThreadTab,
+  useThreadTabsStore,
+} from "../state/threadTabs";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { resolveThreadRouteTarget } from "../threadRoutes";
@@ -102,6 +113,42 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
     });
   };
 
+  // The route decides which tab is current; the store only remembers the last one.
+  const readTabs = () => {
+    const state = useThreadTabsStore.getState();
+    const routeTab = routeThreadTab(router);
+    return {
+      state: { ...state, activeKey: routeTab ? tabKey(routeTab) : state.activeKey },
+      routeTab,
+    };
+  };
+  const goToTab =
+    (
+      pick: (state: ReturnType<typeof readTabs>["state"]) => ReturnType<typeof tabAtIndex>,
+    ): CommandHandler =>
+    (event) => {
+      const tab = pick(readTabs().state);
+      if (tab === null) return false;
+      claim(event);
+      void navigateToThreadTab(router, tab);
+    };
+  const tabCommands = {
+    "threadTab.next": goToTab((state) => adjacentTab(state, "next")),
+    "threadTab.previous": goToTab((state) => adjacentTab(state, "previous")),
+    "threadTab.close": ((event) => {
+      const { routeTab } = readTabs();
+      if (routeTab === null) return false;
+      claim(event);
+      void closeThreadTab(router, tabKey(routeTab));
+    }) satisfies CommandHandler,
+    ...Object.fromEntries(
+      THREAD_TAB_JUMP_KEYBINDING_COMMANDS.map((command, index) => [
+        command,
+        goToTab((state) => tabAtIndex(state, index)),
+      ]),
+    ),
+  };
+
   const previewCommand =
     (action: PreviewAction): CommandHandler =>
     (event) => {
@@ -112,6 +159,7 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
 
   return registerCommands(
     {
+      ...tabCommands,
       "chat.newLocal": startNewLocal,
       "chat.newWithoutProject": (event) => {
         const { activeThread, activeDraftThread } = readThreadContext();

@@ -8,6 +8,7 @@ import {
   type ResolvedKeybindingRule,
   type ResolvedKeybindingsConfig,
   THREAD_JUMP_KEYBINDING_COMMANDS,
+  THREAD_TAB_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 
 export interface ShortcutEventLike {
@@ -223,6 +224,16 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
     key: `mod+${index + 1}`,
     command,
     when: "!modelPickerOpen && isDesktop",
+  })),
+  { key: "mod+alt+]", command: "threadTab.next", when: "!terminalFocus" },
+  { key: "mod+alt+[", command: "threadTab.previous", when: "!terminalFocus" },
+  { key: "ctrl+tab", command: "threadTab.next", when: "isDesktop && !terminalFocus" },
+  { key: "ctrl+shift+tab", command: "threadTab.previous", when: "isDesktop && !terminalFocus" },
+  { key: "mod+alt+w", command: "threadTab.close", when: "!terminalFocus" },
+  ...THREAD_TAB_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
+    key: `mod+alt+${index + 1}`,
+    command,
+    when: "!terminalFocus && !modelPickerOpen",
   })),
   ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
     key: `mod+${index + 1}`,

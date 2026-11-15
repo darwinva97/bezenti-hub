@@ -519,6 +519,10 @@
       "types": "./src/providerClients.ts",
       "default": "./src/providerClients.ts"
     },
+    "./thread-tabs": {
+      "types": "./src/threadTabs/threadTabs.ts",
+      "default": "./src/threadTabs/threadTabs.ts"
+    },
     "./spaces/current-space": {
       "types": "./src/spaces/currentSpace.ts",
       "default": "./src/spaces/currentSpace.ts"

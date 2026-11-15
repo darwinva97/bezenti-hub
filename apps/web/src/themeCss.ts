@@ -169,16 +169,67 @@ export function showThemeCss(css: string | null): void {
   shownCss = next;
 }
 
-// ── Storage: theme id to CSS, this browser only.
+// ── The viewer: whose CSS this page may show.
 
-function readLibrary(): Record<string, string> {
+/**
+ * `unknown` until the session is read (startup): nothing is shown. `none`: nobody is signed in, as
+ * on a Hub without Users. CSS is stored with its owner (a User id, or null for none) and shown only
+ * to that owner; whenever the viewer becomes known, CSS of any other owner is dropped.
+ */
+export type ThemeCssViewer =
+  | { readonly kind: "unknown" }
+  | { readonly kind: "none" }
+  | { readonly kind: "user"; readonly userId: string };
+
+let viewer: ThemeCssViewer = { kind: "unknown" };
+
+function viewerOwner(current: ThemeCssViewer): string | null | undefined {
+  return current.kind === "user" ? current.userId : current.kind === "none" ? null : undefined;
+}
+
+/** Changes with the signed-in User; compare it before and after an await. */
+export function themeCssViewerKey(): string {
+  return viewer.kind === "user" ? `user:${viewer.userId}` : viewer.kind;
+}
+
+/** Returns whether it changed. The caller repaints. */
+export function setThemeCssViewer(next: ThemeCssViewer): boolean {
+  const changed = next.kind !== viewer.kind || viewerOwner(next) !== viewerOwner(viewer);
+  viewer = next;
+  const owner = viewerOwner(next);
+  if (owner !== undefined) {
+    const library = readLibrary();
+    const kept = Object.fromEntries(
+      Object.entries(library).filter(([, entry]) => entry.owner === owner),
+    );
+    if (Object.keys(kept).length !== Object.keys(library).length) {
+      try {
+        writeLibrary(kept);
+      } catch {}
+    }
+  }
+  return changed;
+}
+
+// ── Storage: theme id to CSS and its owner, this browser only.
+
+interface StoredCss {
+  readonly css: string;
+  readonly owner: string | null;
+}
+
+function readLibrary(): Record<string, StoredCss> {
   if (typeof window === "undefined") return {};
   try {
     const value: unknown = JSON.parse(window.localStorage.getItem(THEME_CSS_STORAGE_KEY) ?? "{}");
     if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
-    const library: Record<string, string> = {};
-    for (const [themeId, css] of Object.entries(value)) {
-      if (typeof css === "string") library[themeId] = css;
+    const library: Record<string, StoredCss> = {};
+    for (const [themeId, entry] of Object.entries(value)) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const { css, owner } = entry as Record<string, unknown>;
+      if (typeof css === "string" && (owner === null || typeof owner === "string")) {
+        library[themeId] = { css, owner };
+      }
     }
     return library;
   } catch {
@@ -186,7 +237,7 @@ function readLibrary(): Record<string, string> {
   }
 }
 
-function writeLibrary(library: Record<string, string>): void {
+function writeLibrary(library: Record<string, StoredCss>): void {
   if (Object.keys(library).length === 0) {
     window.localStorage.removeItem(THEME_CSS_STORAGE_KEY);
   } else {
@@ -194,22 +245,37 @@ function writeLibrary(library: Record<string, string>): void {
   }
 }
 
+/** The viewer's own CSS only; nothing while the viewer is unknown. */
+function visibleLibrary(): Record<string, string> {
+  const owner = viewerOwner(viewer);
+  if (owner === undefined) return {};
+  const visible: Record<string, string> = {};
+  for (const [themeId, entry] of Object.entries(readLibrary())) {
+    if (entry.owner === owner) visible[themeId] = entry.css;
+  }
+  return visible;
+}
+
 export function storedThemeCss(themeId: string): string | null {
-  const library = readLibrary();
+  const library = visibleLibrary();
   return Object.hasOwn(library, themeId) ? library[themeId]! : null;
 }
 
+/** Whether this browser holds any custom theme CSS, whoever owns it: what the ways out remove. */
 export function hasStoredThemeCss(): boolean {
   return Object.keys(readLibrary()).length > 0;
 }
 
-export function storedThemeCssIds(): ReadonlyArray<string> {
-  return Object.keys(readLibrary());
+/** Themes with CSS of the current viewer; `anyOwner` for every stored one. */
+export function storedThemeCssIds({ anyOwner = false } = {}): ReadonlyArray<string> {
+  return Object.keys(anyOwner ? readLibrary() : visibleLibrary());
 }
 
-/** Throws when this browser's storage refuses the write. */
+/** Saves it as the viewer's. Throws while the viewer is unknown or storage refuses the write. */
 export function saveThemeCss(themeId: string, css: string): void {
-  writeLibrary({ ...readLibrary(), [themeId]: css });
+  const owner = viewerOwner(viewer);
+  if (owner === undefined) throw new Error("Your sign-in is not known yet. Try again.");
+  writeLibrary({ ...readLibrary(), [themeId]: { css, owner } });
 }
 
 export function forgetThemeCss(themeId: string): void {

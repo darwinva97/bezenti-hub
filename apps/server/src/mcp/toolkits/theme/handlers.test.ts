@@ -133,7 +133,17 @@ it.effect("returns the CSS's size and digest with the Hub's seal, never the CSS 
       expect(result).toMatchObject({ themeProposal: { ...NIGHT, css } });
       const seal = (result as { themeProposalSeal: string }).themeProposalSeal;
       expect(seal).toMatch(/^[A-Za-z0-9_-]{43}$/);
-      expect(ThemeProposalSeal.themeProposalSealValid({ ...NIGHT, css }, seal)).toBe(true);
+      // Sealed for the caller's own Thread only: replayed in another Thread it does not check out.
+      expect(ThemeProposalSeal.themeProposalSealValid({ ...NIGHT, css }, threadId, seal)).toBe(
+        true,
+      );
+      expect(
+        ThemeProposalSeal.themeProposalSealValid(
+          { ...NIGHT, css },
+          ThreadId.make("thread:other"),
+          seal,
+        ),
+      ).toBe(false);
       // The agent already has its CSS; echoing it would cost its context and break compaction.
       expect(JSON.stringify(result)).not.toContain("keyframes");
       expect((result as { next: string }).next).toContain("CSS");

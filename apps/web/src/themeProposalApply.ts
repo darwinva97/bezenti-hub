@@ -111,12 +111,35 @@ export function themeProposalCssFromInput(
     : { ok: false, message: `This CSS is not accepted today. ${problem}` };
 }
 
+/** How many mounted cards show each item: a preview needs one to be stopped from. */
+const mountedCards = new Map<string, number>();
+
+/** Called by a card while it is on screen; its preview ends when the last card for it leaves. */
+export function mountThemeProposalCard(itemId: string): () => void {
+  mountedCards.set(itemId, (mountedCards.get(itemId) ?? 0) + 1);
+  return () => {
+    const left = (mountedCards.get(itemId) ?? 1) - 1;
+    if (left > 0) {
+      mountedCards.set(itemId, left);
+      return;
+    }
+    mountedCards.delete(itemId);
+    stopThemeProposalPreview(itemId);
+  };
+}
+
+function themeProposalCardMounted(itemId: string): boolean {
+  return mountedCards.has(itemId);
+}
+
 /** Paints `proposal` (and its checked CSS) without saving it; takes the preview over. */
 export function previewThemeProposal(
   itemId: string,
   proposal: ThemeProposal,
   css?: string,
 ): ThemeProposalApplyResult {
+  // A preview with no card on screen would have nothing to stop it.
+  if (!themeProposalCardMounted(itemId)) return { ok: false, message: "This card is not shown." };
   const checked = cssForProposal(proposal, css);
   if (!checked.ok) return checked;
   applyThemeColorPreview(themeProposalDefinition(proposal).colors, proposal.appearance);
@@ -347,7 +370,7 @@ export function undoThemeProposal(itemId: string): boolean {
 export function dropThemeCss(): void {
   if (typeof window === "undefined") return;
   if (state.previewing !== null) updateState({ previewing: null });
-  const cssThemeIds = new Set(storedThemeCssIds());
+  const cssThemeIds = new Set(storedThemeCssIds({ anyOwner: true }));
   const current = readThemeSelection();
   const before = readThemeBeforeCss();
   forgetAllThemeCss();

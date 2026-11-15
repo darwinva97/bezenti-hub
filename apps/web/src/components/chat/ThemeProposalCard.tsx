@@ -1,12 +1,14 @@
 import type { ThemeProposal } from "@t3tools/shared/themeProposal";
 import { PaletteIcon, TriangleAlertIcon } from "lucide-react";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useTheme } from "../../hooks/useTheme";
+import { themeCssViewerKey } from "../../themeCss";
 import { THEME_CSS_RECOVERY_SHORTCUT } from "../../themeCssRecovery";
 import {
   applyThemeProposal,
   getThemeProposalState,
+  mountThemeProposalCard,
   previewThemeProposal,
   stopThemeProposalPreview,
   subscribeThemeProposals,
@@ -64,8 +66,17 @@ export function ThemeProposalCard({
     shared.recordsVersion >= 0 &&
     themeProposalAppliedHere(itemId, proposal);
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- unmount cleanup only: this card's preview, painted on the document, must end when the card leaves the screen
-  useEffect(() => () => stopThemeProposalPreview(itemId), [itemId]);
+  // False once this card left the screen: an answer arriving later must not paint or save.
+  const onScreen = useRef(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registration only: a preview, painted on the document, needs a card on screen and ends when the last one leaves
+  useEffect(() => {
+    onScreen.current = true;
+    const leave = mountThemeProposalCard(itemId);
+    return () => {
+      onScreen.current = false;
+      leave();
+    };
+  }, [itemId]);
 
   /** The proposal's CSS, loaded once and checked; undefined for a colors-only proposal. */
   const loadCss = async (): Promise<
@@ -90,7 +101,10 @@ export function ThemeProposalCard({
   };
 
   const act = async (run: (css: string | undefined) => ThemeProposalApplyResult) => {
+    const clickedBy = themeCssViewerKey();
     const loaded = await loadCss();
+    // The load can take seconds: the card may have left, or the session ended or changed hands.
+    if (!onScreen.current || themeCssViewerKey() !== clickedBy) return;
     if (!loaded.ok) {
       setMessage(loaded.message);
       return;

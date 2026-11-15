@@ -21,11 +21,16 @@ const NIGHT = {
 const CSS_META = { length: 120, sha256: "c".repeat(64) };
 const PROPOSAL = { ...NIGHT, css: CSS_META };
 
-const toolItem = (output: unknown, toolName = "mcp__t3-code__t3_theme_propose") =>
+const THREAD = ThreadId.make("thread-1");
+const toolItem = (
+  output: unknown,
+  toolName = "mcp__t3-code__t3_theme_propose",
+  threadId: ThreadId = THREAD,
+) =>
   ({
     id: TurnItemId.make("theme-1"),
     type: "dynamic_tool",
-    threadId: ThreadId.make("thread-1"),
+    threadId,
     runId: null,
     nodeId: null,
     providerThreadId: null,
@@ -50,7 +55,7 @@ const wireProposal = (item: OrchestrationV2TurnItem) => {
 
 describe("theme proposal cards on the wire", () => {
   ThemeProposalSeal.installThemeProposalSealKey(new Uint8Array(32).fill(3));
-  const seal = ThemeProposalSeal.sealThemeProposal(PROPOSAL)!;
+  const seal = ThemeProposalSeal.sealThemeProposal(PROPOSAL, THREAD)!;
 
   it("keeps a proposal's CSS when the Hub sealed it, through every projection", () => {
     const item = toolItem({
@@ -73,10 +78,10 @@ describe("theme proposal cards on the wire", () => {
   });
 
   it("drops the CSS of a card no Hub sealed, whatever server or name it claims", () => {
-    const otherCss = ThemeProposalSeal.sealThemeProposal({
-      ...NIGHT,
-      css: { ...CSS_META, sha256: "d".repeat(64) },
-    });
+    const otherCss = ThemeProposalSeal.sealThemeProposal(
+      { ...NIGHT, css: { ...CSS_META, sha256: "d".repeat(64) } },
+      THREAD,
+    );
     for (const forged of [undefined, "x".repeat(43), otherCss, seal.slice(1) + "A"]) {
       for (const toolName of [
         "mcp__t3-code__t3_theme_propose",
@@ -88,6 +93,15 @@ describe("theme proposal cards on the wire", () => {
         expect(wireProposal(item)).toEqual(NIGHT);
       }
     }
+  });
+
+  it("drops the CSS of a sealed result replayed into another Thread", () => {
+    const replayed = toolItem(
+      { themeProposal: PROPOSAL, themeProposalSeal: seal },
+      "mcp__t3-code__t3_theme_propose",
+      ThreadId.make("thread-2"),
+    );
+    expect(wireProposal(replayed)).toEqual(NIGHT);
   });
 
   it("drops every CSS while the Hub has no key", () => {

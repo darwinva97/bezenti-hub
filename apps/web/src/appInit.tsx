@@ -49,7 +49,7 @@ import { appAtomRegistry } from "./rpc/atomRegistry";
 import { primaryServerConfigAtom } from "./state/server";
 import { environmentShell } from "./state/shell";
 import { installChatRouteCommands } from "./shortcuts/chatRouteCommands";
-import { installThemeCssRecoveryShortcut } from "./themeCssRecovery";
+import { installThemeCssRecoveryShortcut, startThemeCssViewerTracking } from "./themeCssRecovery";
 import { startWorkspaceFocus } from "./lib/workspaceFocus";
 import { installCommandPaletteCommands } from "./shortcuts/commandPaletteCommands";
 import { registerOpenFavoriteEditorCommand } from "./components/chat/OpenInPickerShortcut";
@@ -180,6 +180,8 @@ export function startAppServices(): AppRouter {
 
   // The way out of custom theme CSS, before anything renders that CSS could hide.
   installThemeCssRecoveryShortcut();
+  // Custom theme CSS is shown only to the User who applied it, known once the Spaces load.
+  startThemeCssViewerTracking();
   startClientAppearance();
   startDocumentTitle();
   startEnvironmentThemeRepaint();

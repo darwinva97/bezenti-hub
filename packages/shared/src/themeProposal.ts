@@ -35,10 +35,14 @@ export interface ThemeProposal {
 /** The Hub's HMAC over a proposal (base64url, 32 bytes). Only a sealed proposal keeps its CSS. */
 export const THEME_PROPOSAL_SEAL_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
-/** What the Hub seals: every field of the proposal, the CSS by size and digest. */
-export function themeProposalSealMessage(proposal: ThemeProposal): string {
+/**
+ * What the Hub seals: the Thread the proposal was made in, so a sealed result replayed in another
+ * Thread does not check out, and every field of the proposal, the CSS by size and digest.
+ */
+export function themeProposalSealMessage(proposal: ThemeProposal, threadId: string): string {
   return JSON.stringify([
-    "t3-theme-proposal/1",
+    "t3-theme-proposal/2",
+    threadId,
     proposal.name,
     proposal.appearance,
     proposal.canvas,

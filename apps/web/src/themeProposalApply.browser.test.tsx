@@ -12,11 +12,17 @@ import {
   THEME_CSS_STYLE_ELEMENT_ID,
   themeCssSha256,
 } from "./themeCss";
-import { installThemeCssRecoveryShortcut } from "./themeCssRecovery";
+import {
+  installThemeCssRecoveryShortcut,
+  startThemeCssViewerTracking,
+  syncThemeCssViewer,
+} from "./themeCssRecovery";
+import { useCurrentSpace } from "./state/currentSpace";
 import { getCustomThemes, removeCustomThemes } from "./themePalette";
 import {
   applyThemeProposal,
   dropThemeCss,
+  getThemeProposalState,
   THEME_BEFORE_CSS_STORAGE_KEY,
   themeProposalAppliedHere,
   themeProposalCssFromInput,
@@ -43,9 +49,12 @@ const withCss = (css: string) => ({
 const NIGHT_CSS = withCss(CSS);
 const styleElement = () => document.getElementById(THEME_CSS_STYLE_ELEMENT_ID);
 
+const USER_A = { kind: "user", userId: "user-a" } as const;
+
 function resetBrowserTheme() {
   initThemeCssSafeMode("");
   forgetAllThemeCss();
+  syncThemeCssViewer(USER_A);
   removeCustomThemes(getCustomThemes().map((theme) => theme.id));
   setTheme("grove");
   setAppearanceMode("light");
@@ -421,5 +430,146 @@ describe("the theme proposal card with CSS", () => {
       .element(screen.getByText(THEME_PROPOSAL_CSS_WARNING, { exact: false }))
       .toBeVisible();
     expect(screen.container.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  /** A CSS load the test answers when it chooses. */
+  function heldLoad() {
+    let answer: (input: unknown) => void = () => undefined;
+    const pending = new Promise<unknown>((resolve) => {
+      answer = resolve;
+    });
+    return { load: () => pending, answer: () => answer({ css: CSS }) };
+  }
+
+  /** Lets the card's continuation after the answered load run: promise turns only, no clock. */
+  async function settle() {
+    for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+  }
+
+  it("previews once a held load is answered while the card stays (control for the next two)", async () => {
+    using _theme = freshBrowserTheme();
+    const held = heldLoad();
+    await using screen = await render(
+      <ThemeProposalCard
+        itemId="item:stays"
+        proposal={NIGHT_CSS}
+        actions
+        loadCssInput={held.load}
+      />,
+    );
+    await screen.getByRole("button", { name: "Preview" }).click();
+    expect(styleElement()).toBeNull();
+    held.answer();
+    await settle();
+    expect(styleElement()).not.toBeNull();
+    expect(getThemeProposalState().previewing).toBe("item:stays");
+  });
+
+  it("does not preview when the card left the screen while its CSS was loading", async () => {
+    using _theme = freshBrowserTheme();
+    const held = heldLoad();
+    const screen = await render(
+      <ThemeProposalCard
+        itemId="item:gone"
+        proposal={NIGHT_CSS}
+        actions
+        loadCssInput={held.load}
+      />,
+    );
+    await screen.getByRole("button", { name: "Preview" }).click();
+    await screen.unmount();
+    held.answer();
+    await settle();
+    expect(styleElement()).toBeNull();
+    expect(getThemeProposalState().previewing).toBeNull();
+    expect(document.documentElement.dataset.themeId).toBe("grove");
+    await screen[Symbol.asyncDispose]();
+  });
+
+  it("does not apply when the signed-in User changed while its CSS was loading", async () => {
+    using _theme = freshBrowserTheme();
+    const before = readThemeSelection();
+    const held = heldLoad();
+    await using screen = await render(
+      <ThemeProposalCard
+        itemId="item:other-user"
+        proposal={NIGHT_CSS}
+        actions
+        loadCssInput={held.load}
+      />,
+    );
+    await screen.getByRole("button", { name: "Apply to my appearance" }).click();
+    syncThemeCssViewer({ kind: "unknown" });
+    held.answer();
+    await settle();
+    expect(styleElement()).toBeNull();
+    expect(hasStoredThemeCss()).toBe(false);
+    expect(readThemeSelection()).toEqual(before);
+  });
+});
+
+describe("custom CSS belongs to the User who applied it", () => {
+  it("is shown only to that User, and dropped when another User or nobody signs in", () => {
+    using _theme = freshBrowserTheme();
+    applyThemeProposal("item:css", NIGHT_CSS, CSS);
+    const id = themeProposalThemeId(NIGHT_CSS);
+    expect(styleElement()).not.toBeNull();
+
+    // Not known yet (startup): nothing is shown, nothing is dropped.
+    syncThemeCssViewer({ kind: "unknown" });
+    expect(styleElement()).toBeNull();
+    syncThemeCssViewer(USER_A);
+    expect(styleElement()?.textContent).toContain("rgb(1, 2, 3)");
+
+    // Another User signs in on this browser: never shown, and dropped for good.
+    syncThemeCssViewer({ kind: "user", userId: "user-b" });
+    expect(styleElement()).toBeNull();
+    syncThemeCssViewer(USER_A);
+    expect(storedThemeCss(id)).toBeNull();
+    expect(styleElement()).toBeNull();
+  });
+
+  it("is dropped when the session ends some other way and nobody is signed in", () => {
+    using _theme = freshBrowserTheme();
+    applyThemeProposal("item:css", NIGHT_CSS, CSS);
+    syncThemeCssViewer({ kind: "none" });
+    expect(styleElement()).toBeNull();
+    syncThemeCssViewer(USER_A);
+    expect(hasStoredThemeCss()).toBe(false);
+  });
+
+  it("keeps today's behaviour on a Hub without Users", () => {
+    using _theme = freshBrowserTheme();
+    syncThemeCssViewer({ kind: "none" });
+    applyThemeProposal("item:css", NIGHT_CSS, CSS);
+    syncThemeCssViewer({ kind: "unknown" });
+    syncThemeCssViewer({ kind: "none" });
+    expect(styleElement()?.textContent).toContain("rgb(1, 2, 3)");
+    // CSS saved with no Users is nobody's: a User signing in later does not get it.
+    syncThemeCssViewer(USER_A);
+    expect(styleElement()).toBeNull();
+    expect(hasStoredThemeCss()).toBe(false);
+  });
+
+  it("follows the signed-in User from the Spaces store", () => {
+    using _theme = freshBrowserTheme();
+    applyThemeProposal("item:css", NIGHT_CSS, CSS);
+    syncThemeCssViewer({ kind: "unknown" });
+    const stop = startThemeCssViewerTracking();
+    try {
+      useCurrentSpace.setState({
+        environmentId: "env-1" as never,
+        view: { userId: "user-a" } as never,
+        loadFailed: false,
+      });
+      expect(styleElement()).not.toBeNull();
+      // The session ended some other way (expired, revoked): nobody is signed in.
+      useCurrentSpace.setState({ view: null, loadFailed: false });
+      expect(styleElement()).toBeNull();
+      expect(hasStoredThemeCss()).toBe(false);
+    } finally {
+      stop();
+      useCurrentSpace.setState({ environmentId: null, view: null, loadFailed: false });
+    }
   });
 });

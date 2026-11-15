@@ -201,8 +201,8 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
       };
     case "dynamic_tool": {
       const { output: rawOutput, ...projected } = item;
-      // A theme proposal keeps its CSS only when this Hub sealed it.
-      const output = keepSealedThemeProposalCss(compactDynamicToolOutput(rawOutput));
+      // A theme proposal keeps its CSS only when this Hub sealed it, in this item's Thread.
+      const output = keepSealedThemeProposalCss(compactDynamicToolOutput(rawOutput), item.threadId);
       return {
         ...projected,
         input: summarizeDynamicValue(item.input),

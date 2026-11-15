@@ -10,6 +10,7 @@ import {
 } from "@t3tools/shared/themeProposal";
 import { BUILT_IN_THEME_IDS } from "@t3tools/shared/themePalettes";
 import * as Effect from "effect/Effect";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { sealThemeProposal } from "./themeProposalSeal.ts";
 import { ThemeToolkit } from "./tools.ts";
@@ -55,7 +56,13 @@ export const layer = McpToolAccess.toLayer(ThemeToolkit, {
           sha256: NodeCrypto.createHash("sha256").update(params.css, "utf8").digest("hex"),
         },
       };
-      const themeProposalSeal = sealThemeProposal(themeProposal);
+      // Sealed for the caller's Thread, the one this call's item lands in. No Thread, no CSS.
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const threadId = scope.thread?.threadId;
+      if (threadId === undefined) {
+        return yield* refuse("CSS needs a Thread to be shown in. Propose colors only.");
+      }
+      const themeProposalSeal = sealThemeProposal(themeProposal, threadId);
       if (themeProposalSeal === null) {
         return yield* refuse(
           "This server cannot take CSS in a proposal right now. Propose colors only.",

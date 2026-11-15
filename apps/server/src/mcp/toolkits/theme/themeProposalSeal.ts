@@ -13,8 +13,8 @@ import * as Layer from "effect/Layer";
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 
 /**
- * Proves a proposal's CSS came from this Hub's `t3_theme_propose`; no tool name can (a provider may
- * run its own server named t3-code, ACP reports bare names). HMAC-SHA256, key in module state because
+ * Proves a proposal's CSS came from this Hub's `t3_theme_propose` in this very Thread; no tool name
+ * can (a provider may run its own server named t3-code). HMAC-SHA256, key in module state because
  * WireProjection is a plain function. Without a key CSS is refused on proposing, dropped on projection.
  */
 const SEAL_SECRET_NAME = "theme-proposal-seal";
@@ -25,31 +25,37 @@ export function installThemeProposalSealKey(key: Uint8Array | null): void {
   sealKey = key === null ? null : Uint8Array.from(key);
 }
 
-function mac(key: Uint8Array, proposal: ThemeProposal): Buffer {
-  return NodeCrypto.createHmac("sha256", key).update(themeProposalSealMessage(proposal)).digest();
+function mac(key: Uint8Array, proposal: ThemeProposal, threadId: string): Buffer {
+  return NodeCrypto.createHmac("sha256", key)
+    .update(themeProposalSealMessage(proposal, threadId))
+    .digest();
 }
 
-/** The seal for a proposal this Hub accepted, or null while there is no key. */
-export function sealThemeProposal(proposal: ThemeProposal): string | null {
-  return sealKey === null ? null : mac(sealKey, proposal).toString("base64url");
+/** The seal for a proposal this Hub accepted in `threadId`, or null while there is no key. */
+export function sealThemeProposal(proposal: ThemeProposal, threadId: string): string | null {
+  return sealKey === null ? null : mac(sealKey, proposal, threadId).toString("base64url");
 }
 
-export function themeProposalSealValid(proposal: ThemeProposal, seal: unknown): boolean {
+export function themeProposalSealValid(
+  proposal: ThemeProposal,
+  threadId: string,
+  seal: unknown,
+): boolean {
   if (sealKey === null || typeof seal !== "string" || !THEME_PROPOSAL_SEAL_PATTERN.test(seal)) {
     return false;
   }
   const given = Buffer.from(seal, "base64url");
-  const expected = mac(sealKey, proposal);
+  const expected = mac(sealKey, proposal, threadId);
   return given.length === expected.length && NodeCrypto.timingSafeEqual(given, expected);
 }
 
-/** A compact tool output as clients get it: a proposal keeps its CSS only under a valid seal. */
+/** A compact tool output of an item in `threadId`: its proposal keeps CSS only under a valid seal. */
 export function keepSealedThemeProposalCss<
   Output extends { themeProposal?: ThemeProposal; themeProposalSeal?: string },
->(output: Output | undefined): Output | undefined {
+>(output: Output | undefined, threadId: string): Output | undefined {
   const proposal = output?.themeProposal;
   if (output === undefined || proposal?.css === undefined) return output;
-  if (themeProposalSealValid(proposal, output.themeProposalSeal)) return output;
+  if (themeProposalSealValid(proposal, threadId, output.themeProposalSeal)) return output;
   const { themeProposalSeal: _seal, ...rest } = output;
   return { ...rest, themeProposal: themeProposalColors(proposal) } as Output;
 }

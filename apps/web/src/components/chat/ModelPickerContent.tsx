@@ -215,15 +215,18 @@ function ModelPickerProviderNotices({
               <p className="line-clamp-3 text-muted-foreground">
                 {getProviderStatusMessage(entry.snapshot)}
               </p>
-              <InlineButton
-                className="mt-1"
-                onClick={() => {
-                  onRequestClose?.();
-                  onOpenProviderSetup?.(entry.instanceId);
-                }}
-              >
-                {setupEntries.length > 1 ? `Set up ${entry.displayName}` : "Open provider setup"}
-              </InlineButton>
+              {/* An agent the Thread's machine lacks: provider setup is the Hub's, it cannot add it there. */}
+              {entry.snapshot.availability === "unavailable" ? null : (
+                <InlineButton
+                  className="mt-1"
+                  onClick={() => {
+                    onRequestClose?.();
+                    onOpenProviderSetup?.(entry.instanceId);
+                  }}
+                >
+                  {setupEntries.length > 1 ? `Set up ${entry.displayName}` : "Open provider setup"}
+                </InlineButton>
+              )}
             </div>
           ))}
         </div>

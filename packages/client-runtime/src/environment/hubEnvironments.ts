@@ -481,7 +481,7 @@ export function providersOnEnvironment(
         availability: "available",
       };
     }
-    const reason = `Not available on ${environment.name}.`;
+    const reason = `Not installed on ${environment.name}.`;
     return {
       ...rest,
       enabled: there?.enabled ?? false,

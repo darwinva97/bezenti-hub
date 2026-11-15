@@ -576,7 +576,10 @@ Decisions; the rule is `ai/chooseAiAccount.ts` (one chooser, also the session pl
   catalog) and `null` for a direct one; `applies` says whether turns there run on AI accounts.
 - **Availability in the clients.** Where `applies`, a gateway or direct agent is ready only with a
   compatible allowed account; its machine login (auth status, sign-in prompts) is ignored; a
-  gateway agent lists its accounts' models, other families labeled (Gemini under Claude Code).
+  gateway agent lists its accounts' models of its own family (`isModelListedFor`: Claude under
+  Claude Code, OpenAI under Codex, the families with no agent of their own under Codex, labeled;
+  OpenCode and Pi list all; image, embedding and audio models nowhere). Picker order only: the
+  Hub serves any allowed model to any gateway agent.
   None: «No AI account is allowed for you in <Space>». The composer has an «AI account» select
   (the accounts that fit the provider and model, first by priority); mid-Thread it calls
   `thread.setAiAccount`.

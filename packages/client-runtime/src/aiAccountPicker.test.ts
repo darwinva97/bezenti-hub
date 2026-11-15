@@ -44,6 +44,19 @@ const cursor: ServerProvider = {
   models: [{ slug: "auto", name: "Auto", isCustom: false, capabilities: null }],
 };
 
+const codex: ServerProvider = {
+  ...claude,
+  instanceId: ProviderInstanceId.make("codex"),
+  driver: ProviderDriverKind.make("codex"),
+  models: [],
+};
+const pi: ServerProvider = {
+  ...claude,
+  instanceId: ProviderInstanceId.make("pi"),
+  driver: ProviderDriverKind.make("pi"),
+  models: [],
+};
+
 const acmeClaude = "acct-acme-claude" as AiAccountId;
 const acmeGoogle = "acct-acme-google" as AiAccountId;
 const picker: AiAccountPickerResult = {
@@ -76,11 +89,69 @@ describe("applyAiAccountsToProviders", () => {
     expect(shown?.auth.status).toBe("authenticated");
     expect(shown?.setup).toBeUndefined();
     expect(shown?.message).toBeUndefined();
-    // Every allowed account's models; another family with its family named.
+    // Claude Code lists Claude models only, whichever allowed account serves them.
     expect(shown?.models.map((model) => [model.slug, model.subProvider])).toEqual([
       ["claude-sonnet-5-5", undefined],
-      ["gemini-3-pro", "Gemini"],
     ]);
+  });
+
+  it("lists each family under its own agent, and the families without one under Codex", () => {
+    const mixed: AiAccountPickerResult = {
+      ...picker,
+      accounts: [
+        ...picker.accounts,
+        {
+          id: "acct-acme-chatgpt" as AiAccountId,
+          name: "Acme ChatGPT",
+          type: "subscription",
+          provider: "codex",
+          priority: 3,
+          models: ["gpt-5.6-terra", "gpt-image-2.5", "text-embedding-4"],
+        },
+        {
+          id: "acct-acme-deepseek" as AiAccountId,
+          name: "Acme DeepSeek",
+          type: "api-key",
+          provider: "openai-compatible",
+          priority: 4,
+          models: ["deepseek-flash"],
+        },
+      ],
+    };
+    const [asClaude, asCodex, asPi] = applyAiAccountsToProviders([claude, codex, pi], mixed);
+    expect(asClaude?.models.map((model) => model.slug)).toEqual(["claude-sonnet-5-5"]);
+    // Image and embedding models are not for a conversation: no agent lists them.
+    expect(asCodex?.models.map((model) => [model.slug, model.subProvider])).toEqual([
+      ["gemini-3-pro", "Gemini"],
+      ["gpt-5.6-terra", undefined],
+      ["deepseek-flash", "DeepSeek"],
+    ]);
+    // An agent with no family of its own keeps every conversation model.
+    expect(asPi?.models.map((model) => model.slug)).toEqual([
+      "claude-sonnet-5-5",
+      "gemini-3-pro",
+      "gpt-5.6-terra",
+      "deepseek-flash",
+    ]);
+  });
+
+  it("does not offer an agent whose allowed accounts serve none of its models", () => {
+    const onlyChatGpt: AiAccountPickerResult = {
+      ...picker,
+      accounts: [
+        {
+          id: "acct-acme-chatgpt" as AiAccountId,
+          name: "Acme ChatGPT",
+          type: "subscription",
+          provider: "codex",
+          priority: 1,
+          models: ["gpt-5.6-terra"],
+        },
+      ],
+    };
+    const [shown] = applyAiAccountsToProviders([claude], onlyChatGpt);
+    expect(shown?.status).toBe("error");
+    expect(shown?.message).toBe("No AI account allowed for you in Acme serves Claude models.");
   });
 
   it("never offers a provider on the machine's login when no allowed account fits it", () => {

@@ -94,6 +94,29 @@ const NATIVE_FAMILY: Readonly<Record<string, string>> = {
   claudeAgent: "Claude",
   codex: "OpenAI",
 };
+const NATIVE_FAMILIES: ReadonlySet<string> = new Set(Object.values(NATIVE_FAMILY));
+/** The agent that lists the families no agent is made for (DeepSeek, Gemini…): they speak OpenAI. */
+const OTHER_FAMILIES_DRIVER = "codex";
+
+/** Models an account's catalog carries that no agent can hold a conversation with. */
+const NOT_FOR_CONVERSATION =
+  /(^|[-/])(image|embedding|embeddings|tts|whisper|transcribe|moderation|dall-e|sora|realtime|audio)([-/.]|\d|$)/iu;
+
+/**
+ * Whether `driver`'s picker lists `model`: an agent made for one family lists that family only,
+ * so Claude models sit under Claude Code and OpenAI's under Codex; the families without an agent
+ * of their own go under Codex, labeled; an agent with no family (OpenCode, Pi) lists them all.
+ * This is the picker's order only: the Hub still serves any allowed model to any gateway agent.
+ */
+function isModelListedFor(driver: string, model: string): boolean {
+  const plain = servedModelOf(model).split("/").at(-1) ?? model;
+  if (NOT_FOR_CONVERSATION.test(plain)) return false;
+  const native = NATIVE_FAMILY[driver];
+  if (native === undefined) return true;
+  const family = modelFamilyOf(model);
+  if (family === native) return true;
+  return driver === OTHER_FAMILIES_DRIVER && (family === undefined || !NATIVE_FAMILIES.has(family));
+}
 
 export const AI_PROVIDER_LABEL: Readonly<Record<AiAccountProvider, string>> = {
   claude: "Claude",
@@ -116,7 +139,7 @@ export function aiAccountFallbackName(provider: AiAccountProvider): string {
   return `${AI_PROVIDER_LABEL[provider]} account`;
 }
 
-/** The models a gateway provider offers here: every allowed account's, other families labeled. */
+/** The models a gateway provider offers here: its allowed accounts' that `isModelListedFor` it. */
 function gatewayModelsOf(
   provider: ServerProvider,
   accounts: ReadonlyArray<AiAccountPickerAccount>,
@@ -134,7 +157,7 @@ function gatewayModelsOf(
   }
   for (const account of accounts) {
     for (const slug of account.models ?? []) {
-      if (seen.has(slug)) continue;
+      if (seen.has(slug) || !isModelListedFor(provider.driver, slug)) continue;
       seen.add(slug);
       const family = modelFamilyOf(slug);
       const existing = known.get(slug);
@@ -183,6 +206,16 @@ export function applyAiAccountsToProviders(
       };
     }
     const gateway = AI_GATEWAY_DRIVERS.has(provider.driver);
+    const models = gateway ? gatewayModelsOf(provider, accounts) : provider.models;
+    const native = NATIVE_FAMILY[provider.driver];
+    if (gateway && models.length === 0 && native !== undefined) {
+      return {
+        ...withoutSetup,
+        status: "error",
+        auth: { status: "unknown" },
+        message: `No AI account allowed for you in ${picker.spaceName ?? "this Space"} serves ${native} models.`,
+      };
+    }
     return {
       ...withoutSetup,
       status: provider.installed ? "ready" : provider.status,
@@ -191,7 +224,7 @@ export function applyAiAccountsToProviders(
       ...(provider.installed || provider.message === undefined
         ? {}
         : { message: provider.message }),
-      models: gateway ? gatewayModelsOf(provider, accounts) : provider.models,
+      models,
     };
   });
 }

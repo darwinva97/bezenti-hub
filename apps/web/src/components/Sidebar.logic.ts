@@ -733,6 +733,28 @@ export function isTrailingDoubleClick(detail: number): boolean {
   return detail > 1;
 }
 
+export type SidebarThreadClick =
+  | "open"
+  | "background-tab"
+  | "toggle-selection"
+  | "range-select"
+  | "none";
+
+/**
+ * What a click on a thread row does. `mod` is Cmd on macOS and Ctrl elsewhere: alone it opens
+ * the thread in a background tab, as a browser does with a link; with Shift it adds the row to
+ * the selection or takes it out. Shift alone selects the range.
+ */
+export function resolveSidebarThreadClick(input: {
+  readonly mod: boolean;
+  readonly shift: boolean;
+  readonly detail: number;
+}): SidebarThreadClick {
+  if (input.mod) return input.shift ? "toggle-selection" : "background-tab";
+  if (input.shift) return "range-select";
+  return isTrailingDoubleClick(input.detail) ? "none" : "open";
+}
+
 function nodeClosest(node: object | null, selector: string): unknown {
   if (node === null || !("closest" in node) || typeof node.closest !== "function") return null;
   return node.closest(selector);

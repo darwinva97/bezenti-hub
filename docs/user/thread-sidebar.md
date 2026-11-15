@@ -65,8 +65,10 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 
 The top of the chat area is a strip of tabs, one per open thread, with the project icon, the
 title and a dot for working, waiting for you, or failed. Opening a thread from the sidebar
-reuses the current tab; a thread that is already open just gets its tab back. Middle-click a
-sidebar row to open it in a background tab, or press **+** to start a new thread in a new tab.
+reuses the current tab; a thread that is already open just gets its tab back. **Ctrl-click**
+(**Cmd-click** on macOS) or middle-click a sidebar row to open it in a background tab and stay
+where you are, or press **+** to start a new thread in a new tab. To select several rows,
+**Shift-click** for a range and **Ctrl-Shift-click** (**Cmd-Shift-click**) to add or remove one.
 Drag tabs to reorder them; the strip scrolls sideways when they do not fit.
 
 Closing a tab only removes it from the strip. The thread keeps running and stays in the sidebar.

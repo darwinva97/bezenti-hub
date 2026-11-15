@@ -843,7 +843,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const handleClick = (event: ReactMouseEvent) => {
     onThreadClick(event, threadRef);
   };
-  // Middle-click opens the Thread as a background tab, like a link; Ctrl and Cmd clicks select rows.
+  // Middle-click opens the Thread as a background tab, like a link (as a Ctrl or Cmd click does).
   const handleMiddleMouseDown = (event: ReactMouseEvent) => {
     if (event.button === 1) event.preventDefault();
   };

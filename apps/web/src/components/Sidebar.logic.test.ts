@@ -11,6 +11,7 @@ import {
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   resolveSidebarRowThreadId,
+  resolveSidebarThreadClick,
   belongsInSidebarWorkingShelf,
   isSidebarEnvironmentDisconnected,
   orderItemsByPreferredIds,
@@ -1651,5 +1652,36 @@ describe("shouldCreateNewThreadInCurrentProject", () => {
     expect(shouldCreateNewThreadInCurrentProject(false, 1, 3)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(false, 0, 0)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(true, 2, 2)).toBe(true);
+  });
+});
+
+describe("resolveSidebarThreadClick", () => {
+  const click = (keys: { mod?: boolean; shift?: boolean; detail?: number }) =>
+    resolveSidebarThreadClick({
+      mod: keys.mod ?? false,
+      shift: keys.shift ?? false,
+      detail: keys.detail ?? 1,
+    });
+
+  it("opens the thread on a plain click", () => {
+    expect(click({})).toBe("open");
+  });
+
+  it("opens a background tab on a Ctrl or Cmd click", () => {
+    expect(click({ mod: true })).toBe("background-tab");
+  });
+
+  it("toggles the row's selection on a Ctrl or Cmd click with Shift", () => {
+    expect(click({ mod: true, shift: true })).toBe("toggle-selection");
+  });
+
+  it("selects a range on a Shift click", () => {
+    expect(click({ shift: true })).toBe("range-select");
+  });
+
+  it("ignores the second click of a double-click, which renames", () => {
+    expect(click({ detail: 2 })).toBe("none");
+    // A modified click acts each time: two Ctrl clicks are two requests.
+    expect(click({ mod: true, detail: 2 })).toBe("background-tab");
   });
 });

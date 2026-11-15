@@ -173,6 +173,7 @@ import {
 } from "../threadRoutes";
 import type { SidebarThreadSummary } from "../types";
 import { readThreadRolePermissions } from "../state/currentSpace";
+import { openThreadTabInBackground } from "../state/threadTabs";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { cn } from "~/lib/utils";
 import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
@@ -194,7 +195,6 @@ import {
   belongsInSidebarWorkingShelf,
   isSidebarEnvironmentDisconnected,
   isSidebarNestedLinkClick,
-  isTrailingDoubleClick,
   orderItemsByPreferredIds,
   planSidebarThreadDrop,
   reduceSidebarProjectScopeMenuState,
@@ -218,6 +218,7 @@ import {
   type SidebarListItem,
   type SidebarSection,
   resolveSidebarRowThreadId,
+  resolveSidebarThreadClick,
 } from "./Sidebar.logic";
 import {
   createSidebarCollisionDetection,
@@ -1594,22 +1595,29 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const handleThreadClick = (event: ReactMouseEvent, threadRef: ScopedThreadRef) => {
     if (isSidebarNestedLinkClick(event.target)) return;
     const isMac = isMacPlatform(navigator.platform);
-    const isModClick = isMac ? event.metaKey : event.ctrlKey;
     const threadKey = scopedThreadKey(threadRef);
-    if (isModClick) {
-      event.preventDefault();
+    const click = resolveSidebarThreadClick({
+      mod: isMac ? event.metaKey : event.ctrlKey,
+      shift: event.shiftKey,
+      detail: event.detail,
+    });
+    if (click === "none") return;
+    if (click === "open") {
+      navigateToThread(threadRef);
+      return;
+    }
+    event.preventDefault();
+    if (click === "background-tab") {
+      openThreadTabInBackground({
+        kind: "thread",
+        environmentId: threadRef.environmentId,
+        threadId: threadRef.threadId,
+      });
+    } else if (click === "toggle-selection") {
       toggleThreadSelection(threadKey);
-      return;
-    }
-    if (event.shiftKey) {
-      event.preventDefault();
+    } else {
       rangeSelectTo(threadKey, orderedThreadKeysRef.current);
-      return;
     }
-    if (isTrailingDoubleClick(event.detail)) {
-      return;
-    }
-    navigateToThread(threadRef);
   };
 
   // Snapshot navigation before partition mutation; background parks use a null plan.

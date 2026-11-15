@@ -35,7 +35,10 @@ const ThemeProposal = Schema.Struct({
 /** The decoder strips unknown keys by default; a key outside the four fails decoding instead. */
 const OtherKeysRefused = Schema.Record(
   Schema.String.check(Schema.isPattern(/^(?!(?:name|appearance|canvas|accent)$)/)),
-  Schema.Never,
+  Schema.Never.annotate({
+    message:
+      "Not accepted: a proposal takes only name, appearance, canvas and accent (no CSS or other colors).",
+  }),
 );
 
 const ThemeReadTool = Tool.make(THEME_READ_TOOL_NAME, {

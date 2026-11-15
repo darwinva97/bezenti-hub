@@ -2,12 +2,14 @@ import { readThemeProposal, type ThemeProposal } from "@t3tools/shared/themeProp
 
 import {
   readThemeSelection,
+  refreshTheme,
   restoreThemeSelection,
   setAppearanceMode,
   setTheme,
   type ThemeSelection,
 } from "./hooks/useTheme";
 import {
+  applyThemeColorPreview,
   createVividThemeColors,
   getCustomThemes,
   installCustomTheme,
@@ -25,6 +27,48 @@ import {
 /** WCAG AA for body text; every text role of the derived palette must reach it. */
 export const THEME_PROPOSAL_MIN_TEXT_CONTRAST = 4.5;
 const APPLIED_STORAGE_PREFIX = "t3code:theme-proposal-applied:v1:";
+
+/**
+ * What every card reads: which proposal, if any, is previewing on the document (there is only one
+ * document, so one preview), and a version bumped on every write or removal of an applied record,
+ * which lives in localStorage where nothing would tell a card it changed.
+ */
+export interface ThemeProposalState {
+  readonly previewing: string | null;
+  readonly recordsVersion: number;
+}
+
+let state: ThemeProposalState = { previewing: null, recordsVersion: 0 };
+const listeners = new Set<() => void>();
+
+function updateState(next: Partial<ThemeProposalState>): void {
+  state = { ...state, ...next };
+  for (const listener of listeners) listener();
+}
+
+export function subscribeThemeProposals(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function getThemeProposalState(): ThemeProposalState {
+  return state;
+}
+
+/** Paints `proposal` without saving it; takes the preview over from any other card. */
+export function previewThemeProposal(itemId: string, proposal: ThemeProposal): void {
+  applyThemeColorPreview(themeProposalDefinition(proposal).colors, proposal.appearance);
+  updateState({ previewing: itemId });
+}
+
+/** Ends the running preview (only `itemId`'s, when given) and repaints the stored theme. */
+export function stopThemeProposalPreview(itemId?: string): void {
+  if (state.previewing === null || (itemId !== undefined && state.previewing !== itemId)) return;
+  updateState({ previewing: null });
+  refreshTheme({ preservePreview: false });
+}
 
 /** The same proposal always maps to the same theme, so applying it again updates, not duplicates. */
 export function themeProposalThemeId(proposal: ThemeProposal): string {
@@ -107,6 +151,8 @@ export function applyThemeProposal(
   proposal: ThemeProposal,
 ): ThemeProposalApplyResult {
   if (typeof window === "undefined") return { ok: false, message: "No browser to apply it in." };
+  // A preview marks the document, and a theme set under it would not be painted.
+  stopThemeProposalPreview();
   // Read again: a card can come from an old turn, and today's rules decide what applies.
   const valid = readThemeProposal(proposal);
   if (valid === undefined) return { ok: false, message: "This proposal is not a valid theme." };
@@ -143,15 +189,18 @@ export function applyThemeProposal(
   try {
     window.localStorage.setItem(appliedKey(itemId), JSON.stringify(record));
   } catch {}
+  updateState({ recordsVersion: state.recordsVersion + 1 });
   return { ok: true };
 }
 
 /** Puts back the theme, mode and mix this browser had before the card's Apply. */
 export function undoThemeProposal(itemId: string): boolean {
   if (typeof window === "undefined") return false;
+  stopThemeProposalPreview();
   const record = readApplied(itemId);
   if (record === null) return false;
   if (!restoreThemeSelection(record.previous)) return false;
   forgetApplied(itemId);
+  updateState({ recordsVersion: state.recordsVersion + 1 });
   return true;
 }

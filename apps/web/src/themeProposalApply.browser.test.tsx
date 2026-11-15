@@ -113,6 +113,60 @@ describe("the theme proposal card", () => {
     expect(document.documentElement.dataset.themeId).toBe("grove");
   });
 
+  it("keeps one preview for all cards, and Apply on another card ends it and paints", async () => {
+    using _theme = freshBrowserTheme();
+    const OCEAN_NIGHT = { ...NIGHT, name: "Ocean Night", accent: "#7aa2f7" } as const;
+    await using screen = await render(
+      <div>
+        <div data-testid="a">
+          <ThemeProposalCard itemId="item:a" proposal={NIGHT} actions />
+        </div>
+        <div data-testid="b">
+          <ThemeProposalCard itemId="item:b" proposal={OCEAN_NIGHT} actions />
+        </div>
+      </div>,
+    );
+    const a = screen.getByTestId("a");
+    const b = screen.getByTestId("b");
+
+    await a.getByRole("button", { name: "Preview" }).click();
+    await b.getByRole("button", { name: "Preview" }).click();
+    // B took the preview over: A no longer claims it.
+    await expect.element(a.getByRole("button", { name: "Preview" })).toBeVisible();
+    await expect.element(b.getByRole("button", { name: "Stop preview" })).toBeVisible();
+
+    await a.getByRole("button", { name: "Preview" }).click();
+    await b.getByRole("button", { name: "Apply to my appearance" }).click();
+    expect(document.documentElement.dataset.themeId).toBe(themeProposalThemeId(OCEAN_NIGHT));
+    await expect.element(b.getByRole("button", { name: "Undo" })).toBeVisible();
+    await expect.element(a.getByRole("button", { name: "Preview" })).toBeVisible();
+
+    await a.getByRole("button", { name: "Preview" }).click();
+    await b.getByRole("button", { name: "Undo" }).click();
+    expect(document.documentElement.dataset.themeId).toBe("grove");
+    await expect.element(a.getByRole("button", { name: "Preview" })).toBeVisible();
+  });
+
+  it("follows its applied record even when the selected theme does not change", async () => {
+    using _theme = freshBrowserTheme();
+    await using screen = await render(
+      <ThemeProposalCard itemId="item:record" proposal={NIGHT} actions />,
+    );
+    await screen.getByRole("button", { name: "Apply to my appearance" }).click();
+    await screen.getByRole("button", { name: "Undo" }).click();
+
+    // Picked again in Settings: then Apply records this very theme as the one to go back to.
+    setTheme(themeProposalThemeId(NIGHT));
+    await screen.getByRole("button", { name: "Apply to my appearance" }).click();
+    await expect.element(screen.getByRole("button", { name: "Undo" })).toBeVisible();
+
+    await screen.getByRole("button", { name: "Undo" }).click();
+    await expect
+      .element(screen.getByRole("button", { name: "Apply to my appearance" }))
+      .toBeVisible();
+    expect(screen.container.querySelector("[role=status]")).toBeNull();
+  });
+
   it("shows a guest the proposal with no buttons", async () => {
     using _theme = freshBrowserTheme();
     await using screen = await render(

@@ -1,11 +1,14 @@
 import type { ThemeProposal } from "@t3tools/shared/themeProposal";
 import { PaletteIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
-import { refreshTheme, useTheme } from "../../hooks/useTheme";
-import { applyThemeColorPreview } from "../../themePalette";
+import { useTheme } from "../../hooks/useTheme";
 import {
   applyThemeProposal,
+  getThemeProposalState,
+  previewThemeProposal,
+  stopThemeProposalPreview,
+  subscribeThemeProposals,
   themeProposalAppliedHere,
   themeProposalDefinition,
   themeProposalReadable,
@@ -16,6 +19,7 @@ import { Button } from "../ui/button";
 /**
  * A theme an agent proposed. Showing it changes nothing; Preview, Apply and Undo act only in this
  * browser, for whoever clicks. `actions` is false where the viewer cannot act, such as a guest link.
+ * The preview and the applied records are shared by every card (themeProposalApply's store).
  */
 export function ThemeProposalCard({
   itemId,
@@ -26,47 +30,38 @@ export function ThemeProposalCard({
   readonly proposal: ThemeProposal;
   readonly actions: boolean;
 }) {
-  // Read the selected theme here, so Apply and Undo follow it (the compiler memoizes on it).
   const { theme } = useTheme();
-  const [previewing, setPreviewing] = useState(false);
+  const shared = useSyncExternalStore(
+    subscribeThemeProposals,
+    getThemeProposalState,
+    getThemeProposalState,
+  );
   const [message, setMessage] = useState<string | null>(null);
-  const previewingRef = useRef(false);
   const definition = themeProposalDefinition(proposal);
   const readable = themeProposalReadable(proposal);
-  const applied = actions && theme === definition.id && themeProposalAppliedHere(itemId, proposal);
+  const previewing = shared.previewing === itemId;
+  // The record lives in localStorage: reading the version here makes the compiler re-read it after
+  // every write or removal, and the theme after every selection.
+  const applied =
+    actions &&
+    theme === definition.id &&
+    shared.recordsVersion >= 0 &&
+    themeProposalAppliedHere(itemId, proposal);
 
-  const stopPreview = () => {
-    if (!previewingRef.current) return;
-    previewingRef.current = false;
-    setPreviewing(false);
-    refreshTheme({ preservePreview: false });
-  };
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- unmount cleanup only: a preview painted on the document must end when the card leaves the screen
-  useEffect(
-    () => () => {
-      if (previewingRef.current) refreshTheme({ preservePreview: false });
-    },
-    [],
-  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- unmount cleanup only: this card's preview, painted on the document, must end when the card leaves the screen
+  useEffect(() => () => stopThemeProposalPreview(itemId), [itemId]);
 
   const togglePreview = () => {
-    if (previewingRef.current) {
-      stopPreview();
-      return;
-    }
-    previewingRef.current = true;
-    setPreviewing(true);
-    applyThemeColorPreview(definition.colors, proposal.appearance);
+    if (previewing) stopThemeProposalPreview(itemId);
+    else previewThemeProposal(itemId, proposal);
   };
 
   const apply = () => {
-    stopPreview();
     const result = applyThemeProposal(itemId, proposal);
     setMessage(result.ok ? null : result.message);
   };
 
   const undo = () => {
-    stopPreview();
     setMessage(undoThemeProposal(itemId) ? null : "The previous theme could not be restored.");
   };
 

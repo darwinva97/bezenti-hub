@@ -16,6 +16,7 @@ import {
   type McpAppReference,
 } from "./mcpApp.ts";
 import { resolveT3McpToolId } from "./t3McpToolPresentation.ts";
+import { readThemeProposal, THEME_PROPOSE_TOOL_NAME, type ThemeProposal } from "./themeProposal.ts";
 
 const MAX_PARSED_BYTES = 16_384;
 const MAX_METADATA_BYTES = 8_192;
@@ -45,6 +46,7 @@ interface CompactToolOutput {
   scheduledTaskId?: string;
   status?: "rolled_back";
   htmlRender?: HtmlRenderReference;
+  themeProposal?: ThemeProposal;
   [MCP_APP_OUTPUT_KEY]?: McpAppReference;
   thread?: { threadId: string };
   threads?: Array<{ threadId?: string; status?: "rolled_back" }>;
@@ -136,6 +138,8 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
     }
     const htmlRender = readHtmlRenderReference(data.htmlRender);
     if (htmlRender !== undefined) output.htmlRender = htmlRender;
+    const themeProposal = readThemeProposal(data.themeProposal);
+    if (themeProposal !== undefined) output.themeProposal = themeProposal;
     const mcpApp = readMcpAppReference(data[MCP_APP_OUTPUT_KEY]);
     if (mcpApp !== undefined) output[MCP_APP_OUTPUT_KEY] = mcpApp;
     const nestedThreadId = Predicate.isObject(data.thread)
@@ -194,6 +198,16 @@ export function htmlRenderFromToolItem(item: {
   if (resolveT3McpToolId(item.toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
   const output = compactDynamicToolOutput(item.output);
   return output?.isError ? undefined : output?.htmlRender;
+}
+
+/** A colors-only theme `t3_theme_propose` returned; only that tool's results count. */
+export function themeProposalFromToolItem(item: {
+  readonly toolName: string | null | undefined;
+  readonly output?: unknown;
+}): ThemeProposal | undefined {
+  if (resolveT3McpToolId(item.toolName) !== THEME_PROPOSE_TOOL_NAME) return undefined;
+  const output = compactDynamicToolOutput(item.output);
+  return output?.isError ? undefined : output?.themeProposal;
 }
 
 /** The thread-owned file `preview_recording_stop` stored for the agent. */

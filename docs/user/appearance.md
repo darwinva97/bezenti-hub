@@ -54,6 +54,33 @@ On web and desktop, choose **Create theme** to adjust a palette, or import a T3 
 theme. The theme editor's color picker lets you select an area of the app to find the color to
 change. Export your theme as JSON to share it.
 
+## Ask an agent for a theme
+
+Ask the agent in a thread to give T3 Code a new look, for example "make T3 Code look like a
+late-night terminal". It does not change anything itself: it proposes a theme, which appears as a
+card in the thread with its name, appearance (light or dark), and colors.
+
+- **Preview** shows the theme in your window until you stop the preview.
+- **Apply to my appearance** adds the theme to your custom themes and selects it.
+- **Undo** puts back the theme, light or dark mode, and light/dark mix you had before. If you have
+  picked another theme since, the card offers Apply again instead.
+
+Applying acts only on your appearance in the browser or desktop app where you click. Everyone else
+who can see the thread sees the same card and is not restyled unless they apply it themselves. Your
+other devices keep their own theme. A guest link shows the card without buttons, and the mobile app
+shows a line saying a theme was proposed.
+
+What an agent can and cannot do:
+
+- It can propose a name, light or dark, a background color and an accent color. T3 Code derives
+  every other color from those two and checks that text stays readable.
+- It cannot add CSS, fonts, images or individual colors, cannot change the server's default theme,
+  and cannot change anyone's appearance. A proposal that would be hard to read (a dark theme on a
+  mid-grey or light background, or an accent that disappears on the background) is refused.
+
+To go back at any time, use **Undo** on the card, choose another theme in **Settings → Appearance**,
+or press **Cmd+Option+A** on macOS or **Ctrl+Alt+A** on Windows/Linux to open the theme picker.
+
 ## Environment themes
 
 Environment themes and defaults come from the server serving your web app or the desktop app's

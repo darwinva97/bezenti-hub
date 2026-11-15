@@ -1377,6 +1377,54 @@ describe("HTML renders in the timeline", () => {
     expect(entries.some((entry) => entry.kind === "html-render")).toBe(false);
     expect(entries.find((entry) => entry.id === "render")?.kind).toBe("work");
   });
+
+  const themeProposal = {
+    name: "Night Terminal",
+    appearance: "dark",
+    canvas: "#0b0f0c",
+    accent: "#3ddc84",
+  } as const;
+  const proposeCall = (
+    status: OrchestrationV2TurnItem["status"],
+    output: unknown,
+    toolName = "mcp__t3-code__t3_theme_propose",
+  ): OrchestrationV2TurnItem => {
+    const call = renderCall(status, output);
+    return call.type === "dynamic_tool" ? { ...call, toolName, input: themeProposal } : call;
+  };
+
+  it("shows an agent's theme proposal as its own row, above the reply", () => {
+    const entries = turn(
+      proposeCall("completed", { structuredContent: { themeProposal, next: "card" } }),
+    );
+    expect(entries.find((entry) => entry.kind === "theme-proposal")).toMatchObject({
+      id: "render",
+      runId,
+      themeProposal,
+    });
+    expect(rowsFor(entries, false)).toEqual(["message", "turn-fold", "theme-proposal", "message"]);
+  });
+
+  it.each([
+    [
+      "a failed call",
+      proposeCall("failed", { structuredContent: { themeProposal }, isError: true }),
+    ],
+    [
+      "another tool's result",
+      proposeCall("completed", { structuredContent: { themeProposal } }, "mcp__other__propose"),
+    ],
+    [
+      "colors today's rules refuse",
+      proposeCall("completed", {
+        structuredContent: { themeProposal: { ...themeProposal, canvas: "#f0f0f0" } },
+      }),
+    ],
+  ])("keeps %s in the work log, with no card", (_label, call) => {
+    const entries = turn(call);
+    expect(entries.some((entry) => entry.kind === "theme-proposal")).toBe(false);
+    expect(entries.find((entry) => entry.id === "render")?.kind).toBe("work");
+  });
 });
 
 describe("work-log failure policy (#7999/#7893)", () => {

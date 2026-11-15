@@ -597,6 +597,27 @@ describe("buildThreadFeed", () => {
     expect(items[0]).toMatchObject({ output: rawOutput });
   });
 
+  it("shows an agent's theme proposal as a plain row, with no way to apply it", () => {
+    const themeProposal = {
+      name: "Night Terminal",
+      appearance: "dark",
+      canvas: "#0b0f0c",
+      accent: "#3ddc84",
+    };
+    const item: OrchestrationV2TurnItem = {
+      ...base("theme-proposal", "2026-06-20T00:00:03.000Z", 2),
+      type: "dynamic_tool",
+      toolName: "mcp__t3-code__t3_theme_propose",
+      input: themeProposal,
+      output: { structuredContent: { themeProposal, next: "Shown as a card." } },
+    };
+    const activities = buildThreadFeed([projected(item, 0)]).flatMap((entry) =>
+      entry.type === "activity-group" ? entry.activities : [],
+    );
+    expect(activities).toHaveLength(1);
+    expect(workEntryRowLabel(activities[0]!.workEntry)).toMatch(/proposed a theme/i);
+  });
+
   it("counts every file of a multi-file patch", () => {
     const item: OrchestrationV2TurnItem = {
       ...base("multi-file-change", "2026-06-20T00:00:04.000Z", 3),

@@ -54,5 +54,8 @@ export function ThreadTimeline({
     }
     rememberReadyThreadTimeline({ threadKey: activeThreadKey, entries });
   }, [activeThreadKey, detailLoading, entries]);
-  return <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />;
+  // The signed-in viewer's own timeline: they may apply a theme proposal to their browser.
+  return (
+    <MessagesTimeline themeProposalActions {...timelineProps} timelineEntries={displayedEntries} />
+  );
 }

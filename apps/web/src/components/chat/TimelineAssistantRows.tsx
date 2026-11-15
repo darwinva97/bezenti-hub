@@ -9,6 +9,7 @@ import { Button } from "../ui/button";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
+import { ThemeProposalCard } from "./ThemeProposalCard";
 import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
@@ -265,6 +266,23 @@ export function HtmlRenderTimelineRow({
         htmlRender={row.htmlRender}
         threadRef={ctx.threadRef ?? undefined}
         onFullscreenChange={onFullscreenChange}
+      />
+    </div>
+  );
+}
+
+export function ThemeProposalTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "theme-proposal" }>;
+}) {
+  const ctx = use(TimelineRowCtx);
+  return (
+    <div className="min-w-0 px-1">
+      <ThemeProposalCard
+        itemId={row.id}
+        proposal={row.themeProposal}
+        actions={ctx.themeProposalActions}
       />
     </div>
   );

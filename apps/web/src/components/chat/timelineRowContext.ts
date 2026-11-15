@@ -76,6 +76,8 @@ export interface TimelineRowSharedState {
    * loads it through its own route.
    */
   renderHtmlRender: ((row: Extract<TimelineRow, { kind: "html-render" }>) => ReactNode) | undefined;
+  /** Whether a viewer may preview and apply an agent's theme proposal; false on a guest link. */
+  themeProposalActions: boolean;
   /** Unset, expanded rows read detail and command output from the environment. */
   turnItemSource: TurnItemSource | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;

@@ -580,6 +580,50 @@ export function setAppearanceMode(nextAppearanceMode: ThemePreferenceMode): bool
   return true;
 }
 
+/** Everything a theme choice writes in this browser, so it can be put back exactly. */
+export interface ThemeSelection {
+  readonly theme: Theme;
+  readonly appearanceMode: ThemePreferenceMode;
+  /** The light/dark mix as stored, or null when there is none. */
+  readonly halves: string | null;
+}
+
+export function readThemeSelection(): ThemeSelection {
+  const theme = getStored();
+  let halves: string | null = null;
+  if (typeof window !== "undefined") {
+    try {
+      halves = window.localStorage.getItem(THEME_HALVES_STORAGE_KEY);
+    } catch {}
+  }
+  return { theme, appearanceMode: readAppearanceModePreference(theme), halves };
+}
+
+/** Puts back a selection read with readThemeSelection, such as the one before a theme was applied. */
+export function restoreThemeSelection(selection: ThemeSelection): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    writeThemePreference(selection.theme);
+    writeAppearanceModePreference(selection.appearanceMode);
+    if (selection.halves === null) window.localStorage.removeItem(THEME_HALVES_STORAGE_KEY);
+    else window.localStorage.setItem(THEME_HALVES_STORAGE_KEY, selection.halves);
+  } catch (cause) {
+    const error = isThemeStorageError(cause)
+      ? cause
+      : new ThemeStorageError({ operation: "write", storageKey: STORAGE_KEY, cause });
+    console.error(error.message, {
+      operation: error.operation,
+      storageKey: error.storageKey,
+      ...safeErrorLogAttributes(error),
+    });
+    return false;
+  }
+  lastAppliedTheme = null;
+  applyTheme(getStored(), { suppressTransitions: true, preservePreview: false });
+  emitChange();
+  return true;
+}
+
 function setThemeHalf(appearance: ThemeAppearance, themeId: string | null): boolean {
   if (typeof window === "undefined") return false;
   try {

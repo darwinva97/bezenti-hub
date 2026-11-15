@@ -26,7 +26,12 @@ import {
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
-import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
+import type { ThemeProposal } from "@t3tools/shared/themeProposal";
+import {
+  htmlRenderFromToolItem,
+  mcpAppFromToolItem,
+  themeProposalFromToolItem,
+} from "@t3tools/shared/toolOutput";
 import {
   contextCompactionLabel,
   workEntryIndicatesToolFailure,
@@ -132,6 +137,13 @@ export type TimelineEntry = (
       readonly createdAt: string;
       readonly runId: RunId | null;
       readonly htmlRender: HtmlRenderReference;
+    }
+  | {
+      readonly id: string;
+      readonly kind: "theme-proposal";
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly themeProposal: ThemeProposal;
     }
   | {
       readonly id: string;
@@ -707,6 +719,23 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         createdAt,
         runId: item.runId,
         htmlRender,
+        ...attemptMetadata,
+      });
+      continue;
+    }
+
+    // A colors-only theme an agent proposed: a card each viewer may apply in their own browser.
+    const themeProposal =
+      item.type === "dynamic_tool" && item.status === "completed"
+        ? themeProposalFromToolItem(item)
+        : undefined;
+    if (themeProposal !== undefined) {
+      entries.push({
+        id: item.id,
+        kind: "theme-proposal",
+        createdAt,
+        runId: item.runId,
+        themeProposal,
         ...attemptMetadata,
       });
       continue;

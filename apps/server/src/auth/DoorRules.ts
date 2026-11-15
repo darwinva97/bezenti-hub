@@ -253,6 +253,10 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   t3_background_wait: OWN_THREAD,
   t3_environment_preferences_update: rpc(WS_METHODS.serverUpdateSettings),
   t3_environment_read: own("the redacted settings every client reads (serverGetConfig)"),
+  t3_theme_propose: own(
+    "the calling agent's own Thread (actsAsCaller); writes nothing: each viewer applies the colors in their own browser",
+  ),
+  t3_theme_read: own("built-in theme names and the colors-only guide; no Space data"),
   t3_pending_request: VISIBLE_THREAD,
   t3_preview_close: PREVIEW,
   t3_preview_list: PREVIEW,

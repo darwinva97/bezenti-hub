@@ -919,6 +919,36 @@ function themeContrastRatio(first: ThemeRgbColor, second: ThemeRgbColor): number
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+/** Text roles and the surfaces they are read on, for the readability check of a derived palette. */
+const THEME_TEXT_PAIRS: ReadonlyArray<readonly [ThemeColorRole, ThemeColorRole]> = [
+  ["text", "canvas"],
+  ["toolbarForeground", "toolbar"],
+  ["accentForeground", "accent"],
+  ["messageForeground", "messageSurface"],
+  ["sidebarForeground", "sidebar"],
+  ["secondaryForeground", "secondary"],
+  ["mutedForeground", "muted"],
+  ["accentSurfaceForeground", "accentSurface"],
+];
+
+/** The lowest contrast among a palette's text roles on their surfaces; 1 if a color is unreadable. */
+export function themeColorsMinimumContrast(colors: ThemeColors): number {
+  let minimum = Number.POSITIVE_INFINITY;
+  for (const [foreground, surface] of THEME_TEXT_PAIRS) {
+    const parsedForeground = parseThemeColor(colors[foreground]);
+    const parsedSurface = parseThemeColor(colors[surface]);
+    if (!parsedForeground || !parsedSurface) return 1;
+    minimum = Math.min(
+      minimum,
+      themeContrastRatio(
+        themeOklchToRgb(parsedForeground.color),
+        themeOklchToRgb(parsedSurface.color),
+      ),
+    );
+  }
+  return minimum;
+}
+
 function readableThemeForeground(background: ThemeRgbColor): ThemeRgbColor {
   const lightContrast = themeContrastRatio(background, THEME_LIGHT_FOREGROUND);
   const darkContrast = themeContrastRatio(background, THEME_DARK_FOREGROUND);

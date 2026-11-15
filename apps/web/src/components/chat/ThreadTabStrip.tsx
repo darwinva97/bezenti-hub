@@ -227,10 +227,13 @@ export function ThreadTabStrip(props: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the active tab DOM node into view when it changes
   useEffect(() => {
     document
-      .querySelector<HTMLElement>(`[data-thread-tab="${CSS.escape(routeKey)}"]`)
+      .querySelector<HTMLElement>('[data-thread-tabs] [data-active-tab="true"]')
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A tab added or removed shifts the strip, so the active tab is scrolled back into view.
-  }, [routeKey, tabs.length]);
+  }, [
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- The open Thread, or a tab added or removed, can leave the active tab outside the scrolled strip.
+    routeKey,
+    tabs.length,
+  ]);
 
   const activate = useStableCallback((tab: ThreadTab) => {
     // A click on a tab's close button also reaches the tab, whose key is gone by then.

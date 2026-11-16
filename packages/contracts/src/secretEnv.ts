@@ -149,6 +149,8 @@ export class SecretDeliveryError extends Schema.TaggedError<SecretDeliveryError>
       "template",
       "provider",
       "shared-process",
+      /** A workload identity token could not be signed (ticket 07): no issuer, or no key. */
+      "identity",
     ]),
     environmentName: Schema.optional(Schema.String),
     provider: Schema.optional(Schema.String),
@@ -167,6 +169,8 @@ export class SecretDeliveryError extends Schema.TaggedError<SecretDeliveryError>
         return `${this.environmentName ?? "This machine"} has no folder in memory, so it gets no secret files (${(this.entries ?? []).join(", ")}): they are never written to its disk. Deliver them as environment variables, or run the Thread on another machine.`;
       case "provider":
         return `${this.provider ?? "This provider"} can't receive this Thread's secrets yet. Pick another provider, or remove the Vaults from this Project.`;
+      case "identity":
+        return `${(this.entries ?? []).join(", ") || "A workload identity token"} could not be signed: the Hub has no issuer, or could not read its signing key.`;
       case "shared-process":
         return `${this.provider ?? "This provider"} runs this Thread in a process shared with other Threads, so it can't receive this Thread's secrets. Start a new Thread to receive them.`;
     }

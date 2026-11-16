@@ -204,6 +204,7 @@ import * as Vaults from "./vaults/Vaults.ts";
 import * as EffectiveVaults from "./vaults/EffectiveVaults.ts";
 import * as SecretDelivery from "./vaults/SecretDelivery.ts";
 import * as IdentityIssuer from "./identity/IdentityIssuer.ts";
+import * as IdentityRefresher from "./identity/IdentityRefresher.ts";
 import * as IdentityKeys from "./identity/IdentityKeys.ts";
 import * as IdentityTokens from "./identity/IdentityTokens.ts";
 import * as MachineSecretFiles from "./environment/MachineSecretFiles.ts";
@@ -1073,6 +1074,8 @@ const layerMakeServer = Layer.unwrap(
       layerRuntimeState.pipe(Layer.provide(layerLauncher)),
       layerTailscaleServe,
       HeapSnapshot.layer,
+      // Workload identity files refreshed where they are held (Vaults ticket 07).
+      IdentityRefresher.layer,
     );
 
     return layerServerApplication.pipe(

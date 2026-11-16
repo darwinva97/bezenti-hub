@@ -44,6 +44,8 @@ export interface EffectiveTemplateInput {
   readonly unmasked: boolean;
   /** Delivered as a Secret file itself (what `{{ NAME | path }}` takes). */
   readonly file: boolean;
+  /** A workload identity entry (ticket 07): a template takes only its file's path. */
+  readonly identity?: true;
 }
 
 /** One variable of the effective set. */
@@ -76,6 +78,11 @@ export interface EffectiveVariable {
   readonly class: VaultEntryClass;
   /** A Secret file in memory whose path the variable holds (contract 16), or the variable. */
   readonly delivery: "env" | "file";
+  /**
+   * A workload identity entry (ticket 07): the token the Hub signs, for this audience and
+   * lifetime, when the process starts. No value id: nothing is stored.
+   */
+  readonly identity?: { readonly audience: string; readonly ttlSeconds: number };
   /** A Template entry: its text and the entries of its Vault it names, each found. */
   readonly template: {
     readonly text: string;
@@ -170,6 +177,8 @@ interface EntryRow {
   readonly kind: string;
   readonly delivery: "env" | "file" | "none";
   readonly templateText: string | null;
+  readonly identityAudience: string | null;
+  readonly identityTtlSeconds: number | null;
 }
 
 /** The provider an entry reads its value from, if it is a Provider entry. */
@@ -196,10 +205,39 @@ const templateInputs = (
   if (parsed._tag === "invalid") return undefined;
   const byName = new Map(siblings.map((entry) => [entry.name, entry]));
   const inputs: Array<EffectiveTemplateInput> = [];
+  // A token is taken by its file only: a template using its value (written by other means) is broken.
+  const pathOnly = new Set(
+    parsed.parts.flatMap((part) =>
+      part._tag === "ref" && part.filters.length === 1 && part.filters[0] === "path"
+        ? [part.name]
+        : [],
+    ),
+  );
+  const valueUses = new Set(
+    parsed.parts.flatMap((part) =>
+      part._tag === "ref" && !(part.filters.length === 1 && part.filters[0] === "path")
+        ? [part.name]
+        : [],
+    ),
+  );
   for (const name of templateNames(parsed.parts)) {
     const entry = byName.get(name);
     if (entry === undefined || entry.kind === "template") return undefined;
     const provider = providerOf(entry);
+    if (entry.kind === "identity") {
+      if (valueUses.has(name) || !pathOnly.has(name)) return undefined;
+      inputs.push({
+        name,
+        entryId: VaultEntryId.make(entry.entryId),
+        valueId: null,
+        provider: null,
+        class: "secret",
+        unmasked: false,
+        file: true,
+        identity: true,
+      });
+      continue;
+    }
     if (entry.valueId === null && provider === null) return undefined;
     inputs.push({
       name,
@@ -237,7 +275,9 @@ const make = Effect.gen(function* () {
             CASE WHEN e.kind = 'link' THEN o.class ELSE e.class END AS "class",
             e.provider_id AS "providerId", e.provider_reference AS "providerReference",
             e.provider_scope_id AS "providerScopeId", e.kind AS "kind",
-            e.delivery AS "delivery", e.template_text AS "templateText"
+            e.delivery AS "delivery", e.template_text AS "templateText",
+            e.identity_audience AS "identityAudience",
+            e.identity_ttl_seconds AS "identityTtlSeconds"
           FROM vault_entries e
           LEFT JOIN vault_entries o
             ON e.kind = 'link' AND o.entry_id = e.linked_entry_id
@@ -389,7 +429,15 @@ const make = Effect.gen(function* () {
             ? templateInputs(entry.templateText, byVault.get(row.vaultId) ?? [])
             : undefined;
         if (entry.kind === "template" && inputs === undefined) continue;
-        if (entry.valueId === null && provider === null && inputs === undefined) continue;
+        const identity =
+          entry.kind === "identity" &&
+          entry.identityAudience !== null &&
+          entry.identityTtlSeconds !== null
+            ? { audience: entry.identityAudience, ttlSeconds: entry.identityTtlSeconds }
+            : undefined;
+        if (entry.valueId === null && provider === null && inputs === undefined && !identity) {
+          continue;
+        }
         const risk = secretNameRisk(entry.name);
         if (risk === "invalid" || risk === "gateway") continue;
         const winner = winners.get(entry.name);
@@ -423,6 +471,7 @@ const make = Effect.gen(function* () {
             unmasked: entry.unmasked === 1,
             dangerous: risk === "dangerous",
             shadowed: [],
+            ...(identity === undefined ? {} : { identity }),
           },
         });
       }

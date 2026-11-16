@@ -48,12 +48,16 @@ const HUB = {
   contractVersion: ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
 };
 
-const ownersThreadWith = (secretFiles?: Layer.Layer<ThreadSecretFiles.ThreadSecretFiles>) =>
+const ownersThreadWith = (
+  secretFiles?: Layer.Layer<ThreadSecretFiles.ThreadSecretFiles>,
+  identityIssuer?: string,
+) =>
   Effect.gen(function* () {
     const provider = makeFakeSecretProvider();
     const server = yield* serveAuthHttpWith({
       providerReads: provider.options,
       ...(secretFiles === undefined ? {} : { secretFiles }),
+      ...(identityIssuer === undefined ? {} : { identityIssuer }),
     });
     const { created } = yield* bootstrapOwner(server, yield* makeAuthenticator());
     const owner = UserId.make((created.body.user as { id: string }).id);
@@ -597,5 +601,161 @@ it.effect("a template fails whole with one of its entries: nothing of the set go
       bad.message,
       "DECODED could not be composed: DB_USER is not what its filter takes.",
     );
+  }).pipe(Effect.scoped),
+);
+
+// Ticket 07: workload identity entries, a token signed for the Thread, refreshed in its file.
+
+/** KUBE_TOKEN: a token for the cluster, in a file KUBECONFIG names by its path. */
+const identitySet = Effect.fn(function* (
+  setup: Effect.Success<ReturnType<typeof ownersThreadWith>>,
+) {
+  const { vaults, owner } = setup;
+  const put = (input: Omit<Parameters<typeof vaults.putEntry>[0], "vaultId">) =>
+    vaults.putEntry({ vaultId: MAIN_VAULT_ID, ...input }).pipe(CommandActor.actAs(owner));
+  const token = yield* put({ name: "KUBE_TOKEN", identity: { audience: "kubernetes" } });
+  yield* put({
+    name: "KUBECONFIG",
+    template: { text: "tokenFile: {{ KUBE_TOKEN | path }}\n" },
+    delivery: "file",
+  });
+  return token.entry;
+});
+
+const claimsOf = (token: string) =>
+  JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")) as Record<
+    string,
+    unknown
+  >;
+
+it.effect("an identity entry goes as a sealed file: a token for the Thread, masked there", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-17T00:00:00.000Z"));
+    const setup = yield* ownersThreadWith(hubFilesInMemory, "https://hub.example.com");
+    const { server, thread, forTurn, delivery, owner } = setup;
+    yield* identitySet(setup);
+    const threadId = yield* thread("thread:identity");
+    const env = yield* forTurn({ threadId, target: HUB });
+    const folder = env?.filesFolder ?? "";
+    const token = env?.files?.find((file) => file.name === "KUBE_TOKEN")?.content ?? "";
+    assert.lengthOf(token.split("."), 3);
+    assert.deepInclude(claimsOf(token), {
+      iss: "https://hub.example.com",
+      aud: "kubernetes",
+      thread_id: threadId,
+      user_id: owner,
+    });
+    assert.deepEqual(
+      env?.files?.find((file) => file.name === "KUBECONFIG"),
+      {
+        name: "KUBECONFIG",
+        content: `tokenFile: ${HUB_FILES_ROOT}/${folder}/KUBE_TOKEN\n`,
+        mode: 0o600,
+      },
+    );
+    // Never an environment variable.
+    assert.deepEqual(env?.variables, []);
+    // Masked in the Thread.
+    const masker = yield* Context.get(server.services, SecretMasker.SecretMasker).forThread(
+      threadId,
+    );
+    assert.equal(
+      masker.mask(`Authorization: Bearer ${token}`),
+      "Authorization: Bearer [KUBE_TOKEN]",
+    );
+    // A new token does not change what the set is: the session is not reopened for it.
+    const plan = yield* delivery.planTurn({ threadId, target: HUB });
+    yield* TestClock.adjust("401 seconds");
+    const again = yield* delivery.planTurn({ threadId, target: HUB });
+    assert.equal(again.fingerprint, plan.fingerprint);
+    const later = yield* delivery.resolve(again);
+    assert.notEqual(later.files?.find((file) => file.name === "KUBE_TOKEN")?.content, token);
+    // The token is only in the file: not in the plan, the audit log, nor the Thread's records.
+    const audit = yield* server.sql<{ readonly text: string }>`
+      SELECT action || ' ' || COALESCE(detail_json, '') AS "text" FROM audit_log
+    `;
+    const recorded = yield* server.sql<{ readonly text: string }>`
+      SELECT value_id || ' ' || name AS "text" FROM thread_secret_values
+      WHERE thread_id = ${threadId}
+    `;
+    const seen = JSON.stringify([plan, again, audit, recorded]);
+    assert.notInclude(seen, token);
+    assert.notInclude(seen, token.split(".")[2]!);
+    assert.isTrue(audit.some((row) => row.text.startsWith("identity.issue")));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("refreshes the held file at two thirds of its life; stops when no process holds it", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-17T00:00:00.000Z"));
+    const setup = yield* ownersThreadWith(hubFilesInMemory, "https://hub.example.com");
+    const { thread, forTurn, delivery } = setup;
+    yield* identitySet(setup);
+    const threadId = yield* thread("thread:refresh");
+    const env = yield* forTurn({ threadId, target: HUB });
+    const first = env?.files?.find((file) => file.name === "KUBE_TOKEN")?.content;
+    const sent: Array<{
+      readonly environmentId: string;
+      readonly folder: string;
+      readonly files: ReadonlyArray<{ readonly name: string; readonly content: string }>;
+    }> = [];
+    let answer: "refreshed" | "not-held" = "refreshed";
+    const send: SecretDelivery.SendSecretFiles = (environmentId, input) =>
+      Effect.sync(() => {
+        sent.push({ environmentId, folder: input.filesFolder, files: input.files });
+        return answer;
+      });
+    yield* TestClock.adjust("399 seconds");
+    yield* delivery.refreshIdentityFiles(send);
+    assert.lengthOf(sent, 0);
+    yield* TestClock.adjust("2 seconds");
+    yield* delivery.refreshIdentityFiles(send);
+    assert.lengthOf(sent, 1);
+    assert.equal(sent[0]!.environmentId, HUB_MACHINE_ENVIRONMENT_ID);
+    assert.equal(sent[0]!.folder, env?.filesFolder);
+    // Only the token's file: the template names its path, which does not change.
+    assert.deepEqual(
+      sent[0]!.files.map((file) => file.name),
+      ["KUBE_TOKEN"],
+    );
+    assert.notEqual(sent[0]!.files[0]!.content, first);
+    // No process holds the folder any more: the refreshing stops there.
+    answer = "not-held";
+    yield* TestClock.adjust("401 seconds");
+    yield* delivery.refreshIdentityFiles(send);
+    assert.lengthOf(sent, 2);
+    yield* TestClock.adjust("401 seconds");
+    yield* delivery.refreshIdentityFiles(send);
+    assert.lengthOf(sent, 2);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("an identity entry deleted, or out of reach, is no longer refreshed", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-17T00:00:00.000Z"));
+    const setup = yield* ownersThreadWith(hubFilesInMemory, "https://hub.example.com");
+    const { thread, forTurn, delivery, vaults, owner } = setup;
+    const entry = yield* identitySet(setup);
+    const threadId = yield* thread("thread:gone");
+    yield* forTurn({ threadId, target: HUB });
+    const listed = yield* vaults
+      .listEntries({ vaultId: MAIN_VAULT_ID })
+      .pipe(CommandActor.actAs(owner));
+    const kubeconfig = listed.entries.find((found) => found.name === "KUBECONFIG")!;
+    yield* vaults
+      .deleteEntry({ vaultId: MAIN_VAULT_ID, entryId: kubeconfig.id })
+      .pipe(
+        Effect.andThen(vaults.deleteEntry({ vaultId: MAIN_VAULT_ID, entryId: entry.id })),
+        CommandActor.actAs(owner),
+      );
+    const sent: Array<unknown> = [];
+    yield* TestClock.adjust("401 seconds");
+    yield* delivery.refreshIdentityFiles((_, input) =>
+      Effect.sync(() => {
+        sent.push(input);
+        return "refreshed" as const;
+      }),
+    );
+    assert.lengthOf(sent, 0);
   }).pipe(Effect.scoped),
 );

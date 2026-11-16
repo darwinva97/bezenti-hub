@@ -366,12 +366,19 @@ describe("every door of the Hub declares its rule", () => {
       .map(({ file }) => file);
     expect(deliveryUsers.toSorted()).toEqual([
       "environment/ThreadWorkspace.ts",
+      // Vaults ticket 07: re-signs identity files held by running processes, nothing else.
+      "identity/IdentityRefresher.ts",
       // list_secret_names (spec 5 ticket 06): names only, through `turnNames`.
       "mcp/OrchestratorMcpService.ts",
       "orchestration-v2/Orchestrator.ts",
       "orchestration-v2/ProviderSessionManager.ts",
       "project/ProjectSetupScriptRunner.ts",
       "server.ts",
+    ]);
+    const refresher =
+      files.find(({ file }) => file === "identity/IdentityRefresher.ts")?.text ?? "";
+    expect([...refresher.matchAll(/delivery\.value\s*\.(\w+)/gu)].map((m) => m[1])).toEqual([
+      "refreshIdentityFiles",
     ]);
     const orchestrator = files.find(({ file }) => file === "orchestration-v2/Orchestrator.ts");
     expect(orchestrator?.text).not.toMatch(/\.(forProcess|forTurn)\(/u);

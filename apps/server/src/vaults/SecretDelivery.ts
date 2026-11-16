@@ -18,12 +18,16 @@ import {
   type SecretEnvFile,
   type SecretEnvVariable,
   SecretDeliveryError,
+  type EnvironmentExecutorUnavailableError,
+  type SecretFilesError,
+  type SecretFilesRefreshInput,
   SecretProviderReadError,
   type SpaceId,
   type ThreadId,
   UserId,
   VaultError,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -34,6 +38,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as MachineSecretFiles from "../environment/MachineSecretFiles.ts";
 import { machineNameOf } from "../environments/machineName.ts";
 import { threadTurnOwner } from "../orchestration-v2/threadTurnOwner.ts";
+import * as IdentityTokens from "../identity/IdentityTokens.ts";
 import { servesSpace } from "../sandboxes/sandboxSpace.ts";
 import * as DeliveredValueId from "./deliveredValueId.ts";
 import * as EffectiveVaults from "./EffectiveVaults.ts";
@@ -84,6 +89,15 @@ export interface PlannedVariable {
   readonly provider?: ProviderReads.ProviderRef;
   /** Delivered as a Secret file whose path the variable holds. */
   readonly file?: true;
+  /**
+   * A workload identity entry (ticket 07): its token is signed when the process starts. Its
+   * `valueId` names the entry, audience and lifetime, never a token: a new token reopens nothing.
+   */
+  readonly identity?: {
+    readonly entryId: string;
+    readonly audience: string;
+    readonly ttlSeconds: number;
+  };
   /** A Template entry: its text and its entries, rendered when the process starts. */
   readonly template?: {
     readonly text: string;
@@ -99,7 +113,21 @@ export interface PlannedInput {
   readonly plain?: true;
   readonly provider?: ProviderReads.ProviderRef;
   readonly file?: true;
+  /** A workload identity entry: the template takes its file's path, never its token. */
+  readonly identity?: true;
 }
+
+/**
+ * Rewrites a held folder of Secret files on a machine (`secrets.refreshFiles`): `not-held` once
+ * no process of the Thread root and User holds it there.
+ */
+export type SendSecretFiles = (
+  environmentId: EnvironmentId,
+  input: SecretFilesRefreshInput,
+) => Effect.Effect<
+  "refreshed" | "not-held",
+  SecretFilesError | EnvironmentExecutorUnavailableError
+>;
 
 /** The machine a process starts on: the Thread's Active environment, and its executor contract. */
 export interface SecretTarget {
@@ -175,6 +203,12 @@ export class SecretDelivery extends Context.Service<
      * description and winning Vault. Never a value or an id. Empty without an owner, for a Thread
      * that is gone, or for an owner who no longer works in its Space.
      */
+    /**
+     * Ticket 07: re-signs the workload identity tokens of every held folder past two thirds of
+     * their life and sends them with `send`. A folder no process holds any more (`not-held`), or
+     * whose entries left the Thread's set, is forgotten.
+     */
+    readonly refreshIdentityFiles: (send: SendSecretFiles) => Effect.Effect<void>;
     readonly turnNames: (threadId: ThreadId) => Effect.Effect<
       ReadonlyArray<{
         readonly name: string;
@@ -259,6 +293,31 @@ export const emptyPlan = (
   ...facts,
 });
 
+/** One identity file of a held folder: which entry, for which audience and lifetime. */
+interface HeldIdentityEntry {
+  readonly name: string;
+  readonly entryId: string;
+  readonly audience: string;
+  readonly ttlSeconds: number;
+}
+
+interface HeldIdentity {
+  readonly facts: IdentityTokens.ThreadFacts;
+  readonly filesFolder: string;
+  readonly entries: ReadonlyArray<HeldIdentityEntry>;
+  /** Epoch milliseconds: two thirds into the shortest life of its tokens. */
+  readonly dueAt: number;
+}
+
+/** After a failed refresh, tried again this much later (well before a token runs out). */
+const IDENTITY_RETRY_MILLIS = 30_000;
+
+const dueAtOf = (tokens: ReadonlyArray<IdentityTokens.IssuedToken>) =>
+  Math.min(...tokens.map((token) => token.issuedAt + ((token.expiresAt - token.issuedAt) * 2) / 3));
+
+const identityIdText = (entryId: string, identity: { audience: string; ttlSeconds: number }) =>
+  JSON.stringify([entryId, identity.audience, identity.ttlSeconds]);
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const effective = yield* EffectiveVaults.EffectiveVaults;
@@ -269,6 +328,10 @@ const make = Effect.gen(function* () {
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   // Ticket 05: where each machine writes Secret files (in memory, or none at all).
   const machineFiles = yield* Effect.serviceOption(MachineSecretFiles.MachineSecretFiles);
+  // Ticket 07: the workload identity tokens the Hub signs, when it is an issuer.
+  const identityTokens = yield* Effect.serviceOption(IdentityTokens.IdentityTokens);
+  /** Held folders with identity files, by machine and folder: what `refreshIdentityFiles` renews. */
+  const heldIdentity = new Map<string, HeldIdentity>();
 
   const storage = (what: string) => (cause: unknown) =>
     Effect.logError(`SecretDelivery: could not ${what}`, { cause }).pipe(
@@ -307,6 +370,22 @@ const make = Effect.gen(function* () {
     return { values: found, failure: readFailureOf(reads, outcomes) };
   });
 
+  /** A token sealed for masking, as a provider's value is: `delivered:<HMAC>`. */
+  const keepDelivered = Effect.fn("SecretDelivery.keepDelivered")(function* (
+    token: IdentityTokens.IssuedToken,
+  ) {
+    if (Option.isNone(deliveredStore)) {
+      return yield* storage("keep a token for masking")(
+        "no delivered values' store on this machine",
+      );
+    }
+    const id = DeliveredValueId.deliveredIdOf(yield* hmacKey, token.token);
+    yield* deliveredStore.value
+      .set(id, new TextEncoder().encode(token.token))
+      .pipe(Effect.catch(storage("keep a token for masking")));
+    return DeliveredValueId.deliveredValueId(id);
+  });
+
   const turnOwner = Effect.fn("SecretDelivery.turnOwner")(function* (threadId: ThreadId) {
     return yield* threadTurnOwner(sql, threadId).pipe(
       Effect.catch(storage("read who owns the Thread")),
@@ -323,13 +402,13 @@ const make = Effect.gen(function* () {
     if (dangerous.length === 0) return new Set<string>();
     const valueIds = dangerous.flatMap((v) => (v.valueId === null ? [] : [v.valueId]));
     const entryIds = dangerous.flatMap((v) =>
-      v.provider === null && v.template === null ? [] : [v.entryId],
+      v.provider === null && v.template === null && v.identity === undefined ? [] : [v.entryId],
     );
     const rows = yield* sql<{ readonly valueId: string | null; readonly entryId: string }>`
       SELECT e.value_id AS "valueId", e.entry_id AS "entryId" FROM vault_entries e
       JOIN users u ON u.user_id = e.updated_by AND u.is_owner = 1
       WHERE e.value_id IN ${sql.in(valueIds.length === 0 ? [""] : valueIds)}
-        OR (e.kind IN ('provider', 'template')
+        OR (e.kind IN ('provider', 'template', 'identity')
           AND e.entry_id IN ${sql.in(entryIds.length === 0 ? [""] : entryIds)})
     `.pipe(Effect.catch(storage("check who set the Thread's secrets")));
     const trustedValues = new Set(
@@ -339,7 +418,7 @@ const make = Effect.gen(function* () {
     return new Set(
       dangerous
         .filter((v) =>
-          v.provider === null && v.template === null
+          v.provider === null && v.template === null && v.identity === undefined
             ? v.valueId !== null && trustedValues.has(v.valueId)
             : trustedEntries.has(v.entryId),
         )
@@ -396,11 +475,35 @@ const make = Effect.gen(function* () {
         ? undefined
         : DeliveredValueId.deliveredValueId(DeliveredValueId.deliveredIdOf(key, value));
     };
+    /** An identity entry's id: its entry, audience and lifetime; the tokens never name a set. */
+    const identityId = (entryId: string, identity: { audience: string; ttlSeconds: number }) =>
+      `identity:${DeliveredValueId.deliveredIdOf(key, identityIdText(entryId, identity))}`;
     const variables = chosen.flatMap((v): Array<PlannedVariable> => {
       const file = v.delivery === "file" ? { file: true as const } : {};
       const plain = v.class === "variable" ? { plain: true as const } : {};
+      if (v.identity !== undefined) {
+        return [
+          {
+            name: v.name,
+            valueId: identityId(v.entryId, v.identity),
+            identity: { entryId: v.entryId, ...v.identity },
+            file: true,
+          },
+        ];
+      }
       if (v.template !== null) {
         const inputs = v.template.inputs.flatMap((entry): Array<PlannedInput> => {
+          if (entry.identity === true) {
+            return [
+              {
+                entryId: entry.entryId,
+                name: entry.name,
+                valueId: `identity:${entry.entryId}`,
+                identity: true,
+                file: true,
+              },
+            ];
+          }
           const valueId = entry.provider === null ? entry.valueId : readId(entry.entryId);
           if (valueId === null || valueId === undefined) return [];
           return [
@@ -559,6 +662,126 @@ const make = Effect.gen(function* () {
       .map((v) => ({ name: v.name, description: v.description, vault: v.vaultName }));
   });
 
+  /** The facts of the Thread a token is signed for: from the plan, which the Hub made. */
+  const factsOf = (planned: SecretPlan): IdentityTokens.ThreadFacts | undefined =>
+    planned.threadId === undefined || planned.userId === null || planned.spaceId === null
+      ? undefined
+      : {
+          threadId: planned.threadId,
+          userId: planned.userId,
+          spaceId: planned.spaceId,
+          environmentId: planned.target.environmentId,
+        };
+
+  /** A token for one identity entry; without an issuer, or a key, the start fails whole. */
+  const signIdentity = Effect.fn("SecretDelivery.signIdentity")(function* (
+    planned: SecretPlan,
+    name: string,
+    identity: { readonly entryId: string; readonly audience: string; readonly ttlSeconds: number },
+  ) {
+    const facts = factsOf(planned);
+    if (facts === undefined || Option.isNone(identityTokens)) {
+      return yield* new SecretDeliveryError({ reason: "identity", entries: [name] });
+    }
+    return yield* identityTokens.value
+      .forThread({ facts, ...identity })
+      .pipe(
+        Effect.catch(() =>
+          Effect.fail(new SecretDeliveryError({ reason: "identity", entries: [name] })),
+        ),
+      );
+  });
+
+  /** Keeps the folder's identity files to refresh at two thirds of their shortest life. */
+  const holdIdentity = (
+    planned: SecretPlan,
+    identities: ReadonlyArray<HeldIdentityEntry & { readonly issued: IdentityTokens.IssuedToken }>,
+  ) =>
+    Effect.sync(() => {
+      const facts = factsOf(planned);
+      if (facts === undefined || planned.files === undefined) return;
+      heldIdentity.set(`${planned.target.environmentId}\u0000${planned.files.folder}`, {
+        facts,
+        filesFolder: planned.files.folder,
+        entries: identities.map(({ issued: _issued, ...entry }) => entry),
+        dueAt: dueAtOf(identities.map((entry) => entry.issued)),
+      });
+    });
+
+  const refreshIdentityFiles = Effect.fn("SecretDelivery.refreshIdentityFiles")(function* (
+    send: SendSecretFiles,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    // Visiting a Map while its entries are replaced or deleted is safe: each is seen once.
+    for (const [key, held] of heldIdentity) {
+      if (held.dueAt > now) continue;
+      // Still in the Thread's set, as it was: else the file is left to expire.
+      const set = yield* effective
+        .forThread({ threadId: held.facts.threadId, actingUserId: held.facts.userId })
+        .pipe(Effect.option);
+      const live = Option.isNone(set)
+        ? []
+        : held.entries.filter((entry) =>
+            set.value.variables.some(
+              (v) =>
+                v.entryId === entry.entryId &&
+                v.identity?.audience === entry.audience &&
+                v.identity.ttlSeconds === entry.ttlSeconds,
+            ),
+          );
+      if (live.length === 0 || Option.isNone(identityTokens)) {
+        heldIdentity.delete(key);
+        continue;
+      }
+      const issued = yield* Effect.forEach(live, (entry) =>
+        identityTokens.value
+          .forThread({ facts: held.facts, ...entry })
+          .pipe(Effect.map((token) => ({ entry, token }))),
+      ).pipe(Effect.option);
+      if (Option.isNone(issued)) {
+        heldIdentity.set(key, { ...held, dueAt: now + IDENTITY_RETRY_MILLIS });
+        continue;
+      }
+      // Masked before any process can print the new token.
+      const masked: Array<SecretMasker.DeliveredSecret> = [];
+      for (const { entry, token } of issued.value) {
+        const valueId = yield* keepDelivered(token).pipe(Effect.option);
+        if (Option.isSome(valueId)) {
+          masked.push({ name: entry.name, value: token.token, valueId: valueId.value });
+        }
+      }
+      if (masked.length !== issued.value.length) {
+        heldIdentity.set(key, { ...held, dueAt: now + IDENTITY_RETRY_MILLIS });
+        continue;
+      }
+      if (Option.isSome(masker)) yield* masker.value.remember(held.facts.threadId, masked);
+      const answer = yield* send(held.facts.environmentId, {
+        filesFolder: held.filesFolder,
+        files: issued.value.map(({ entry, token }) => ({
+          name: entry.name,
+          content: token.token,
+          mode: 0o600,
+        })),
+      }).pipe(Effect.option);
+      if (Option.isNone(answer)) {
+        yield* Effect.logWarning("SecretDelivery: could not refresh a Thread's identity files", {
+          environmentId: held.facts.environmentId,
+        });
+        heldIdentity.set(key, { ...held, dueAt: now + IDENTITY_RETRY_MILLIS });
+        continue;
+      }
+      if (answer.value === "not-held") {
+        heldIdentity.delete(key);
+        continue;
+      }
+      heldIdentity.set(key, {
+        ...held,
+        entries: live,
+        dueAt: dueAtOf(issued.value.map(({ token }) => token)),
+      });
+    }
+  });
+
   const resolve = Effect.fn("SecretDelivery.resolve")(function* (planned: SecretPlan) {
     // A Provider entry that could not be read: nothing of the set goes (decision 3).
     if (planned.failure !== undefined) return yield* planned.failure;
@@ -608,6 +831,9 @@ const make = Effect.gen(function* () {
         );
     // What the Thread masks: every Secret delivered, and every Secret a template took.
     const masked: Array<SecretMasker.DeliveredSecret> = [];
+    // Identity tokens signed now: their held folder is refreshed before they expire (ticket 07).
+    const identities: Array<HeldIdentityEntry & { readonly issued: IdentityTokens.IssuedToken }> =
+      [];
     const out: Array<{
       readonly name: string;
       readonly value: string;
@@ -622,6 +848,11 @@ const make = Effect.gen(function* () {
       if (variable.template !== undefined) {
         const found = new Map<string, string>();
         for (const entry of variable.template.inputs) {
+          // An identity entry gives the template its file's path only (Vaults checks it).
+          if (entry.identity === true) {
+            found.set(entry.name, "");
+            continue;
+          }
           const value =
             entry.provider === undefined
               ? Option.getOrUndefined(yield* readOwn(entry.valueId))
@@ -661,6 +892,17 @@ const make = Effect.gen(function* () {
         out.push({ name: variable.name, value: rendered.text, ...pick(variable) });
         continue;
       }
+      if (variable.identity !== undefined) {
+        const issued = yield* signIdentity(planned, variable.name, variable.identity);
+        masked.push({
+          name: variable.name,
+          value: issued.token,
+          valueId: yield* keepRead(issued.token),
+        });
+        out.push({ name: variable.name, value: issued.token, file: true });
+        identities.push({ name: variable.name, ...variable.identity, issued });
+        continue;
+      }
       if (variable.provider !== undefined) {
         const value = read.values.get(variable.name);
         // A provider gone since the plan (broken): left out, like a broken link.
@@ -681,6 +923,9 @@ const make = Effect.gen(function* () {
     // Variables never are.
     if (planned.threadId !== undefined && Option.isSome(masker)) {
       yield* masker.value.remember(planned.threadId, masked);
+    }
+    if (identities.length > 0 && planned.files !== undefined) {
+      yield* holdIdentity(planned, identities);
     }
     const variables = out.flatMap(({ name, value, plain, file }): Array<SecretEnvVariable> =>
       file === true ? [] : [plain === true ? { name, value, plain } : { name, value }],
@@ -733,6 +978,7 @@ const make = Effect.gen(function* () {
     planTurn,
     resolve,
     mayReceiveSecrets,
+    refreshIdentityFiles,
     turnNames,
   });
 });

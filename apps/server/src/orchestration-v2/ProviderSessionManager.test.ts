@@ -4066,6 +4066,7 @@ const fakeSecretDelivery = (
   return SecretDelivery.SecretDelivery.of({
     turnOwner: () => Effect.succeedNone,
     turnNames: () => Effect.succeed([]),
+    refreshIdentityFiles: () => Effect.void,
     mayReceiveSecrets: (threadId) => Effect.succeed(byThread.get(threadId) !== undefined),
     plan: ({ target }) => Effect.succeed(SecretDelivery.emptyPlan(target)),
     planTurn: ({ threadId, target }) =>

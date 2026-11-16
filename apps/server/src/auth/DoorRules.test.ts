@@ -267,6 +267,7 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/115_VaultReachLoss.ts",
       "persistence/Migrations/116_ThreadSecretValues.ts",
       "persistence/Migrations/119_VaultEntryClass.ts",
+      "persistence/Migrations/120_VaultProviderEntries.ts",
       "vaults/EffectiveVaults.ts",
       "vaults/SecretDelivery.ts",
       "vaults/SecretMasker.ts",

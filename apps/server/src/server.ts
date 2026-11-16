@@ -203,6 +203,9 @@ import * as VaultsHttp from "./vaults/http.ts";
 import * as Vaults from "./vaults/Vaults.ts";
 import * as EffectiveVaults from "./vaults/EffectiveVaults.ts";
 import * as SecretDelivery from "./vaults/SecretDelivery.ts";
+import * as IdentityIssuer from "./identity/IdentityIssuer.ts";
+import * as IdentityKeys from "./identity/IdentityKeys.ts";
+import * as IdentityTokens from "./identity/IdentityTokens.ts";
 import * as MachineSecretFiles from "./environment/MachineSecretFiles.ts";
 import * as ThreadSecretFiles from "./secrets/ThreadSecretFiles.ts";
 import * as SecretMasker from "./vaults/SecretMasker.ts";
@@ -510,6 +513,13 @@ const layerServerEnvironment = ServerEnvironment.layer.pipe(Layer.provide(Server
 /** A Thread's masker and the sets it reads: one instance, shared by everything that masks. */
 const layerSecretMasking = SecretMasker.layer.pipe(Layer.provideMerge(EffectiveVaults.layer));
 
+/** The Hub as an OIDC issuer for its Threads and itself (ADR 0009): one key set, one cache. */
+const layerIdentity = IdentityTokens.layer.pipe(
+  Layer.provideMerge(IdentityKeys.layer),
+  Layer.provideMerge(IdentityIssuer.layer),
+  Layer.provide(AuditLog.layer),
+);
+
 const layerAuth = Layer.mergeAll(
   InvitationService.layer,
   MembershipService.layer,
@@ -526,6 +536,8 @@ const layerAuth = Layer.mergeAll(
     Layer.provideMerge(layerSecretMasking),
     Layer.provide(ProviderReads.layer),
   ),
+  // Workload identity (Vaults ticket 07): the issuer, its sealed signing keys and the tokens.
+  layerIdentity,
   // Secret providers' scopes and «Test connection» (Vaults ticket 03), over the same reads.
   SecretProviderScopes.layer.pipe(
     Layer.provide(ProviderReads.layer),

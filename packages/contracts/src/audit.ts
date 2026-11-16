@@ -74,6 +74,8 @@ export const AuditAction = Schema.Literals([
   "provider_scope.update",
   "provider_scope.delete",
   "provider_scope.allow",
+  // Vaults ticket 07: a workload identity token the Hub signed (never the token itself).
+  "identity.issue",
 ]);
 export type AuditAction = typeof AuditAction.Type;
 
@@ -253,6 +255,8 @@ export const AUDIT_DETAIL_KEYS = {
   "provider_scope.update": ["provider", "paths", "writable", "broke"],
   "provider_scope.delete": ["provider", "broke"],
   "provider_scope.allow": ["vault", "vaultId", "allowed", "broke"],
+  /** Its audience, subject, id and expiry, and the Thread it was signed for; never the token. */
+  "identity.issue": ["aud", "sub", "jti", "exp", "thread"],
 } as const satisfies Record<AuditAction, ReadonlyArray<string>>;
 
 export type AuditDetailOf<A extends AuditAction> = {

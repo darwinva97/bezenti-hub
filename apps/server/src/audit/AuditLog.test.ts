@@ -631,6 +631,8 @@ it.effect(
         "provider_scope.update",
         "provider_scope.delete",
         "provider_scope.allow",
+        // identity/IdentityTokens.test.ts (Vaults ticket 07)
+        "identity.issue",
       ];
       assert.sameMembers(
         [...new Set([...expected.map((row) => row.action), ...recordedElsewhere])],

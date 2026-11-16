@@ -41,16 +41,30 @@ export function vaultActions(
   };
 }
 
-/** A link is replaced at its original; a name that changes how tools run is the Owner's. */
+export interface EntryActions extends VaultActions {
+  /** Seal a revealable Secret: one way, no value. */
+  readonly seal: boolean;
+  /** Make a sealed Secret revealable: with a new value. */
+  readonly allowReveal: boolean;
+  /** Make a Secret a Variable: with a new value. */
+  readonly makeVariable: boolean;
+  /** Make a Variable a Secret (sealed). */
+  readonly makeSecret: boolean;
+}
+
+/**
+ * A link is replaced at its original, and is what its original is; a name that changes how tools
+ * run is the Owner's. «Reveal» only on a revealable Secret: never a sealed one or a Variable.
+ */
 export function entryActions(
   vault: Pick<VaultSummary, "canEdit" | "canReveal">,
-  entry: Pick<VaultEntry, "kind" | "name">,
+  entry: Pick<VaultEntry, "kind" | "name"> & Partial<Pick<VaultEntry, "class" | "sealed">>,
   context: {
     readonly mayWrite: boolean;
     readonly surface: VaultSurface;
     readonly isOwner: boolean;
   },
-): VaultActions {
+): EntryActions {
   const base = vaultActions(vault, context);
   const dangerousOnPhone =
     context.surface === "mobile" && secretNameRisk(entry.name) === "dangerous";
@@ -59,7 +73,16 @@ export function entryActions(
     !dangerousOnPhone &&
     entry.kind !== "link" &&
     (secretNameRisk(entry.name) !== "dangerous" || context.isOwner);
-  return { ...base, replace: mayReplace };
+  const isVariable = entry.class === "variable";
+  return {
+    ...base,
+    replace: mayReplace,
+    reveal: base.reveal && !isVariable && entry.sealed !== true,
+    seal: mayReplace && !isVariable && entry.sealed !== true,
+    allowReveal: mayReplace && !isVariable && entry.sealed === true,
+    makeVariable: mayReplace && !isVariable,
+    makeSecret: mayReplace && isVariable,
+  };
 }
 
 export function entryBadges(entry: VaultEntry): ReadonlyArray<string> {

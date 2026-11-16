@@ -2,10 +2,12 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   type AuthAccount,
   type EnvironmentId,
+  looksLikeCredential,
   MAIN_VAULT_ID,
   secretNameRisk,
   type SpaceId,
   type VaultEntry,
+  type VaultEntryClass,
   type VaultEntryId,
   type VaultSummary,
 } from "@t3tools/contracts";
@@ -43,6 +45,14 @@ const VALUE_INPUT_PROPS = {
   "data-1p-ignore": true,
   "data-lpignore": "true",
 } as const;
+/** A Variable's value is meant to be seen: shown as typed. */
+const SEEN_INPUT_PROPS = {
+  type: "text",
+  autoComplete: "off",
+  spellCheck: false,
+  "data-1p-ignore": true,
+  "data-lpignore": "true",
+} as const;
 /** A revealed value stays on screen this long, at most. */
 const REVEAL_MS = 60_000;
 const VAULT_SURFACE = isElectron ? "desktop" : "web";
@@ -64,6 +74,44 @@ const nameHint = (name: string, isOwner: boolean) => {
   }
 };
 const isDangerous = (name: string) => secretNameRisk(name) === "dangerous";
+
+const CREDENTIAL_WARNING =
+  "This looks like a credential. A Variable's value is shown to everyone who sees it and never masked: make it a Secret unless it is meant to be seen.";
+const SEAL_CONFIRM = (name: string) =>
+  `Seal ${name}? Nobody will reveal it again, not even you. Only a new value can make it revealable.`;
+
+const KIND_ITEMS: ReadonlyArray<{ readonly value: VaultEntryClass; readonly label: string }> = [
+  { value: "secret", label: "Secret" },
+  { value: "variable", label: "Variable" },
+];
+
+/** What a change to an entry sends, besides its name: a value, a class, the reveal choice. */
+interface EntryChange {
+  readonly value?: string;
+  readonly class?: VaultEntryClass;
+  readonly allowReveal?: boolean;
+  readonly confirmDangerous: boolean;
+}
+
+/** The value form an entry row opens: a plain replace, or one of the changes that need a value. */
+type ValueMode = "replace" | "allow-reveal" | "make-variable";
+const VALUE_MODE_LABEL: Record<ValueMode, string> = {
+  replace: "Save value",
+  "allow-reveal": "Save and allow reveal",
+  "make-variable": "Save as Variable",
+};
+
+/** The live «looks like a credential» line for a Variable being typed. Never blocks. */
+function CredentialWarning(props: { readonly name: string; readonly value: string }) {
+  if (!looksLikeCredential(props.name, props.value.length === 0 ? undefined : props.value)) {
+    return null;
+  }
+  return (
+    <span className="text-xs text-warning" role="status">
+      {CREDENTIAL_WARNING}
+    </span>
+  );
+}
 
 /** The Owner's explicit confirmation for a name that changes how tools run. */
 function ConfirmDangerous(props: {
@@ -186,8 +234,8 @@ function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }
           title="Secrets for your agents"
           description={
             isOwner
-              ? "Each secret reaches agents as an environment variable. Only you reveal values; an Organization's Admins add, replace and delete its secrets without seeing them; Members and Guests see names only."
-              : "The secrets your Organizations' agents receive, by name. Values are never shown here."
+              ? "Each entry reaches agents as an environment variable. A Variable is configuration: everyone who sees it reads its value, Guests excepted. A Secret is never shown; a new one is sealed (nobody reveals it, not even you) unless you allow reveal. An Organization's Admins add, replace and delete its entries without seeing Secrets."
+              : "The entries your Organizations' agents receive, by name. Variables show their value; Secrets never do."
           }
           status={
             error === null ? null : (
@@ -344,7 +392,37 @@ function VaultSection(props: {
   const savedMessage = (name: string, verb: string, warnings: ReadonlyArray<string>) =>
     warnings.includes("short-value")
       ? `${name} ${verb}. Shorter than 6 characters: it won't be masked in the history.`
-      : `${name} ${verb}.`;
+      : warnings.includes("looks-like-credential")
+        ? `${name} ${verb}. ${CREDENTIAL_WARNING}`
+        : `${name} ${verb}.`;
+  const change = (entry: VaultEntry, input: EntryChange) =>
+    act(async () => {
+      const result = await settle(
+        commands.put({
+          environmentId,
+          input: {
+            vaultId: vault.id,
+            entryId: entry.id,
+            name: entry.name,
+            ...(input.value === undefined ? {} : { value: Redacted.make(input.value) }),
+            ...(input.class === undefined ? {} : { class: input.class }),
+            ...(input.allowReveal === undefined ? {} : { allowReveal: input.allowReveal }),
+            ...(input.confirmDangerous ? { confirmDangerous: true } : {}),
+          },
+        }),
+      );
+      const verb =
+        input.class === "variable"
+          ? "is now a Variable"
+          : input.class === "secret"
+            ? "is now a sealed Secret"
+            : input.allowReveal === false
+              ? "sealed"
+              : input.allowReveal === true
+                ? "replaced; you can reveal it"
+                : "replaced";
+      return savedMessage(entry.name, verb, result.warnings);
+    });
   const owner = vault.isMain
     ? "Yours alone; reaches Organizations only through links or copies"
     : vault.spaceName === null
@@ -396,23 +474,7 @@ function VaultSection(props: {
             canEdit={canEdit}
             isOwner={props.isOwner}
             entry={entry}
-            onReplace={(value, confirmDangerous) =>
-              act(async () => {
-                const result = await settle(
-                  commands.put({
-                    environmentId,
-                    input: {
-                      vaultId: vault.id,
-                      entryId: entry.id,
-                      name: entry.name,
-                      value: Redacted.make(value),
-                      ...(confirmDangerous ? { confirmDangerous } : {}),
-                    },
-                  }),
-                );
-                return savedMessage(entry.name, "replaced", result.warnings);
-              })
-            }
+            onChange={(input) => change(entry, input)}
             onDelete={() =>
               act(async () => {
                 const input = { vaultId: vault.id, entryId: entry.id };
@@ -437,7 +499,7 @@ function VaultSection(props: {
         <AddSecretForm
           vaultName={vault.name}
           isOwner={props.isOwner}
-          onAdd={(name, value, confirmDangerous) =>
+          onAdd={(name, value, options) =>
             act(async () => {
               const result = await settle(
                 commands.put({
@@ -446,7 +508,11 @@ function VaultSection(props: {
                     vaultId: vault.id,
                     name,
                     value: Redacted.make(value),
-                    ...(confirmDangerous ? { confirmDangerous } : {}),
+                    class: options.class,
+                    ...(options.class === "secret" && options.allowReveal
+                      ? { allowReveal: true }
+                      : {}),
+                    ...(options.confirmDangerous ? { confirmDangerous: true } : {}),
                   },
                 }),
               );
@@ -493,11 +559,11 @@ function EntryRow(props: {
   readonly canEdit: boolean;
   readonly isOwner: boolean;
   readonly entry: VaultEntry;
-  readonly onReplace: (value: string, confirmDangerous: boolean) => Promise<boolean>;
+  readonly onChange: (change: EntryChange) => Promise<boolean>;
   readonly onDelete: () => Promise<boolean>;
 }) {
   const { vault, entry } = props;
-  const [replacing, setReplacing] = useState(false);
+  const [mode, setMode] = useState<ValueMode | null>(null);
   const [value, setValue] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const dangerous = isDangerous(entry.name);
@@ -507,11 +573,27 @@ function EntryRow(props: {
     surface: VAULT_SURFACE,
     isOwner: props.isOwner,
   });
-  const mayReplace = actions.replace;
+  const isVariable = entry.class === "variable";
+  const toggle = (next: ValueMode) => setMode((open) => (open === next ? null : next));
+  // A Variable stays a Variable when its value is replaced, so it shows as typed.
+  const shownAsTyped = mode === "make-variable" || (mode === "replace" && isVariable);
   return (
     <li className="flex flex-col gap-2 px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <code className="text-sm font-medium">{entry.name}</code>
+        {isVariable ? (
+          <Badge variant="outline">Variable</Badge>
+        ) : entry.sealed ? (
+          <Badge variant="outline">Sealed</Badge>
+        ) : null}
+        {isVariable && entry.value !== undefined ? (
+          <code
+            aria-label={`Value of ${entry.name}`}
+            className="rounded bg-muted px-2 py-0.5 text-xs break-all"
+          >
+            {entry.value}
+          </code>
+        ) : null}
         {entry.kind === "link" ? (
           entry.broken ? (
             <Badge variant="destructive">broken</Badge>
@@ -523,20 +605,69 @@ function EntryRow(props: {
         ) : entry.kind === "copy" ? (
           <Badge variant="outline">copy</Badge>
         ) : null}
-        {entry.unmasked ? <Badge variant="outline">not masked</Badge> : null}
+        {entry.unmasked && !isVariable ? <Badge variant="outline">not masked</Badge> : null}
         {dangerous ? <Badge variant="outline">changes how tools run</Badge> : null}
         {entry.description === null ? null : (
           <span className="text-xs text-muted-foreground">{entry.description}</span>
         )}
-        <span className="ms-auto flex gap-1">
-          {mayReplace ? (
+        <span className="ms-auto flex flex-wrap gap-1">
+          {actions.replace ? (
             <Button
               size="xs"
               variant="outline"
               aria-label={`Replace value of ${entry.name}`}
-              onClick={() => setReplacing((open) => !open)}
+              onClick={() => toggle("replace")}
             >
               Replace value
+            </Button>
+          ) : null}
+          {actions.seal ? (
+            <Button
+              size="xs"
+              variant="outline"
+              aria-label={`Seal ${entry.name}`}
+              onClick={() => {
+                if (!window.confirm(SEAL_CONFIRM(entry.name))) return;
+                // Confirming the seal confirms a name that changes how tools run (the Owner's).
+                void props.onChange({ allowReveal: false, confirmDangerous: dangerous });
+              }}
+            >
+              Seal
+            </Button>
+          ) : null}
+          {actions.allowReveal ? (
+            <Button
+              size="xs"
+              variant="outline"
+              aria-label={`Allow reveal of ${entry.name}`}
+              onClick={() => toggle("allow-reveal")}
+            >
+              Allow reveal
+            </Button>
+          ) : null}
+          {actions.makeVariable ? (
+            <Button
+              size="xs"
+              variant="outline"
+              aria-label={`Make ${entry.name} a Variable`}
+              onClick={() => toggle("make-variable")}
+            >
+              Make variable
+            </Button>
+          ) : null}
+          {actions.makeSecret ? (
+            <Button
+              size="xs"
+              variant="outline"
+              aria-label={`Make ${entry.name} a Secret`}
+              onClick={() => {
+                if (dangerous && !window.confirm(`${CONFIRM_DANGEROUS}. Make it a Secret?`)) {
+                  return;
+                }
+                void props.onChange({ class: "secret", confirmDangerous: dangerous });
+              }}
+            >
+              Make secret
             </Button>
           ) : null}
           {props.canEdit ? (
@@ -551,26 +682,43 @@ function EntryRow(props: {
           ) : null}
         </span>
       </div>
-      {replacing ? (
+      {mode === null ? null : (
         <form
           className="flex max-w-md flex-col gap-2"
           autoComplete="off"
           onSubmit={(event) => {
             event.preventDefault();
-            void props.onReplace(value, confirmed).then((saved) => {
-              // A failed save keeps what was typed.
-              if (!saved) return;
-              setValue("");
-              setConfirmed(false);
-              setReplacing(false);
-            });
+            void props
+              .onChange({
+                value,
+                ...(mode === "allow-reveal" ? { allowReveal: true } : {}),
+                ...(mode === "make-variable" ? { class: "variable" as const } : {}),
+                confirmDangerous: confirmed,
+              })
+              .then((saved) => {
+                // A failed save keeps what was typed.
+                if (!saved) return;
+                setValue("");
+                setConfirmed(false);
+                setMode(null);
+              });
           }}
         >
+          {mode === "allow-reveal" ? (
+            <span className="text-xs text-muted-foreground">
+              A sealed value is never read back: allowing reveal takes a new one.
+            </span>
+          ) : mode === "make-variable" ? (
+            <span className="text-xs text-muted-foreground">
+              A Secret's value is never shown: a Variable takes a new one, visible to everyone who
+              sees it.
+            </span>
+          ) : null}
           <div className="flex gap-2">
             <Input
               aria-label={`New value of ${entry.name}`}
               nativeInput
-              {...VALUE_INPUT_PROPS}
+              {...(shownAsTyped ? SEEN_INPUT_PROPS : VALUE_INPUT_PROPS)}
               value={value}
               onChange={(event) => setValue(event.currentTarget.value)}
             />
@@ -579,12 +727,13 @@ function EntryRow(props: {
               size="sm"
               type="submit"
             >
-              Save value
+              {VALUE_MODE_LABEL[mode]}
             </Button>
           </div>
+          {shownAsTyped ? <CredentialWarning name={entry.name} value={value} /> : null}
           {dangerous ? <ConfirmDangerous checked={confirmed} onChange={setConfirmed} /> : null}
         </form>
-      ) : null}
+      )}
       {actions.reveal && !entry.broken ? (
         // A new version hides a value revealed before it.
         <RevealControl key={`${entry.id}:${entry.version}`} vault={vault} entry={entry} />
@@ -708,12 +857,23 @@ function RevealControl(props: { readonly vault: VaultSummary; readonly entry: Va
 function AddSecretForm(props: {
   readonly vaultName: string;
   readonly isOwner: boolean;
-  readonly onAdd: (name: string, value: string, confirmDangerous: boolean) => Promise<boolean>;
+  readonly onAdd: (
+    name: string,
+    value: string,
+    options: {
+      readonly class: VaultEntryClass;
+      readonly allowReveal: boolean;
+      readonly confirmDangerous: boolean;
+    },
+  ) => Promise<boolean>;
 }) {
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
+  const [kind, setKind] = useState<VaultEntryClass>("secret");
+  const [allowReveal, setAllowReveal] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
+  const isVariable = kind === "variable";
   const hint = nameHint(name, props.isOwner);
   const dangerous = isDangerous(name);
   const blocked =
@@ -729,22 +889,47 @@ function AddSecretForm(props: {
         event.preventDefault();
         setPending(true);
         void props
-          .onAdd(name, value, dangerous && confirmed)
+          .onAdd(name, value, {
+            class: kind,
+            allowReveal: !isVariable && allowReveal,
+            confirmDangerous: dangerous && confirmed,
+          })
           .then((saved) => {
             // A failed save keeps what was typed.
             if (!saved) return;
             setName("");
             setValue("");
+            setAllowReveal(false);
             setConfirmed(false);
           })
           .finally(() => setPending(false));
       }}
     >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <label className="flex flex-col gap-1 text-xs font-medium sm:w-32">
+          Kind
+          <Select
+            disabled={pending}
+            items={KIND_ITEMS}
+            value={kind}
+            onValueChange={(next) => setKind(next === "variable" ? "variable" : "secret")}
+          >
+            <SelectTrigger aria-label="Kind">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopup>
+              {KIND_ITEMS.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </label>
         <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
-          Variable name
+          Name
           <Input
-            aria-label="Variable name"
+            aria-label="Name"
             nativeInput
             disabled={pending}
             maxLength={128}
@@ -759,7 +944,7 @@ function AddSecretForm(props: {
             aria-label="Value"
             nativeInput
             disabled={pending}
-            {...VALUE_INPUT_PROPS}
+            {...(isVariable ? SEEN_INPUT_PROPS : VALUE_INPUT_PROPS)}
             value={value}
             onChange={(event) => setValue(event.currentTarget.value)}
           />
@@ -769,9 +954,26 @@ function AddSecretForm(props: {
           size="sm"
           type="submit"
         >
-          Add secret
+          {isVariable ? "Add variable" : "Add secret"}
         </Button>
       </div>
+      {isVariable ? null : (
+        <label className="flex items-center gap-2 text-xs font-medium">
+          <Checkbox
+            aria-label="Allow reveal"
+            checked={allowReveal}
+            disabled={pending}
+            onCheckedChange={(checked) => setAllowReveal(checked === true)}
+          />
+          Allow reveal
+          <span className="font-normal text-muted-foreground">
+            {allowReveal
+              ? "The Owner can read it back, with a strong factor."
+              : "Sealed: nobody reads it back, not even the Owner."}
+          </span>
+        </label>
+      )}
+      {isVariable ? <CredentialWarning name={name} value={value} /> : null}
       {hint === null ? null : <span className="text-xs text-destructive">{hint}</span>}
       {dangerous && props.isOwner ? (
         <ConfirmDangerous checked={confirmed} onChange={setConfirmed} />

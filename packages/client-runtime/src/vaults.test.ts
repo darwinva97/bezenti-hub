@@ -83,6 +83,41 @@ describe("entryActions", () => {
     ).toBe(true);
     expect(entryActions(vault(), entry(), ctx).replace).toBe(true);
   });
+
+  it("offers «Reveal» only on a revealable Secret; sealing, reveal and class to editors", () => {
+    const owner = vault({ canReveal: true, canEdit: true });
+    const web = { mayWrite: true, surface: "web" as const, isOwner: true };
+    const revealable = entry({ class: "secret", sealed: false });
+    const sealed = entry({ class: "secret", sealed: true });
+    const variable = entry({ class: "variable", sealed: false, value: "eu-west-1" });
+    expect(entryActions(owner, revealable, web)).toMatchObject({
+      reveal: true,
+      seal: true,
+      allowReveal: false,
+      makeVariable: true,
+      makeSecret: false,
+    });
+    expect(entryActions(owner, sealed, web)).toMatchObject({
+      reveal: false,
+      seal: false,
+      allowReveal: true,
+      makeVariable: true,
+    });
+    expect(entryActions(owner, variable, web)).toMatchObject({
+      reveal: false,
+      seal: false,
+      allowReveal: false,
+      makeVariable: false,
+      makeSecret: true,
+    });
+    // A link is what its original is; a viewer who does not edit changes nothing.
+    expect(
+      entryActions(owner, entry({ kind: "link", class: "secret", sealed: false }), web),
+    ).toMatchObject({ seal: false, allowReveal: false, makeVariable: false });
+    expect(
+      entryActions(vault({ canEdit: false }), revealable, { ...web, isOwner: false }),
+    ).toMatchObject({ seal: false, allowReveal: false, makeVariable: false, makeSecret: false });
+  });
 });
 
 describe("labels", () => {

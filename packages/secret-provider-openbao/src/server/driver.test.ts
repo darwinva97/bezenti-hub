@@ -18,7 +18,6 @@ import { readError, readValue } from "@t3tools/secret-provider-core/server/drive
 
 import {
   baoModel,
-  eventually,
   type Reply,
   type SeenRequest,
   startFakeOpenBao,
@@ -130,8 +129,9 @@ describe("OpenBao driver", () => {
       Effect.gen(function* () {
         const fake = yield* startFakeOpenBao(baoModel({ kv2: KV2 }).route);
         const config = approle(fake.address, { roleId: "r-shared" });
-        const results = yield* Effect.all(
-          [1, 2, 3].map(() => driver.read(config, ["kv/acme/other#key"])),
+        const results = yield* Effect.forEach(
+          [1, 2, 3],
+          () => driver.read(config, ["kv/acme/other#key"]),
           { concurrency: "unbounded" },
         );
         assert.deepStrictEqual(results.flat(), [
@@ -313,11 +313,7 @@ describe("OpenBao driver", () => {
         assert.deepStrictEqual(yield* driver.read(config, ["kv/acme/other#key"]), [
           { _tag: "value", value: "other-key", version: "1" },
         ]);
-        assert.isTrue(
-          yield* eventually(() =>
-            fake.seen.some((request) => request.url === "/v1/auth/token/renew-self"),
-          ),
-        );
+        yield* fake.next((request) => request.url === "/v1/auth/token/renew-self");
         // Renewed: past the first lease's end, no new login is needed.
         yield* TestClock.adjust("200 seconds");
         assert.deepStrictEqual(yield* driver.read(config, ["kv/acme/other#key"]), [
@@ -340,7 +336,7 @@ describe("OpenBao driver", () => {
         assert.deepStrictEqual(yield* driver.read(config, ["kv/acme/other#key"]), [
           { _tag: "value", value: "other-key", version: "1" },
         ]);
-        assert.isTrue(yield* eventually(() => logins(fake.seen).length === 2));
+        assert.strictEqual(logins(fake.seen).length, 2);
         assert.isFalse(fake.seen.some((request) => request.url === "/v1/auth/token/renew-self"));
       }),
     ),

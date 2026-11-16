@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off -- an in-process HTTP(S) server.
+// @effect-diagnostics nodeBuiltinImport:off -- an in-process HTTP(S) server.
 /** A fake OpenBao for the driver tests: real sockets and TLS, a scripted API, every call kept. */
 import * as Effect from "effect/Effect";
 import * as NodeFS from "node:fs";
@@ -42,6 +42,8 @@ export type Route = (request: SeenRequest) => Reply;
 export interface FakeOpenBao {
   readonly address: string;
   readonly seen: Array<SeenRequest>;
+  /** The first request (seen or still to come) that `matches`; background calls arrive later. */
+  readonly next: (matches: (request: SeenRequest) => boolean) => Effect.Effect<SeenRequest>;
 }
 
 /** Serves `route` on 127.0.0.1 until the scope closes: plain, TLS, or TLS asking a client cert. */
@@ -51,6 +53,19 @@ export const startFakeOpenBao = (route: Route, tls?: "server" | "mutual") =>
       () =>
         new Promise<{ readonly fake: FakeOpenBao; readonly server: NodeHttp.Server }>((resolve) => {
           const seen: Array<SeenRequest> = [];
+          const waiting: Array<{
+            readonly matches: (request: SeenRequest) => boolean;
+            readonly resolve: (request: SeenRequest) => void;
+          }> = [];
+          const next = (matches: (request: SeenRequest) => boolean) =>
+            Effect.promise(
+              () =>
+                new Promise<SeenRequest>((resolve) => {
+                  const already = seen.find(matches);
+                  if (already !== undefined) resolve(already);
+                  else waiting.push({ matches, resolve });
+                }),
+            );
           const handler: NodeHttp.RequestListener = (request, response) => {
             const chunks: Array<Buffer> = [];
             request.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -72,6 +87,10 @@ export const startFakeOpenBao = (route: Route, tls?: "server" | "mutual") =>
                     : undefined,
               };
               seen.push(seenRequest);
+              for (const waiter of waiting.filter((candidate) => candidate.matches(seenRequest))) {
+                waiting.splice(waiting.indexOf(waiter), 1);
+                waiter.resolve(seenRequest);
+              }
               const reply = route(seenRequest);
               response.statusCode = reply.status;
               if (reply.location !== undefined) response.setHeader("Location", reply.location);
@@ -102,6 +121,7 @@ export const startFakeOpenBao = (route: Route, tls?: "server" | "mutual") =>
               fake: {
                 address: `${tls === undefined ? "http" : "https"}://127.0.0.1:${port}`,
                 seen,
+                next,
               },
               server,
             });
@@ -189,18 +209,3 @@ export function baoModel(options: BaoModelOptions = {}) {
     revokeAll: () => valid.clear(),
   };
 }
-
-/** Waits (real time, at most 2 s) until `check` holds: background renewals do real I/O. */
-export const eventually = (check: () => boolean) =>
-  Effect.promise(
-    () =>
-      new Promise<boolean>((resolve) => {
-        const started = Date.now();
-        const tick = () => {
-          if (check()) resolve(true);
-          else if (Date.now() - started > 2000) resolve(false);
-          else setTimeout(tick, 10);
-        };
-        tick();
-      }),
-  );

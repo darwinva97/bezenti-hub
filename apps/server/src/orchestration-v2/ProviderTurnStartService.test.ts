@@ -21,6 +21,7 @@ import {
   ProjectId,
   type OrchestrationV2ThreadProjection,
   OrchestrationV2DomainEvent,
+  SecretProviderReadError,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -1641,6 +1642,38 @@ effectIt.effect("terminalizes a starting run when its provider session cannot op
       },
     ]);
   }),
+);
+
+effectIt.effect(
+  "a Secret provider that did not answer fails the run with its code, for «Retry», and no value",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        openFailure: new SecretProviderReadError({
+          reason: "unavailable",
+          provider: "OpenBao",
+          scope: null,
+          entries: ["KUBE_TOKEN"],
+        }),
+      });
+
+      yield* harness.start;
+
+      expect(harness.projection().runs.at(-1)).toMatchObject({ status: "failed" });
+      expect(harness.projection().turnItems).toMatchObject([
+        {
+          type: "error",
+          status: "failed",
+          failure: {
+            class: "provider_error",
+            code: "secret_provider_unavailable",
+            retryable: true,
+            message: expect.stringContaining("OpenBao didn't answer for KUBE_TOKEN"),
+          },
+        },
+      ]);
+    }),
 );
 
 effectIt.effect("leaves the run starting when a session-open failure will be retried", () =>

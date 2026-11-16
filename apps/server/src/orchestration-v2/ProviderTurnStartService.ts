@@ -13,6 +13,7 @@ import {
   isCompactionCommandMessage,
   parseGoalCommand,
   RunId,
+  SecretProviderReadError,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -70,6 +71,8 @@ export class ProviderTurnStartError extends Schema.TaggedError<ProviderTurnStart
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+const isSecretProviderReadError = Schema.is(SecretProviderReadError);
 
 class WorktreeRecreateError extends Schema.TaggedError<WorktreeRecreateError>()(
   "WorktreeRecreateError",
@@ -513,6 +516,9 @@ export const layer: Layer.Layer<
           readonly message?: string;
         }) {
           const nestedCause = "cause" in failed.error ? failed.error.cause : undefined;
+          // A Secret provider that did not answer (Vaults ticket 02): its code lets clients
+          // offer «Retry»; its message names the provider and entries, never a value.
+          const providerRead = isSecretProviderReadError(nestedCause) ? nestedCause : null;
           yield* settleRunBeforeStart({
             signal: failed.signal,
             status: "failed",
@@ -533,6 +539,9 @@ export const layer: Layer.Layer<
                       ? nestedCause
                       : failed.error.message),
                 class: "provider_error",
+                ...(providerRead === null
+                  ? {}
+                  : { code: providerRead.code, retryable: providerRead.reason === "unavailable" }),
               }),
             },
           });

@@ -6,9 +6,6 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 /** The executor contract from which a machine receives `secretEnv`. */
 export const SECRET_ENV_CONTRACT_VERSION = 10;
 
-/** The executor contract from which a machine receives Secret files (`secretEnv.files`). */
-export const SECRET_FILES_CONTRACT_VERSION = 16;
-
 /** A Secret file's content, at most this many bytes; all of one process's, at most 1 MiB. */
 export const SECRET_FILE_MAX_BYTES = 64 * 1024;
 export const SECRET_FILES_MAX_TOTAL_BYTES = 1024 * 1024;

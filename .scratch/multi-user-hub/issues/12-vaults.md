@@ -17,7 +17,7 @@ Incluye: ningún aislamiento protege los secretos de un Space frente a su propio
 Resuelto por grilling con el Owner (2026-11-04). Términos nuevos en `GLOSSARY.md`: Vault, Main vault, Secret link.
 
 1. Un Vault es un conjunto con nombre de secretos (tokens, API keys…), cada uno bajo un nombre de variable de entorno. El Owner tiene un Main vault.
-2. Los valores viven en un almacén propio del Hub, cifrado, con la clave maestra en un archivo aparte de la base de datos. Sin backends externos.
+2. Los valores viven en un almacén propio del Hub, cifrado, con la clave maestra en un archivo aparte de la base de datos. Sin backends externos. _(Reabierto: ADR 0008, `../../vault-variables-and-providers/spec.md`.)_
 3. Solo el Owner crea Vaults y los permite a Spaces y/o Users.
 4. El Vault de una Organization combina Secret links al Main vault (rotar el original los actualiza), copias independientes y secretos propios.
 5. Editan: el Main vault, solo el Owner; los Vaults de una Organization, el Owner y sus Admins.

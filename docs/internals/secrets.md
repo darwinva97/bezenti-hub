@@ -365,7 +365,9 @@ with (`auth`) and the path prefixes allowed. The Owner decides which Vaults may 
   - `vault_provider_scopes` (Vault ↔ scope).
   - `auth` holds only non-secret fields (`role`, `mount`, `method`, `namespace`, `audience`,
     `project`, `environment`, `PROVIDER_SCOPE_AUTH_FIELDS`). Any other key is refused, both by the
-    RPC schema and by the service. A scope's credentials (ticket 04) are sealed, like a provider's.
+    RPC schema and by the service. Credentials per scope (an AppRole secret ID per scope) are
+    not part of ticket 04: one provider is connected per identity instead. A kind lays `auth`
+    over its config only through `withScopeAuth` (see «OpenBao driver»).
 - **Providers themselves** stay in `settings.secretProviders`, behind the existing settings door
   (`server.updateSettings`, the Owner). A definition's `credentialFields` are
   `SettingsSecretValue`s:
@@ -398,6 +400,82 @@ with (`auth`) and the path prefixes allowed. The Owner decides which Vaults may 
 - **Web:** Settings → Secrets has «Test connection» per provider, the «Provider scopes» section,
   and on removal a list of what would break. Each Vault has «Add a Provider entry» (choose a
   scope, or «Direct» for the Owner). Mobile comes in ticket 16.
+
+## OpenBao driver («Variables, Secretos sellados y Secret providers», ticket 04)
+
+`packages/secret-provider-openbao` reads KV v1 and v2 from OpenBao or HashiCorp Vault.
+
+- **Config** (`shared/definition.ts`):
+  - `address`: an origin, `https://`, or `http://` only to loopback;
+  - `namespace?`;
+  - `caCert?`: inline PEM, added to `tls.rootCertificates`. There is no field that disables
+    verification, and an unknown key such as `tlsSkipVerify` is dropped by the schema;
+  - `mounts`: `[{ path, version: 1 | 2 }]`, declared, never discovered;
+  - `authMethod` with its fields: `kubernetes` (`authRole`, `tokenFile?`), `jwt` (`authRole`,
+    `tokenFile`), `approle` (`roleId`, `secretId`), `token` (`token`), `cert` (`clientCert` as
+    inline PEM, `clientKey`); plus `authMount?` and `refreshIntervalSeconds?`.
+  - A certificate field that holds a `PRIVATE KEY` is refused.
+  - `credentialFields` are `token`, `secretId` and `clientKey`: sealed by `settingsSecrets`, and
+    `""` on disk and for clients.
+- **References:** `mount/path?version=N#field`.
+  - `isReference` checks the syntax: at least two segments, no `.`/`..`/empty segment, a field,
+    `N` > 0.
+  - `configReferenceProblem` checks the reference against the provider's config: it must lie
+    under a declared mount by whole segments (the longest one wins), and `?version` only on v2.
+  - `ProviderReads.referenceProblem` asks both when an entry is saved; the driver asks again on
+    read (`invalid`).
+- **Reads** (`server/driver.ts`):
+  - one GET per distinct path and version, concurrency 8. That is `<mount>/data/<path>` for v2
+    and `<mount>/<path>` for v1;
+  - a field that is a string is returned as is; a number or boolean as text; anything else is
+    `not-found`. v2 reads carry `version`.
+- **HTTP** (`server/http.ts`): `node:https` with one keep-alive agent per (origin, CA, client
+  cert), 5 s per request, at most 1 MiB of body.
+  - Status alone classifies: 404 is `not-found` (for a sign-in, `invalid`); 401/403 are
+    `forbidden`; 400 is `invalid`; anything else, a timeout, or TLS or network failure is
+    `unavailable`.
+  - A non-2xx body is never read. Logs carry the operation and the status, never a path, body or
+    token.
+  - A 3xx is followed once and only to the same origin. A redirect elsewhere is `unavailable` and
+    is not followed, so the token never leaves its origin.
+- **Tokens** (`server/tokens.ts`), only in memory:
+  - one per identity, a hash of address, namespace, CA, method, mount, role, file, and
+    credentials. Scopes with the same role share it;
+  - a sign-in in flight is shared by every caller;
+  - at 2/3 of the lease, a forked fiber renews it (`renew-self`), or signs in again when the token
+    is not renewable. Reads go on with the current token meanwhile. An expired token waits for a
+    new sign-in.
+  - The `token` method signs in by `lookup-self` and cannot sign in again.
+  - A 403 on a read is taken as a lost token: at most **one** new sign-in and **one** retry of the
+    refused paths per `read`, then `forbidden`. A `token` method does not retry.
+- **Files** (`server/fileRoots.ts`): `tokenFile` is typed by the Owner, and the Hub sends what it
+  reads to an address the Owner typed. So a file is read only under the operator's
+  `T3CODE_SECRET_PROVIDER_FILE_ROOTS`: colon-separated absolute directories, `/var/run/secrets` by
+  default, never `/`. The rules:
+  - the path is plain: absolute, with no `.`, `..` or empty segment;
+  - it lies under a root as written, and again after `realPath`, so a link that escapes is
+    refused;
+  - it is a regular file of at most 64 KiB, checked by `stat` before it is opened and by `fstat`
+    after;
+  - a refused file is never opened.
+  - It is checked at save, through the driver's `configProblem`, which `serverSettings` runs for
+    each kind with a driver, and again at every sign-in (`invalid`).
+- **Scope `auth`** (`ProviderReads`): the scope's `auth` (read with `scopeAuthOf`, parsed by
+  `authOf`, keeping only the allowed fields) goes through the definition's `withScopeAuth` before
+  the driver runs.
+  - OpenBao maps `role`, `mount` and `namespace`. It refuses another `method` or any other key.
+  - A kind without `withScopeAuth`, or a refusal, makes the scope's reads `invalid`. It never reads
+    with the provider's broader identity. A scope whose `auth` cannot be read is `invalid` too.
+  - The cache key is the provider's config key, a NUL, and the `auth`. A changed role is read
+    again, and a settings change that leaves the provider alone keeps scoped values.
+  - «Test connection» for a scope signs in with its `auth`.
+- **Tests:**
+  - an in-process fake OpenBao over real HTTP/HTTPS/mutual TLS (`test/fakeOpenBao.ts`), using the
+    test-only certificates in `test/fixtures/tls` (regenerated by `generate.sh`; their keys
+    protect nothing);
+  - `openbao.live.test.ts` runs against `bao server -dev` only with
+    `T3CODE_TEST_LIVE_OPENBAO=1` and `bao` on the PATH;
+  - a run on k3s with Kubernetes auth is left for a person (ticket 18).
 
 ## Allowing Vaults (spec 5, ticket 03)
 

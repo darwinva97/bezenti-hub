@@ -393,7 +393,8 @@ matters.
 
 ### Read secrets from a provider: Provider scopes
 
-**Settings → Secrets** lists the secret providers the Hub can read (1Password today).
+**Settings → Secrets** lists the secret providers the Hub can read: 1Password, and OpenBao or
+HashiCorp Vault (see [Connect OpenBao](#connect-openbao-or-hashicorp-vault)).
 **Test connection** checks that the Hub can sign in. It never shows a secret.
 
 A **Provider scope** says what Vaults may read through a provider:
@@ -415,6 +416,63 @@ through the scopes allowed to their Vault. You can also add one **Direct**, with
 Narrowing or deleting a scope, or taking it away from a Vault, first lists the entries that would
 break and asks you to confirm. After that, those entries show «broken» and are no longer
 delivered. Removing a provider shows the same list first.
+
+### Connect OpenBao or HashiCorp Vault
+
+The Hub reads KV secrets (v1 and v2) from OpenBao, or from HashiCorp Vault, which speaks the same
+API. It signs in by itself and keeps its token only in memory.
+
+1. **In OpenBao**, give each Organization its own policy and role. For a Hub running in
+   Kubernetes as the ServiceAccount `t3-hub`:
+
+   ```sh
+   bao auth enable kubernetes
+   bao write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc
+   bao policy write acme-read - <<'EOF'
+   path "kv/data/acme/*" { capabilities = ["read"] }
+   EOF
+   bao write auth/kubernetes/role/t3-acme \
+     bound_service_account_names=t3-hub bound_service_account_namespaces=t3 \
+     token_policies=acme-read ttl=1h
+   ```
+
+   On a KV v1 mount the policy path has no `data/`: `path "legacy/acme/*"`.
+
+2. **Settings → Secrets → Add provider**, kind **OpenBao / HashiCorp Vault**:
+   - **Address**: `https://…`. Plain `http://` works only to `localhost` (`bao server -dev`).
+     With several nodes, point it at the active node or the load balancer: the Hub does not
+     follow a redirect to another host.
+   - **KV mounts**: one per line with its version, like `kv v2` or `legacy v1`.
+   - **CA certificate**: the PEM of a private CA, if the server uses one. It is added to the
+     system's CAs. Certificate checks cannot be turned off.
+   - **Sign-in**:
+     - **Kubernetes**: the role. The token file defaults to the Pod's ServiceAccount token.
+     - **JWT from a file**: the role and the token file.
+     - **AppRole**: the role ID and the secret ID.
+     - **Client certificate**: the certificate (PEM) and its private key.
+     - **Token**: a token. Use it only to try things out. The Hub cannot sign in again with it,
+       so you replace it here when it expires.
+
+   The secret ID, private key or token is kept in the Hub's secret store and never shown again.
+   It can also be read from another secret provider.
+
+3. **Test connection** signs in and checks the token.
+4. Add a **Provider scope** for each Organization: its **role** (`t3-acme`) and its allowed paths
+   (`kv/acme`). The Hub then signs in with that role for that scope's entries, so OpenBao's own
+   policy keeps Organizations apart. A scope can change the role, the sign-in mount and the
+   namespace, but not the sign-in method.
+
+A reference is `mount/path#field`, for example `kv/acme/app#token`. On a KV v2 mount,
+`kv/acme/app?version=3#token` reads a fixed version. Without one, the latest version is read, and
+a changed value reaches the Hub within the refresh interval (5 minutes).
+
+**Files the Hub reads to sign in.** A token file is read only if it sits under one of the
+directories in `T3CODE_SECRET_PROVIDER_FILE_ROOTS`. Set that variable in the Hub's environment,
+not in Settings, as absolute directories separated by `:`. It defaults to `/var/run/secrets`,
+where Kubernetes puts ServiceAccount tokens. The file must still be inside one of those
+directories once links are followed, and it must be a regular file of at most 64 KiB. Any other
+path is refused when the provider is saved, and again at each sign-in, and is never opened. This
+stops a settings change from sending a file the Hub can read to an address someone typed in.
 
 ### Invite people
 

@@ -129,3 +129,11 @@ Login, y después `auth/token/lookup-self`. Responde `{ ok }` o la clase del fal
 3. **Credenciales por scope** (un `secretId` de AppRole por scope): el 03 las dejó para el 04, pero exigen un almacén sellado por scope y su UI. → **Fuera del 04.** Con `kubernetes` o `jwt` cada scope ya usa su propio rol sin secretos. Para AppRole, token o cert se conecta un proveedor por identidad. Si hace falta, se abre un ticket aparte.
 4. **El ticket pide una prueba real en k3s**, y yo no tengo acceso al clúster. → **Queda para un humano** (ticket 18 o checklist). Yo dejo la receta y la prueba opcional con `bao server -dev`.
 5. **Sintaxis de la referencia:** el spec escribe `kv/acme/app#token` y `?version=N` por separado. → **`mount/ruta?version=N#campo`**, en el orden de una URL; el placeholder lo muestra.
+
+## Cambios al construirlo
+
+- **Cliente HTTP:** `node:https` con un agente por origen, CA y certificado, no `fetch` con `undici`. Nunca sigue redirecciones por su cuenta, no depende del dispatcher global y no choca con cómo se empaqueta `undici` en el ejecutable.
+- **Proxy:** no se usa. OpenBao se alcanza directamente, y el soporte de proxy queda para cuando haga falta, con su prueba.
+- **Renovación:** la primera lectura que pasa los 2/3 del lease lanza la renovación en una fibra aparte. No hay temporizador por token que se quede vivo si cambian los ajustes.
+- **`audience`** (kubernetes) no está en el config: OpenBao no la recibe al entrar. Se configura en el rol y en el token proyectado.
+- **Un `auth` de scope en un tipo sin `withScopeAuth`** (1Password) hace sus lecturas `invalid` en vez de ignorarlo. Así nunca se lee con la identidad más amplia del proveedor.

@@ -1,5 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  IDENTITY_TTL_DEFAULT_SECONDS,
+  IDENTITY_TTL_MAX_SECONDS,
+  IDENTITY_TTL_MIN_SECONDS,
   type AuthAccount,
   type EnvironmentId,
   looksLikeCredential,
@@ -88,12 +91,19 @@ const CREDENTIAL_WARNING =
 const SEAL_CONFIRM = (name: string) =>
   `Seal ${name}? Nobody will reveal it again, not even you. Only a new value can make it revealable.`;
 
-type AddKind = VaultEntryClass | "template";
+type AddKind = VaultEntryClass | "template" | "identity";
 const KIND_ITEMS: ReadonlyArray<{ readonly value: AddKind; readonly label: string }> = [
   { value: "secret", label: "Secret" },
   { value: "variable", label: "Variable" },
   { value: "template", label: "Template" },
 ];
+/** Vaults ticket 07: a token the Hub signs for each Thread; the Owner's alone. */
+const OWNER_KIND_ITEMS: ReadonlyArray<{ readonly value: AddKind; readonly label: string }> = [
+  ...KIND_ITEMS,
+  { value: "identity", label: "Workload identity" },
+];
+const IDENTITY_HINT =
+  "A token the Hub signs for each Thread, for this audience only: delivered as a file the Hub refreshes before it expires, never shown. The system that verifies it trusts this Hub's issuer.";
 
 const DELIVERY_ITEMS: ReadonlyArray<{
   readonly value: VaultEntryDelivery;
@@ -119,6 +129,17 @@ const templateProblem = (text: string, entries: ReadonlyArray<VaultEntry>): stri
     const entry = byName.get(name);
     if (entry === undefined) return `${name} is not an entry of this Vault.`;
     if (entry.kind === "template") return `${name} is a template: a template never names another.`;
+    if (
+      entry.kind === "identity" &&
+      parsed.parts.some(
+        (part) =>
+          part._tag === "ref" &&
+          part.name === name &&
+          !(part.filters.length === 1 && part.filters[0] === "path"),
+      )
+    ) {
+      return `${name} is a workload identity token: use {{ ${name} | path }}, never the token.`;
+    }
     if (paths.has(name) && entry.delivery !== "file") {
       return `{{ ${name} | path }} takes ${name}'s file: deliver ${name} as a file.`;
     }
@@ -592,7 +613,14 @@ function VaultSection(props: {
                     name,
                     ...(options.kind === "template"
                       ? { template: { text: value } }
-                      : { value: Redacted.make(value), class: options.kind }),
+                      : options.kind === "identity"
+                        ? {
+                            identity: {
+                              audience: value,
+                              ttlSeconds: options.ttlSeconds ?? IDENTITY_TTL_DEFAULT_SECONDS,
+                            },
+                          }
+                        : { value: Redacted.make(value), class: options.kind }),
                     ...(options.kind === "secret" && options.allowReveal
                       ? { allowReveal: true }
                       : {}),
@@ -720,6 +748,13 @@ function EntryRow(props: {
           ) : (
             <Badge variant="outline">Template</Badge>
           )
+        ) : entry.kind === "identity" ? (
+          <Badge variant="outline">
+            Workload identity: {entry.identity?.audience ?? ""}
+            {entry.identity === undefined
+              ? ""
+              : ` (${Math.round(entry.identity.ttlSeconds / 60)} min)`}
+          </Badge>
         ) : null}
         {entry.delivery === "file" ? <Badge variant="outline">File</Badge> : null}
         {entry.delivery === "none" ? <Badge variant="outline">Not delivered</Badge> : null}
@@ -729,7 +764,9 @@ function EntryRow(props: {
           <span className="text-xs text-muted-foreground">{entry.description}</span>
         )}
         <span className="ms-auto flex flex-wrap gap-1">
-          {props.canEdit && (entry.kind !== "provider" || props.isOwner) ? (
+          {props.canEdit &&
+          entry.kind !== "identity" &&
+          (entry.kind !== "provider" || props.isOwner) ? (
             <span className="w-48">
               <DeliverySelect
                 label={`Delivery of ${entry.name}`}
@@ -1007,6 +1044,8 @@ function AddSecretForm(props: {
       readonly allowReveal: boolean;
       readonly delivery: VaultEntryDelivery;
       readonly confirmDangerous: boolean;
+      /** A workload identity token's lifetime. */
+      readonly ttlSeconds?: number;
     },
   ) => Promise<boolean>;
 }) {
@@ -1017,19 +1056,27 @@ function AddSecretForm(props: {
   const [allowReveal, setAllowReveal] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
+  const [minutes, setMinutes] = useState(String(IDENTITY_TTL_DEFAULT_SECONDS / 60));
   const isVariable = kind === "variable";
   const isTemplate = kind === "template";
+  const isIdentity = kind === "identity";
+  const ttlSeconds = Math.round(Number(minutes) * 60);
+  const ttlValid =
+    Number.isFinite(ttlSeconds) &&
+    ttlSeconds >= IDENTITY_TTL_MIN_SECONDS &&
+    ttlSeconds <= IDENTITY_TTL_MAX_SECONDS;
   const hint = nameHint(name, props.isOwner);
   const dangerous = isDangerous(name);
   // A template's text holds names only: checked and previewed here, as `[NAME]`, never a value.
   const parsed = isTemplate && value.length > 0 ? parseTemplate(value) : null;
   const problem = isTemplate && value.length > 0 ? templateProblem(value, props.entries) : null;
   const preview = parsed?._tag === "parsed" ? previewTemplate(parsed.parts) : null;
-  const chosenDelivery = isTemplate && delivery === "none" ? "env" : delivery;
+  const chosenDelivery = isIdentity ? "file" : isTemplate && delivery === "none" ? "env" : delivery;
   const blocked =
     secretNameRisk(name) === "invalid" ||
     secretNameRisk(name) === "gateway" ||
     problem !== null ||
+    (isIdentity && !ttlValid) ||
     (dangerous && (!props.isOwner || !confirmed));
   return (
     <form
@@ -1045,6 +1092,7 @@ function AddSecretForm(props: {
             allowReveal: kind === "secret" && allowReveal,
             delivery: chosenDelivery,
             confirmDangerous: dangerous && confirmed,
+            ...(isIdentity ? { ttlSeconds } : {}),
           })
           .then((saved) => {
             // A failed save keeps what was typed.
@@ -1063,17 +1111,19 @@ function AddSecretForm(props: {
           Kind
           <Select
             disabled={pending}
-            items={KIND_ITEMS}
+            items={props.isOwner ? OWNER_KIND_ITEMS : KIND_ITEMS}
             value={kind}
             onValueChange={(next) =>
-              setKind(next === "variable" || next === "template" ? next : "secret")
+              setKind(
+                next === "variable" || next === "template" || next === "identity" ? next : "secret",
+              )
             }
           >
             <SelectTrigger aria-label="Kind">
               <SelectValue />
             </SelectTrigger>
             <SelectPopup>
-              {KIND_ITEMS.map((item) => (
+              {(props.isOwner ? OWNER_KIND_ITEMS : KIND_ITEMS).map((item) => (
                 <SelectItem key={item.value} value={item.value}>
                   {item.label}
                 </SelectItem>
@@ -1093,7 +1143,34 @@ function AddSecretForm(props: {
             onChange={(event) => setName(event.currentTarget.value.toUpperCase())}
           />
         </label>
-        {isTemplate ? null : (
+        {isIdentity ? (
+          <>
+            <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
+              Audience
+              <Input
+                aria-label="Audience"
+                nativeInput
+                disabled={pending}
+                maxLength={256}
+                spellCheck={false}
+                placeholder="https://kubernetes.default.svc"
+                value={value}
+                onChange={(event) => setValue(event.currentTarget.value.trim())}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium sm:w-28">
+              Lifetime (min)
+              <Input
+                aria-label="Lifetime in minutes"
+                nativeInput
+                disabled={pending}
+                inputMode="numeric"
+                value={minutes}
+                onChange={(event) => setMinutes(event.currentTarget.value)}
+              />
+            </label>
+          </>
+        ) : isTemplate ? null : (
           <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
             Value
             <Input
@@ -1111,8 +1188,8 @@ function AddSecretForm(props: {
           <DeliverySelect
             label="Delivery"
             value={chosenDelivery}
-            disabled={pending}
-            allowNone={!isTemplate}
+            disabled={pending || isIdentity}
+            allowNone={!isTemplate && !isIdentity}
             onChange={setDelivery}
           />
         </label>
@@ -1121,7 +1198,13 @@ function AddSecretForm(props: {
           size="sm"
           type="submit"
         >
-          {isTemplate ? "Add template" : isVariable ? "Add variable" : "Add secret"}
+          {isIdentity
+            ? "Add identity"
+            : isTemplate
+              ? "Add template"
+              : isVariable
+                ? "Add variable"
+                : "Add secret"}
         </Button>
       </div>
       {isTemplate ? (
@@ -1158,7 +1241,12 @@ function AddSecretForm(props: {
           )}
         </div>
       ) : null}
-      {DELIVERY_HINT[chosenDelivery].length === 0 ? null : (
+      {isIdentity ? (
+        <span className="text-xs text-muted-foreground">
+          {IDENTITY_HINT}
+          {ttlValid ? "" : " Its lifetime is 1 to 60 minutes."}
+        </span>
+      ) : DELIVERY_HINT[chosenDelivery].length === 0 ? null : (
         <span className="text-xs text-muted-foreground">{DELIVERY_HINT[chosenDelivery]}</span>
       )}
       {kind !== "secret" ? null : (

@@ -546,6 +546,95 @@ with (`auth`) and the path prefixes allowed. The Owner decides which Vaults may 
     `T3CODE_TEST_LIVE_OPENBAO=1` and `bao` on the PATH;
   - a run on k3s with Kubernetes auth is left for a person (ticket 18).
 
+## Workload identity («Variables, Secretos sellados y Secret providers», ticket 07, ADR 0009)
+
+The Hub is an OIDC issuer for the work it runs (`apps/server/src/identity/`).
+
+- **Issuer** (`IdentityIssuer.ts`):
+  - `T3CODE_IDENTITY_ISSUER`, else `T3CODE_PUBLIC_URL`'s origin;
+  - an origin only: `https://` (`http://` to loopback), no path, user, query or fragment;
+  - never a request's Host header;
+  - without one, identity is off: an identity entry is refused (`identity-no-issuer`), and a
+    delivery or a `hub_identity` sign-in gets no token.
+- **Keys** (`IdentityKeys.ts`):
+  - ES256 (P-256), `kid` the RFC 7638 thumbprint;
+  - the private JWK is sealed in `ServerSecretStore` as `identity-signing-<kid>`;
+  - the public half and the schedule live in `identity_signing_keys` (migration 123): `publish_at`,
+    `sign_from`, `sign_until` (30 days), `retire_at` (7 days after);
+  - `maintain` drops retired rows and rows whose sealed half is gone, makes a key when none signs,
+    and makes the next one 7 days before the current one ends. It runs before every signature and
+    publication, and hourly once any key exists. Keys are made lazily: none until identity is used.
+  - **Never exported:** no door or command returns them, and `MasterKeyFile.importKey` deletes the
+    `identity-signing-*` seals (same key or not), so a restored Hub makes new keys.
+  - Residual risk: an old database copy with its master-key backup opens the keys of that time,
+    each valid at most 37 days.
+- **Public documents** (`identity/http.ts`, raw routes in `http.ts`):
+  - `GET /.well-known/openid-configuration` and `GET /.well-known/jwks.json`;
+  - the JWKS is built from an allow-list of members (`kty crv x y kid alg use`); never `d`;
+  - `Cache-Control: public, max-age=300`;
+  - while `IdentityTokens.inUse` is false (no `identity` entry, and no provider whose definition's
+    `hubIdentity` answers, question 12), the route hands the request to `handleStaticAndDevRequest`,
+    the same handler as any unknown path, so the answer is identical (`http.test.ts` compares them).
+  - Listed in `DoorRules` (`RAW_ROUTE_RULES`, `AMBIENT_COOKIE_RULES`) and `MaskedPaths`.
+- **Tokens** (`IdentityTokens.ts`):
+  - `iss`, `aud` (one string, never a list), `iat`, `nbf = iat − 60 s`, `exp`, `jti`;
+  - a Thread's token: `sub = t3:space:<space id>:project:<project id|->:user:<login>`, plus
+    `username`, `groups: ["t3:space:<space id>"]` and the facts read from the rows (`users`,
+    `spaces`, `space_memberships`, the Thread's projection, `sandboxes` and
+    `dedicated_sandbox_credentials` for `environment_kind`). Never a Vault or entry name.
+  - The Hub's token: `sub = t3:hub:<installation>`, `scope` the Provider scope's id or `direct`,
+    5 minutes.
+  - The audience is only what the Owner saved (the entry or the provider's config). Refused: empty,
+    more than 256 characters, spaces or commas, or an origin of the Hub itself.
+  - TTL 60 s to 1 h (default 10 min). A token is reused while more than a third of its life is
+    left (per Thread, User, machine, entry, audience and TTL; for the Hub, per audience and scope).
+  - Each new token is audited as `identity.issue` with `aud`, `sub`, `jti`, `exp` and `thread`,
+    actor `system`, never the token.
+- **Entries:**
+  - `vault_entries.kind = 'identity'` with `identity_audience` and `identity_ttl_seconds`. The CHECK
+    makes it a sealed Secret with no value, delivered as a `file`.
+  - `vault.identityEntry` is Owner-only, also for an Admin's own Organization Vault, and for
+    edits and deletes too.
+  - It is never linked or copied out of the Main vault. A template names it only as
+    `{{ NAME | path }}`: refused at save, and broken (`EffectiveVaults.templateInputs`) if
+    written otherwise.
+- **Delivery** (`SecretDelivery`):
+  - the planned variable's `valueId` is `identity:<HMAC(entry, audience, TTL)>`, never a token, so
+    a new token does not change the fingerprint;
+  - `resolve` signs (or reuses) the token, seals it as `delivered:<HMAC>` and remembers it for
+    masking, then sends it as a file;
+  - with no issuer or key, the whole start fails (`SecretDeliveryError` `identity`);
+  - contract < 16 or no folder in memory fails closed, as for any file (ticket 05).
+- **Refresh:**
+  - each resolve with identity files keeps the folder (machine, `filesFolder`, Thread facts,
+    entries) in memory, due at two thirds of the shortest token's life;
+  - `IdentityRefresher` calls `SecretDelivery.refreshIdentityFiles` every 10 s with a sender: the
+    Hub machine's `ThreadSecretFiles.refresh`, or `secrets.refreshFiles` over a joined machine's
+    socket. It is `refreshFiles`' first caller.
+  - A due folder is checked against the Thread's effective set (entry, audience and TTL still
+    there). Its tokens are re-signed, sealed and remembered for masking before they are sent, and
+    only the identity files are rewritten.
+  - `not-held` or loss of reach forgets the folder; a failure is retried 30 s later.
+  - The folder is per Thread root and User (ticket 05), so it holds the last resolved Thread's
+    token.
+- **`hub_identity`:**
+  - `SecretProviderDefinition.hubIdentity(config)` names the audience. `ProviderReads` signs the
+    Hub's token for the group's scope (null: «Direct») and puts it in the config's `identityToken`
+    for that driver call alone, «Test connection» included.
+  - OpenBao's `hub_identity` method logs in at `auth/<authMount ?? "jwt">/login` with
+    `{ role, jwt }`. Its session identity excludes `identityToken`, so a newer JWT is the same
+    sign-in.
+  - A saved `identityToken` is refused by the driver's `configProblem`.
+- **Tests:**
+  - `IdentityTokens.test.ts`: `jose` against the served JWKS (wrong `aud`, `exp`, `nbf`, unknown
+    `kid`, a 45 s slow clock), rotation with `TestClock`, raw JSON without private members,
+    regeneration after a restore, reuse, `inUse`, and no token in logs or audit;
+  - `http.test.ts`: identical answer while unused, and the issuer whatever Host is sent;
+  - `ServerSecretStore.encryption.test.ts`: the import drops the seals;
+  - `Vaults.test.ts`, `SecretDelivery.test.ts`, `ProviderReads.test.ts`,
+    `IdentityRefresher.test.ts`, and the OpenBao driver tests;
+  - a live k3s run is left for a person (ticket 18).
+
 ## Allowing Vaults (spec 5, ticket 03)
 
 Which Vaults may reach a Space or a User is one rule, `vaults/VaultReach.ts`, used by the doors

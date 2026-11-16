@@ -157,3 +157,13 @@ Ticket 18 (de Darwin) gana en su checklist:
 - `T3CODE_IDENTITY_ISSUER` o `T3CODE_PUBLIC_URL` en el Deployment del Hub;
 - el autenticador `jwt` de k3s apuntando a la URL de discovery interna;
 - el kubeconfig con `tokenFile: {{ KUBE_TOKEN | path }}`.
+
+## Cambios al construirlo
+
+- **Sin slugs:** ni los Spaces ni los Projects tienen slug en la base de datos. Los claims usan ids estables: `sub = t3:space:<id>:project:<id|->:user:<login>` y `groups = ["t3:space:<id>"]`. No hay `t3:org:`, porque una Organization es un Space. Además hay `space_name` para leerlo.
+- **El emisor es un origen sin ruta:** el discovery vive en `/.well-known` del origen, como pide OIDC para un emisor sin ruta.
+- **Rutas:** son rutas raw explícitas (así `DoorRules` las ve). Sin uso, llaman al mismo handler estático que una ruta desconocida.
+- **El token del Hub** (`hub_identity`) se reutiliza mientras le queda un tercio de vida, como el de un Thread, para no escribir `identity.issue` en cada lectura.
+- **El refresco** mira cada 10 s; los tokens viven al menos 60 s.
+- **`audience` vuelve al config de OpenBao,** solo para `hub_identity` (el 04 la había quitado).
+- **Web:** «Workload identity» en el formulario de entradas, solo para el Owner, y «This Hub's own identity (JWT)» en el de OpenBao.

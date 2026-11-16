@@ -506,6 +506,107 @@ sealed Secret, never revealed. If one of its entries cannot be read, the Thread'
 turn does not start. Its text and each long line of a file (a certificate, a key)
 are hidden in the Thread's history like any Secret.
 
+### Workload identity: tokens instead of stored credentials
+
+The Hub can sign a short-lived token for each Thread. Kubernetes, OpenBao or
+HashiCorp Vault, AWS, Google Cloud and Azure can trust the Hub instead of a
+credential you store for a Space. Their own logs then show which User and Thread
+acted.
+
+1. **Give the Hub an issuer.** Set `T3CODE_IDENTITY_ISSUER` to the Hub's public
+   origin, for example `https://hub.example.com` (`https://`, no path). Without
+   it the Hub uses `T3CODE_PUBLIC_URL`. With neither, workload identity is off and
+   the Hub refuses identity entries. The issuer never comes from the address a
+   request names.
+2. **Verifiers fetch its public keys** from
+   `<issuer>/.well-known/openid-configuration` and
+   `<issuer>/.well-known/jwks.json`. These answer without a sign-in, so an access
+   proxy in front of the Hub must let `/.well-known` through. They hold public keys
+   only. Until an identity entry or an OpenBao provider using the Hub's identity
+   exists, they answer like any unknown page.
+
+   A verifier inside your network can fetch them from the Hub's internal
+   address instead, such as Kubernetes' `issuer.discoveryURL` or OpenBao's
+   `oidc_discovery_url`. Note that address down as
+   `T3CODE_IDENTITY_DISCOVERY_URL_INTERNAL` in your setup. The Hub itself does not
+   read it.
+
+3. **Add an entry.** In a Vault, the Owner picks **Kind → Workload identity**, an
+   **Audience** (what the verifier expects in `aud`) and a **Lifetime** (10 minutes
+   unless you choose 1 to 60). Only the Owner adds, changes or deletes these. The
+   entry is always a sealed **File**: the variable holds the token's path, and the
+   Hub writes a new token there before the old one expires, while the Thread runs.
+   A template uses it only as `{{ NAME | path }}`.
+
+The token's claims come from the Thread, never from a Vault:
+
+- `sub` is `t3:space:<space id>:project:<project id or ->:user:<login name>`;
+- `username` is the login name;
+- `groups` is `["t3:space:<space id>"]`;
+- it also carries `installation`, `user_id`, `space_id`, `space_name`, `organization`,
+  `project_id`, `thread_id`, `root_thread_id`, `environment_id`, `environment_kind`
+  (`hub`, `sandbox`, `dedicated` or `personal`) and `role`.
+
+Each token is audited as `identity.issue` (its audience, subject, id and expiry,
+never the token).
+
+The signing keys never leave the Hub. They rotate every 30 days: the next one is
+published 7 days early and the old one stays published 7 days after. Restoring
+the master key (`t3 secrets key import`) makes new keys, so verifiers pick up the
+new keys on their own.
+
+**Kubernetes** (`--authentication-config`, API server 1.30 or later):
+
+```yaml
+apiVersion: apiserver.config.k8s.io/v1beta1
+kind: AuthenticationConfiguration
+jwt:
+  - issuer:
+      url: https://hub.example.com
+      discoveryURL: http://t3-hub.t3.svc:3773/.well-known/openid-configuration
+      audiences: ["kubernetes"]
+    claimMappings:
+      username: { claim: username, prefix: "t3:" }
+      groups: { claim: groups, prefix: "" }
+    claimValidationRules:
+      - expression: "claims.environment_kind in ['sandbox', 'dedicated']"
+```
+
+Bind each Space's group (`t3:space:<space id>`) to a Role with a RoleBinding. A
+Vault entry with audience `kubernetes`, plus a kubeconfig template with
+`tokenFile: {{ KUBE_TOKEN | path }}`, gives the Thread `kubectl`.
+
+**OpenBao or HashiCorp Vault** (JWT auth):
+
+```sh
+bao auth enable jwt
+bao write auth/jwt/config oidc_discovery_url=https://hub.example.com bound_issuer=https://hub.example.com
+bao write auth/jwt/role/acme role_type=jwt user_claim=sub bound_audiences=vault \
+  bound_claims='{"space_id":"<space id>"}' token_policies=acme-read token_ttl=10m
+```
+
+A Thread then signs in with `bao write auth/jwt/login role=acme jwt=@$BAO_TOKEN_FILE`.
+The Hub can sign in this way too. Pick **This Hub's own identity (JWT)** as the OpenBao
+provider's sign-in, with the role and audience. Its tokens have `sub` set to
+`t3:hub:<installation>` and `scope` set to the Provider scope's id (or `direct`), so a
+role can be bound per scope with `bound_claims`. No credential is stored for it.
+
+**AWS:** create an IAM OIDC identity provider for the issuer with the audience you
+chose. Put `AWS_ROLE_ARN` in a Variable and the identity entry in
+`AWS_WEB_IDENTITY_TOKEN_FILE`, which takes a path, so the SDKs assume the role.
+
+**Google Cloud:** create a workload identity pool provider for the issuer. A
+template entry renders the `external_account` JSON with
+`"credential_source": { "file": "{{ GCP_TOKEN | path }}" }`, delivered as a
+**File** in `GOOGLE_APPLICATION_CREDENTIALS`.
+
+**Azure:** add a federated credential to an app registration for the issuer and
+`sub`. Put `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` in Variables and the identity
+entry in `AZURE_FEDERATED_TOKEN_FILE`.
+
+Anyone who can read a Thread's files on a shared Sandbox can read its token while
+it lives. Keep lifetimes short.
+
 ### Invite people
 
 To add someone to an organization, switch to it in the Space selector, choose

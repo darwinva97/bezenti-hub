@@ -106,6 +106,14 @@ export const INSTALLATION_RPC_METHODS = [
   WS_METHODS.aiAccountsLoginComplete,
   WS_METHODS.aiAccountsImportVertex,
   WS_METHODS.aiAccountsImportCliproxy,
+  // Secret providers' scopes, «Test connection» and what deleting one breaks (Vaults ticket 03):
+  // the Owner's, as the providers themselves (`server.updateSettings`).
+  WS_METHODS.secretProvidersTest,
+  WS_METHODS.secretProvidersImpact,
+  WS_METHODS.secretProvidersScopesList,
+  WS_METHODS.secretProvidersScopesPut,
+  WS_METHODS.secretProvidersScopesDelete,
+  WS_METHODS.secretProvidersScopesAllow,
 ] as const;
 export type InstallationRpcMethod = (typeof INSTALLATION_RPC_METHODS)[number];
 

@@ -44,6 +44,8 @@ import * as VaultsHttp from "../vaults/http.ts";
 import * as Vaults from "../vaults/Vaults.ts";
 import * as EffectiveVaults from "../vaults/EffectiveVaults.ts";
 import * as ProviderReads from "../vaults/ProviderReads.ts";
+import * as SecretProviderScopes from "../vaults/SecretProviderScopes.ts";
+import { scopeAllows } from "../vaults/providerScopeRules.ts";
 import * as SecretDelivery from "../vaults/SecretDelivery.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
 import * as MasterKeyBackup from "./MasterKeyBackup.ts";
@@ -259,6 +261,7 @@ const makeLayerServices = (
     Layer.provideMerge(
       Layer.mergeAll(
         Vaults.layer,
+        SecretProviderScopes.layer,
         // Delivery, and the masking of what was delivered (spec 5 ticket 05), under everything.
         SecretDelivery.layer.pipe(
           Layer.provideMerge(SecretMasker.layer),
@@ -271,7 +274,18 @@ const makeLayerServices = (
         Layer.provideMerge(
           providerReads === undefined
             ? ProviderReads.layer.pipe(Layer.provide(ServerSettings.layerTest()))
-            : Layer.effect(ProviderReads.ProviderReads, ProviderReads.make(providerReads)),
+            : Layer.effect(
+                ProviderReads.ProviderReads,
+                Effect.gen(function* () {
+                  // The scopes' rules as on the Hub, over the test's database (ticket 03).
+                  const sql = yield* SqlClient.SqlClient;
+                  return yield* ProviderReads.make({
+                    scopeAllows: (ref) =>
+                      scopeAllows(sql, ref).pipe(Effect.orElseSucceed(() => false)),
+                    ...providerReads,
+                  });
+                }),
+              ),
         ),
       ),
     ),

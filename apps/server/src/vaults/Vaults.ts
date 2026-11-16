@@ -30,6 +30,10 @@ import {
   type VaultErrorReason,
   VaultId,
   type VaultEntryClass,
+  type VaultProviderScopes,
+  type VaultProviderScopesInput,
+  ProviderScopeId,
+  type SecretProviderId,
   looksLikeCredential,
   type VaultListResult,
   type VaultSummary,
@@ -56,12 +60,13 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
-import type * as AccessPolicy from "../auth/AccessPolicy.ts";
+import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { projectSpaceSql } from "../spaces/SpaceDirectory.ts";
 import * as ProviderReads from "./ProviderReads.ts";
+import { pathsOf } from "./providerScopeRules.ts";
 import * as ThreadSecretValues from "./ThreadSecretValues.ts";
 import * as VaultKeyCheck from "./VaultKeyCheck.ts";
 import * as VaultReach from "./VaultReach.ts";
@@ -132,6 +137,13 @@ export class Vaults extends Context.Service<
     readonly saveTargets: (input: {
       readonly threadId: ThreadId;
     }) => Effect.Effect<ReadonlyArray<VaultSummary>, VaultError>;
+    /**
+     * `vaults.providerScopes` (ticket 03): for whoever edits the Vault, the Provider scopes allowed
+     * to it, and for the Owner also each provider «Direct». Never a credential or a scope's auth.
+     */
+    readonly providerScopes: (
+      input: VaultProviderScopesInput,
+    ) => Effect.Effect<VaultProviderScopes, VaultError>;
   }
 >()("t3/vaults/Vaults") {}
 
@@ -178,6 +190,9 @@ interface EntryRow {
   /** A Provider entry's provider (a key of `settings.secretProviders`) and reference. */
   readonly providerId: string | null;
   readonly providerReference: string | null;
+  /** Its Provider scope (ticket 03), and that scope's label; null: the Owner's «Direct». */
+  readonly providerScopeId: string | null;
+  readonly scopeLabel: string | null;
 }
 
 /** An entry's class: a link's original's; a broken link's, a Secret. */
@@ -210,7 +225,8 @@ const ENTRY_COLUMNS = `
   e.updated_at AS "updatedAt", e.updated_by AS "updatedBy",
   o.name AS "linkedName", o.unmasked AS "linkedUnmasked", o.value_id AS "linkedValueId",
   o.class AS "linkedClass", o.revealable AS "linkedRevealable",
-  e.provider_id AS "providerId", e.provider_reference AS "providerReference"
+  e.provider_id AS "providerId", e.provider_reference AS "providerReference",
+  e.provider_scope_id AS "providerScopeId", s.label AS "scopeLabel"
 `;
 
 /** UTF-8 text without NUL, not empty, at most SECRET_VALUE_MAX_BYTES. Says why, never what. */
@@ -345,6 +361,7 @@ const entryOf = (
             label: provider?.label ?? null,
             // Where it reads is its editors' to know, as a link's original is the Owner's.
             reference: canEdit ? row.providerReference : null,
+            scope: row.providerScopeId === null ? null : (row.scopeLabel ?? null),
           },
         }
       : {}),
@@ -387,6 +404,7 @@ const unavailable = Vaults.of({
   setSpaceDefaults: refuse,
   setProjectChoice: refuse,
   saveTargets: refuse,
+  providerScopes: refuse,
 });
 
 const invalidName = (name: string) =>
@@ -403,6 +421,21 @@ const make = Effect.gen(function* () {
     providerId === null || Option.isNone(providerReads)
       ? Effect.succeed(undefined)
       : providerReads.value.status(providerId);
+  /**
+   * A Provider entry's provider as Settings says, broken too when its scope (ticket 03) no
+   * longer allows it in this Vault: removed, narrowed or taken back. Never a read.
+   */
+  const providerStatusOf = Effect.fn("Vaults.providerStatusOf")(function* (row: EntryRow) {
+    const status = yield* providerStatus(row.providerId);
+    if (status === undefined || status.broken || Option.isNone(providerReads)) return status;
+    const allowed = yield* providerReads.value.allowed({
+      providerId: row.providerId ?? "",
+      scopeId: row.providerScopeId,
+      reference: row.providerReference ?? "",
+      vaultId: row.vaultId,
+    });
+    return allowed ? status : { ...status, broken: true };
+  });
   const random = yield* SecureRandom.SecureRandom;
   const path = yield* Path.Path;
   const { baseDir } = yield* ServerConfig.ServerConfig;
@@ -601,6 +634,7 @@ const make = Effect.gen(function* () {
   const ENTRY_FROM = `
     FROM vault_entries e
     LEFT JOIN vault_entries o ON o.entry_id = e.linked_entry_id AND o.vault_id = '${MAIN_VAULT_ID}'
+    LEFT JOIN secret_provider_scopes s ON s.scope_id = e.provider_scope_id
   `;
 
   const entriesOf = (vaultId: string) =>
@@ -730,7 +764,7 @@ const make = Effect.gen(function* () {
         readsVariables && classOf(row) === "variable" && valueIdOf(row) !== null
           ? readValue(valueIdOf(row)).pipe(Effect.orElseSucceed(() => undefined))
           : Effect.succeed(undefined),
-        providerStatus(row.providerId),
+        providerStatusOf(row),
       ]).pipe(Effect.map(([value, provider]) => entryOf(row, seesMain, canEdit, value, provider))),
     );
   });
@@ -764,6 +798,51 @@ const make = Effect.gen(function* () {
       .map((row) => summaryOf(row, known, can));
     return { vaults };
   }).pipe(Effect.withSpan("Vaults.list"));
+
+  const providerScopes = Effect.fn("Vaults.providerScopes")(function* (
+    input: VaultProviderScopesInput,
+  ) {
+    const { can, row } = yield* authorizeVault(input.vaultId, "vault.edit");
+    if (Option.isNone(providerReads)) return { scopes: [], direct: [] };
+    const readable = new Map(
+      (yield* providerReads.value.providers).map((provider) => [provider.providerId, provider]),
+    );
+    const rows = yield* sql<{
+      readonly scopeId: string;
+      readonly providerId: string;
+      readonly label: string;
+      readonly paths: string;
+    }>`
+      SELECT s.scope_id AS "scopeId", s.provider_id AS "providerId", s.label, s.allowed_paths_json AS "paths"
+      FROM secret_provider_scopes s
+      JOIN vault_provider_scopes a ON a.scope_id = s.scope_id AND a.vault_id = ${row.vaultId}
+      ORDER BY s.label
+    `.pipe(Effect.catch(storage("read the Vault's Provider scopes")));
+    return {
+      scopes: rows.flatMap((scope) => {
+        const provider = readable.get(scope.providerId);
+        return provider === undefined
+          ? []
+          : [
+              {
+                id: ProviderScopeId.make(scope.scopeId),
+                label: scope.label,
+                providerId: scope.providerId as SecretProviderId,
+                providerLabel: provider.label,
+                allowedPaths: pathsOf(scope.paths),
+                referencePlaceholder: provider.referencePlaceholder,
+              },
+            ];
+      }),
+      direct: can("secretProvider.manage", AccessPolicy.installation)
+        ? [...readable.values()].map((provider) => ({
+            providerId: provider.providerId as SecretProviderId,
+            providerLabel: provider.label,
+            referencePlaceholder: provider.referencePlaceholder,
+          }))
+        : [],
+    } satisfies VaultProviderScopes;
+  });
 
   const saveTargets = Effect.fn("Vaults.saveTargets")(function* (input: {
     readonly threadId: ThreadId;
@@ -954,8 +1033,13 @@ const make = Effect.gen(function* () {
   ) {
     const { userId, can, row, resource, dangerous, existing } = context;
     if (!can("vault.providerEntry", resource)) {
-      return yield* fail("forbidden", "Only the Owner adds or changes a Provider entry.");
+      return yield* fail(
+        "forbidden",
+        "Only the Owner and the Organization's Admins add Provider entries.",
+      );
     }
+    // «Direct» (no scope) is the Owner's own access; anyone else reads through a scope.
+    const isOwner = can("secretProvider.manage", AccessPolicy.installation);
     if (existing !== undefined && existing.kind !== "provider") {
       return yield* fail(
         "invalid-value",
@@ -969,18 +1053,33 @@ const make = Effect.gen(function* () {
       );
     }
     const source =
-      input.provider ??
-      (existing === undefined
-        ? undefined
-        : { providerId: existing.providerId ?? "", reference: existing.providerReference ?? "" });
+      input.provider === undefined
+        ? existing === undefined
+          ? undefined
+          : {
+              providerId: existing.providerId ?? "",
+              reference: existing.providerReference ?? "",
+              scopeId: existing.providerScopeId,
+            }
+        : { ...input.provider, scopeId: input.provider.scopeId ?? null };
     if (source === undefined) return yield* fail("invalid-value", "Name the provider to read.");
-    if (input.provider !== undefined) {
+    if (
+      !isOwner &&
+      (source.scopeId === null || (existing !== undefined && existing.providerScopeId === null))
+    ) {
+      return yield* fail(
+        "forbidden",
+        "Only the Owner reads a provider directly: choose a Provider scope allowed to this Vault.",
+      );
+    }
+    if (input.provider !== undefined || !isOwner) {
       const problem = Option.isNone(providerReads)
         ? "Secret providers are read only on a Hub."
         : yield* providerReads.value.referenceProblem({
             providerId: source.providerId,
-            scopeId: null,
+            scopeId: source.scopeId,
             reference: source.reference,
+            vaultId: row.vaultId,
           });
       if (problem !== undefined) return yield* fail("invalid-reference", problem);
     }
@@ -995,11 +1094,11 @@ const make = Effect.gen(function* () {
             yield* stillWritable(row.vaultId);
             yield* sql`
               INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id,
-                unmasked, class, revealable, provider_id, provider_reference, version, created_at,
-                updated_at, updated_by)
+                unmasked, class, revealable, provider_id, provider_reference, provider_scope_id,
+                version, created_at, updated_at, updated_by)
               VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null},
-                'provider', NULL, 0, 'secret', 0, ${source.providerId}, ${source.reference}, 1,
-                ${at}, ${at}, ${userId})
+                'provider', NULL, 0, 'secret', 0, ${source.providerId}, ${source.reference},
+                ${source.scopeId}, 1, ${at}, ${at}, ${userId})
             `;
             yield* recordEdit({
               userId,
@@ -1020,7 +1119,9 @@ const make = Effect.gen(function* () {
     if (renamed) yield* nameTaken(row.vaultId, input.name, existing.entryId);
     const described = input.description !== undefined && input.description !== existing.description;
     const moved =
-      source.providerId !== existing.providerId || source.reference !== existing.providerReference;
+      source.providerId !== existing.providerId ||
+      source.reference !== existing.providerReference ||
+      source.scopeId !== existing.providerScopeId;
     if (!renamed && !described && !moved) {
       return yield* result(can, resource, row.vaultId, existing.entryId, []);
     }
@@ -1034,6 +1135,7 @@ const make = Effect.gen(function* () {
               description = ${input.description === undefined ? existing.description : input.description},
               provider_id = ${source.providerId},
               provider_reference = ${source.reference},
+              provider_scope_id = ${source.scopeId},
               version = version + ${moved ? 1 : 0},
               updated_at = ${at},
               updated_by = ${userId}
@@ -1724,6 +1826,7 @@ const make = Effect.gen(function* () {
     setSpaceDefaults,
     setProjectChoice,
     saveTargets,
+    providerScopes,
     authorizeReveal,
     create,
     update,

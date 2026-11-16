@@ -194,8 +194,13 @@ export type Action =
   | "vault.view"
   /** Read its Variables' values: whoever sees it, Guests excepted (decision 4). */
   | "vault.readVariables"
-  /** Add or change a Provider entry (read from a Secret provider): the Owner (ticket 03: scopes). */
+  /**
+   * Add or change a Provider entry: whoever edits the Vault; an Admin only through a Provider
+   * scope allowed to it (Vaults decides), the Owner also «Direct».
+   */
   | "vault.providerEntry"
+  /** Secret providers' scopes and «Test connection», decided on the Installation: the Owner. */
+  | "secretProvider.manage"
   /** Add, replace, rename and delete a Vault's secrets without reading them. */
   | "vault.edit"
   /** Create, rename, describe, archive and delete a Vault: the Owner. */
@@ -570,7 +575,13 @@ const VAULT_ACTIONS: ReadonlySet<Action> = new Set([
  */
 const decideVault = (principal: Principal, action: Action, vault: VaultResource): Decision => {
   if (principal.isOwner) return allow;
-  if (action !== "vault.view" && action !== "vault.edit" && action !== "vault.readVariables") {
+  // Ticket 03: a Provider entry is an Admin's as an edit is (Vaults then asks for a scope).
+  if (
+    action !== "vault.view" &&
+    action !== "vault.edit" &&
+    action !== "vault.readVariables" &&
+    action !== "vault.providerEntry"
+  ) {
     return deny("owner-only");
   }
   if (vault.isMain) return deny("owner-only");
@@ -582,7 +593,7 @@ const decideVault = (principal: Principal, action: Action, vault: VaultResource)
   return inOrganization(
     principal,
     space,
-    action === "vault.edit"
+    action === "vault.edit" || action === "vault.providerEntry"
       ? ADMIN_ONLY
       : action === "vault.readVariables"
         ? ROLES_THAT_CREATE_PROJECTS
@@ -690,7 +701,11 @@ export function decide(principal: Principal, action: Action, resource: Resource)
       ? inOrganization(principal, resource, ADMIN_ONLY)
       : deny("owner-only");
   }
-  if (action === "environment.dedicate" || action === "masterKey.backup") {
+  if (
+    action === "environment.dedicate" ||
+    action === "masterKey.backup" ||
+    action === "secretProvider.manage"
+  ) {
     if (resource.kind !== "installation") return deny("wrong-resource");
     return principal.isOwner ? allow : deny("owner-only");
   }

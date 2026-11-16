@@ -63,6 +63,7 @@ import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as SecretResolver from "./secrets/SecretResolver.ts";
 import * as DeliveredValues from "./vaults/DeliveredValues.ts";
 import * as ProviderReads from "./vaults/ProviderReads.ts";
+import * as SecretProviderScopes from "./vaults/SecretProviderScopes.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -522,6 +523,11 @@ const layerAuth = Layer.mergeAll(
   SecretDelivery.layer.pipe(
     Layer.provideMerge(layerSecretMasking),
     Layer.provide(ProviderReads.layer),
+  ),
+  // Secret providers' scopes and «Test connection» (Vaults ticket 03), over the same reads.
+  SecretProviderScopes.layer.pipe(
+    Layer.provide(ProviderReads.layer),
+    Layer.provide(AuditLog.layer),
   ),
   // The Sandboxes' base image: built on this Hub, one build at a time.
   SandboxImage.layer,

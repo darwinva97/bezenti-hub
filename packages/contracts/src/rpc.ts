@@ -450,6 +450,22 @@ import {
   VaultThreadEnvironment,
   VaultThreadEnvironmentInput,
 } from "./vaults.ts";
+import {
+  ProviderScopeAllowInput,
+  ProviderScopeChangeResult,
+  ProviderScopeDeleteInput,
+  ProviderScopeDeleteResult,
+  ProviderScopePutInput,
+  ProviderScopesListInput,
+  ProviderScopesListResult,
+  SecretProviderImpact,
+  SecretProviderImpactInput,
+  SecretProviderScopeError,
+  SecretProviderTestInput,
+  SecretProviderTestResult,
+  VaultProviderScopes,
+  VaultProviderScopesInput,
+} from "./secretProviderScopes.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
@@ -603,6 +619,15 @@ export const WS_METHODS = {
   vaultsSpaceDefaultsSet: "vaults.spaceDefaults.set",
   vaultsProjectChoicesSet: "vaults.projectChoices.set",
   vaultsThreadEnvironment: "vaults.threadEnvironment",
+  // Vaults ticket 03: the Scopes a Vault's editors may add Provider entries through; Secret
+  // providers' scopes, «Test connection» and what deleting one breaks (the Owner's).
+  vaultsProviderScopes: "vaults.providerScopes",
+  secretProvidersTest: "secretProviders.test",
+  secretProvidersImpact: "secretProviders.impact",
+  secretProvidersScopesList: "secretProviders.scopes.list",
+  secretProvidersScopesPut: "secretProviders.scopes.put",
+  secretProvidersScopesDelete: "secretProviders.scopes.delete",
+  secretProvidersScopesAllow: "secretProviders.scopes.allow",
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
@@ -2187,6 +2212,46 @@ const WsVaultsThreadEnvironmentRpc = Rpc.make(WS_METHODS.vaultsThreadEnvironment
   error: VaultRpcError,
 });
 
+const WsVaultsProviderScopesRpc = Rpc.make(WS_METHODS.vaultsProviderScopes, {
+  payload: VaultProviderScopesInput,
+  success: VaultProviderScopes,
+  error: VaultRpcError,
+});
+const SecretProviderRpcError = Schema.Union([
+  SecretProviderScopeError,
+  EnvironmentAuthorizationError,
+]);
+const WsSecretProvidersTestRpc = Rpc.make(WS_METHODS.secretProvidersTest, {
+  payload: SecretProviderTestInput,
+  success: SecretProviderTestResult,
+  error: SecretProviderRpcError,
+});
+const WsSecretProvidersImpactRpc = Rpc.make(WS_METHODS.secretProvidersImpact, {
+  payload: SecretProviderImpactInput,
+  success: SecretProviderImpact,
+  error: SecretProviderRpcError,
+});
+const WsSecretProvidersScopesListRpc = Rpc.make(WS_METHODS.secretProvidersScopesList, {
+  payload: ProviderScopesListInput,
+  success: ProviderScopesListResult,
+  error: SecretProviderRpcError,
+});
+const WsSecretProvidersScopesPutRpc = Rpc.make(WS_METHODS.secretProvidersScopesPut, {
+  payload: ProviderScopePutInput,
+  success: ProviderScopeChangeResult,
+  error: SecretProviderRpcError,
+});
+const WsSecretProvidersScopesDeleteRpc = Rpc.make(WS_METHODS.secretProvidersScopesDelete, {
+  payload: ProviderScopeDeleteInput,
+  success: ProviderScopeDeleteResult,
+  error: SecretProviderRpcError,
+});
+const WsSecretProvidersScopesAllowRpc = Rpc.make(WS_METHODS.secretProvidersScopesAllow, {
+  payload: ProviderScopeAllowInput,
+  success: ProviderScopeChangeResult,
+  error: SecretProviderRpcError,
+});
+
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -2302,6 +2367,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsVaultsSpaceDefaultsSetRpc,
   WsVaultsProjectChoicesSetRpc,
   WsVaultsThreadEnvironmentRpc,
+  WsVaultsProviderScopesRpc,
+  WsSecretProvidersTestRpc,
+  WsSecretProvidersImpactRpc,
+  WsSecretProvidersScopesListRpc,
+  WsSecretProvidersScopesPutRpc,
+  WsSecretProvidersScopesDeleteRpc,
+  WsSecretProvidersScopesAllowRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

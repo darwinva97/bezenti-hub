@@ -3,7 +3,13 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { EnvironmentHttpApi, SecretEnv, VaultEntry, WsRpcGroup } from "@t3tools/contracts";
+import {
+  EnvironmentHttpApi,
+  SecretEnv,
+  VaultEntry,
+  WS_METHODS,
+  WsRpcGroup,
+} from "@t3tools/contracts";
 import type * as SchemaAST from "effect/SchemaAST";
 import { describe, expect, it } from "@effect/vitest";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -184,7 +190,7 @@ describe("every door of the Hub declares its rule", () => {
     const vaultRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
       rpc._tag.startsWith("vaults."),
     );
-    expect(vaultRpcs.length).toBe(14);
+    expect(vaultRpcs.length).toBe(15);
     expect(
       vaultRpcs
         .filter((rpc) => objectsWith(rpc.successSchema.ast, "value").has(VaultEntry.ast))
@@ -222,6 +228,44 @@ describe("every door of the Hub declares its rule", () => {
       const text = files.find((candidate) => candidate.file === file)?.text ?? "";
       expect(text, file).not.toMatch(/\.forThread\b/u);
     }
+  });
+
+  it("keeps Secret providers' scopes and «Test connection» the Owner's, and never a credential (Vaults ticket 03)", () => {
+    const ownerOnly = [
+      WS_METHODS.secretProvidersTest,
+      WS_METHODS.secretProvidersImpact,
+      WS_METHODS.secretProvidersScopesList,
+      WS_METHODS.secretProvidersScopesPut,
+      WS_METHODS.secretProvidersScopesDelete,
+      WS_METHODS.secretProvidersScopesAllow,
+    ];
+    // Installation RPCs: refused before any handler to anyone but an unlimited Owner's session.
+    for (const method of ownerOnly) {
+      expect(INSTALLATION_RPC_METHODS as ReadonlyArray<string>, method).toContain(method);
+      expect(spaceAccessForRpcMethod(method), method).toBe("installation");
+    }
+    // A Vault's usable scopes: decided by Vaults for the Vault's editors.
+    expect(spaceAccessForRpcMethod(WS_METHODS.vaultsProviderScopes)).toMatchObject({
+      unscoped: expect.stringContaining("Vaults"),
+    });
+    for (const rpc of WsRpcGroup.requests.values()) {
+      if (
+        !rpc._tag.startsWith("secretProviders.") &&
+        rpc._tag !== WS_METHODS.vaultsProviderScopes
+      ) {
+        continue;
+      }
+      for (const credential of ["value", "credential", "token", "password", "secret", "config"]) {
+        expect(successFields(rpc.successSchema.ast), `${rpc._tag} ${credential}`).not.toContain(
+          credential,
+        );
+      }
+    }
+    // A scope's `auth` (role, mount…) goes only to the Owner, never to a Vault's editors.
+    const editors = [...WsRpcGroup.requests.values()].find(
+      (rpc) => rpc._tag === WS_METHODS.vaultsProviderScopes,
+    );
+    expect(successFields(editors!.successSchema.ast)).not.toContain("auth");
   });
 
   it("reads a Vault value in three places only: the reveal, delivery and masking (spec 5 ticket 09)", () => {
@@ -284,6 +328,7 @@ describe("every door of the Hub declares its rule", () => {
       "vaults/EffectiveVaults.ts",
       "vaults/SecretDelivery.ts",
       "vaults/SecretMasker.ts",
+      "vaults/SecretProviderScopes.ts", // names only: the entries a scope change would break
       "vaults/ThreadSecretValues.ts",
       "vaults/VaultReachLoss.ts",
       "vaults/Vaults.ts",

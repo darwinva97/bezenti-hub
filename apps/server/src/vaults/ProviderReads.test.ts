@@ -208,6 +208,45 @@ describe("ProviderReads", () => {
     }),
   );
 
+  it.effect("a credential read from another provider is filled in before the driver runs", () =>
+    Effect.gen(function* () {
+      const seen: Array<unknown> = [];
+      const driver = defineSecretProviderDriver({
+        kind: FAKE,
+        definition: defineSecretProvider({
+          kind: FAKE,
+          label: "Fake",
+          configSchema: Schema.Struct({ account: Schema.String, token: Schema.String }),
+          isReference: (reference) => reference.startsWith("kv/"),
+          referencePlaceholder: "kv/path#key",
+          invalidReferenceMessage: "Use kv/path#key.",
+          credentialFields: ["token"],
+        }),
+        read: (config, references) =>
+          Effect.sync(() => {
+            seen.push(config.token);
+            return references.map(() => readError("forbidden"));
+          }),
+        test: () => Effect.succeed({ ok: true }),
+      });
+      const service = yield* ProviderReads.make({
+        drivers: [driver],
+        secretProviders: Effect.succeed({
+          [VAULT]: {
+            kind: FAKE,
+            label: "OpenBao",
+            config: { account: "a", token: { provider: OTHER, reference: "op://Hub/bao/token" } },
+          },
+        }),
+        readCredential: () => Effect.succeed("bao-hub-token-0003"),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
+      const outcome = yield* service.read([ref("kv/a")]);
+      assert.deepEqual(seen, ["bao-hub-token-0003"]);
+      // The answer says the class; the credential is nowhere in it.
+      assert.notInclude(JSON.stringify(outcome), "bao-hub-token-0003");
+    }),
+  );
+
   it.effect("a failure says its class and provider, never what the provider said", () => {
     const logs: Array<string> = [];
     const logger = Logger.make((options) => {

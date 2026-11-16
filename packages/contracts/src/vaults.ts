@@ -218,6 +218,11 @@ export const VaultEntryKind = Schema.Literals(["own", "copy", "link", "provider"
 const VAULT_PROVIDER_REFERENCE_MAX_LENGTH = 1024;
 export const VaultProviderSource = Schema.Struct({
   providerId: SecretProviderId,
+  /**
+   * The Provider scope it reads through (ticket 03): an Admin's always names one allowed to the
+   * Vault; the Owner's may omit it («Direct»).
+   */
+  scopeId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   reference: Schema.String.check(
     Schema.isMinLength(1),
     Schema.isMaxLength(VAULT_PROVIDER_REFERENCE_MAX_LENGTH),
@@ -296,7 +301,12 @@ export const VaultEntry = Schema.Struct({
    * Vault, its reference. Never a value: none is read to list it.
    */
   provider: Schema.optionalKey(
-    Schema.Struct({ label: Schema.NullOr(Schema.String), reference: Schema.NullOr(Schema.String) }),
+    Schema.Struct({
+      label: Schema.NullOr(Schema.String),
+      reference: Schema.NullOr(Schema.String),
+      /** The scope it reads through (ticket 03), by label; null for the Owner's «Direct». */
+      scope: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    }),
   ),
   /**
    * Shown, never delivered: a Secret link whose original in the Main vault is gone, or a Provider

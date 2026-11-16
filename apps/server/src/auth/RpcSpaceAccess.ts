@@ -149,6 +149,8 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.vaultsChoices]: "project",
   [WS_METHODS.vaultsProjectChoicesSet]: "project",
   [WS_METHODS.vaultsThreadEnvironment]: "thread",
+  // Vaults ticket 03: the scopes a Vault's editors may use, decided by Vaults (`vault.edit`).
+  [WS_METHODS.vaultsProviderScopes]: VAULTS,
   [WS_METHODS.projectsCreateFromThread]: "thread",
   // An app acts inside its Thread's live session, so it is its creator's, like a message.
   [WS_METHODS.mcpAppsCallTool]: "owned",

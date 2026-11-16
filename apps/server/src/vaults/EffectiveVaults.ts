@@ -53,6 +53,7 @@ export interface EffectiveVariable {
     readonly providerId: string;
     readonly scopeId: string | null;
     readonly reference: string;
+    readonly vaultId: string;
   } | null;
   /** A link's original's. A Variable is never masked. */
   readonly class: VaultEntryClass;
@@ -315,6 +316,8 @@ const make = Effect.gen(function* () {
                 providerId: entry.providerId,
                 reference: entry.providerReference,
                 scopeId: entry.providerScopeId,
+                // Its scope must still be allowed to this Vault when it is read (ticket 03).
+                vaultId: entry.vaultId,
               }
             : null;
         if (entry.valueId === null && provider === null) continue;

@@ -65,6 +65,15 @@ export const AuditAction = Schema.Literals([
   // with each provider session and are not audited one by one).
   "ai_gateway_key.create",
   "ai_gateway_key.revoke",
+  // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
+  "secret_provider.create",
+  "secret_provider.update",
+  "secret_provider.delete",
+  "secret_provider.test",
+  "provider_scope.create",
+  "provider_scope.update",
+  "provider_scope.delete",
+  "provider_scope.allow",
 ]);
 export type AuditAction = typeof AuditAction.Type;
 
@@ -80,6 +89,8 @@ export const AuditTargetKind = Schema.Literals([
   "environment",
   "ai_account",
   "ai_gateway_key",
+  "secret_provider",
+  "provider_scope",
 ]);
 export type AuditTargetKind = typeof AuditTargetKind.Type;
 
@@ -229,6 +240,17 @@ export const AUDIT_DETAIL_KEYS = {
   "ai_gateway_key.create": ["kind", "space"],
   /** Why: `revoked` by a person (its User or the Owner); `space-lost` or `user-inactive` by the Hub. */
   "ai_gateway_key.revoke": ["kind", "space", "reason"],
+  /** The provider's kind and which config fields changed, by name; never a credential. */
+  "secret_provider.create": ["kind", "changed"],
+  "secret_provider.update": ["kind", "changed"],
+  "secret_provider.delete": ["kind"],
+  /** Whether it signed in and, for a scope, whether its probe read; classes, never a value. */
+  "secret_provider.test": ["scope", "auth", "probe"],
+  /** Its provider and how many path prefixes it allows; `broke`: entries the change broke. */
+  "provider_scope.create": ["provider", "paths", "writable"],
+  "provider_scope.update": ["provider", "paths", "writable", "broke"],
+  "provider_scope.delete": ["provider", "broke"],
+  "provider_scope.allow": ["vault", "vaultId", "allowed", "broke"],
 } as const satisfies Record<AuditAction, ReadonlyArray<string>>;
 
 export type AuditDetailOf<A extends AuditAction> = {

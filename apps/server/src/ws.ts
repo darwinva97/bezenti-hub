@@ -124,6 +124,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as Vaults from "./vaults/Vaults.ts";
+import * as SecretProviderScopes from "./vaults/SecretProviderScopes.ts";
 import * as EffectiveVaults from "./vaults/EffectiveVaults.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
 import {
@@ -1284,6 +1285,7 @@ export const layerWsRpc = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const vaults = yield* Vaults.Vaults;
+      const secretProviderScopes = yield* SecretProviderScopes.SecretProviderScopes;
       const effectiveVaults = yield* EffectiveVaults.EffectiveVaults;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -2453,6 +2455,15 @@ export const layerWsRpc = (
         [WS_METHODS.vaultsSpaceDefaultsSet]: (input) => vaults.setSpaceDefaults(input),
         [WS_METHODS.vaultsProjectChoicesSet]: (input) => vaults.setProjectChoice(input),
         [WS_METHODS.vaultsThreadEnvironment]: (input) => effectiveVaults.threadEnvironment(input),
+        // Vaults ticket 03: a Vault's usable Provider scopes (its editors); Secret providers'
+        // scopes, «Test connection» and what a deletion breaks (the Owner, SecretProviderScopes).
+        [WS_METHODS.vaultsProviderScopes]: (input) => vaults.providerScopes(input),
+        [WS_METHODS.secretProvidersTest]: (input) => secretProviderScopes.test(input),
+        [WS_METHODS.secretProvidersImpact]: (input) => secretProviderScopes.impact(input),
+        [WS_METHODS.secretProvidersScopesList]: (_input) => secretProviderScopes.list,
+        [WS_METHODS.secretProvidersScopesPut]: (input) => secretProviderScopes.put(input),
+        [WS_METHODS.secretProvidersScopesDelete]: (input) => secretProviderScopes.remove(input),
+        [WS_METHODS.secretProvidersScopesAllow]: (input) => secretProviderScopes.allow(input),
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),
@@ -2773,9 +2784,20 @@ export const layerWsRpc = (
                 )
               : undefined;
             const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
+            // Vaults ticket 03: a change to the secret providers is audited (names, never values).
+            const providersBefore =
+              patch.secretProviders === undefined
+                ? undefined
+                : (yield* serverSettings.getSettings).secretProviders;
             const settings = yield* providerInstanceMutation === undefined
               ? serverSettings.updateSettings(nextPatch)
               : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
+            if (providersBefore !== undefined) {
+              yield* secretProviderScopes.recordProviderChanges(
+                providersBefore,
+                settings.secretProviders,
+              );
+            }
             return ServerSettings.redactServerSettingsForClient(settings, settingsClient);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,

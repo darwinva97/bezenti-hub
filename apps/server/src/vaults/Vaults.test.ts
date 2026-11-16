@@ -1208,12 +1208,18 @@ it.effect(
       assert.deepEqual(added.entry.provider, {
         label: FAKE_PROVIDER_LABEL,
         reference: "kv/acme/kube#token",
+        // The Owner's own access, no Provider scope (ticket 03: «Direct»).
+        scope: null,
       });
       // A Member sees «Provider: OpenBao», never where it reads.
       const seen = (yield* vaults
         .listEntries({ vaultId: acme.id })
         .pipe(as(people.member.id))).entries.find((entry) => entry.name === "KUBE_TOKEN");
-      assert.deepEqual(seen?.provider, { label: FAKE_PROVIDER_LABEL, reference: null });
+      assert.deepEqual(seen?.provider, {
+        label: FAKE_PROVIDER_LABEL,
+        reference: null,
+        scope: null,
+      });
       // Sealed: refused before the factor, and the provider is never asked.
       assert.equal(
         yield* reasonOf(

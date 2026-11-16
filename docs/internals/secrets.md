@@ -242,6 +242,59 @@ is the one service; WS RPCs `vaults.*` and HTTP `vaults.reveal` are its doors.
   as `Schema.RedactedFromValue`, so no log, span or error shows them. Every change is audited
   (`vault.create|update|delete`, `secret.edit` with `op`) with names and kinds, never values.
 
+## Variables y sellado («Variables, Secretos sellados y Secret providers», ticket 01)
+
+Each entry is a **Variable** (configuration, shown and never masked) or a **Secret**, and a
+Secret is **revealable** or **sealed** (nobody reveals it, not even the Owner).
+
+- **Data** (migration 119, a rebuild of `vault_entries`): `class` (`secret` | `variable`) and
+  `revealable` (0 | 1), both NULL on a link, which is what its original is (a broken link counts
+  as a sealed Secret). A row written without them is a sealed Secret (the defaults fail closed).
+  The entries that existed before stay revealable Secrets. A Variable is never `revealable`. A
+  copy takes its original's class and seal (`Vaults.fromMain`; two rows, so no CHECK).
+- **Reveal:** `Vaults.revealable` refuses a sealed one with `sealed` before anything else
+  happens: before the HTTP door asks for the strong factor (409 `EnvironmentHttpConflictError`)
+  and before its value is read. A Variable can still be revealed by the Owner, but no client offers it.
+- **Changes** (`vaults.entries.put`, `class` and `allowReveal`), each for whoever edits the Vault:
+  - **Seal** (`allowReveal: false`) is one way.
+  - **Allow reveal** (`allowReveal: true`) on a sealed Secret, and **Secret → Variable**,
+    need a `value` in the same request (`needs-new-value`). The old value is removed unread, as a
+    replace does.
+  - **Variable → Secret** gives a sealed Secret.
+  - A new Secret is sealed unless `allowReveal`.
+  - A link's class or seal is changed at its original (`not-linkable`).
+  - Audited `secret.edit` with `op` `seal`, `allow-reveal` or `class` (detail `class`), beside
+    the usual `replace`.
+  - The Secret → Variable change without a new value (revealable + strong factor) is not built.
+- **Who reads a Variable's value:** `vault.readVariables`, which is `vault.view` without Guests (an
+  invitation can leave the Organization; decision 4). `Vaults.shown` is the one place that reads
+  one, for rows of class `variable` only. It is the only `value` a WS answer carries
+  (`VaultEntry.value`, in `vaults.entries.list|put|link|copy`; `DoorRules.test.ts` holds both).
+  `vaults.threadEnvironment` gives `class`, never a value.
+- **`looks-like-credential`** (`looksLikeCredential` in contracts, the same function in the form
+  and in the save): a name ending `_TOKEN|_SECRET|_PASSWORD|_KEY|_PAT`; a value starting `ghp_`,
+  `github_pat_`, `glpat-`, `sk-`, `xox`, `AKIA` or `-----BEGIN`; a three-part JWT; or 20+
+  characters with no spaces, not a URL, with entropy ≥ 4 bits per character. It is a warning and never blocks.
+- **Masking:** a Variable is never masked.
+  - The effective set carries `class`. `SecretMasker` leaves Variables out of a Thread's and a
+    User's maskers, and out of the start's `rememberKnownSecrets`.
+  - `SecretDelivery` delivers a Variable with `plain: true` in `secretEnv` and does not record it
+    in `thread_secret_values`.
+  - The executor (`EnvironmentAgent`) and a terminal's history skip `plain` ones.
+  - An executor before this ignores `plain` and masks Variables in its own logs. That is more
+    masking, never less, so no contract bump.
+  - A Variable that becomes a Secret is masked from then on. What was already stored in clear
+    stays as it was.
+  - A Secret that becomes a Variable stays masked where it was delivered before.
+  - The fingerprint marks Variables, so a class change reaches the next process.
+- **What sealing does not cover** (accepted):
+  - whoever has the Hub's disk and the master key decrypts the store;
+  - the agent that receives a value can print it, and its AI provider sees what it reads.
+  - Sealing protects reading through the Hub's UI and APIs.
+- **Clients:** web only in this ticket. `entryActions` (client-runtime) offers «Reveal» only on a
+  revealable Secret, and also offers «Seal», «Allow reveal», «Make variable» and «Make secret».
+  Mobile keeps working with the new fields and will show them in a later ticket.
+
 ## Allowing Vaults (spec 5, ticket 03)
 
 Which Vaults may reach a Space or a User is one rule, `vaults/VaultReach.ts`, used by the doors

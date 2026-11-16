@@ -366,6 +366,31 @@ permissions (WSL's `/mnt/c`, some NFS) set
 started with a missing or different key refuses to start and says why; it never
 makes a new key over encrypted secrets.
 
+### Vaults: Variables and sealed Secrets
+
+**Settings → Vaults** holds what your agents receive as environment variables.
+When you add an entry, **Kind** says what it is:
+
+- a **Variable** is configuration, such as `AWS_REGION` or `KUBE_SERVER`. Its value
+  is shown in the list to the Owner, Admins and Members who see the Vault (never to
+  Guests), and it is never hidden in a Thread's history. If a Variable looks like a
+  credential (a name ending in `_TOKEN` or `_PASSWORD`, a value starting `ghp_` or
+  `sk-`...), Settings warns you, but it still saves it.
+- a **Secret** is never shown. A new one is **Sealed**: nobody can read it back
+  from the Hub, not even the Owner. It can only be replaced or deleted. Tick
+  **Allow reveal** when you add it to keep it readable by the Owner, with a passkey
+  or password and code. Secrets saved before this existed stay revealable.
+
+**Seal** on a revealable Secret makes it sealed. It cannot be undone:
+**Allow reveal** on a sealed Secret asks for a new value. **Make variable** also
+asks for a new value, so changing the kind never shows a Secret. A copy of a
+sealed Secret is sealed too, and a Secret link is what its original is.
+
+Sealing protects reading through the Hub's screens and APIs. It does not stop
+someone who has the Hub's disk and its master key, and it does not stop the agent
+that receives the value from printing it. Use short-lived credentials when that
+matters.
+
 ### Invite people
 
 To add someone to an organization, switch to it in the Space selector, choose

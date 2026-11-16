@@ -54,6 +54,14 @@ const SWEPT_ELSEWHERE: Record<string, string> = {
   "mcp:request_secret": "SecretRequestVaults.test.ts and SecretRequests.test.ts",
   "http:vaults.masterKeyBackup": "MasterKeyHttp.test.ts: the master key, the Owner only",
   "http:vaults.masterKeyBackupConfirm": "MasterKeyHttp.test.ts",
+  // Vaults ticket 03: Owner-only Installation RPCs and a Vault's usable scopes, per role.
+  "ws:secretProviders.test": "SecretProviderScopes.test.ts: the Owner only, classes never values",
+  "ws:secretProviders.impact": "SecretProviderScopes.test.ts: names of what breaks",
+  "ws:secretProviders.scopes.list": "SecretProviderScopes.test.ts: the Owner only",
+  "ws:secretProviders.scopes.put": "SecretProviderScopes.test.ts: the Owner only",
+  "ws:secretProviders.scopes.delete": "SecretProviderScopes.test.ts: the Owner only",
+  "ws:secretProviders.scopes.allow": "SecretProviderScopes.test.ts: the Owner only",
+  "ws:vaults.providerScopes": "SecretProviderScopes.test.ts: editors, no auth, Direct the Owner's",
 };
 
 const RE_VAULTS = /vault|secret/iu;

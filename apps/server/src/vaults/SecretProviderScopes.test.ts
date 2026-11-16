@@ -328,6 +328,7 @@ it.effect("a provider change is audited by field names, never with a credential'
         },
       } as unknown as ServerSettings["secretProviders"])
       .pipe(h.as(h.ownerId));
+    yield* h.scopes.recordProviderChanges(after, {}).pipe(h.as(h.ownerId));
     const rows = yield* h.server.sql<{ readonly action: string; readonly detail: string }>`
       SELECT action, detail_json AS detail FROM audit_log WHERE action LIKE 'secret_provider.%'
       ORDER BY audit_id
@@ -337,9 +338,59 @@ it.effect("a provider change is audited by field names, never with a credential'
       [
         ["secret_provider.create", { kind: "credentialed", changed: "label, address, token" }],
         ["secret_provider.update", { kind: "credentialed", changed: "token" }],
+        ["secret_provider.delete", { kind: "credentialed" }],
       ],
     );
     assert.notInclude(JSON.stringify(rows), credential);
     void Redacted;
   }),
+);
+
+it.effect(
+  "a Vault's editors see its usable scopes, never their auth; only the Owner sees «Direct»",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const scope = (yield* h.putScope({
+        label: "Acme",
+        auth: { role: "acme-reader" },
+        allowedPaths: ["kv/acme"],
+      })).scope!;
+      yield* h.scopes
+        .allow({ scopeId: scope.id, vaultId: h.acme.id, allowed: true })
+        .pipe(h.as(h.ownerId));
+      const forAdmin = yield* h.vaults.providerScopes({ vaultId: h.acme.id }).pipe(h.as(h.admin));
+      assert.deepEqual(
+        forAdmin.scopes.map((item) => [item.label, item.allowedPaths]),
+        [["Acme", ["kv/acme"]]],
+      );
+      assert.deepEqual(forAdmin.direct, []);
+      assert.notInclude(JSON.stringify(forAdmin), "acme-reader");
+      const forOwner = yield* h.vaults.providerScopes({ vaultId: h.acme.id }).pipe(h.as(h.ownerId));
+      assert.deepEqual(
+        forOwner.direct.map((item) => item.providerId),
+        [FAKE_PROVIDER_ID],
+      );
+      // Another Vault the scope is not allowed to: none. A Member edits nothing: refused.
+      assert.deepEqual(
+        (yield* h.vaults.providerScopes({ vaultId: h.other.id }).pipe(h.as(h.admin))).scopes,
+        [],
+      );
+      assert.equal(
+        yield* reasonOf(h.vaults.providerScopes({ vaultId: h.acme.id }).pipe(h.as(h.member))),
+        "forbidden",
+      );
+      // «Test connection» and the scope changes are audited, by name.
+      yield* h.scopes
+        .test({ providerId: FAKE_PROVIDER_ID, scopeId: scope.id })
+        .pipe(h.as(h.ownerId));
+      const actions = yield* h.server.sql<{ readonly action: string }>`
+      SELECT action FROM audit_log
+      WHERE action LIKE 'provider_scope.%' OR action = 'secret_provider.test' ORDER BY audit_id
+    `;
+      assert.deepEqual(
+        actions.map((row) => row.action),
+        ["provider_scope.create", "provider_scope.allow", "secret_provider.test"],
+      );
+    }),
 );

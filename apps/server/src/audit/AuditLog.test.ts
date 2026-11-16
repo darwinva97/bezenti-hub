@@ -622,6 +622,15 @@ it.effect(
         // (ticket 10: local CLI keys, revoked by their User, the Owner or a lost Space)
         "ai_gateway_key.create",
         "ai_gateway_key.revoke",
+        // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
+        "secret_provider.create",
+        "secret_provider.update",
+        "secret_provider.delete",
+        "secret_provider.test",
+        "provider_scope.create",
+        "provider_scope.update",
+        "provider_scope.delete",
+        "provider_scope.allow",
       ];
       assert.sameMembers(
         [...new Set([...expected.map((row) => row.action), ...recordedElsewhere])],

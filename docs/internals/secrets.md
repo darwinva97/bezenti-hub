@@ -295,6 +295,65 @@ Secret is **revealable** or **sealed** (nobody reveals it, not even the Owner).
   revealable Secret, and also offers «Seal», «Allow reveal», «Make variable» and «Make secret».
   Mobile keeps working with the new fields and will show them in a later ticket.
 
+## Provider entries («Variables, Secretos sellados y Secret providers», ticket 02)
+
+A Provider entry stores where to read its value: a Secret provider from the Owner's
+`settings.secretProviders` and a reference. It never stores a value. Why the Hub reads providers
+on the Thread's behalf: [ADR 0008](../adr/0008-vault-entries-read-from-secret-providers.md).
+
+- **Data** (migration 120, another rebuild of `vault_entries`): `kind = 'provider'`,
+  `provider_id`, `provider_reference` (at most 1024 characters) and `provider_scope_id`. The scope
+  stays NULL until ticket 03 adds scopes. A Provider entry holds no `value_id` and is always a
+  sealed Secret (CHECK).
+- **Who:** only the Owner adds one or changes its reference (`vault.providerEntry`, through
+  `vaults.entries.put` with `provider`). There is no UI for it yet. Ticket 03 lets Admins add them
+  within the scopes allowed to a Vault. Editors may still delete one.
+  - In the list, a Provider entry shows its provider's label; only editors also see its
+    reference.
+  - It is «broken» for everyone when its provider is gone, or is of a kind this Hub has no driver
+    for. A broken entry is not delivered, like a broken link.
+  - It cannot be linked or copied (`not-linkable`): «Copy into the Hub» is ticket 08.
+  - Reveal answers `sealed` without asking the provider.
+- **Driver contract** (`packages/secret-provider-core`):
+  - `read` gives each reference either `{ value, expiresAt?, version? }` or a class of error:
+    `not-found`, `forbidden`, `unavailable` or `invalid`. It never carries text, because a
+    provider's own output (such as `op`'s stderr) can echo what it holds.
+  - `test` reports whether the configured sign-in works.
+  - 1Password keeps its behaviour: a timeout is `unavailable`, a failed `op` is `not-found`, and
+    `test` runs `op whoami`.
+  - The settings' `SecretResolver` maps a result back to a value or nothing, and keeps its cache
+    for the server's life.
+- **Reads** (`vaults/ProviderReads.ts`), the only module that asks a provider for a Vault entry:
+  - The reference is checked when saved and again before every read: the driver's `isReference`,
+    then no `.`/`..` segments, no empty segment (`//`), no `%2e`/`%2f`/`%5c`, no backslash, no
+    control characters. Ticket 03 adds a scope's allowed paths to the same check.
+  - Reads are grouped by provider and scope: providers in parallel, one batch each, with a 10 s
+    timeout per batch. A batch that times out or dies is `unavailable`, and the cause of a death
+    is not logged.
+  - Values are cached by `(provider, scope, reference)` until `expiresAt`, or for the provider's
+    `refreshIntervalSeconds` (5 minutes by default). Failures are not cached.
+  - Concurrent reads of the same reference collapse into one.
+  - A provider whose settings change, or that is removed, is dropped from the cache at once.
+- **Delivery** (`SecretDelivery`):
+  - The plan reads Provider entries through the cache. Each one's value id is
+    `delivered:<HMAC-SHA256(key, value)>`. The key is 32 random bytes kept as `vault-fingerprint-key`
+    in the store. So the fingerprint changes when a provider rotates the value, and it never holds
+    the value or a plain hash of it.
+  - If an entry fails, the whole start fails with `SecretProviderReadError { reason, provider,
+    scope, entries }`: names only, and nothing of the set is delivered (decision 3).
+  - The run fails with code `secret_provider_<reason>` (retryable when `unavailable`). On web and
+    desktop the failed run shows «Retry», which sends its message again as a new turn. Mobile:
+    ticket 16.
+- **Masking:** a delivered value is sealed in `DeliveredValueStore`
+  (`secrets/delivered-values/`, purpose `delivered-value`) and recorded as a `delivered:<id>`
+  row of `thread_secret_values`. SecretMasker reads it back from that store, so it stays
+  `[NAME]` after a rotation.
+  - `DeliveredValues` removes a deleted Thread's rows, and every value no other Thread holds, as
+    the `thread.deleted` event arrives.
+  - At start it also sweeps values that no row holds.
+- **Not built yet:** scopes and Settings → Secret providers (03), OpenBao (04), files and
+  templates (05), Dynamic secrets (06), Provider Variables, and the `secret.read` audit.
+
 ## Allowing Vaults (spec 5, ticket 03)
 
 Which Vaults may reach a Space or a User is one rule, `vaults/VaultReach.ts`, used by the doors

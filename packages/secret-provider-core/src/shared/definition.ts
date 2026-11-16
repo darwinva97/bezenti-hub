@@ -10,6 +10,11 @@ export interface SecretProviderDefinition<Config = unknown> {
   readonly isReference: (reference: string) => boolean;
   readonly referencePlaceholder: string;
   readonly invalidReferenceMessage: string;
+  /**
+   * Config fields holding a credential (`SettingsSecretValue`: a literal or a reference to another
+   * provider). The server seals a literal in its store and never sends it to a client.
+   */
+  readonly credentialFields?: ReadonlyArray<string>;
 }
 
 export const defineSecretProvider = <Config>(

@@ -56,7 +56,7 @@ import {
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
-import { secretProviderDefinitions } from "./secrets/secretProviderDefinitions.ts";
+import { secretProviderDefinitionFor } from "./secrets/secretProviderDefinitions.ts";
 import {
   readSecretFieldValues,
   sourceControlHostSecretName,
@@ -203,12 +203,73 @@ export function applyProviderInstanceMutation(
   return { ...settings, providerInstances };
 }
 
-const secretProviderConfigGuards = new Map(
-  secretProviderDefinitions.definitions.map((definition) => [
-    definition.kind as string,
-    Schema.is(definition.configSchema),
-  ]),
-);
+const secretProviderConfigGuardCache = new Map<string, (config: unknown) => boolean>();
+const secretProviderConfigGuards = {
+  has: (kind: string) => secretProviderDefinitionFor(kind) !== undefined,
+  get: (kind: string) => {
+    const known = secretProviderConfigGuardCache.get(kind);
+    if (known !== undefined) return known;
+    const definition = secretProviderDefinitionFor(kind);
+    if (definition === undefined) return undefined;
+    const guard = Schema.is(definition.configSchema);
+    secretProviderConfigGuardCache.set(kind, guard);
+    return guard;
+  },
+};
+
+/**
+ * Why the providers' credentials would read in a circle (a provider's credential naming itself, or
+ * A's naming B's naming A), or undefined. Each provider reads its credentials first, so a circle
+ * could never be read.
+ */
+const secretProviderCredentialCycle = (
+  providers: ServerSettings["secretProviders"],
+): string | undefined => {
+  const edges = new Map<string, ReadonlyArray<string>>();
+  for (const [id, entry] of Object.entries(providers)) {
+    const fields = secretProviderDefinitionFor(entry.kind)?.credentialFields ?? [];
+    const config = entry.config as Record<string, unknown> | undefined;
+    edges.set(
+      id,
+      fields.flatMap((field) => {
+        const value = config?.[field];
+        return isSecretReference(value) ? [value.provider as string] : [];
+      }),
+    );
+  }
+  const visiting = new Set<string>();
+  const done = new Set<string>();
+  const visit = (id: string, path: ReadonlyArray<string>): string | undefined => {
+    if (visiting.has(id)) return [...path, id].join(" → ");
+    if (done.has(id)) return undefined;
+    visiting.add(id);
+    for (const next of edges.get(id) ?? []) {
+      const cycle = visit(next, [...path, id]);
+      if (cycle !== undefined) return cycle;
+    }
+    visiting.delete(id);
+    done.add(id);
+    return undefined;
+  };
+  for (const id of edges.keys()) {
+    const cycle = visit(id, []);
+    if (cycle !== undefined) return cycle;
+  }
+  return undefined;
+};
+
+const ensureNoSecretProviderCycle = (settings: ServerSettings, settingsPath: string) => {
+  const cycle = secretProviderCredentialCycle(settings.secretProviders);
+  return cycle === undefined
+    ? Effect.void
+    : Effect.fail(
+        new ServerSettingsError({
+          settingsPath,
+          operation: "write-secret-provider",
+          cause: new Error(`A secret provider's credential cannot be read from itself: ${cycle}.`),
+        }),
+      );
+};
 
 // Rejects a kind this server has not loaded rather than storing a config it cannot check.
 function ensureSecretProviderWritesAllowed(
@@ -1467,9 +1528,12 @@ const make = Effect.gen(function* () {
     getSettings: getMaterializedSettings,
     updateSettings: (patch) =>
       updateAndPersistSettings(patch, (current) =>
-        ensureSecretProviderWritesAllowed(patch, settingsPath).pipe(
-          Effect.as(applyServerSettingsPatch(current, patch)),
-        ),
+        Effect.gen(function* () {
+          yield* ensureSecretProviderWritesAllowed(patch, settingsPath);
+          const next = applyServerSettingsPatch(current, patch);
+          yield* ensureNoSecretProviderCycle(next, settingsPath);
+          return next;
+        }),
       ),
     updateProviderInstance: (mutation, patch = {}) =>
       updateAndPersistSettings(patch, (current) =>
@@ -1477,6 +1541,7 @@ const make = Effect.gen(function* () {
           yield* ensureSecretProviderWritesAllowed(patch, settingsPath);
           yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
           const patched = applyServerSettingsPatch(current, patch);
+          yield* ensureNoSecretProviderCycle(patched, settingsPath);
           return applyProviderInstanceMutation(patched, mutation);
         }),
       ),

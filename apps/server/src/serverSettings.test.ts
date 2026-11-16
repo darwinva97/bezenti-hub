@@ -11,7 +11,9 @@ import {
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
   SecretProviderId,
+  SecretProviderKind,
   ServerSettings,
+  SettingsSecretValue,
   ServerSettingsPatch,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
@@ -37,7 +39,21 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as ServerSettingsModule from "./serverSettings.ts";
 import { SECRET_REDACTED } from "./settingsSecrets.ts";
 import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
+import { registerSecretProviderDefinitionForTests } from "./secrets/secretProviderDefinitions.ts";
+import { defineSecretProvider } from "@t3tools/secret-provider-core/shared/definition";
 import { resolveProviderInstanceTerminalEnvironment } from "./terminal/Manager.ts";
+
+/** A provider kind with a credential field, as OpenBao will be (Vaults ticket 03). */
+const CREDENTIALED_PROVIDER = defineSecretProvider({
+  kind: SecretProviderKind.make("credentialed"),
+  label: "Credentialed",
+  configSchema: Schema.Struct({ address: Schema.String, token: SettingsSecretValue }),
+  isReference: (reference) => reference.startsWith("kv/"),
+  referencePlaceholder: "kv/path#key",
+  invalidReferenceMessage: "Use kv/path#key.",
+  credentialFields: ["token"],
+});
+const KNOWN_CREDENTIAL = "known-provider-credential-0001";
 
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
@@ -337,6 +353,85 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       }
       assert.deepStrictEqual((yield* service.getSettings).secretProviders, {});
     }).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  // Vaults ticket 03: a provider's credentials are sealed, never sent, and never read in a circle.
+  it.effect("seals a secret provider's credential and never sends it to a client", () =>
+    Effect.gen(function* () {
+      registerSecretProviderDefinitionForTests(CREDENTIALED_PROVIDER);
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const { settingsPath } = yield* ServerConfig.ServerConfig;
+      yield* decodeServerSettingsPatch({
+        secretProviders: {
+          vault: {
+            kind: "credentialed",
+            label: "Vault",
+            config: { address: "https://bao.example", token: KNOWN_CREDENTIAL },
+          },
+        },
+      }).pipe(Effect.flatMap(service.updateSettings));
+      // The Hub reads it (its own settings), clients and the settings file never see it.
+      const own = yield* service.getSettings;
+      assert.deepEqual(own.secretProviders[SecretProviderId.make("vault")]?.config, {
+        address: "https://bao.example",
+        token: KNOWN_CREDENTIAL,
+      });
+      const forClient = ServerSettingsModule.redactServerSettingsForClient(own, {
+        secretReferences: true,
+      });
+      assert.notInclude(JSON.stringify(forClient), KNOWN_CREDENTIAL);
+      assert.notInclude(yield* fileSystem.readFileString(settingsPath), KNOWN_CREDENTIAL);
+      // The client sends the marker back unchanged: the credential stays.
+      yield* decodeServerSettingsPatch({
+        secretProviders: {
+          vault: {
+            kind: "credentialed",
+            label: "Vault renamed",
+            config: { address: "https://bao.example", token: SECRET_REDACTED },
+          },
+        },
+      }).pipe(Effect.flatMap(service.updateSettings));
+      const kept = (yield* service.getSettings).secretProviders[SecretProviderId.make("vault")];
+      assert.deepEqual(kept?.config, { address: "https://bao.example", token: KNOWN_CREDENTIAL });
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect("refuses a provider credential read from itself, directly or in a circle", () =>
+    Effect.gen(function* () {
+      registerSecretProviderDefinitionForTests(CREDENTIALED_PROVIDER);
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const provider = (token: unknown) => ({
+        kind: "credentialed",
+        label: "P",
+        config: { address: "https://bao.example", token },
+      });
+      const write = (providers: Record<string, unknown>) =>
+        decodeServerSettingsPatch({ secretProviders: providers }).pipe(
+          Effect.flatMap(service.updateSettings),
+          Effect.flip,
+        );
+      const self = yield* write({ a: provider({ provider: "a", reference: "kv/a#token" }) });
+      assert.deepInclude(self, { operation: "write-secret-provider" });
+      assert.include(String(self.cause), "a → a");
+      const circle = yield* write({
+        a: provider({ provider: "b", reference: "kv/b#token" }),
+        b: provider({ provider: "a", reference: "kv/a#token" }),
+      });
+      assert.include(String(circle.cause), "→");
+      assert.deepStrictEqual((yield* service.getSettings).secretProviders, {});
+      // A chain without a circle is fine.
+      yield* decodeServerSettingsPatch({
+        secretProviders: {
+          a: provider({ provider: "b", reference: "kv/b#token" }),
+          b: provider("b-own-token-0002"),
+        },
+      }).pipe(Effect.flatMap(service.updateSettings));
+      assert.deepEqual(Object.keys((yield* service.getSettings).secretProviders).sort(), [
+        "a",
+        "b",
+      ]);
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 
   it.effect("saves through a symlinked settings file without replacing the link", () =>

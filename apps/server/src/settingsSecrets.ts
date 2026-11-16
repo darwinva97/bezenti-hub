@@ -18,6 +18,7 @@ import { kiroClient } from "@t3tools/provider-kiro/client";
 import { museClient } from "@t3tools/provider-muse/client";
 import { openCodeClient } from "@t3tools/provider-opencode/client";
 import { piClient } from "@t3tools/provider-pi/client";
+import { secretProviderDefinitionFor } from "./secrets/secretProviderDefinitions.ts";
 import {
   readSecretFieldValues,
   SOURCE_CONTROL_HOST_SECRET_FIELDS,
@@ -230,6 +231,32 @@ function mapSecretFieldGroups(
       ) as SimlockDeviceHostConfig,
   );
 
+  // Secret providers' credentials (Vaults ticket 03): the fields their kind declares.
+  const secretProviders = Object.fromEntries(
+    Object.entries(settings.secretProviders).map(([id, entry]) => {
+      const fields = secretProviderDefinitionFor(entry.kind)?.credentialFields ?? [];
+      const config = entry.config;
+      return [
+        id,
+        fields.length === 0 ||
+        config === null ||
+        typeof config !== "object" ||
+        Array.isArray(config)
+          ? entry
+          : {
+              ...entry,
+              config: mapFields(
+                config as Record<string, unknown>,
+                fields,
+                (field, serverHost) =>
+                  `secret-provider-${encode(id)}-${encode(field)}` +
+                  (serverHost === null ? "" : `-${encode(serverHost)}`),
+              ),
+            },
+      ];
+    }),
+  ) as ServerSettings["secretProviders"];
+
   return {
     ...settings,
     providerInstances,
@@ -237,5 +264,6 @@ function mapSecretFieldGroups(
     usageLimitSources,
     easDeviceHosts,
     simlockDeviceHosts,
+    secretProviders,
   };
 }

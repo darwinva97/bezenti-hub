@@ -191,6 +191,7 @@ import * as HubPreviews from "./preview/HubPreviews.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import { issueThreadAssetUrl } from "./assets/ThreadAssets.ts";
 import {
   attachmentRelativePath,
   chatAttachmentStableKey,
@@ -272,7 +273,6 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
-import { isNetworkPath } from "@t3tools/shared/path";
 import {
   sameUsageLimitCommandCoverage,
   withUsageLimitsCommands,
@@ -3166,11 +3166,7 @@ export const layerWsRpc = (
               input.resource._tag === "attachment" ||
               input.resource._tag === "native-app-icon" ||
               input.resource._tag === "tool-output-image" ||
-              input.resource._tag === SOURCE_CONTROL_MEDIA_ASSET ||
-              // A network path is served only from the thread's project, looked up below.
-              (input.resource._tag === "media-file" &&
-                path.isAbsolute(input.resource.path) &&
-                !isNetworkPath(input.resource.path))
+              input.resource._tag === SOURCE_CONTROL_MEDIA_ASSET
             ) {
               return yield* issueAssetUrl({ resource: input.resource, viewer: principal.userId });
             }
@@ -3227,35 +3223,31 @@ export const layerWsRpc = (
                   : {}),
               });
             }
-            const thread = yield* threadManagement
-              .getThreadRecords(input.resource.threadId, [])
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new AssetWorkspaceContextResolutionError({
-                      resource: input.resource,
-                      cause,
-                    }),
-                ),
-              );
-            const project = yield* projectService.getById(thread.thread.projectId).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new AssetWorkspaceContextResolutionError({
-                    resource: input.resource,
-                    cause,
-                  }),
-              ),
-            );
-            if (Option.isNone(project)) {
-              return yield* new AssetWorkspaceContextNotFoundError({
-                resource: input.resource,
-              });
-            }
-            return yield* issueAssetUrl({
-              resource: input.resource,
-              workspaceRoot: thread.thread.worktreePath ?? project.value.workspaceRoot,
+            const resource = input.resource;
+            const localWorkspaceRoot = Effect.gen(function* () {
+              const thread = yield* threadManagement
+                .getThreadRecords(resource.threadId, [])
+                .pipe(
+                  Effect.mapError(
+                    (cause) => new AssetWorkspaceContextResolutionError({ resource, cause }),
+                  ),
+                );
+              const project = yield* projectService
+                .getById(thread.thread.projectId)
+                .pipe(
+                  Effect.mapError(
+                    (cause) => new AssetWorkspaceContextResolutionError({ resource, cause }),
+                  ),
+                );
+              if (Option.isNone(project)) {
+                return yield* new AssetWorkspaceContextNotFoundError({ resource });
+              }
+              return thread.thread.worktreePath ?? project.value.workspaceRoot;
+            });
+            return yield* issueThreadAssetUrl({
+              resource,
               viewer: principal.userId,
+              localWorkspaceRoot,
             });
           }),
         [WS_METHODS.assetsPersistChatAttachments]: (input) =>

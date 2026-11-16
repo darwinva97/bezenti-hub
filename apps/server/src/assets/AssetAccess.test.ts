@@ -33,7 +33,14 @@ import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { assetFileResponse } from "../http.ts";
-import { ASSET_ROUTE_PREFIX, issueAssetUrl, readMcpAppHtml, resolveAsset } from "./AssetAccess.ts";
+import {
+  ASSET_ROUTE_PREFIX,
+  issueAssetUrl,
+  issueMachineAssetUrl,
+  readMcpAppHtml,
+  resolveAsset,
+} from "./AssetAccess.ts";
+import { LAPTOP, machineOver } from "./MachineAssets.testkit.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import { fakeSourceControlDriverInstance } from "@t3tools/source-control-testing/fakeSourceControlDriver";
@@ -1549,6 +1556,102 @@ describe("AssetAccess", () => {
         const encoded = yield* encodeAssetAccessError(error);
         expect(encoded).not.toContain(url);
       }
+    }).pipe(Effect.provide(layerTest)),
+  );
+});
+
+describe("AssetAccess: a file of a Thread on another machine (ticket 15)", () => {
+  const threadId = ThreadId.make("thread-on-laptop");
+  /** The token's path part and the file name a request asks under it. */
+  const partsOf = (relativeUrl: string) => {
+    const suffix = relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+    const separator = suffix.indexOf("/");
+    return { token: suffix.slice(0, separator), name: suffix.slice(separator + 1) };
+  };
+
+  it.effect("signs the machine's own path, never a Hub path, and serves it until it expires", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-machine-asset-url-" });
+      yield* fs.makeDirectory(`${root}/site/img`, { recursive: true });
+      yield* fs.writeFileString(`${root}/site/index.html`, "<img src='img/logo.png'>");
+      yield* fs.writeFileString(`${root}/site/img/logo.png`, "png");
+      yield* fs.writeFileString(`${root}/doc.pdf`, "%PDF");
+      const source = machineOver(root);
+
+      const pdf = yield* issueMachineAssetUrl({
+        resource: { _tag: "media-file", threadId, path: "doc.pdf" },
+        source,
+        viewer: "owner",
+      });
+      const exact = partsOf(pdf.relativeUrl);
+      const resolved = yield* resolveAsset(exact.token, exact.name);
+      expect(resolved).toMatchObject({
+        kind: "machine-file",
+        threadId,
+        environmentId: LAPTOP,
+        relativePath: "doc.pdf",
+        viewer: "owner",
+      });
+      expect(resolved && "identity" in resolved ? resolved.identity : undefined).toBeDefined();
+      // Exact: another name under the same token is nothing.
+      expect(yield* resolveAsset(exact.token, "other.pdf")).toBeNull();
+
+      // An HTML preview: its folder, so the page's own assets resolve under it, and only those.
+      const page = yield* issueMachineAssetUrl({
+        resource: { _tag: "workspace-file", threadId, path: "site/index.html" },
+        source,
+        viewer: "owner",
+      });
+      const html = partsOf(page.relativeUrl);
+      expect(yield* resolveAsset(html.token, "img%2Flogo.png")).toMatchObject({
+        relativePath: "site/img/logo.png",
+      });
+      for (const name of ["..%2Fdoc.pdf", ".git%2Fconfig", "img%2Flogo.exe", "%2Fetc%2Fpasswd"]) {
+        expect(yield* resolveAsset(html.token, name)).toBeNull();
+      }
+
+      // An hour later the URL is gone, as any other.
+      yield* TestClock.adjust("61 minutes");
+      expect(yield* resolveAsset(exact.token, exact.name)).toBeNull();
+      expect(yield* resolveAsset(html.token, "img%2Flogo.png")).toBeNull();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("judges preview types on the path asked for and on where it leads", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-machine-asset-type-" });
+      yield* fs.writeFileString(`${root}/run.sh`, "echo hi");
+      const source = machineOver(root);
+      const refused = yield* issueMachineAssetUrl({
+        resource: { _tag: "media-file", threadId, path: "run.sh" },
+        source,
+      }).pipe(Effect.flip);
+      expect(refused).toBeInstanceOf(AssetPreviewTypeValidationError);
+      // A link named like an image that leads to a script is judged as the script.
+      const linked = machineOver(root, {
+        inspect: (relativePath) =>
+          Effect.map(source.inspect("run.sh"), (file) => ({
+            ...file,
+            relativePath: "run.sh",
+          })).pipe(Effect.tap(() => Effect.sync(() => expect(relativePath).toBe("shot.png")))),
+      });
+      const alias = yield* issueMachineAssetUrl({
+        resource: { _tag: "media-file", threadId, path: "shot.png" },
+        source: linked,
+      }).pipe(Effect.flip);
+      expect(alias).toBeInstanceOf(AssetPreviewTypeValidationError);
+      // A download takes any file; a path out of the workspace, none.
+      yield* issueMachineAssetUrl({
+        resource: { _tag: "media-file", threadId, path: "run.sh", disposition: "attachment" },
+        source,
+      });
+      const outside = yield* issueMachineAssetUrl({
+        resource: { _tag: "media-file", threadId, path: "/etc/hostname" },
+        source: { ...source, toRelative: () => undefined },
+      }).pipe(Effect.flip);
+      expect(outside._tag).toBe("AssetRemoteEnvironmentError");
     }).pipe(Effect.provide(layerTest)),
   );
 });

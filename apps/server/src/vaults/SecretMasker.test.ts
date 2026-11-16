@@ -34,6 +34,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import type { HttpServerResponse } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -56,6 +57,8 @@ import { maskingPullRequestReads } from "./maskPullRequests.ts";
 import { maskTerminalStream } from "./maskTerminal.ts";
 import { maskReadFile, maskSearchContents } from "./maskWorkspace.ts";
 import { maskedAssetText } from "./maskAssets.ts";
+import { maskedMachineAsset } from "../assets/MachineAssetResponse.ts";
+import { machineOver } from "../assets/MachineAssets.testkit.ts";
 import * as SecretMasker from "./SecretMasker.ts";
 import * as ThreadSecretValues from "./ThreadSecretValues.ts";
 
@@ -789,44 +792,65 @@ describe("SecretMasker: its own reads", () => {
   );
 });
 
+/** How a checkout's file is served masked: from `dir` by its name, for `user`. */
+type ServeMasked = (
+  dir: string,
+  name: string,
+  user: Option.Option<UserId>,
+  range?: string,
+) => Effect.Effect<HttpServerResponse.HttpServerResponse | undefined>;
+
+/** The Hub machine's own file, from its disk. */
+const fromHubDisk: ServeMasked = (dir, name, user, range) =>
+  maskedAssetText(`${dir}/${name}`, user, range).pipe(
+    Effect.provide(Layer.merge(layerMasker, NodeServices.layer)),
+  );
+
+/** Ticket 15: a file of a Thread on another machine, read from that machine through the Hub. */
+const fromMachine: ServeMasked = (dir, name, user, range) => {
+  const source = machineOver(dir);
+  return source.inspect(name).pipe(
+    Effect.orDie,
+    Effect.flatMap((file) => maskedMachineAsset(source, file, user, range)),
+    Effect.provide(layerMasker),
+  );
+};
+
 describe("SecretMasker: a checkout file served by URL", () => {
-  it.effect("is served to its User masked when it is text that holds their value", () =>
+  it.effect.each([
+    { where: "on the Hub machine", serve: fromHubDisk },
+    { where: "on the Thread's machine", serve: fromMachine },
+  ])("is served to its User masked when it is text that holds their value ($where)", ({ serve }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-mask-asset-" });
-      const secretFile = `${dir}/big.env`;
-      const plainFile = `${dir}/plain.txt`;
-      yield* fileSystem.writeFileString(secretFile, `TOKEN=${TOKEN}\n`);
-      yield* fileSystem.writeFileString(plainFile, "nothing here\n");
+      yield* fileSystem.writeFileString(`${dir}/big.env`, `TOKEN=${TOKEN}\n`);
+      yield* fileSystem.writeFileString(`${dir}/plain.txt`, "nothing here\n");
       const viewer = UserId.make("viewer");
-      const masked = yield* maskedAssetText(secretFile, Option.some(viewer));
+      const masked = yield* serve(dir, "big.env", Option.some(viewer));
       assert.isDefined(masked);
       const body = masked!.body;
       assert.equal(
         body._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : "",
         "TOKEN=[API_TOKEN]\n",
       );
-      assert.isUndefined(yield* maskedAssetText(plainFile, Option.some(viewer)), "served as it is");
+      assert.isUndefined(yield* serve(dir, "plain.txt", Option.some(viewer)), "served as it is");
       // A script keeps its type; a range of it is served from the masked text.
-      const script = `${dir}/app.js`;
-      yield* fileSystem.writeFileString(script, `const t = "${TOKEN}";\n`);
-      const ranged = yield* maskedAssetText(script, Option.some(viewer), "bytes=0-4");
+      yield* fileSystem.writeFileString(`${dir}/app.js`, `const t = "${TOKEN}";\n`);
+      const ranged = yield* serve(dir, "app.js", Option.some(viewer), "bytes=0-4");
       assert.equal(ranged?.status, 206);
       assert.include(String(ranged?.headers["content-type"]), "javascript");
       // Media and binary files go as they are, however large; text asked for by no User, refused.
-      const image = `${dir}/shot.png`;
-      yield* fileSystem.writeFile(image, new Uint8Array([137, 80, 78, 71, 0, 1, 2]));
-      assert.isUndefined(yield* maskedAssetText(image, Option.some(viewer)));
-      const binary = `${dir}/blob.bin`;
-      yield* fileSystem.writeFile(binary, new Uint8Array([1, 0, 2, 3]));
-      assert.isUndefined(yield* maskedAssetText(binary, Option.none()));
-      assert.equal((yield* maskedAssetText(secretFile, Option.none()))?.status, 403);
+      yield* fileSystem.writeFile(`${dir}/shot.png`, new Uint8Array([137, 80, 78, 71, 0, 1, 2]));
+      assert.isUndefined(yield* serve(dir, "shot.png", Option.some(viewer)));
+      yield* fileSystem.writeFile(`${dir}/blob.bin`, new Uint8Array([1, 0, 2, 3]));
+      assert.isUndefined(yield* serve(dir, "blob.bin", Option.none()));
+      assert.equal((yield* serve(dir, "big.env", Option.none()))?.status, 403);
       // Text whose type a MIME table calls media (TypeScript as MPEG-TS, SVG as an image) is text.
       for (const name of ["config.ts", "module.mts", "logo.svg"]) {
-        const file = `${dir}/${name}`;
-        yield* fileSystem.writeFileString(file, `const t = "${TOKEN}";\n`);
-        assert.equal((yield* maskedAssetText(file, Option.none()))?.status, 403, name);
-        const masked = yield* maskedAssetText(file, Option.some(viewer));
+        yield* fileSystem.writeFileString(`${dir}/${name}`, `const t = "${TOKEN}";\n`);
+        assert.equal((yield* serve(dir, name, Option.none()))?.status, 403, name);
+        const masked = yield* serve(dir, name, Option.some(viewer));
         const body = masked?.body;
         assert.include(
           body?._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : "",
@@ -834,7 +858,7 @@ describe("SecretMasker: a checkout file served by URL", () => {
           name,
         );
       }
-    }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerMasker, NodeServices.layer))),
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
 

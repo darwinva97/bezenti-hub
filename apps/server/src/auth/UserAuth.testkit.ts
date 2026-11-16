@@ -340,6 +340,10 @@ export const serveAuthHttpWith = Effect.fn(function* (
     readonly sshInstallPolicy?: SshInstall.SshInstallPolicy["Service"];
     /** Provider entries' drivers and providers (a fake provider), instead of the Hub's. */
     readonly providerReads?: Parameters<typeof ProviderReads.make>[0];
+    /** More routes on the listening port, over the same services (asset URLs, say). */
+    readonly moreRoutes?: (
+      services: Context.Context<HubServices>,
+    ) => Layer.Layer<never, never, HttpRouter.HttpRouter>;
   } = {},
 ) {
   const base = yield* Layer.build(
@@ -392,6 +396,7 @@ export const serveAuthHttpWith = Effect.fn(function* (
         HubPreviewRoute.routeLayer.pipe(Layer.provide(Layer.succeedContext(services))),
         // Hosts under the preview zone go to previews before any route, as in the server.
         HubPreviewRoute.previewOriginLayer.pipe(Layer.provide(Layer.succeedContext(services))),
+        ...(config.moreRoutes === undefined ? [] : [config.moreRoutes(services)]),
       ),
       { disableListenLog: true, disableLogger: true },
     ).pipe(

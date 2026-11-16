@@ -6,6 +6,7 @@ import {
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,
   AssetProjectFaviconResolutionError,
+  AssetRemoteEnvironmentError,
   AssetSigningKeyLoadError,
   AssetWorkspaceAssetInspectionError,
   AssetWorkspaceAssetNotFoundError,
@@ -61,6 +62,7 @@ import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import { extractIcnsPng } from "./icns.ts";
 import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
+import type { MachineAssetSource } from "./MachineAssets.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
@@ -166,6 +168,24 @@ const AssetClaimsSchema = Schema.Union([
     index: Schema.Number,
     expiresAt: Schema.Number,
   }),
+  /**
+   * Ticket 15: a file of a Thread that runs on another machine, read from that machine when the
+   * URL is fetched. `exact`: `path` is the file; `html-base`: the folder an HTML file and its
+   * assets are under. Paths are relative to the Thread's workspace there, never a Hub path.
+   */
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("thread-machine-file"),
+    threadId: ThreadId,
+    environmentId: Schema.String,
+    mode: Schema.Literals(["exact", "html-base"]),
+    path: Schema.String,
+    device: Schema.optionalKey(Schema.String),
+    inode: Schema.optionalKey(Schema.String),
+    download: Schema.optionalKey(Schema.Boolean),
+    expiresAt: Schema.Number,
+    viewer: Schema.optionalKey(Schema.String),
+  }),
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal(SOURCE_CONTROL_MEDIA_ASSET),
@@ -205,7 +225,46 @@ export type ResolvedAsset =
       readonly url: string;
       readonly cwd: string;
       readonly expiresAt: number;
-    };
+    }
+  | MachineFileAsset;
+
+/** Ticket 15: a Thread's file on the machine it runs on, which the Hub reads from there. */
+export interface MachineFileAsset {
+  readonly kind: "machine-file";
+  readonly threadId: ThreadId;
+  readonly environmentId: string;
+  /** Relative to the Thread's workspace on that machine, `/`-separated. */
+  readonly relativePath: string;
+  /** The file the URL was signed for; another one at the path is refused. */
+  readonly identity?: { readonly device: string; readonly inode: string };
+  readonly download?: boolean;
+  readonly fileName: string;
+  /** The User the URL was issued to. */
+  readonly viewer?: string;
+}
+
+const posixBasename = (relativePath: string) =>
+  relativePath.slice(relativePath.lastIndexOf("/") + 1);
+const posixDirname = (relativePath: string) => {
+  const index = relativePath.lastIndexOf("/");
+  return index < 0 ? "." : relativePath.slice(0, index);
+};
+const posixExtname = (relativePath: string) => {
+  const name = posixBasename(relativePath);
+  const index = name.lastIndexOf(".");
+  return index <= 0 ? "" : name.slice(index);
+};
+
+/** A path an HTML preview asks for under its folder: no dot segments, a previewable type. */
+const isPreviewSubPath = (decodedPath: string) => {
+  const segments = decodedPath.split(/[\\/]/);
+  return !(
+    decodedPath.length === 0 ||
+    decodedPath.includes("\0") ||
+    segments.some((segment) => segment === "." || segment === ".." || segment.startsWith(".")) ||
+    !PREVIEW_ASSET_EXTENSIONS.has(posixExtname(segments.join("/")).toLowerCase())
+  );
+};
 
 function decodeClaims(encodedPayload: string): AssetClaims | null {
   try {
@@ -889,6 +948,81 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   };
 });
 
+/**
+ * Ticket 15: a URL for a file of a Thread that runs on another machine. The machine looks at the
+ * file (inside the Thread's workspace, symlinks followed); the Hub applies the same preview types
+ * as for its own files, to the path asked for and to where it leads.
+ */
+export const issueMachineAssetUrl = Effect.fn("AssetAccess.issueMachineAssetUrl")(
+  function* (input: {
+    readonly resource: Extract<AssetResource, { _tag: "workspace-file" | "media-file" }>;
+    readonly source: MachineAssetSource;
+    readonly viewer?: string | undefined;
+  }) {
+    const { resource, source } = input;
+    const requested = source.toRelative(resource.path);
+    if (requested === undefined || requested === ".") {
+      return yield* new AssetRemoteEnvironmentError({
+        resource,
+        reason: "outside_thread_workspace",
+        detail: `Only files in this Thread's workspace on ${source.name} can be opened.`,
+      });
+    }
+    const download = resource._tag === "media-file" && resource.disposition === "attachment";
+    const allowed = (relativePath: string) =>
+      resource._tag === "workspace-file"
+        ? isWorkspacePreviewEntryPath(relativePath)
+        : download || hostPreviewMimeTypeFromExtension(posixExtname(relativePath)) !== null;
+    if (!allowed(requested)) return yield* new AssetPreviewTypeValidationError({ resource });
+    const inspection = yield* source.inspect(requested).pipe(
+      Effect.catchTags({
+        MachineAssetError: () => Effect.fail(new AssetWorkspaceAssetNotFoundError({ resource })),
+        MachineAssetUnavailableError: (error) =>
+          Effect.fail(
+            new AssetRemoteEnvironmentError({
+              resource,
+              reason: error.reason,
+              detail: error.detail,
+            }),
+          ),
+      }),
+    );
+    // A link inside the workspace to a file of another type is judged as that file.
+    if (!allowed(inspection.relativePath)) {
+      return yield* new AssetPreviewTypeValidationError({ resource });
+    }
+    const html = resource._tag === "workspace-file" && /\.html?$/i.test(requested);
+    const expiresAt = (yield* Clock.currentTimeMillis) + ASSET_TOKEN_TTL_MS;
+    const claims: AssetClaims = {
+      version: 1,
+      kind: "thread-machine-file",
+      threadId: resource.threadId,
+      environmentId: source.environmentId,
+      mode: html ? "html-base" : "exact",
+      path: html ? posixDirname(requested) : inspection.relativePath,
+      // A media file is pinned as on the Hub machine: replaced since, it needs a new URL.
+      ...(resource._tag === "media-file" ? inspection.identity : {}),
+      ...(download ? { download: true } : {}),
+      expiresAt,
+      ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
+    };
+    const encodedPayload = base64UrlEncode(encodeAssetClaims(claims));
+    const signer = yield* AssetSigner.AssetSigner;
+    const signature = yield* signer
+      .sign(encodedPayload)
+      .pipe(Effect.mapError((cause) => new AssetSigningKeyLoadError({ resource, cause })));
+    const fileName = posixBasename(html ? requested : inspection.relativePath);
+    return {
+      relativeUrl: `${ASSET_ROUTE_PREFIX}/${encodedPayload}.${signature}/${encodeURIComponent(fileName)}`,
+      expiresAt,
+      ...(inspection.imageDimensions === undefined
+        ? {}
+        : { imageDimensions: inspection.imageDimensions }),
+      ...(resource._tag === "media-file" ? { fileRevision: inspection.revision } : {}),
+    };
+  },
+);
+
 export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
   token: string,
   relativePath: string,
@@ -991,6 +1125,32 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
 
   const decodedPath = decodeRelativePath(relativePath);
   if (decodedPath === null) return null;
+  if (claims.kind === "thread-machine-file") {
+    let served: string;
+    if (claims.mode === "exact") {
+      if (decodedPath !== posixBasename(claims.path)) return null;
+      served = claims.path;
+    } else {
+      if (!isPreviewSubPath(decodedPath)) return null;
+      const sub = decodedPath
+        .split(/[\\/]/)
+        .filter((segment) => segment !== "")
+        .join("/");
+      served = claims.path === "." ? sub : `${claims.path}/${sub}`;
+    }
+    return {
+      kind: "machine-file",
+      threadId: claims.threadId,
+      environmentId: claims.environmentId,
+      relativePath: served,
+      ...(claims.device !== undefined && claims.inode !== undefined
+        ? { identity: { device: claims.device, inode: claims.inode } }
+        : {}),
+      ...(claims.download === true ? { download: true } : {}),
+      fileName: posixBasename(served),
+      ...(claims.viewer === undefined ? {} : { viewer: claims.viewer }),
+    } satisfies ResolvedAsset;
+  }
   const path = yield* Path.Path;
   if (claims.kind === "media-file-exact") {
     if (decodedPath !== path.basename(claims.filePath)) return null;
@@ -1041,15 +1201,7 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
         } satisfies ResolvedAsset)
       : null;
   }
-  const segments = decodedPath.split(/[\\/]/);
-  if (
-    decodedPath.length === 0 ||
-    decodedPath.includes("\0") ||
-    segments.some((segment) => segment === "." || segment === ".." || segment.startsWith(".")) ||
-    !PREVIEW_ASSET_EXTENSIONS.has(path.extname(decodedPath).toLowerCase())
-  ) {
-    return null;
-  }
+  if (!isPreviewSubPath(decodedPath)) return null;
   const joinedRelativePath =
     claims.baseRelativePath === "." ? decodedPath : path.join(claims.baseRelativePath, decodedPath);
   const workspaceFile = yield* resolveCanonicalWorkspaceFileForRequest({

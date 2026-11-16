@@ -39,6 +39,8 @@ import * as Stream from "effect/Stream";
 
 import { issueAssetUrl, resolveAsset } from "../assets/AssetAccess.ts";
 import * as AssetSigner from "../assets/AssetSigner.ts";
+import { maskedMachineAsset } from "../assets/MachineAssetResponse.ts";
+import { machineOver } from "../assets/MachineAssets.testkit.ts";
 import { MCP_TOOL_RULES, RAW_ROUTE_RULES } from "../auth/DoorRules.ts";
 import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
 import { REMOTE_OPERATIONS, REMOTE_STREAM_ITEMS } from "../environment/RemoteExecutorWire.ts";
@@ -382,6 +384,25 @@ const assetUrl: Proof = (scenario) =>
     );
   });
 
+/** Ticket 15: a Thread's file a URL serves from its machine, read through the Hub. */
+const machineAssetUrl: Proof = (scenario) =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() =>
+      NodeFSP.writeFile(NodePath.join(scenario.cwd, "proof-machine.txt"), `TOKEN=${OWNER_TOKEN}\n`),
+    );
+    const source = machineOver(scenario.cwd);
+    const file = yield* source.inspect("proof-machine.txt");
+    const response = yield* inHub(
+      scenario,
+      maskedMachineAsset(source, file, Option.some(scenario.owner)),
+    );
+    const body = response?.body;
+    shownMasked(
+      body?._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : "",
+      "files.streamAsset",
+    );
+  });
+
 /** The Changes panel's service, as the server builds it, over the Hub's own services. */
 const reviewLayer = ReviewService.layer.pipe(
   Layer.provideMerge(
@@ -634,6 +655,7 @@ const PROOFS: Record<string, Proof> = {
   "mcp:write_pull_request_guides": mcpGuideStore,
   "executor:files.read": readFile,
   "executor:files.write": writeFile,
+  "executor:files.streamAsset": machineAssetUrl,
   "executor:search.contents": searchContents,
   "executor:terminal.open": terminal("attach"),
   "executor:terminal.stream": terminal("observe"),

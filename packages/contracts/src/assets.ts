@@ -307,6 +307,27 @@ export class AssetSourceControlMediaUrlValidationError extends Schema.TaggedErro
   }
 }
 
+/**
+ * A file of a Thread that runs on another machine, which cannot be served from there now: the
+ * machine is offline or needs an update, or the file is outside the Thread's workspace there.
+ */
+export class AssetRemoteEnvironmentError extends Schema.TaggedError<AssetRemoteEnvironmentError>()(
+  "AssetRemoteEnvironmentError",
+  {
+    resource: AssetResource,
+    reason: Schema.Literals([
+      "environment_offline",
+      "machine_outdated",
+      "outside_thread_workspace",
+    ]),
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 export const AssetAccessError = Schema.Union([
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
@@ -322,5 +343,6 @@ export const AssetAccessError = Schema.Union([
   AssetProjectFaviconNotFoundError,
   AssetSourceControlMediaUrlValidationError,
   AssetSigningKeyLoadError,
+  AssetRemoteEnvironmentError,
 ]);
 export type AssetAccessError = typeof AssetAccessError.Type;

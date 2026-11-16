@@ -9,6 +9,7 @@ import {
   ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
   type EnvironmentId,
   NO_SECRETS_FINGERPRINT,
+  REMOTE_ASSETS_CONTRACT_VERSION,
   SECRET_ENV_CONTRACT_VERSION,
   type SecretEnv,
   SHELL_FACTS_CONTRACT_VERSION,
@@ -60,6 +61,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as MachineAssets from "../assets/MachineAssets.ts";
 import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { terminalOutputStream } from "../terminal/OutputProtocol.ts";
@@ -1055,6 +1057,69 @@ export const make = Effect.gen(function* () {
               Effect.fail(refuse({ _tag: "offline", name: where.name })),
           }),
         );
+    }),
+    /**
+     * Ticket 15: where a Thread's file served by URL is read. A read: a stopped Sandbox does not
+     * start for it. A Thread on another machine is never served the Hub machine's copy.
+     */
+    machineAsset: Effect.fn("ThreadWorkspace.machineAsset")(function* (
+      threadId: string,
+      caller: WorkspaceCaller,
+    ) {
+      const where = yield* route(threadId, { userId: caller.userId });
+      if (where._tag === "local" || where._tag === "hub-off") {
+        return { _tag: "local" } satisfies MachineAssets.MachineAssetRoute;
+      }
+      if (where._tag === "refused") {
+        return {
+          _tag: "unavailable",
+          reason: "outside_thread_workspace",
+          detail: REFUSED_MESSAGE,
+        } satisfies MachineAssets.MachineAssetRoute;
+      }
+      if (where._tag === "offline") {
+        return {
+          _tag: "unavailable",
+          reason: "environment_offline",
+          detail: offlineMessage(where.name, where.stopped),
+        } satisfies MachineAssets.MachineAssetRoute;
+      }
+      // A machine before contract 15 knows no such operation: it says so, never a Hub copy.
+      if (where.forward.contractVersion() < REMOTE_ASSETS_CONTRACT_VERSION) {
+        return {
+          _tag: "unavailable",
+          reason: "machine_outdated",
+          detail: `${where.name} needs an update to preview and download this Thread's files.`,
+        } satisfies MachineAssets.MachineAssetRoute;
+      }
+      const forward = where.forward;
+      const offline = () =>
+        new MachineAssets.MachineAssetUnavailableError({
+          reason: "environment_offline",
+          detail: offlineMessage(where.name),
+        });
+      const source: MachineAssets.MachineAssetSource = {
+        environmentId: where.environmentId,
+        name: where.name,
+        toRelative: (path) => (isAbsolute(path) ? onMachine(where, path) : relativeInside(path)),
+        inspect: (relativePath) =>
+          forward.call("files.inspectAsset", { root: where.remoteBase, relativePath }).pipe(
+            Effect.catchTags({
+              EnvironmentExecutorUnavailableError: () => Effect.fail(offline()),
+            }),
+          ),
+        read: (input) =>
+          forward
+            .stream(
+              "files.streamAsset",
+              { root: where.remoteBase, ...input },
+              { threadId: ThreadId.make(threadId) },
+            )
+            .pipe(
+              Stream.catchTag("EnvironmentExecutorUnavailableError", () => Stream.fail(offline())),
+            ),
+      };
+      return { _tag: "remote", source } satisfies MachineAssets.MachineAssetRoute;
     }),
     terminalOpen: (input: TerminalOpenInput, caller: WorkspaceCaller) =>
       terminalCall(

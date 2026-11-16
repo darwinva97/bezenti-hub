@@ -41,6 +41,13 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 
+import type * as HttpRouter from "effect/http/HttpRouter";
+
+import * as AssetSigner from "../assets/AssetSigner.ts";
+import * as ProjectCheckouts from "../environment/ProjectCheckouts.ts";
+import * as ThreadWorkspace from "../environment/ThreadWorkspace.ts";
+import * as ServerHttp from "../http.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as HubRepository from "../checkpointing/HubRepository.ts";
@@ -331,14 +338,20 @@ const withOrchestration =
         ),
       );
       const withRuntime = Context.merge(services, orchestration);
-      // Previews through the Hub, as the server serves them (`/preview/<token>/`).
+      // Previews through the Hub, as the server serves them (`/preview/<token>/`), and asset URLs
+      // of a Thread's files (`/api/assets/...`) read from its Active environment (ticket 15).
       const merged = Context.merge(
         withRuntime,
         yield* Layer.build(
-          // A live socket's access is checked again often, so tests see it close quickly.
-          HubPreviews.layerWith({ recheckEvery: "200 millis" }).pipe(
-            Layer.provide(Layer.succeedContext(withRuntime)),
-          ),
+          Layer.mergeAll(
+            // A live socket's access is checked again often, so tests see it close quickly.
+            HubPreviews.layerWith({ recheckEvery: "200 millis" }),
+            AssetSigner.layer,
+            WorkspacePaths.layer,
+            ThreadWorkspace.layer.pipe(
+              Layer.provide(Layer.mergeAll(ProjectionStore.layer, ProjectCheckouts.layer)),
+            ),
+          ).pipe(Layer.provide(Layer.succeedContext(withRuntime))),
         ),
       );
       // The effect worker runs as the server runs it, so effects settle without a test draining them.
@@ -895,6 +908,9 @@ export const makeHub = Effect.fn("HubWithEnvironments.makeHub")(function* (
     ...(options.sshInstallPolicy === undefined
       ? {}
       : { sshInstallPolicy: options.sshInstallPolicy }),
+    // Asset URLs as the server serves them: a Thread's files from its Active environment.
+    moreRoutes: () =>
+      ServerHttp.layerAssetRoute as unknown as Layer.Layer<never, never, HttpRouter.HttpRouter>,
   });
   sandboxes.setHubUrl(server.url);
   /**

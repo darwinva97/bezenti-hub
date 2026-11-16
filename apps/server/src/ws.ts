@@ -3247,6 +3247,7 @@ export const layerWsRpc = (
             return yield* issueThreadAssetUrl({
               resource,
               viewer: principal.userId,
+              threadWorkspace,
               localWorkspaceRoot,
             });
           }),

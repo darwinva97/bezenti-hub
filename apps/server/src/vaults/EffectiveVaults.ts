@@ -4,8 +4,10 @@
  * then Project, then Space): docs/internals/secrets.md, «The effective set».
  */
 import {
+  parseTemplate,
   ProjectId,
   secretNameRisk,
+  templateNames,
   type SpaceId,
   ThreadId,
   type UserId,
@@ -32,6 +34,18 @@ import type * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as VaultReach from "./VaultReach.ts";
 
+/** An entry a Template entry names: of the template's own Vault, read for it alone. */
+export interface EffectiveTemplateInput {
+  readonly name: string;
+  readonly entryId: VaultEntryId;
+  readonly valueId: string | null;
+  readonly provider: EffectiveVariable["provider"];
+  readonly class: VaultEntryClass;
+  readonly unmasked: boolean;
+  /** Delivered as a Secret file itself (what `{{ NAME | path }}` takes). */
+  readonly file: boolean;
+}
+
 /** One variable of the effective set. */
 export interface EffectiveVariable {
   readonly name: string;
@@ -55,8 +69,18 @@ export interface EffectiveVariable {
     readonly reference: string;
     readonly vaultId: string;
   } | null;
-  /** A link's original's. A Variable is never masked. */
+  /**
+   * A link's original's. A Variable is never masked. A template's, from its entries now: a
+   * Variable only when every one is.
+   */
   readonly class: VaultEntryClass;
+  /** A Secret file in memory whose path the variable holds (contract 14), or the variable. */
+  readonly delivery: "env" | "file";
+  /** A Template entry: its text and the entries of its Vault it names, each found. */
+  readonly template: {
+    readonly text: string;
+    readonly inputs: ReadonlyArray<EffectiveTemplateInput>;
+  } | null;
   readonly unmasked: boolean;
   /** A name that changes how tools run; only the Owner sets one (`secretNameRisk`). */
   readonly dangerous: boolean;
@@ -143,7 +167,52 @@ interface EntryRow {
   readonly providerId: string | null;
   readonly providerReference: string | null;
   readonly providerScopeId: string | null;
+  readonly kind: string;
+  readonly delivery: "env" | "file" | "none";
+  readonly templateText: string | null;
 }
+
+/** The provider an entry reads its value from, if it is a Provider entry. */
+const providerOf = (entry: EntryRow): EffectiveVariable["provider"] =>
+  entry.providerId !== null && entry.providerReference !== null
+    ? {
+        providerId: entry.providerId,
+        reference: entry.providerReference,
+        scopeId: entry.providerScopeId,
+        // Its scope must still be allowed to this Vault when it is read (ticket 03).
+        vaultId: entry.vaultId,
+      }
+    : null;
+
+/**
+ * A template's entries, found among its own Vault's by name: undefined when one is missing, holds
+ * nothing (a broken link), or is another template, so the template is broken and not delivered.
+ */
+const templateInputs = (
+  text: string,
+  siblings: ReadonlyArray<EntryRow>,
+): ReadonlyArray<EffectiveTemplateInput> | undefined => {
+  const parsed = parseTemplate(text);
+  if (parsed._tag === "invalid") return undefined;
+  const byName = new Map(siblings.map((entry) => [entry.name, entry]));
+  const inputs: Array<EffectiveTemplateInput> = [];
+  for (const name of templateNames(parsed.parts)) {
+    const entry = byName.get(name);
+    if (entry === undefined || entry.kind === "template") return undefined;
+    const provider = providerOf(entry);
+    if (entry.valueId === null && provider === null) return undefined;
+    inputs.push({
+      name,
+      entryId: VaultEntryId.make(entry.entryId),
+      valueId: provider === null ? entry.valueId : null,
+      provider,
+      class: entry.class ?? "secret",
+      unmasked: entry.unmasked === 1,
+      file: entry.delivery === "file",
+    });
+  }
+  return inputs;
+};
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -167,7 +236,8 @@ const make = Effect.gen(function* () {
             CASE WHEN e.kind = 'link' THEN o.unmasked ELSE e.unmasked END AS "unmasked",
             CASE WHEN e.kind = 'link' THEN o.class ELSE e.class END AS "class",
             e.provider_id AS "providerId", e.provider_reference AS "providerReference",
-            e.provider_scope_id AS "providerScopeId"
+            e.provider_scope_id AS "providerScopeId", e.kind AS "kind",
+            e.delivery AS "delivery", e.template_text AS "templateText"
           FROM vault_entries e
           LEFT JOIN vault_entries o
             ON e.kind = 'link' AND o.entry_id = e.linked_entry_id
@@ -308,19 +378,18 @@ const make = Effect.gen(function* () {
     const winners = new Map<string, { variable: EffectiveVariable; shadowed: VaultShadowed[] }>();
     for (const { row, source } of groups) {
       for (const entry of byVault.get(row.vaultId) ?? []) {
+        // An entry that only feeds templates takes no name: another Vault's may (ticket 05).
+        if (entry.delivery === "none") continue;
         // A broken link holds nothing; a name the Hub keeps (or not a variable) is never set. A
-        // Provider entry holds where to read its value (SecretDelivery reads it, ProviderReads).
-        const provider =
-          entry.providerId !== null && entry.providerReference !== null
-            ? {
-                providerId: entry.providerId,
-                reference: entry.providerReference,
-                scopeId: entry.providerScopeId,
-                // Its scope must still be allowed to this Vault when it is read (ticket 03).
-                vaultId: entry.vaultId,
-              }
-            : null;
-        if (entry.valueId === null && provider === null) continue;
+        // Provider entry holds where to read its value (SecretDelivery reads it, ProviderReads),
+        // a template the entries of its Vault it names (a broken one is not delivered).
+        const provider = providerOf(entry);
+        const inputs =
+          entry.kind === "template" && entry.templateText !== null
+            ? templateInputs(entry.templateText, byVault.get(row.vaultId) ?? [])
+            : undefined;
+        if (entry.kind === "template" && inputs === undefined) continue;
+        if (entry.valueId === null && provider === null && inputs === undefined) continue;
         const risk = secretNameRisk(entry.name);
         if (risk === "invalid" || risk === "gateway") continue;
         const winner = winners.get(entry.name);
@@ -337,9 +406,20 @@ const make = Effect.gen(function* () {
             vaultId: row.vaultId,
             vaultName: row.name,
             source,
-            valueId: provider === null ? entry.valueId : null,
+            valueId: provider === null && inputs === undefined ? entry.valueId : null,
             provider,
-            class: entry.class ?? "secret",
+            // A template is a Variable only while every entry it names is one, whatever it says.
+            class:
+              inputs === undefined
+                ? (entry.class ?? "secret")
+                : inputs.length > 0 && inputs.every((input) => input.class === "variable")
+                  ? "variable"
+                  : "secret",
+            delivery: entry.delivery === "file" ? "file" : "env",
+            template:
+              inputs === undefined || entry.templateText === null
+                ? null
+                : { text: entry.templateText, inputs },
             unmasked: entry.unmasked === 1,
             dangerous: risk === "dangerous",
             shadowed: [],

@@ -9,8 +9,14 @@ import {
   EnvironmentId,
   HUB_MACHINE_ENVIRONMENT_ID,
   NO_SECRETS_FINGERPRINT,
+  parseTemplate,
+  renderTemplate,
+  templatePathNames,
   SECRET_ENV_CONTRACT_VERSION,
+  SECRET_FILES_CONTRACT_VERSION,
   type SecretEnv,
+  type SecretEnvFile,
+  type SecretEnvVariable,
   SecretDeliveryError,
   SecretProviderReadError,
   type SpaceId,
@@ -25,6 +31,7 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as MachineSecretFiles from "../environment/MachineSecretFiles.ts";
 import { machineNameOf } from "../environments/machineName.ts";
 import { threadTurnOwner } from "../orchestration-v2/threadTurnOwner.ts";
 import { servesSpace } from "../sandboxes/sandboxSpace.ts";
@@ -33,7 +40,12 @@ import * as EffectiveVaults from "./EffectiveVaults.ts";
 import * as ProviderReads from "./ProviderReads.ts";
 import * as SecretMasker from "./SecretMasker.ts";
 
-type ProviderRead = { readonly name: string; readonly ref: ProviderReads.ProviderRef };
+/** A Provider entry to read: `key` tells entries apart (a template's of another Vault share names). */
+type ProviderRead = {
+  readonly key: string;
+  readonly name: string;
+  readonly ref: ProviderReads.ProviderRef;
+};
 
 /**
  * The failure of a set's Provider entries: the first provider and class that failed, with every
@@ -64,6 +76,31 @@ const readFailureOf = (
   });
 };
 
+/** One variable of a plan: by value id, never a value. */
+export interface PlannedVariable {
+  readonly name: string;
+  readonly valueId: string;
+  readonly plain?: true;
+  readonly provider?: ProviderReads.ProviderRef;
+  /** Delivered as a Secret file whose path the variable holds. */
+  readonly file?: true;
+  /** A Template entry: its text and its entries, rendered when the process starts. */
+  readonly template?: {
+    readonly text: string;
+    readonly inputs: ReadonlyArray<PlannedInput>;
+  };
+}
+
+/** An entry a template names (of its own Vault): its value id, or its provider, and if a file. */
+export interface PlannedInput {
+  readonly entryId: string;
+  readonly name: string;
+  readonly valueId: string;
+  readonly plain?: true;
+  readonly provider?: ProviderReads.ProviderRef;
+  readonly file?: true;
+}
+
 /** The machine a process starts on: the Thread's Active environment, and its executor contract. */
 export interface SecretTarget {
   readonly environmentId: EnvironmentId;
@@ -81,17 +118,18 @@ export interface SecretPlan {
    * entry, read again (through ProviderReads' cache) when the process starts; its `valueId` is
    * the delivered value's (`delivered:<HMAC>`), so a rotation in the provider changes the plan.
    */
-  readonly variables: ReadonlyArray<{
-    readonly name: string;
-    readonly valueId: string;
-    readonly plain?: true;
-    readonly provider?: ProviderReads.ProviderRef;
-  }>;
+  readonly variables: ReadonlyArray<PlannedVariable>;
   /**
-   * A Provider entry that could not be read when planning: the start fails with it, whole
-   * (decision 3). Its fingerprint differs from any set's, so a running process is not kept.
+   * Ticket 05: where `file` entries go on the target (its root and this Thread root and User's
+   * folder), when the set has any.
    */
-  readonly failure?: SecretProviderReadError;
+  readonly files?: { readonly root: string; readonly folder: string };
+  /**
+   * A Provider entry that could not be read when planning, or Secret files the target cannot take
+   * (before contract 14, or no folder in memory): the start fails with it, whole (decision 3). Its
+   * fingerprint differs from any set's, so a running process is not kept.
+   */
+  readonly failure?: SecretProviderReadError | SecretDeliveryError;
   /**
    * Spec 5 ticket 07: the Space the set was planned for (the Thread's, read by the same
    * `forThread`) and the User whose set it is; null when nothing was computed. A shell keeps them.
@@ -159,13 +197,53 @@ const fingerprintOf = (actingUserId: UserId, variables: SecretPlan["variables"])
         .update(
           JSON.stringify([
             actingUserId,
-            variables.map((v) =>
-              v.plain === true ? [v.name, v.valueId, "plain"] : [v.name, v.valueId],
-            ),
+            variables.map((v) => [
+              v.name,
+              v.valueId,
+              ...(v.plain === true ? ["plain"] : []),
+              ...(v.file === true ? ["file"] : []),
+            ]),
           ]),
         )
         .digest("hex")
         .slice(0, 32);
+
+/** How a planned variable is delivered: `plain` (a Variable) and `file` (a Secret file). */
+const pick = (variable: PlannedVariable): { readonly plain?: true; readonly file?: true } => ({
+  ...(variable.plain === true ? { plain: true as const } : {}),
+  ...(variable.file === true ? { file: true as const } : {}),
+});
+
+/** The Provider entries a set reads: its own and its templates' entries, once each. */
+const providerReadsOf = (
+  variables: ReadonlyArray<EffectiveVaults.EffectiveVariable>,
+): ReadonlyArray<ProviderRead> => {
+  const reads = new Map<string, ProviderRead>();
+  for (const v of variables) {
+    if (v.provider !== null) {
+      reads.set(v.entryId, { key: v.entryId, name: v.name, ref: v.provider });
+    }
+    for (const entry of v.template?.inputs ?? []) {
+      if (entry.provider !== null) {
+        reads.set(entry.entryId, { key: entry.entryId, name: entry.name, ref: entry.provider });
+      }
+    }
+  }
+  return [...reads.values()];
+};
+
+/** Whether each entry a template takes the path of is the one delivered under its name. */
+const pathsDelivered = (
+  v: EffectiveVaults.EffectiveVariable,
+  delivered: ReadonlyMap<string, string>,
+): boolean => {
+  const parsed = parseTemplate(v.template?.text ?? "");
+  if (parsed._tag === "invalid") return false;
+  return [...templatePathNames(parsed.parts)].every((name) => {
+    const entry = v.template?.inputs.find((input) => input.name === name);
+    return entry !== undefined && entry.file && delivered.get(name) === entry.entryId;
+  });
+};
 
 /** The plan of a process that gets no secret. */
 export const emptyPlan = (
@@ -189,6 +267,8 @@ const make = Effect.gen(function* () {
   const providerReads = yield* Effect.serviceOption(ProviderReads.ProviderReads);
   const deliveredStore = yield* Effect.serviceOption(ServerSecretStore.DeliveredValueStore);
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
+  // Ticket 05: where each machine writes Secret files (in memory, or none at all).
+  const machineFiles = yield* Effect.serviceOption(MachineSecretFiles.MachineSecretFiles);
 
   const storage = (what: string) => (cause: unknown) =>
     Effect.logError(`SecretDelivery: could not ${what}`, { cause }).pipe(
@@ -222,7 +302,7 @@ const make = Effect.gen(function* () {
     const found = new Map<string, string>();
     reads.forEach((read, index) => {
       const outcome = outcomes[index];
-      if (outcome?._tag === "value") found.set(read.name, outcome.value);
+      if (outcome?._tag === "value") found.set(read.key, outcome.value);
     });
     return { values: found, failure: readFailureOf(reads, outcomes) };
   });
@@ -242,12 +322,15 @@ const make = Effect.gen(function* () {
   ) {
     if (dangerous.length === 0) return new Set<string>();
     const valueIds = dangerous.flatMap((v) => (v.valueId === null ? [] : [v.valueId]));
-    const entryIds = dangerous.flatMap((v) => (v.provider === null ? [] : [v.entryId]));
+    const entryIds = dangerous.flatMap((v) =>
+      v.provider === null && v.template === null ? [] : [v.entryId],
+    );
     const rows = yield* sql<{ readonly valueId: string | null; readonly entryId: string }>`
       SELECT e.value_id AS "valueId", e.entry_id AS "entryId" FROM vault_entries e
       JOIN users u ON u.user_id = e.updated_by AND u.is_owner = 1
       WHERE e.value_id IN ${sql.in(valueIds.length === 0 ? [""] : valueIds)}
-        OR (e.kind = 'provider' AND e.entry_id IN ${sql.in(entryIds.length === 0 ? [""] : entryIds)})
+        OR (e.kind IN ('provider', 'template')
+          AND e.entry_id IN ${sql.in(entryIds.length === 0 ? [""] : entryIds)})
     `.pipe(Effect.catch(storage("check who set the Thread's secrets")));
     const trustedValues = new Set(
       rows.flatMap((row) => (row.valueId === null ? [] : [row.valueId])),
@@ -256,7 +339,7 @@ const make = Effect.gen(function* () {
     return new Set(
       dangerous
         .filter((v) =>
-          v.provider === null
+          v.provider === null && v.template === null
             ? v.valueId !== null && trustedValues.has(v.valueId)
             : trustedEntries.has(v.entryId),
         )
@@ -297,41 +380,78 @@ const make = Effect.gen(function* () {
       if (!serves) return emptyPlan(input.target, facts);
     }
     const trusted = yield* ownerSet(set.value.variables.filter((v) => v.dangerous));
-    const chosen = set.value.variables.filter((v) => !v.dangerous || trusted.has(v.entryId));
-    // Provider entries are read now, through the cache: their value names the set (HMAC).
-    const reads = chosen.flatMap((v) =>
-      v.provider === null ? [] : [{ name: v.name, ref: v.provider }],
-    );
+    const winners = set.value.variables.filter((v) => !v.dangerous || trusted.has(v.entryId));
+    // A template's `| path` takes the Secret file its entry is delivered as: that entry has to be
+    // the one delivered under its name, or the path would be another's file. Else it is broken.
+    const delivered = new Map(winners.map((v) => [v.name, v.entryId as string]));
+    const chosen = winners.filter((v) => v.template === null || pathsDelivered(v, delivered));
+    // Provider entries are read now, through the cache: their value names the set (HMAC). So are
+    // a template's entries read from a provider, once each.
+    const reads = providerReadsOf(chosen);
     const read = yield* readProviders(reads);
-    const key = reads.length === 0 ? undefined : yield* hmacKey;
-    const variables = chosen.flatMap((v): Array<SecretPlan["variables"][number]> => {
-      if (v.provider !== null) {
-        const value = read.values.get(v.name);
-        if (value === undefined || key === undefined) return [];
+    const key = yield* hmacKey;
+    const readId = (entryId: string) => {
+      const value = read.values.get(entryId);
+      return value === undefined
+        ? undefined
+        : DeliveredValueId.deliveredValueId(DeliveredValueId.deliveredIdOf(key, value));
+    };
+    const variables = chosen.flatMap((v): Array<PlannedVariable> => {
+      const file = v.delivery === "file" ? { file: true as const } : {};
+      const plain = v.class === "variable" ? { plain: true as const } : {};
+      if (v.template !== null) {
+        const inputs = v.template.inputs.flatMap((entry): Array<PlannedInput> => {
+          const valueId = entry.provider === null ? entry.valueId : readId(entry.entryId);
+          if (valueId === null || valueId === undefined) return [];
+          return [
+            {
+              entryId: entry.entryId,
+              name: entry.name,
+              valueId,
+              ...(entry.class === "variable" ? { plain: true as const } : {}),
+              ...(entry.provider === null ? {} : { provider: entry.provider }),
+              ...(entry.file ? { file: true as const } : {}),
+            },
+          ];
+        });
+        // An entry not read (its provider failed: the plan fails below) leaves the template out.
+        if (inputs.length !== v.template.inputs.length) return [];
+        // Its id names its text and its entries' values: a rotation reopens the session.
+        const id = DeliveredValueId.deliveredIdOf(
+          key,
+          JSON.stringify([v.template.text, inputs.map((entry) => [entry.name, entry.valueId])]),
+        );
         return [
           {
             name: v.name,
-            valueId: DeliveredValueId.deliveredValueId(DeliveredValueId.deliveredIdOf(key, value)),
-            provider: v.provider,
+            valueId: `template:${id}`,
+            template: { text: v.template.text, inputs },
+            ...plain,
+            ...file,
           },
         ];
       }
+      if (v.provider !== null) {
+        const valueId = readId(v.entryId);
+        if (valueId === undefined) return [];
+        return [{ name: v.name, valueId, provider: v.provider, ...file }];
+      }
       if (v.valueId === null) return [];
-      return [
-        {
-          name: v.name,
-          valueId: v.valueId,
-          ...(v.class === "variable" ? { plain: true as const } : {}),
-        },
-      ];
+      return [{ name: v.name, valueId: v.valueId, ...plain, ...file }];
     });
-    if (read.failure !== undefined) {
+    const files = yield* filesFor(
+      { threadId: input.threadId, actingUserId: input.actingUserId, target: input.target },
+      variables,
+      key,
+    );
+    const failure = read.failure ?? (files._tag === "refused" ? files.error : undefined);
+    if (failure !== undefined) {
       return {
         fingerprint: `failed:${fingerprintOf(input.actingUserId, variables)}`,
         target: input.target,
         threadId: input.threadId,
         variables,
-        failure: read.failure,
+        failure,
         ...facts,
       } satisfies SecretPlan;
     }
@@ -340,8 +460,57 @@ const make = Effect.gen(function* () {
       target: input.target,
       threadId: input.threadId,
       variables,
+      ...(files._tag === "at" ? { files: files.at } : {}),
       ...facts,
     } satisfies SecretPlan;
+  });
+
+  /**
+   * Where the set's Secret files go: nowhere without any; refused, never sent nor turned into
+   * variables, to a machine before contract 14 or without a folder in memory; else its root and
+   * the folder of this Thread root and User (an HMAC id: the same for all their processes there).
+   */
+  const filesFor = Effect.fn("SecretDelivery.filesFor")(function* (
+    input: {
+      readonly threadId: ThreadId;
+      readonly actingUserId: UserId;
+      readonly target: SecretTarget;
+    },
+    variables: ReadonlyArray<PlannedVariable>,
+    key: Uint8Array,
+  ) {
+    const names = variables.flatMap((v) => (v.file === true ? [v.name] : []));
+    if (names.length === 0) return { _tag: "none" } as const;
+    const refused = Effect.fn("SecretDelivery.filesRefused")(function* (
+      reason: "outdated-machine-files" | "files-not-in-memory",
+    ) {
+      const environmentName = yield* machineName(input.target.environmentId);
+      return {
+        _tag: "refused",
+        error: new SecretDeliveryError({
+          reason,
+          entries: names,
+          ...(environmentName === undefined ? {} : { environmentName }),
+        }),
+      } as const;
+    });
+    if (input.target.contractVersion < SECRET_FILES_CONTRACT_VERSION) {
+      return yield* refused("outdated-machine-files");
+    }
+    const root = Option.isNone(machineFiles)
+      ? undefined
+      : machineFiles.value.rootOf(input.target.environmentId);
+    if (root === undefined || !root.inMemory) return yield* refused("files-not-in-memory");
+    const rows = yield* sql<{ readonly root: string }>`
+      SELECT COALESCE(json_extract(payload_json, '$.lineage.rootThreadId'), thread_id) AS "root"
+      FROM orchestration_v2_projection_threads WHERE thread_id = ${input.threadId}
+    `.pipe(Effect.catch(storage("read the Thread's root")));
+    const threadRoot = rows[0]?.root ?? input.threadId;
+    const folder = DeliveredValueId.deliveredIdOf(
+      key,
+      `secret-files|${threadRoot}|${input.actingUserId}`,
+    ).slice(0, 32);
+    return { _tag: "at", at: { root: root.path, folder } } as const;
   });
 
   const planTurn = Effect.fn("SecretDelivery.planTurn")(function* (input: {
@@ -404,60 +573,129 @@ const make = Effect.gen(function* () {
       });
     }
     // Provider entries again, through the cache (a hit since the plan, unless it expired).
-    const reads = planned.variables.flatMap((variable) =>
-      variable.provider === undefined ? [] : [{ name: variable.name, ref: variable.provider }],
-    );
+    const reads = planned.variables.flatMap((variable): Array<ProviderRead> => [
+      ...(variable.provider === undefined
+        ? []
+        : [{ key: variable.name, name: variable.name, ref: variable.provider }]),
+      ...(variable.template?.inputs ?? []).flatMap((entry) =>
+        entry.provider === undefined
+          ? []
+          : [{ key: `${variable.name}/${entry.entryId}`, name: entry.name, ref: entry.provider }],
+      ),
+    ]);
     const read = yield* readProviders(reads);
     if (read.failure !== undefined) return yield* read.failure;
-    const key = reads.length === 0 ? undefined : yield* hmacKey;
-    const delivered: Array<SecretMasker.DeliveredSecret & { readonly plain?: true }> = [];
+    const key = yield* hmacKey;
+    /** A value read from a provider, sealed first: masked in the Thread for its life. */
+    const keepRead = Effect.fn("SecretDelivery.keepRead")(function* (value: string) {
+      const id = DeliveredValueId.deliveredIdOf(key, value);
+      if (Option.isNone(deliveredStore)) {
+        return yield* storage("keep a provider's value for masking")(
+          "no delivered values' store on this machine",
+        );
+      }
+      yield* deliveredStore.value
+        .set(id, new TextEncoder().encode(value))
+        .pipe(Effect.catch(storage("keep a provider's value for masking")));
+      return DeliveredValueId.deliveredValueId(id);
+    });
+    const readOwn = (valueId: string) =>
+      values
+        .get(valueId)
+        .pipe(
+          Effect.catch(storage("read the Thread's secrets")),
+          Effect.map(Option.map((bytes) => new TextDecoder().decode(bytes))),
+        );
+    // What the Thread masks: every Secret delivered, and every Secret a template took.
+    const masked: Array<SecretMasker.DeliveredSecret> = [];
+    const out: Array<{
+      readonly name: string;
+      readonly value: string;
+      readonly plain?: true;
+      readonly file?: true;
+    }> = [];
+    const pathOf = (name: string) =>
+      planned.files === undefined
+        ? undefined
+        : `${planned.files.root}/${planned.files.folder}/${name}`;
     for (const variable of planned.variables) {
+      if (variable.template !== undefined) {
+        const found = new Map<string, string>();
+        for (const entry of variable.template.inputs) {
+          const value =
+            entry.provider === undefined
+              ? Option.getOrUndefined(yield* readOwn(entry.valueId))
+              : read.values.get(`${variable.name}/${entry.entryId}`);
+          if (value === undefined) break;
+          found.set(entry.name, value);
+          if (entry.plain === true) continue;
+          masked.push({
+            name: entry.name,
+            value,
+            valueId: entry.provider === undefined ? entry.valueId : yield* keepRead(value),
+          });
+        }
+        // An entry gone since the plan (a delete, a provider removed): left out, never half.
+        if (found.size !== variable.template.inputs.length) continue;
+        const parsed = parseTemplate(variable.template.text);
+        if (parsed._tag === "invalid") continue;
+        const rendered = renderTemplate(parsed.parts, (name) => {
+          const path = variable.template?.inputs.find((entry) => entry.name === name)?.file
+            ? pathOf(name)
+            : undefined;
+          return { value: found.get(name) ?? "", ...(path === undefined ? {} : { path }) };
+        });
+        if (rendered._tag === "failed") {
+          return yield* new SecretDeliveryError({
+            reason: "template",
+            entries: [variable.name, rendered.name],
+          });
+        }
+        if (variable.plain !== true) {
+          masked.push({
+            name: variable.name,
+            value: rendered.text,
+            valueId: yield* keepRead(rendered.text),
+          });
+        }
+        out.push({ name: variable.name, value: rendered.text, ...pick(variable) });
+        continue;
+      }
       if (variable.provider !== undefined) {
         const value = read.values.get(variable.name);
         // A provider gone since the plan (broken): left out, like a broken link.
-        if (value === undefined || key === undefined) continue;
-        const id = DeliveredValueId.deliveredIdOf(key, value);
-        // Sealed first: masked in the Thread from its first byte, for the Thread's life.
-        if (Option.isNone(deliveredStore)) {
-          return yield* storage("keep a provider's value for masking")(
-            "no delivered values' store on this machine",
-          );
-        }
-        yield* deliveredStore.value
-          .set(id, new TextEncoder().encode(value))
-          .pipe(Effect.catch(storage("keep a provider's value for masking")));
-        delivered.push({
-          name: variable.name,
-          value,
-          valueId: DeliveredValueId.deliveredValueId(id),
-        });
+        if (value === undefined) continue;
+        masked.push({ name: variable.name, value, valueId: yield* keepRead(value) });
+        out.push({ name: variable.name, value, ...pick(variable) });
         continue;
       }
-      const bytes = yield* values
-        .get(variable.valueId)
-        .pipe(Effect.catch(storage("read the Thread's secrets")));
+      const value = yield* readOwn(variable.valueId);
       // A value gone from the store (a race with a delete) is left out, never sent empty.
-      if (Option.isNone(bytes)) continue;
-      delivered.push({
-        name: variable.name,
-        value: new TextDecoder().decode(bytes.value),
-        valueId: variable.valueId,
-        ...(variable.plain === true ? { plain: true as const } : {}),
-      });
+      if (Option.isNone(value)) continue;
+      if (variable.plain !== true) {
+        masked.push({ name: variable.name, value: value.value, valueId: variable.valueId });
+      }
+      out.push({ name: variable.name, value: value.value, ...pick(variable) });
     }
     // Masked in the Thread before the process that gets them can print anything (ticket 05);
     // Variables never are.
     if (planned.threadId !== undefined && Option.isSome(masker)) {
-      yield* masker.value.remember(
-        planned.threadId,
-        delivered.filter((secret) => secret.plain !== true),
-      );
+      yield* masker.value.remember(planned.threadId, masked);
     }
+    const variables = out.flatMap(({ name, value, plain, file }): Array<SecretEnvVariable> =>
+      file === true ? [] : [plain === true ? { name, value, plain } : { name, value }],
+    );
+    const files = out.flatMap(({ name, value, plain, file }): Array<SecretEnvFile> =>
+      file === true
+        ? [{ name, content: value, mode: 0o600, ...(plain === true ? { plain } : {}) }]
+        : [],
+    );
     return {
       fingerprint: planned.fingerprint,
-      variables: delivered.map(({ name, value, plain }) =>
-        plain === true ? { name, value, plain } : { name, value },
-      ),
+      variables,
+      ...(files.length === 0 || planned.files === undefined
+        ? {}
+        : { files, filesFolder: planned.files.folder }),
     } satisfies SecretEnv;
   });
 

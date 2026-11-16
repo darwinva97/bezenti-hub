@@ -9,6 +9,7 @@ import {
   MAIN_VAULT_ID,
   ThreadId,
   UserId,
+  SecretDeliveryError,
   type SecretEnv,
   type VaultEntryId,
 } from "@t3tools/contracts";
@@ -18,8 +19,10 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { readError, readValue } from "@t3tools/secret-provider-core/server/driver";
@@ -37,6 +40,7 @@ import {
 } from "./ProviderReads.testkit.ts";
 import * as SecretDelivery from "./SecretDelivery.ts";
 import * as SecretMasker from "./SecretMasker.ts";
+import * as ThreadSecretFiles from "../secrets/ThreadSecretFiles.ts";
 import * as Vaults from "./Vaults.ts";
 
 const HUB = {
@@ -44,36 +48,40 @@ const HUB = {
   contractVersion: ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
 };
 
-const ownersThread = Effect.gen(function* () {
-  const provider = makeFakeSecretProvider();
-  const server = yield* serveAuthHttpWith({ providerReads: provider.options });
-  const { created } = yield* bootstrapOwner(server, yield* makeAuthenticator());
-  const owner = UserId.make((created.body.user as { id: string }).id);
-  const vaults = Context.get(server.services, Vaults.Vaults);
-  const delivery = Context.get(server.services, SecretDelivery.SecretDelivery);
-  const entries = new Map<string, VaultEntryId>();
-  const put = (
-    name: string,
-    value: string,
-    confirmDangerous?: boolean,
-    entryClass?: "secret" | "variable",
-  ) =>
-    vaults
-      .putEntry({
-        vaultId: MAIN_VAULT_ID,
-        name,
-        value: Redacted.make(value),
-        ...(entries.has(name) ? { entryId: entries.get(name)! } : {}),
-        ...(confirmDangerous === undefined ? {} : { confirmDangerous }),
-        ...(entryClass === undefined ? {} : { class: entryClass }),
-      })
-      .pipe(
-        CommandActor.actAs(owner),
-        Effect.tap((result) => Effect.sync(() => void entries.set(name, result.entry.id))),
-      );
-  const thread = Effect.fn(function* (id: string, rootThreadId?: string) {
-    const now = DateTime.formatIso(yield* DateTime.now);
-    yield* server.sql`
+const ownersThreadWith = (secretFiles?: Layer.Layer<ThreadSecretFiles.ThreadSecretFiles>) =>
+  Effect.gen(function* () {
+    const provider = makeFakeSecretProvider();
+    const server = yield* serveAuthHttpWith({
+      providerReads: provider.options,
+      ...(secretFiles === undefined ? {} : { secretFiles }),
+    });
+    const { created } = yield* bootstrapOwner(server, yield* makeAuthenticator());
+    const owner = UserId.make((created.body.user as { id: string }).id);
+    const vaults = Context.get(server.services, Vaults.Vaults);
+    const delivery = Context.get(server.services, SecretDelivery.SecretDelivery);
+    const entries = new Map<string, VaultEntryId>();
+    const put = (
+      name: string,
+      value: string,
+      confirmDangerous?: boolean,
+      entryClass?: "secret" | "variable",
+    ) =>
+      vaults
+        .putEntry({
+          vaultId: MAIN_VAULT_ID,
+          name,
+          value: Redacted.make(value),
+          ...(entries.has(name) ? { entryId: entries.get(name)! } : {}),
+          ...(confirmDangerous === undefined ? {} : { confirmDangerous }),
+          ...(entryClass === undefined ? {} : { class: entryClass }),
+        })
+        .pipe(
+          CommandActor.actAs(owner),
+          Effect.tap((result) => Effect.sync(() => void entries.set(name, result.entry.id))),
+        );
+    const thread = Effect.fn(function* (id: string, rootThreadId?: string) {
+      const now = DateTime.formatIso(yield* DateTime.now);
+      yield* server.sql`
       INSERT INTO orchestration_v2_projection_threads (
         thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
         created_at, updated_at, payload_json, space_id, owner_user_id
@@ -83,24 +91,37 @@ const ownersThread = Effect.gen(function* () {
         ${`personal:${owner}`}, ${rootThreadId === undefined ? owner : null}
       )
     `;
-    return ThreadId.make(id);
+      return ThreadId.make(id);
+    });
+    // A process starting: the plan, then its values.
+    const forTurn = (input: Parameters<typeof delivery.planTurn>[0]) =>
+      delivery.planTurn(input).pipe(Effect.flatMap(delivery.resolve));
+    const forProcess = (input: Parameters<typeof delivery.plan>[0]) =>
+      delivery.plan(input).pipe(Effect.flatMap(delivery.resolve));
+    // Ticket 02: a Provider entry of the Main vault, read from the fake provider.
+    const putProvider = (name: string, reference: string) =>
+      vaults
+        .putEntry({
+          vaultId: MAIN_VAULT_ID,
+          name,
+          provider: { providerId: FAKE_PROVIDER_ID, reference },
+        })
+        .pipe(CommandActor.actAs(owner));
+    return {
+      server,
+      owner,
+      vaults,
+      put,
+      putProvider,
+      provider,
+      thread,
+      delivery,
+      forTurn,
+      forProcess,
+    };
   });
-  // A process starting: the plan, then its values.
-  const forTurn = (input: Parameters<typeof delivery.planTurn>[0]) =>
-    delivery.planTurn(input).pipe(Effect.flatMap(delivery.resolve));
-  const forProcess = (input: Parameters<typeof delivery.plan>[0]) =>
-    delivery.plan(input).pipe(Effect.flatMap(delivery.resolve));
-  // Ticket 02: a Provider entry of the Main vault, read from the fake provider.
-  const putProvider = (name: string, reference: string) =>
-    vaults
-      .putEntry({
-        vaultId: MAIN_VAULT_ID,
-        name,
-        provider: { providerId: FAKE_PROVIDER_ID, reference },
-      })
-      .pipe(CommandActor.actAs(owner));
-  return { server, owner, put, putProvider, provider, thread, delivery, forTurn, forProcess };
-});
+
+const ownersThread = ownersThreadWith();
 
 const valueOf = (secretEnv: SecretEnv | undefined, name: string) =>
   secretEnv?.variables?.find((variable) => variable.name === name)?.value;
@@ -384,5 +405,194 @@ it.effect("a deleted Thread takes its delivered values with it, but not another 
       Effect.provideService(ServerSecretStore.DeliveredValueStore, store),
     );
     assert.deepEqual(yield* store.list, []);
+  }).pipe(Effect.scoped),
+);
+
+// Ticket 05: Secret files and Template entries.
+
+const isDeliveryError = Schema.is(SecretDeliveryError);
+
+/** The Hub machine's root in memory, as its ThreadSecretFiles found it (nothing is written here). */
+const HUB_FILES_ROOT = "/dev/shm/t3code-thread-files-test";
+const hubFilesInMemory = Layer.effect(
+  ThreadSecretFiles.ThreadSecretFiles,
+  ThreadSecretFiles.make({ path: HUB_FILES_ROOT, inMemory: true }),
+);
+const CA = [
+  "-----BEGIN CERTIFICATE-----",
+  "MIIBszCCAVmgAwIBAgIUQ2xpZW50Q0FfZm9yX3QzY29kZV90ZXN0",
+  "-----END CERTIFICATE-----",
+].join("\n");
+const KUBE_TEMPLATE = [
+  "server: {{ KUBE_SERVER }}",
+  "certificate-authority-data: {{ KUBE_CA | base64 }}",
+  "tokenFile: {{ KUBE_TOKEN | path }}",
+  "",
+].join("\n");
+
+/** KUBE_SERVER (a Variable), KUBE_CA (only the template's), KUBE_TOKEN (a file), KUBECONFIG. */
+const kubeconfigSet = Effect.fn(function* (
+  setup: Effect.Success<ReturnType<typeof ownersThreadWith>>,
+) {
+  const { vaults, owner } = setup;
+  const put = (input: Omit<Parameters<typeof vaults.putEntry>[0], "vaultId">) =>
+    vaults.putEntry({ vaultId: MAIN_VAULT_ID, ...input }).pipe(CommandActor.actAs(owner));
+  yield* put({
+    name: "KUBE_SERVER",
+    value: Redacted.make("https://k3s.internal:6443"),
+    class: "variable",
+  });
+  yield* put({ name: "KUBE_CA", value: Redacted.make(CA), delivery: "none" });
+  yield* put({
+    name: "KUBE_TOKEN",
+    value: Redacted.make("kube-token-secret-0001"),
+    delivery: "file",
+  });
+  return yield* put({ name: "KUBECONFIG", template: { text: KUBE_TEMPLATE }, delivery: "file" });
+});
+
+it.effect(
+  "a template is rendered as a process starts, files go in memory with their paths, all masked",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* ownersThreadWith(hubFilesInMemory);
+      const { server, thread, forTurn } = setup;
+      yield* kubeconfigSet(setup);
+      const threadId = yield* thread("thread:kube");
+      const env = yield* forTurn({ threadId, target: HUB });
+      const folder = env?.filesFolder ?? "";
+      assert.match(folder, /^[0-9a-f]{32}$/);
+      const tokenPath = `${HUB_FILES_ROOT}/${folder}/KUBE_TOKEN`;
+      // Only what goes by environment is a variable; `none` never goes; files carry contents.
+      assert.deepEqual(env?.variables, [
+        { name: "KUBE_SERVER", value: "https://k3s.internal:6443", plain: true },
+      ]);
+      const rendered = [
+        "server: https://k3s.internal:6443",
+        `certificate-authority-data: ${btoa(CA)}`,
+        `tokenFile: ${tokenPath}`,
+        "",
+      ].join("\n");
+      assert.deepEqual(env?.files, [
+        { name: "KUBECONFIG", content: rendered, mode: 0o600 },
+        { name: "KUBE_TOKEN", content: "kube-token-secret-0001", mode: 0o600 },
+      ]);
+      // The same Thread root and User keep one folder: the child Thread's process shares it.
+      const child = yield* thread("thread:kube-child", threadId);
+      assert.equal((yield* forTurn({ threadId: child, target: HUB }))?.filesFolder, folder);
+      // Masked in the Thread: the rendered file, the template's own entries (the one never
+      // delivered by itself too), and each long line of the multiline CA; the Variable never.
+      const masker = yield* Context.get(server.services, SecretMasker.SecretMasker).forThread(
+        threadId,
+      );
+      assert.equal(masker.mask(rendered), "[KUBECONFIG]");
+      assert.equal(
+        masker.mask("MIIBszCCAVmgAwIBAgIUQ2xpZW50Q0FfZm9yX3QzY29kZV90ZXN0 kube-token-secret-0001"),
+        "[KUBE_CA] [KUBE_TOKEN]",
+      );
+      assert.equal(masker.mask("https://k3s.internal:6443"), "https://k3s.internal:6443");
+    }).pipe(Effect.scoped),
+);
+
+it.effect("a machine before contract 14 or without memory gets no file, and nothing instead", () =>
+  Effect.gen(function* () {
+    const setup = yield* ownersThreadWith();
+    const { thread, delivery, forTurn, server } = setup;
+    yield* kubeconfigSet(setup);
+    const threadId = yield* thread("thread:kube-refused");
+    // The Hub machine here has no folder in memory: refused, never written to a disk or sent as
+    // variables.
+    const notInMemory = yield* Effect.flip(forTurn({ threadId, target: HUB }));
+    assert.instanceOf(notInMemory, SecretDeliveryError);
+    assert.deepEqual(
+      isDeliveryError(notInMemory) ? [notInMemory.reason, ...(notInMemory.entries ?? [])] : [],
+      ["files-not-in-memory", "KUBECONFIG", "KUBE_TOKEN"],
+    );
+    // A machine of contract 13: refused before anything is read.
+    const old = yield* delivery.planTurn({
+      threadId,
+      target: { environmentId: HUB_MACHINE_ENVIRONMENT_ID, contractVersion: 13 },
+    });
+    assert.equal(
+      isDeliveryError(old.failure) ? old.failure.reason : undefined,
+      "outdated-machine-files",
+    );
+    const refused = yield* Effect.flip(delivery.resolve(old));
+    assert.match(refused.message, /needs an update to receive this Thread's secret files/);
+    // Nothing of the set was delivered: nothing is recorded for the Thread's masking.
+    const remembered =
+      yield* server.sql`SELECT 1 FROM thread_secret_values WHERE thread_id = ${threadId}`;
+    assert.lengthOf(remembered, 0);
+    // The Owner switches them to the environment: delivered as variables, on any machine.
+    const { vaults, owner } = setup;
+    const listed = yield* vaults
+      .listEntries({ vaultId: MAIN_VAULT_ID })
+      .pipe(CommandActor.actAs(owner));
+    const idOf = (name: string) => listed.entries.find((entry) => entry.name === name)!.id;
+    yield* vaults
+      .putEntry({
+        vaultId: MAIN_VAULT_ID,
+        entryId: idOf("KUBECONFIG"),
+        name: "KUBECONFIG",
+        template: { text: "server: {{ KUBE_SERVER }}" },
+        delivery: "env",
+      })
+      .pipe(CommandActor.actAs(owner));
+    yield* vaults
+      .putEntry({
+        vaultId: MAIN_VAULT_ID,
+        entryId: idOf("KUBE_TOKEN"),
+        name: "KUBE_TOKEN",
+        delivery: "env",
+      })
+      .pipe(CommandActor.actAs(owner));
+    const asVariables = yield* forTurn({ threadId, target: HUB });
+    assert.equal(valueOf(asVariables, "KUBE_TOKEN"), "kube-token-secret-0001");
+    assert.equal(valueOf(asVariables, "KUBECONFIG"), "server: https://k3s.internal:6443");
+    assert.isUndefined(asVariables?.files);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a template fails whole with one of its entries: nothing of the set goes", () =>
+  Effect.gen(function* () {
+    const setup = yield* ownersThreadWith(hubFilesInMemory);
+    const { thread, forTurn, provider, putProvider, vaults, owner, server } = setup;
+    yield* putProvider("DB_PASSWORD", "kv/acme/db#password");
+    yield* setup.put("DB_USER", "app-user-value");
+    yield* vaults
+      .putEntry({
+        vaultId: MAIN_VAULT_ID,
+        name: "DATABASE_URL",
+        template: { text: "postgres://{{ DB_USER }}:{{ DB_PASSWORD | urlencode }}@db/app" },
+      })
+      .pipe(CommandActor.actAs(owner));
+    const threadId = yield* thread("thread:db");
+    provider.state.answer = () => readValue("p@ss/w0rd!");
+    const env = yield* forTurn({ threadId, target: HUB });
+    assert.equal(valueOf(env, "DATABASE_URL"), "postgres://app-user-value:p%40ss%2Fw0rd!@db/app");
+    // The provider stops answering: the start fails with its error, the template included.
+    const otherThread = yield* thread("thread:db-down");
+    provider.state.answer = () => readError("unavailable");
+    yield* TestClock.adjust("6 minutes");
+    const failed = yield* Effect.flip(forTurn({ threadId: otherThread, target: HUB }));
+    assert.equal(failed._tag, "SecretProviderReadError");
+    const remembered =
+      yield* server.sql`SELECT 1 FROM thread_secret_values WHERE thread_id = ${otherThread}`;
+    assert.lengthOf(remembered, 0);
+    // A value a filter cannot take fails the template by name, never showing the value.
+    yield* vaults
+      .putEntry({
+        vaultId: MAIN_VAULT_ID,
+        name: "DECODED",
+        template: { text: "{{ DB_USER | base64decode }}" },
+      })
+      .pipe(CommandActor.actAs(owner));
+    provider.state.answer = () => readValue("p@ss/w0rd!");
+    yield* TestClock.adjust("6 minutes");
+    const bad = yield* Effect.flip(forTurn({ threadId, target: HUB }));
+    assert.equal(
+      bad.message,
+      "DECODED could not be composed: DB_USER is not what its filter takes.",
+    );
   }).pipe(Effect.scoped),
 );

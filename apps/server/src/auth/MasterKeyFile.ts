@@ -16,6 +16,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
+import { IDENTITY_SIGNING_KEY_PREFIX } from "../identity/signingKeyNames.ts";
 import { createExclusively, readIfPresent, TEMP_FILE, writeAtomically } from "./atomicFile.ts";
 import { isReplayMarker, REPLAY_MARKER_MAX_AGE } from "./replayMarkerNames.ts";
 import * as SecretCipher from "./SecretCipher.ts";
@@ -621,6 +622,22 @@ export const writeBackupRecord = Effect.fn("MasterKeyFile.writeBackupRecord")(fu
 });
 
 /**
+ * A restore never brings back the workload identity signing keys (ticket 07): whoever holds an
+ * old backup and a copy of the secrets could sign as this Hub. The Hub makes new ones; verifiers
+ * fetch them from its JWKS.
+ */
+const dropIdentitySigningKeys = Effect.fn("MasterKeyFile.dropIdentitySigningKeys")(function* (
+  secretsDir: string,
+) {
+  const { sealed } = yield* listEntries(secretsDir);
+  for (const entry of sealed.values()) {
+    if (entry.key === `/${entry.name}` && entry.name.startsWith(IDENTITY_SIGNING_KEY_PREFIX)) {
+      yield* removeFile(entry.file);
+    }
+  }
+});
+
+/**
  * Puts a backed-up key in place; the caller holds the server's ownership lock. Refused when it
  * does not open every secret here; a key it replaces is kept beside it, never discarded.
  */
@@ -648,6 +665,7 @@ export const importKey = Effect.fn("MasterKeyFile.importKey")(function* (
     }),
   );
   if (Option.isSome(current) && current.value.id === key.id) {
+    yield* dropIdentitySigningKeys(config.secretsDir);
     return { keyId: key.id, keyFile, replaced: false };
   }
   // Every sealed entry and the key check must open with it.
@@ -685,5 +703,6 @@ export const importKey = Effect.fn("MasterKeyFile.importKey")(function* (
   yield* writeAtomically(keyFile, new TextEncoder().encode(key.exportText())).pipe(
     Effect.catch(io(`write ${keyFile}`)),
   );
+  yield* dropIdentitySigningKeys(config.secretsDir);
   return { keyId: key.id, keyFile, replaced: Option.isSome(replaced) };
 });

@@ -390,6 +390,26 @@ it.layer(platform)("ServerSecretStore encryption", (it) => {
       }),
     );
 
+    it.effect("drops the workload identity signing keys: a restored Hub makes new ones", () =>
+      Effect.gen(function* () {
+        const source = newBaseDir();
+        yield* withStore(source, (store) =>
+          Effect.all([
+            store.set("owner-token", encoder.encode(SECRET)),
+            store.set("identity-signing-kid-1", encoder.encode('{"d":"private"}')),
+          ]),
+        );
+        const key = yield* exportedFrom(source);
+        const target = newBaseDir();
+        NodeFS.cpSync(secretsDirOf(source), secretsDirOf(target), { recursive: true });
+        // The same key, or a key restored over another: either way the signing keys go.
+        yield* MasterKeyFile.importKey(key).pipe(Effect.provide(configAt(target)));
+        const [kept, signing] = yield* readAll(target, ["owner-token", "identity-signing-kid-1"]);
+        assert.equal(Option.getOrThrow(kept!), SECRET);
+        assert.isTrue(Option.isNone(signing!));
+      }),
+    );
+
     it.effect("of a key that does not open the secrets here changes nothing", () =>
       Effect.gen(function* () {
         const baseDir = newBaseDir();

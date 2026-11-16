@@ -17,13 +17,13 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeCrypto from "node:crypto";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { IDENTITY_SIGNING_KEY_PREFIX } from "./signingKeyNames.ts";
 
 const SIGNS_FOR = Duration.toMillis(Duration.days(30));
 const PUBLISHED_BEFORE = Duration.toMillis(Duration.days(7));
 const KEPT_AFTER = Duration.toMillis(Duration.days(7));
 
-/** Where the private half of a key is sealed. `t3 secrets key import` drops these. */
-const SIGNING_KEY_PREFIX = "identity-signing-";
+const SIGNING_KEY_PREFIX = IDENTITY_SIGNING_KEY_PREFIX;
 
 /** A public key as published: these fields and nothing else (never `d`). */
 export interface PublicJwk {

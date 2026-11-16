@@ -285,6 +285,25 @@ describe("IdentityTokens", () => {
     }).pipe(Effect.provide(layerFor(ISSUER))),
   );
 
+  it.effect("after a restore drops the sealed keys, the Hub makes and publishes new ones", () =>
+    Effect.gen(function* () {
+      yield* reset;
+      yield* seed;
+      const tokens = yield* IdentityTokens.IdentityTokens;
+      const keys = yield* IdentityKeys.IdentityKeys;
+      const before = Jose.decodeProtectedHeader(
+        (yield* tokens.forHub({ audience: "vault", scopeId: null })).token,
+      ).kid!;
+      // `t3 secrets key import` removes the sealed halves; the rows are left behind.
+      sealed.clear();
+      const after = (yield* keys.published).map((key) => key.kid);
+      assert.lengthOf(after, 1);
+      assert.notInclude(after, before);
+      const next = yield* tokens.forHub({ audience: "vault", scopeId: null });
+      assert.strictEqual(Jose.decodeProtectedHeader(next.token).kid, after[0]);
+    }).pipe(Effect.provide(layerFor(ISSUER))),
+  );
+
   it.effect("the JWKS never carries a private member, checked on its raw JSON", () =>
     Effect.gen(function* () {
       yield* reset;

@@ -11,6 +11,18 @@ export interface SecretProviderDefinition<Config = unknown> {
   readonly referencePlaceholder: string;
   readonly invalidReferenceMessage: string;
   /**
+   * Why a reference that passed `isReference` cannot be read with this provider's config (a
+   * mount it does not declare, say), or undefined. Checked when an entry is saved and on read.
+   * Methods, not function fields: a registry holds definitions of every `Config`.
+   */
+  configReferenceProblem?(config: Config, reference: string): string | undefined;
+  /**
+   * A Provider scope's `auth` laid over the provider's config (role, mount, namespace), or
+   * undefined when this kind cannot honour it: then the scope's reads are `invalid`. A kind
+   * without it honours only an empty `auth`.
+   */
+  withScopeAuth?(config: Config, auth: Readonly<Record<string, string>>): Config | undefined;
+  /**
    * Config fields holding a credential (`SettingsSecretValue`: a literal or a reference to another
    * provider). The server seals a literal in its store and never sends it to a client.
    */

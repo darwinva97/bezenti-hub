@@ -83,6 +83,7 @@ import { terminalOutputStream } from "../terminal/OutputProtocol.ts";
 import * as AiGatewayRelay from "./AiGatewayRelay.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as JoinedWorkspaceRoots from "../workspace/JoinedWorkspaceRoots.ts";
+import * as ThreadSecretFiles from "../secrets/ThreadSecretFiles.ts";
 import { makeWorkspaceRpcCalls } from "../workspace/WorkspaceRpcCalls.ts";
 
 /**
@@ -94,6 +95,17 @@ const knowSecrets = (secretEnv: SecretEnv | undefined) => {
     // A Vault Variable is configuration: never masked.
     rememberKnownSecrets(secretEnv.variables.filter((variable) => variable.plain !== true));
   }
+  knowFiles(secretEnv?.files);
+};
+
+/** A Secret file's content is masked whole and line by line, as any multiline value. */
+const knowFiles = (files: SecretEnv["files"]) => {
+  if (files === undefined) return;
+  rememberKnownSecrets(
+    files
+      .filter((file) => file.plain !== true)
+      .map((file) => ({ name: file.name, value: file.content })),
+  );
 };
 
 /** Calls answered, by idempotency key, so a resend gets the first answer instead of a rerun. */
@@ -188,6 +200,8 @@ export const make = Effect.fn("EnvironmentAgent.make")(function* (input: Environ
   const aiGatewayRelay = yield* AiGatewayRelay.make(input.hubUrl);
 
   const sessions = new Map<string, LocalSession>();
+  // Contract 14: where this machine writes Secret files (none: it takes no file).
+  const secretFiles = yield* Effect.serviceOption(ThreadSecretFiles.ThreadSecretFiles);
   const answered = new Map<
     string,
     { readonly answer: Deferred.Deferred<ExecutorCallResult>; settled: boolean }
@@ -535,6 +549,13 @@ export const make = Effect.fn("EnvironmentAgent.make")(function* (input: Environ
       baseUrl: aiGatewayRelay.baseUrl,
     }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem), Effect.mapError(openError));
     const scope = yield* Scope.fork(agentScope);
+    // Contract 14: its Secret files written in memory, held while the session lives; the
+    // variables carry their paths.
+    const secretEnv = yield* ThreadSecretFiles.holdSecretFiles(secretFiles, request.secretEnv).pipe(
+      Effect.provideService(Scope.Scope, scope),
+      Effect.mapError(openError),
+      Effect.onError(() => Scope.close(scope, Exit.void)),
+    );
     // Spec 5: the Thread's secrets go into the provider process's environment and nowhere else:
     // never logged, written or kept here once the session opened (the adapter refuses them if it
     // cannot put them in its process).
@@ -552,7 +573,7 @@ export const make = Effect.fn("EnvironmentAgent.make")(function* (input: Environ
       ...(request.initialProviderItemIdentityVersion === undefined
         ? {}
         : { initialProviderItemIdentityVersion: request.initialProviderItemIdentityVersion }),
-      ...(request.secretEnv === undefined ? {} : { secretEnv: request.secretEnv }),
+      ...(secretEnv === undefined ? {} : { secretEnv }),
       ...(aiGateway === undefined ? {} : { aiGateway }),
     }).pipe(
       Effect.provideService(Scope.Scope, scope),
@@ -1148,6 +1169,13 @@ export const make = Effect.fn("EnvironmentAgent.make")(function* (input: Environ
         return Effect.flatMap(workspaceRpc, ({ terminals }) =>
           terminals.close(request as RemoteInput<"terminal.close">),
         );
+      case "secrets.refreshFiles": {
+        const refresh = request as RemoteInput<"secrets.refreshFiles">;
+        knowFiles(refresh.files);
+        return Option.isNone(secretFiles)
+          ? Effect.succeed("not-held" as const)
+          : secretFiles.value.refresh(refresh);
+      }
       case "terminal.reconcile":
         return Effect.flatMap(workspaceRpc, ({ terminals }) =>
           terminals.reconcile(request as RemoteInput<"terminal.reconcile">),

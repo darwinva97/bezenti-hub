@@ -44,6 +44,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
+import * as ThreadSecretFiles from "../secrets/ThreadSecretFiles.ts";
 import * as EnvironmentAgent from "./EnvironmentAgent.ts";
 import { makeFrameReader } from "./socketFrames.ts";
 import {
@@ -239,6 +240,8 @@ const makeReports = Effect.fn("JoinedHub.makeReports")(function* (joined: Joined
   const hostResources = yield* HostResources.HostResources;
   const config = yield* ServerConfig.ServerConfig;
   const platform = yield* HostProcess.Platform;
+  // Contract 14: where this machine writes Secret files, so the Hub sends them only in memory.
+  const secretFiles = yield* Effect.serviceOption(ThreadSecretFiles.ThreadSecretFiles);
   const providerSummaries = providers.getProviders.pipe(
     Effect.map((list) => list.map(toProviderSummary)),
   );
@@ -261,6 +264,7 @@ const makeReports = Effect.fn("JoinedHub.makeReports")(function* (joined: Joined
       workspaceRoot: report.workspaceRoot,
       orchestration: report.orchestration,
       executorContractVersion: ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
+      secretFilesRoot: Option.isSome(secretFiles) ? secretFiles.value.root : null,
       // Only a server whose host wrote it into its Sandbox's state says it runs in one.
       ...(joined.sandboxed === true
         ? { sandbox: { runtime: joined.sandboxRuntime ?? "process" } }

@@ -47,6 +47,8 @@ import * as ProviderReads from "../vaults/ProviderReads.ts";
 import * as SecretProviderScopes from "../vaults/SecretProviderScopes.ts";
 import { scopeAllows } from "../vaults/providerScopeRules.ts";
 import * as SecretDelivery from "../vaults/SecretDelivery.ts";
+import * as MachineSecretFiles from "../environment/MachineSecretFiles.ts";
+import * as ThreadSecretFiles from "../secrets/ThreadSecretFiles.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
 import * as MasterKeyBackup from "./MasterKeyBackup.ts";
 import * as SandboxImageHttp from "../sandboxes/http.ts";
@@ -204,6 +206,7 @@ const makeLayerServices = (
   sandboxImageBuilder?: SandboxImage.SandboxImageBuilder["Service"],
   sshInstallPolicy?: SshInstall.SshInstallPolicy["Service"],
   providerReads?: Parameters<typeof ProviderReads.make>[0],
+  secretFiles?: Layer.Layer<ThreadSecretFiles.ThreadSecretFiles>,
 ) =>
   // Archive and delete reach Projects and Thread reads; no Thread in these tests runs.
   OrganizationLifecycle.layer.pipe(
@@ -263,9 +266,13 @@ const makeLayerServices = (
         Vaults.layer,
         SecretProviderScopes.layer,
         // Delivery, and the masking of what was delivered (spec 5 ticket 05), under everything.
+        // Where each machine writes Secret files: the Hub machine's own only when a test gives one.
         SecretDelivery.layer.pipe(
           Layer.provideMerge(SecretMasker.layer),
           Layer.provideMerge(EffectiveVaults.layer),
+          Layer.provideMerge(
+            MachineSecretFiles.layer.pipe(Layer.provideMerge(secretFiles ?? Layer.empty)),
+          ),
         ),
       ).pipe(
         Layer.provide(SpaceDirectory.layer),
@@ -344,6 +351,8 @@ export const serveAuthHttpWith = Effect.fn(function* (
     readonly moreRoutes?: (
       services: Context.Context<HubServices>,
     ) => Layer.Layer<never, never, HttpRouter.HttpRouter>;
+    /** The Hub machine's Secret files (contract 14); without it, it takes none. */
+    readonly secretFiles?: Layer.Layer<ThreadSecretFiles.ThreadSecretFiles>;
   } = {},
 ) {
   const base = yield* Layer.build(
@@ -357,6 +366,7 @@ export const serveAuthHttpWith = Effect.fn(function* (
       config.sandboxImageBuilder,
       config.sshInstallPolicy,
       config.providerReads,
+      config.secretFiles,
     ),
   );
   const services = config.extend === undefined ? base : yield* config.extend(base);

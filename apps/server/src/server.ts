@@ -203,6 +203,8 @@ import * as VaultsHttp from "./vaults/http.ts";
 import * as Vaults from "./vaults/Vaults.ts";
 import * as EffectiveVaults from "./vaults/EffectiveVaults.ts";
 import * as SecretDelivery from "./vaults/SecretDelivery.ts";
+import * as MachineSecretFiles from "./environment/MachineSecretFiles.ts";
+import * as ThreadSecretFiles from "./secrets/ThreadSecretFiles.ts";
 import * as SecretMasker from "./vaults/SecretMasker.ts";
 import * as MasterKeyBackup from "./auth/MasterKeyBackup.ts";
 import * as AiAccounts from "./ai/AiAccounts.ts";
@@ -1072,6 +1074,9 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(layerApplicationObservability),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
+      // Contract 14: this machine's Secret files in memory, and where each machine writes its own.
+      Layer.provideMerge(MachineSecretFiles.layer),
+      Layer.provideMerge(ThreadSecretFiles.layer),
       Layer.provideMerge(AgentScopeLive.layer),
       Layer.provideMerge(layerPlatformServices),
       // Read by the Hub machine's executor, text generation, placement and workspace calls.

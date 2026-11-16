@@ -602,6 +602,7 @@ export const EXECUTOR_OPERATIONS: Record<RemoteOperation | RemoteStreamOperation
   "terminal.clear": none("nothing"),
   "terminal.close": none("nothing"),
   "terminal.reconcile": none("which shells closed: Thread ids and terminal ids"),
+  "secrets.refreshFiles": none("whether a held folder of Secret files was rewritten"),
   "terminal.stream": masked("vaults/maskTerminal.ts"),
   "preview.open": none("a preview's address and status"),
   "preview.resize": none("nothing"),

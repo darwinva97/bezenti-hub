@@ -67,6 +67,8 @@ import {
   ProviderUserInputAnswers,
   RunAttemptId,
   SecretEnv,
+  SecretFilesError,
+  SecretFilesRefreshInput,
   RunId,
   RuntimeRequestId,
   ThreadId,
@@ -553,6 +555,12 @@ export const REMOTE_OPERATIONS = {
     TerminalError,
   ),
   "terminal.write": workspace(TerminalWriteInput, Schema.Void, TerminalError),
+  /** Contract 14: a held Secret files folder rewritten in place; `not-held` when no process is. */
+  "secrets.refreshFiles": workspace(
+    SecretFilesRefreshInput,
+    Schema.Literals(["refreshed", "not-held"]),
+    SecretFilesError,
+  ),
   "terminal.resize": workspace(
     Schema.Struct({ input: TerminalResizeInput, viewerId: Schema.optionalKey(Schema.String) }),
     Schema.Void,

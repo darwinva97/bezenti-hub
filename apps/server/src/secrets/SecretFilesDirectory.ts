@@ -30,7 +30,7 @@ export interface SecretFilesFolder {
  * Makes `directory` (never through a symlink) and checks, without following links, that it is a
  * real folder of this user that nobody else may enter.
  */
-const ownFolder = (directory: string, uid: number | undefined, recursive: boolean) =>
+export const ownFolder = (directory: string, uid: number | undefined, recursive: boolean) =>
   Effect.sync(() => {
     try {
       NodeFS.mkdirSync(directory, { mode: 0o700, recursive });

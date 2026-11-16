@@ -9,6 +9,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ENVIRONMENT_CONNECTION_PROTOCOL_VERSION,
   ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
+  type SecretFilesRoot,
   type EnvironmentCloseReason,
   EnvironmentId,
   EventId,
@@ -95,6 +96,7 @@ import * as JoinedHub from "./JoinedHub.ts";
 import type * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 import type { Authenticator, HubServices, Server } from "../auth/UserAuth.testkit.ts";
 import * as EnvironmentAgent from "./EnvironmentAgent.ts";
+import * as ThreadSecretFiles from "../secrets/ThreadSecretFiles.ts";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as AiAccounts from "../ai/AiAccounts.ts";
@@ -430,6 +432,8 @@ const startEnvironment = Effect.fn("HubWithEnvironments.startEnvironment")(funct
   readonly onRefused?: (reason: EnvironmentCloseReason | undefined) => Effect.Effect<void>;
   /** The executor contract its hello names; the current one by default. */
   readonly executorContractVersion?: number;
+  /** Its Secret files' root (a tmpfs folder); without one it takes none (contract 14). */
+  readonly secretFilesRoot?: SecretFilesRoot;
 }) {
   const scope = yield* Effect.scope;
   const ptySpawns: Array<PtySpawn> = [];
@@ -494,6 +498,11 @@ const startEnvironment = Effect.fn("HubWithEnvironments.startEnvironment")(funct
     ),
     Layer.provideMerge(layerRecordingMcp),
     Layer.provideMerge(VcsProcess.layer),
+    Layer.provideMerge(
+      input.secretFilesRoot === undefined
+        ? Layer.empty
+        : ThreadSecretFiles.layerAt(input.secretFilesRoot),
+    ),
     // A joined machine runs agents: that is its job, whatever its Hub does.
     Layer.provideMerge(Layer.succeed(HubRunsAgents.HubRunsAgents, true)),
     // The agent shares the workspace services' roots (memoized: one instance per machine).
@@ -541,6 +550,7 @@ const startEnvironment = Effect.fn("HubWithEnvironments.startEnvironment")(funct
     workspaceRoot: described.workspaceRoot,
     orchestration: described.orchestration,
     executorContractVersion: input.executorContractVersion ?? ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
+    secretFilesRoot: input.secretFilesRoot ?? null,
     ...(input.sandbox === undefined ? {} : { sandbox: input.sandbox }),
   }));
   const heartbeat: Effect.Effect<EnvironmentHeartbeatFrame> = Effect.map(report, (described) => ({
@@ -931,6 +941,8 @@ export const makeHub = Effect.fn("HubWithEnvironments.makeHub")(function* (
     readonly textGeneration?: ProviderTextGeneration;
     /** The executor contract the machine runs; the current one by default. */
     readonly executorContractVersion?: number;
+    /** Where it writes Secret files (a tmpfs folder); none by default. */
+    readonly secretFilesRoot?: SecretFilesRoot;
   }) {
     const joined = yield* joinMachine(
       server,
@@ -950,6 +962,7 @@ export const makeHub = Effect.fn("HubWithEnvironments.makeHub")(function* (
       ...(input.executorContractVersion === undefined
         ? {}
         : { executorContractVersion: input.executorContractVersion }),
+      ...(input.secretFilesRoot === undefined ? {} : { secretFilesRoot: input.secretFilesRoot }),
     });
   });
   /**

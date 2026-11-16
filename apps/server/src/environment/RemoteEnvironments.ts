@@ -31,6 +31,8 @@ import {
   type ProviderInstanceId,
   SECRET_ENV_CONTRACT_VERSION,
   SECRET_ENV_FIELD,
+  SECRET_FILES_CONTRACT_VERSION,
+  SecretFilesError,
   SecretDeliveryError,
   TerminalEnvironmentUnavailableError,
   TextGenerationError,
@@ -78,6 +80,7 @@ import * as SpaceVisibility from "../spaces/SpaceVisibility.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as EnvironmentDemand from "./EnvironmentDemand.ts";
 import * as EnvironmentExecutor from "./EnvironmentExecutor.ts";
+import * as MachineSecretFiles from "./MachineSecretFiles.ts";
 import type * as MovedWorkspace from "./MovedWorkspace.ts";
 import {
   type ExecutorCallResult,
@@ -189,6 +192,15 @@ export interface RemoteConnection {
   /** Acknowledges, in one frame, every event received since the last flush. */
   readonly flushAcks: Effect.Effect<void>;
 }
+
+/** Whether a request carries Secret files (contract 14), or is the call that rewrites them. */
+const carriesSecretFiles = (input: unknown): boolean => {
+  if (typeof input !== "object" || input === null) return false;
+  if ("filesFolder" in input && "files" in input) return true;
+  const secretEnv = (input as { readonly secretEnv?: { readonly files?: ReadonlyArray<unknown> } })
+    .secretEnv;
+  return (secretEnv?.files?.length ?? 0) > 0;
+};
 
 /** A read of the Hub's own checkout that failed, told apart from git's answer of none. */
 const UNREADABLE = Symbol("unreadable");
@@ -331,6 +343,8 @@ const make = Effect.gen(function* () {
   const visibility = yield* Effect.serviceOption(SpaceVisibility.SpaceVisibility);
   // A Sandbox is told which turns run on it, so an image update never cuts one short.
   const demand = yield* Effect.serviceOption(EnvironmentDemand.EnvironmentDemand);
+  // Contract 14: where each machine writes Secret files, as its hello says (SecretDelivery reads).
+  const machineFiles = yield* Effect.serviceOption(MachineSecretFiles.MachineSecretFiles);
   const turnKey = (providerSessionId: string, runOrdinal: number) =>
     `${providerSessionId}:${runOrdinal}`;
   const turnStarted = (link: Link, providerSessionId: string, sink: SessionSink, run: number) =>
@@ -411,14 +425,20 @@ const make = Effect.gen(function* () {
     link: Link,
     operation: RemoteOperation,
     input: object,
-    what: "secrets" | "aiGateway" = "secrets",
+    what: "secrets" | "aiGateway" | "files" = "secrets",
   ) {
     const name = yield* machineNameOf(sql, link.environmentId);
     const named = name === undefined ? {} : { environmentName: name };
     const refusal =
       what === "aiGateway"
         ? new AiGatewaySessionError({ reason: "outdated-machine", ...named })
-        : new SecretDeliveryError({ reason: "outdated-machine", ...named });
+        : new SecretDeliveryError({
+            reason: what === "files" ? "outdated-machine-files" : "outdated-machine",
+            ...named,
+          });
+    if (operation === "secrets.refreshFiles") {
+      return new SecretFilesError({ reason: "invalid", detail: refusal.message });
+    }
     if (operation.startsWith("provider.")) {
       return new ProviderAdapter.ProviderAdapterProtocolError({
         driver: ((input as { readonly instanceId?: string }).instanceId ??
@@ -463,6 +483,14 @@ const make = Effect.gen(function* () {
       SECRET_ENV_FIELD in input
     ) {
       return { _tag: "failed", error: yield* outdatedRefusal(link, operation, input) };
+    }
+    // Contract 14: Secret files only to a machine that writes them in memory; an older one would
+    // drop them (an unknown key) and start the process without. Never sent, never made a variable.
+    if (link.contractVersion < SECRET_FILES_CONTRACT_VERSION && carriesSecretFiles(input)) {
+      return {
+        _tag: "failed",
+        error: yield* outdatedRefusal(link, operation, input as object, "files"),
+      };
     }
     // Spec 4 ticket 06: a gateway key only to a machine of contract 11 (`AiGatewaySessions`
     // decides first); this guard refuses the call, never sends the key to an older one.
@@ -1596,6 +1624,9 @@ const make = Effect.gen(function* () {
       link.providers = hello.providers;
       // A machine that comes back updated (or not) is judged by what it says now.
       link.contractVersion = hello.executorContractVersion ?? 7;
+      if (Option.isSome(machineFiles)) {
+        machineFiles.value.remember(environmentId, hello.secretFilesRoot);
+      }
       const previous = link.channel;
       const channel = yield* makeExecutorChannel({
         environmentId,

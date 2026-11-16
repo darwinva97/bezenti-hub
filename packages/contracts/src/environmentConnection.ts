@@ -15,6 +15,7 @@ import {
 import { OrchestrationV2ProviderCapabilities } from "./orchestrationV2.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
+import { SecretFilesRoot } from "./secretEnv.ts";
 
 export const ENVIRONMENT_CONNECTION_PROTOCOL_VERSION = 2;
 export const ENVIRONMENT_CONNECT_PATH = "/api/environment/connect";
@@ -113,6 +114,11 @@ export const EnvironmentHelloFrame = Schema.Struct({
    * from before it was sent runs 7. Operations newer than it are refused on the Hub.
    */
   executorContractVersion: Schema.optionalKey(Schema.Int),
+  /**
+   * Contract 14: where the machine writes Secret files, and whether that is in memory; null when
+   * it has no such folder. The Hub renders `{{ X | path }}` with it and sends files only in memory.
+   */
+  secretFilesRoot: Schema.optionalKey(Schema.NullOr(SecretFilesRoot)),
   /**
    * Set only by a server running inside a Sandbox (a Hub's, or a dedicated machine's container),
    * from the state its host wrote: a dedicated machine connects only this way.

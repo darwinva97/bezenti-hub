@@ -4,7 +4,9 @@
  * alone, and a machine on an executor contract before 10 gets none and says why.
  */
 // @effect-diagnostics nodeBuiltinImport:off -- the tests make checkouts on disk.
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -60,6 +62,7 @@ import {
 const ACME_TOKEN = "acme-token-value-1111";
 const GRACE_TOKEN = "grace-token-value-2222";
 const OWNER_TOKEN = "owner-token-value-3333";
+const KUBECONFIG_TEXT = "apiVersion: v1\nkind: Config\n";
 
 /** The Hub's workspace RPCs (what `ws.ts` calls), over the Hub's own projection and Environments. */
 const threadWorkspaceOf = (hub: Hub) =>
@@ -565,5 +568,131 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
       assert.isEmpty(old.ptySpawns, "no shell started without its secrets");
       assert.isFalse(old.requests.includes("terminal.open"), "nothing was sent");
     }).pipe(Effect.scoped),
+  );
+
+  it.live("refuse, never strip, Secret files sent to a machine before contract 14", () =>
+    Effect.gen(function* () {
+      const instanceId = "claudeAgent" as ProviderInstanceId;
+      const hub = yield* makeHub();
+      const old = yield* hub.join({
+        name: "Old laptop",
+        adapters: idleAdapters(instanceId),
+        executorContractVersion: 13,
+      });
+      const projectId = ProjectId.make("project:old-files");
+      yield* seedProject(hub.server, { projectId, title: "Old", defaultModelSelection: null });
+      yield* checkoutOnMachine(hub, old.environmentId, projectId);
+      const registry = hub.service(EnvironmentExecutor.EnvironmentExecutorRegistry);
+      const forward = Option.getOrThrow((yield* registry.get(old.environmentId)).workspace.forward);
+      const checkout = Option.getOrThrow(
+        yield* (yield* registry.get(old.environmentId)).workspace.paths.checkout(projectId),
+      );
+      // Past the plan's own refusal: the last guard sends nothing, and no variable instead.
+      const sent = yield* Effect.exit(
+        forward.call("terminal.open", {
+          root: checkout,
+          input: { threadId: "thread:old-files", terminalId: "term-1", cwd: checkout },
+          secretEnv: {
+            fingerprint: "set-1",
+            variables: [],
+            files: [{ name: "KUBECONFIG", content: KUBECONFIG_TEXT, mode: 0o600 }],
+            filesFolder: "0123456789abcdef0123456789abcdef",
+          },
+        }),
+      );
+      assert.isTrue(Exit.isFailure(sent));
+      if (Exit.isFailure(sent)) {
+        assert.include(
+          Cause.pretty(sent.cause),
+          "Old laptop needs an update to receive this Thread's secret files",
+        );
+      }
+      assert.isEmpty(old.ptySpawns, "no shell started without its files");
+      assert.isFalse(old.requests.includes("terminal.open"), "nothing was sent");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "write a shell's Secret files in memory on its machine, with their paths, gone when it ends",
+    () =>
+      Effect.gen(function* () {
+        const instanceId = "claudeAgent" as ProviderInstanceId;
+        const hub = yield* makeHub();
+        const owner = yield* ownerIdOf(hub);
+        const base = yield* Effect.acquireRelease(
+          Effect.sync(() => NodeFS.mkdtempSync("/dev/shm/t3-files-e2e-")),
+          (dir) => Effect.sync(() => NodeFS.rmSync(dir, { recursive: true, force: true })),
+        );
+        const laptop = yield* hub.join({
+          name: "Laptop",
+          adapters: idleAdapters(instanceId),
+          secretFilesRoot: { path: base, inMemory: true },
+        });
+        const vaults = hub.service(Vaults.Vaults);
+        const asOwner = CommandActor.actAs(owner);
+        yield* vaults
+          .putEntry({
+            vaultId: MAIN_VAULT_ID,
+            name: "KUBE_TOKEN",
+            value: Redacted.make(OWNER_TOKEN),
+            delivery: "file",
+          })
+          .pipe(asOwner);
+        yield* vaults
+          .putEntry({
+            vaultId: MAIN_VAULT_ID,
+            name: "KUBECONFIG",
+            template: { text: "users: [{ user: { tokenFile: {{ KUBE_TOKEN | path }} } }]\n" },
+            delivery: "file",
+          })
+          .pipe(asOwner);
+        const projectId = ProjectId.make("project:files");
+        const { workspaceRoot } = yield* seedProject(hub.server, {
+          projectId,
+          title: "Files",
+          defaultModelSelection: null,
+        });
+        const threadId = ThreadId.make("thread:files");
+        yield* hub.service(Orchestrator.OrchestratorV2).dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:files"),
+          threadId,
+          projectId,
+          title: "Files",
+          modelSelection: { instanceId, model: "claude-sonnet-4-6" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          ownerUserId: owner,
+          activeEnvironmentId: laptop.environmentId,
+        });
+        yield* checkoutOnMachine(hub, laptop.environmentId, projectId);
+        const workspace = yield* threadWorkspaceOf(hub);
+        yield* workspace.terminalOpen(
+          { threadId, terminalId: "term-1", cwd: workspaceRoot },
+          { userId: owner },
+        );
+        const shell = lastShell(laptop);
+        const kubeconfig = shell.KUBECONFIG ?? "";
+        const token = shell.KUBE_TOKEN ?? "";
+        const folder = NodePath.dirname(kubeconfig);
+        // Paths in the environment, in memory under the machine's root; never a value there.
+        assert.equal(NodePath.dirname(folder), base);
+        assert.equal(NodePath.dirname(token), folder);
+        assert.notInclude(Object.values(shell).join("\n"), OWNER_TOKEN);
+        assert.equal(NodeFS.statSync(folder).mode & 0o777, 0o700);
+        assert.equal(NodeFS.statSync(kubeconfig).mode & 0o777, 0o600);
+        assert.equal(NodeFS.readFileSync(token, "utf8"), OWNER_TOKEN);
+        assert.equal(
+          NodeFS.readFileSync(kubeconfig, "utf8"),
+          `users: [{ user: { tokenFile: ${token} } }]\n`,
+        );
+        // The shell ends: its folder goes with it (no other process of the Thread holds it).
+        yield* workspace.terminalClose({ threadId, terminalId: "term-1" }, { userId: owner });
+        assert.isFalse(NodeFS.existsSync(folder));
+      }).pipe(Effect.scoped),
   );
 });

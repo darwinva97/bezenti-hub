@@ -87,6 +87,7 @@ import { increment, terminalSessionsTotal } from "../observability/Metrics.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
+import * as ThreadSecretFiles from "../secrets/ThreadSecretFiles.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
 import { terminalOutputStream } from "./OutputProtocol.ts";
 import * as SessionProcesses from "./SessionProcesses.ts";
@@ -351,6 +352,8 @@ interface TerminalSessionState {
   shell: string | null;
   unsubscribeData: (() => void) | null;
   unsubscribeExit: (() => void) | null;
+  /** Lets the shell's Secret files go (contract 14): the folder goes with its last process. */
+  releaseSecretFiles: (() => void) | null;
   hasRunningSubprocess: boolean;
   childCommandLabel: string | null;
   runtimeEnv: Record<string, string> | null;
@@ -596,6 +599,8 @@ function cleanupProcessHandles(session: TerminalSessionState): void {
   session.unsubscribeData = null;
   session.unsubscribeExit?.();
   session.unsubscribeExit = null;
+  session.releaseSecretFiles?.();
+  session.releaseSecretFiles = null;
 }
 
 function enqueueProcessEvent(
@@ -1627,6 +1632,23 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const runFork = Effect.runForkWith(context);
   // A Hub that runs no agents opens no shell in its own process (setup scripts included).
   const runsAgents = yield* HubRunsAgents.HubRunsAgents;
+  // Contract 14: where a shell's Secret files go. Without it, a shell with files never starts.
+  const secretFiles = yield* Effect.serviceOption(ThreadSecretFiles.ThreadSecretFiles);
+  const materializeSecretFiles = (
+    secrets: SecretEnv,
+    threadId: string,
+  ): Effect.Effect<ThreadSecretFiles.MaterializedSecrets, TerminalEnvironmentUnavailableError> => {
+    const refused = (detail: string) =>
+      new TerminalEnvironmentUnavailableError({ threadId, reason: "secrets_unavailable", detail });
+    if ((secrets.files?.length ?? 0) === 0) {
+      return Effect.succeed({ secretEnv: secrets, release: () => {} });
+    }
+    return Option.isNone(secretFiles)
+      ? Effect.fail(refused("This machine takes no Secret file."))
+      : secretFiles.value
+          .materialize(secrets)
+          .pipe(Effect.mapError((error) => refused(error.message)));
+  };
 
   const logsDir = options.logsDir;
   const historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
@@ -2645,11 +2667,22 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               }
             }
             // Spec 5: the secrets go into this shell's environment and are then dropped here.
-            const secrets = session.pendingSecretEnv;
+            const pending = session.pendingSecretEnv;
             session.pendingSecretEnv = null;
+            // Contract 14: Secret files written in memory first; the shell gets their paths.
+            const written =
+              pending === null ? null : yield* materializeSecretFiles(pending, session.threadId);
+            const secrets = written === null ? null : written.secretEnv;
+            session.releaseSecretFiles?.();
+            session.releaseSecretFiles = written === null ? null : written.release;
             // Its history file masks the values the shell got (none of another User's), never a
-            // Vault Variable's.
-            const masked = (secrets?.variables ?? []).filter((v) => v.plain !== true);
+            // Vault Variable's; a Secret file's content as well.
+            const masked = [
+              ...(secrets?.variables ?? []).filter((v) => v.plain !== true),
+              ...(pending?.files ?? [])
+                .filter((file) => file.plain !== true)
+                .map((file) => ({ name: file.name, value: file.content })),
+            ];
             if (masked.length > 0) {
               addHistorySecrets(toSessionKey(session.threadId, session.terminalId), masked);
             }
@@ -3063,6 +3096,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         shell: null,
         unsubscribeData: null,
         unsubscribeExit: null,
+        releaseSecretFiles: null,
         hasRunningSubprocess: false,
         childCommandLabel: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),

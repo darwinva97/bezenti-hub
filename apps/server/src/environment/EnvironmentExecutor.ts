@@ -39,6 +39,7 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
@@ -62,6 +63,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { prepareGatewaySession } from "../environments/AiGatewayRelay.ts";
 import { sandboxHubLoopbackUrl } from "../sandboxes/ProcessSandboxRuntime.ts";
 import { SandboxHubAddress } from "../sandboxes/SandboxRuntime.ts";
+import * as ThreadSecretFiles from "../secrets/ThreadSecretFiles.ts";
 import * as MovedWorkspace from "./MovedWorkspace.ts";
 import * as ProjectCheckouts from "./ProjectCheckouts.ts";
 import type * as RemoteExecutorWire from "./RemoteExecutorWire.ts";
@@ -937,8 +939,19 @@ export const layerProviderAdapterRegistry: Layer.Layer<
     const hubLoopbackUrl = Option.isSome(hubAddress)
       ? hubAddress.value.loopbackUrl
       : Effect.succeed(Option.isSome(config) ? sandboxHubLoopbackUrl(config.value) : undefined);
-    /** The session's gateway completed here, for a process on the Hub machine. */
+    // Contract 14: the Hub machine's Secret files, held while each session lives.
+    const secretFiles = yield* Effect.serviceOption(ThreadSecretFiles.ThreadSecretFiles);
+    /** The session's Secret files written and its gateway completed here, on the Hub machine. */
     const onHubMachine = (
+      adapter: ProviderAdapter.ProviderAdapterV2["Service"],
+      input: ProviderAdapter.ProviderAdapterV2OpenSessionInput,
+    ) =>
+      ThreadSecretFiles.holdSecretFiles(secretFiles, input.secretEnv).pipe(
+        Effect.map((secretEnv) => (secretEnv === undefined ? input : { ...input, secretEnv })),
+        Effect.flatMap((withFiles) => withGateway(adapter, withFiles)),
+      );
+    /** The session's gateway completed here, for a process on the Hub machine. */
+    const withGateway = (
       adapter: ProviderAdapter.ProviderAdapterV2["Service"],
       input: ProviderAdapter.ProviderAdapterV2OpenSessionInput,
     ) =>
@@ -976,7 +989,8 @@ export const layerProviderAdapterRegistry: Layer.Layer<
                 readonly target: ProviderAdapter.ProviderAdapterV2["Service"];
                 readonly input: ProviderAdapter.ProviderAdapterV2OpenSessionInput;
               },
-              unknown
+              unknown,
+              Scope.Scope
             > =>
               executor.environmentId === hubMachine.environmentId
                 ? onHubMachine(adapter, input).pipe(

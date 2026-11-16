@@ -1078,6 +1078,35 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:vaults:thread-environment",
       tag: WS_METHODS.vaultsThreadEnvironment,
     }),
+    // Vaults ticket 03: a Vault's usable Provider scopes; Secret providers' scopes and tests.
+    vaultProviderScopes: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vaults:provider-scopes",
+      tag: WS_METHODS.vaultsProviderScopes,
+    }),
+    testSecretProvider: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:secret-providers:test",
+      tag: WS_METHODS.secretProvidersTest,
+    }),
+    secretProviderImpact: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:secret-providers:impact",
+      tag: WS_METHODS.secretProvidersImpact,
+    }),
+    listProviderScopes: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:secret-providers:scopes:list",
+      tag: WS_METHODS.secretProvidersScopesList,
+    }),
+    putProviderScope: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:secret-providers:scopes:put",
+      tag: WS_METHODS.secretProvidersScopesPut,
+    }),
+    deleteProviderScope: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:secret-providers:scopes:delete",
+      tag: WS_METHODS.secretProvidersScopesDelete,
+    }),
+    allowProviderScope: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:secret-providers:scopes:allow",
+      tag: WS_METHODS.secretProvidersScopesAllow,
+    }),
     refreshUsageRates: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-usage-rates",
       tag: WS_METHODS.serverRefreshUsageRates,

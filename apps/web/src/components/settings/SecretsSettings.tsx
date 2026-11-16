@@ -1,4 +1,4 @@
-import type { SecretProviderConfig, SecretProviderId } from "@t3tools/contracts";
+import type { EnvironmentId, SecretProviderConfig, SecretProviderId } from "@t3tools/contracts";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -17,6 +17,11 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { SecretProviderDialog } from "./SecretProviderDialog";
+import { checkText, ProviderScopesSettings } from "./ProviderScopesSettings";
+import { settle } from "./vaultCommands";
+import { errorMessageOf } from "../../lib/errorMessage";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { classifySecretProvider } from "./SecretProviderDialog.logic";
 import {
   classifyProviderEnvironmentAccess,
@@ -163,7 +168,10 @@ function EnvironmentSecretProviders({
                           Edit
                         </Button>
                       ) : null}
+                      <TestSecretProviderButton environmentId={environmentId} providerId={id} />
                       <RemoveSecretProviderButton
+                        environmentId={environmentId}
+                        providerId={id}
                         label={config.label}
                         onConfirm={() => updateSettings({ secretProviders: { [id]: null } })}
                       />
@@ -175,6 +183,9 @@ function EnvironmentSecretProviders({
           })
         )}
       </SettingsSection>
+      {!readOnly ? (
+        <ProviderScopesSettings environmentId={environmentId} providers={providers} />
+      ) : null}
       {dialog !== null && !readOnly && (dialog.mode === "add" || editing !== undefined) ? (
         <SecretProviderDialog
           onClose={() => setDialog(null)}
@@ -188,17 +199,72 @@ function EnvironmentSecretProviders({
   );
 }
 
+/** «Test connection»: the provider's sign-in, in words; never a value. */
+function TestSecretProviderButton({
+  environmentId,
+  providerId,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly providerId: SecretProviderId;
+}) {
+  const test = useAtomCommand(serverEnvironment.testSecretProvider, "test a secret provider");
+  const [result, setResult] = useState<string | null>(null);
+  return (
+    <>
+      {result === null ? null : (
+        <span className="text-xs text-muted-foreground" role="status">
+          {result}
+        </span>
+      )}
+      <Button
+        size="xs"
+        variant="ghost"
+        onClick={() =>
+          void settle(test({ environmentId, input: { providerId } })).then(
+            (answer) => setResult(checkText("Sign-in", answer.auth)),
+            (cause: unknown) => setResult(errorMessageOf(cause, "Could not test it.")),
+          )
+        }
+      >
+        Test connection
+      </Button>
+    </>
+  );
+}
+
 function RemoveSecretProviderButton({
+  environmentId,
+  providerId,
   label,
   onConfirm,
 }: {
+  readonly environmentId: EnvironmentId;
+  readonly providerId: SecretProviderId;
   readonly label: string;
   readonly onConfirm: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const impactOf = useAtomCommand(serverEnvironment.secretProviderImpact, "read what breaks");
+  // What removing it breaks (Vaults ticket 03): its scopes and Provider entries, by name.
+  const [breaks, setBreaks] = useState<string | null>(null);
   return (
     <>
-      <Button size="xs" variant="ghost" onClick={() => setOpen(true)}>
+      <Button
+        size="xs"
+        variant="ghost"
+        onClick={() => {
+          setOpen(true);
+          void settle(impactOf({ environmentId, input: { providerId } })).then(
+            (impact) =>
+              setBreaks(
+                impact.breaks.length === 0 && impact.scopes.length === 0
+                  ? null
+                  : `Its scopes (${impact.scopes.map((scope) => scope.label).join(", ") || "none"}) and these Provider entries break: ${impact.breaks.map((entry) => `${entry.vaultName} → ${entry.name}`).join(", ") || "none"}.`,
+              ),
+            () => setBreaks(null),
+          );
+        }}
+      >
         Remove
       </Button>
       <AlertDialog open={open} onOpenChange={setOpen}>
@@ -208,6 +274,7 @@ function RemoveSecretProviderButton({
             <AlertDialogDescription>
               Provider variables that read from {label} stop resolving until a provider with the
               same name is added again. The secrets themselves are untouched.
+              {breaks === null ? null : ` ${breaks}`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

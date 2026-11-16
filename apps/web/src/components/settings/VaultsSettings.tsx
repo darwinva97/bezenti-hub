@@ -9,6 +9,8 @@ import {
   type VaultEntry,
   type VaultEntryClass,
   type VaultEntryId,
+  type SecretProviderId,
+  type VaultProviderScopes,
   type VaultSummary,
 } from "@t3tools/contracts";
 import { entryActions, loadVaultOverview, vaultActions } from "@t3tools/client-runtime/vaults";
@@ -521,6 +523,21 @@ function VaultSection(props: {
           }
         />
       ) : null}
+      {canEdit ? (
+        <AddProviderEntryForm
+          environmentId={environmentId}
+          vaultId={vault.id}
+          vaultName={vault.name}
+          onAdd={(name, provider) =>
+            act(async () => {
+              await settle(
+                commands.put({ environmentId, input: { vaultId: vault.id, name, provider } }),
+              );
+              return `${name} saved: read from its provider when a process starts.`;
+            })
+          }
+        />
+      ) : null}
       {canEdit && props.isOwner && props.mainEntries.length > 0 ? (
         <FromMainForm
           vaultName={vault.name}
@@ -988,6 +1005,135 @@ function AddSecretForm(props: {
       {dangerous && props.isOwner ? (
         <ConfirmDangerous checked={confirmed} onChange={setConfirmed} />
       ) : null}
+    </form>
+  );
+}
+
+/**
+ * «Add a Provider entry» (Vaults ticket 03): a sealed Secret read from a provider when a process
+ * starts, through a Provider scope allowed to this Vault (or the Owner's «Direct» access). Shown
+ * only when there is one to choose.
+ */
+function AddProviderEntryForm(props: {
+  readonly environmentId: EnvironmentId;
+  readonly vaultId: VaultSummary["id"];
+  readonly vaultName: string;
+  readonly onAdd: (
+    name: string,
+    provider: {
+      readonly providerId: SecretProviderId;
+      readonly reference: string;
+      readonly scopeId: string | null;
+    },
+  ) => Promise<boolean>;
+}) {
+  const load = useAtomCommand(serverEnvironment.vaultProviderScopes, "list provider scopes");
+  const [choices, setChoices] = useState<VaultProviderScopes | null>(null);
+  const [source, setSource] = useState("");
+  const [name, setName] = useState("");
+  const [reference, setReference] = useState("");
+  const [pending, setPending] = useState(false);
+  const fetchChoices = useEffectEvent((vaultId: VaultSummary["id"]) =>
+    settle(load({ environmentId: props.environmentId, input: { vaultId } })).catch(() => null),
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the Provider scopes this Vault may use when its section opens.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchChoices(props.vaultId).then((loaded) => {
+      if (!cancelled) setChoices(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.vaultId]);
+  const items = [
+    ...(choices?.scopes ?? []).map((scope) => ({
+      value: `scope:${scope.id}`,
+      label: `${scope.label} (${scope.providerLabel}: ${scope.allowedPaths.join(", ")})`,
+      providerId: scope.providerId,
+      scopeId: scope.id as string | null,
+      placeholder: scope.referencePlaceholder,
+    })),
+    ...(choices?.direct ?? []).map((provider) => ({
+      value: `direct:${provider.providerId}`,
+      label: `${provider.providerLabel} (Direct)`,
+      providerId: provider.providerId,
+      scopeId: null as string | null,
+      placeholder: provider.referencePlaceholder,
+    })),
+  ];
+  if (items.length === 0) return null;
+  const chosen = items.find((item) => item.value === source) ?? items[0]!;
+  return (
+    <form
+      aria-label={`Add a Provider entry to ${props.vaultName}`}
+      className="flex flex-col gap-2 px-4 pb-4 sm:flex-row sm:items-end"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setPending(true);
+        void props
+          .onAdd(name, {
+            providerId: chosen.providerId,
+            reference: reference.trim(),
+            scopeId: chosen.scopeId,
+          })
+          .then((saved) => {
+            if (!saved) return;
+            setName("");
+            setReference("");
+          })
+          .finally(() => setPending(false));
+      }}
+    >
+      <label className="flex flex-col gap-1 text-xs font-medium sm:w-56">
+        Source: Provider
+        <Select
+          items={items.map((item) => ({ value: item.value, label: item.label }))}
+          value={chosen.value}
+          onValueChange={(value) => setSource(value ?? "")}
+        >
+          <SelectTrigger aria-label="Provider scope">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            {items.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      </label>
+      <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
+        Name
+        <Input
+          aria-label="Provider entry name"
+          nativeInput
+          disabled={pending}
+          maxLength={128}
+          value={name}
+          onChange={(event) => setName(event.currentTarget.value.toUpperCase())}
+        />
+      </label>
+      <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
+        Reference
+        <Input
+          aria-label="Reference"
+          nativeInput
+          disabled={pending}
+          maxLength={1024}
+          placeholder={chosen.placeholder}
+          value={reference}
+          onChange={(event) => setReference(event.currentTarget.value)}
+        />
+      </label>
+      <Button
+        disabled={pending || name.length === 0 || reference.trim().length === 0}
+        size="sm"
+        type="submit"
+      >
+        Add Provider entry
+      </Button>
     </form>
   );
 }

@@ -14,6 +14,8 @@
 - [ ] Red: ufw permite el 6443 desde `hub-vps` (72.60.66.80) solo, o un túnel dedicado; añadir la IP a `tls-san` si cambia la dirección.
 - [ ] OpenBao: rol de Kubernetes auth para `bezenti-hub/openbao-lector` (ya existe el SecretStore `openbao` sin uso) o JWT auth con la identidad del Hub; una política por scope; NetworkPolicies `bezenti-hub` → `openbao:8200` (salida del Hub y entrada de OpenBao; hoy ambas lo bloquean).
 - [ ] Deployment del Hub: volumen de token proyectado con audiencia `vault` (mantener `automountServiceAccountToken: false`).
+- [ ] Deployment del Hub: `T3CODE_IDENTITY_ISSUER` (o `T3CODE_PUBLIC_URL`) con el emisor público; sin él, la identidad del 07 está apagada.
+- [ ] k3s: el autenticador `jwt` usa como `issuer.discoveryURL` la URL de discovery **interna** del Hub (la de `T3CODE_IDENTITY_DISCOVERY_URL_INTERNAL`), con `issuer.url` igual al emisor público.
 - [ ] Auditoría de la API: regla `Metadata` para `t3:` (usuarios del Hub) antes de la regla que descarta `get/list/watch`.
-- [ ] En el Hub: Vault «cluster-lectura» con `KUBE_SERVER` y `KUBE_CA` (Variables), `KUBE_TOKEN` (identidad, `none`) y `KUBECONFIG` (plantilla, `file`), permitido solo a los Projects que lo necesitan, con `deliverTo: [sandbox, dedicated]`.
+- [ ] En el Hub: Vault «cluster-lectura» con `KUBE_SERVER` y `KUBE_CA` (Variables), `KUBE_TOKEN` (identidad: siempre `file`) y `KUBECONFIG` (plantilla, `file`, con `tokenFile: {{ KUBE_TOKEN | path }}`; una plantilla solo nombra una identidad con `| path`, diseño 07), permitido solo a los Projects que lo necesitan, con `deliverTo: [sandbox, dedicated]`.
 - [ ] SSH del nodo: solo clave, `PermitRootLogin prohibit-password`, idealmente solo por `wg0`.

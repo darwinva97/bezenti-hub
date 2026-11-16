@@ -1010,6 +1010,9 @@ importers:
       '@t3tools/secret-provider-onepassword':
         specifier: workspace:*
         version: link:../../packages/secret-provider-onepassword
+      '@t3tools/secret-provider-openbao':
+        specifier: workspace:*
+        version: link:../../packages/secret-provider-openbao
       '@t3tools/shared':
         specifier: workspace:*
         version: link:../../packages/shared

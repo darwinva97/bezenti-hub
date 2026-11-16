@@ -14,12 +14,12 @@ import { useState, type ComponentProps, type ComponentType, type ReactNode } fro
 
 import { isSecretsFeatureEnabled } from "../../env";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
-import { OnePasswordIcon } from "../Icons";
 import { serverEnvironment } from "../../state/server";
 import { DraftInput } from "../ui/draft-input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SecretInput } from "./SecretInput";
 import { classifySecretProvider } from "./SecretProviderDialog.logic";
+import { SECRET_PROVIDER_KINDS } from "./secretProviderKinds";
 
 export interface SecretSource {
   readonly id: SecretProviderId;
@@ -94,8 +94,9 @@ export function SecretSourceInput({
   const label = input["aria-label"] ?? "Secret";
   const providerLabel = (id: SecretProviderId) =>
     sources.find((source) => source.id === id)?.label ?? id;
-  const providerIcon = (id: SecretProviderId) =>
-    sources.some((source) => source.id === id) ? OnePasswordIcon : KeyRoundIcon;
+  const iconOf = (source: SecretSource | undefined) =>
+    (source && SECRET_PROVIDER_KINDS[source.kind]?.icon) ?? KeyRoundIcon;
+  const providerIcon = (id: SecretProviderId) => iconOf(sources.find((source) => source.id === id));
 
   const source =
     sources.length === 0 && provider === null ? null : (
@@ -130,7 +131,7 @@ export function SecretSourceInput({
           </SelectItem>
           {sources.map((source) => (
             <SelectItem key={source.id} value={source.id}>
-              <SourceLabel icon={OnePasswordIcon} label={source.label} />
+              <SourceLabel icon={iconOf(source)} label={source.label} />
             </SelectItem>
           ))}
           {provider !== null && !sources.some((source) => source.id === provider) ? (

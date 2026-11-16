@@ -5,7 +5,6 @@ import { useState } from "react";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import type { EnvironmentPresentation } from "../../state/environments";
 import { useEnvironmentSessionState } from "../../state/session";
-import { OnePasswordIcon, type Icon } from "../Icons";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -17,6 +16,7 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { SecretProviderDialog } from "./SecretProviderDialog";
+import { SECRET_PROVIDER_KINDS } from "./secretProviderKinds";
 import { checkText, ProviderScopesSettings } from "./ProviderScopesSettings";
 import { settle } from "./vaultCommands";
 import { errorMessageOf } from "../../lib/errorMessage";
@@ -31,12 +31,6 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-
-const SECRET_PROVIDER_KINDS: Readonly<
-  Record<string, { readonly name: string; readonly icon: Icon }>
-> = {
-  one_password: { name: "1Password", icon: OnePasswordIcon },
-};
 
 export function SecretsSettingsPanel() {
   const { scope, environment } = useSettingsScope();
@@ -120,7 +114,7 @@ function EnvironmentSecretProviders({
         {entries.length === 0 ? (
           <SettingsRow
             title="No secret providers configured."
-            description="Add a 1Password account, then pick it as the source of a provider variable."
+            description="Add a 1Password account or an OpenBao server, then pick it as the source of a provider variable or a Vault entry."
           />
         ) : (
           entries.map(([id, config]) => {
@@ -151,6 +145,10 @@ function EnvironmentSecretProviders({
                         hideTooltip="Click to hide account"
                         className="max-w-full truncate"
                       />
+                    </span>
+                  ) : classified.kind === "openbao" && kind ? (
+                    <span className="min-w-0 truncate">
+                      {kind.name} · {classified.config.address}
                     </span>
                   ) : (
                     `Unsupported provider (${config.kind})`

@@ -42,6 +42,9 @@ import type { PreviewOriginPattern } from "../preview/PreviewOrigin.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as VaultsHttp from "../vaults/http.ts";
 import * as Vaults from "../vaults/Vaults.ts";
+import * as IdentityIssuer from "../identity/IdentityIssuer.ts";
+import * as IdentityKeys from "../identity/IdentityKeys.ts";
+import * as IdentityTokens from "../identity/IdentityTokens.ts";
 import * as EffectiveVaults from "../vaults/EffectiveVaults.ts";
 import * as ProviderReads from "../vaults/ProviderReads.ts";
 import * as SecretProviderScopes from "../vaults/SecretProviderScopes.ts";
@@ -207,6 +210,7 @@ const makeLayerServices = (
   sshInstallPolicy?: SshInstall.SshInstallPolicy["Service"],
   providerReads?: Parameters<typeof ProviderReads.make>[0],
   secretFiles?: Layer.Layer<ThreadSecretFiles.ThreadSecretFiles>,
+  identityIssuer?: string,
 ) =>
   // Archive and delete reach Projects and Thread reads; no Thread in these tests runs.
   OrganizationLifecycle.layer.pipe(
@@ -276,6 +280,23 @@ const makeLayerServices = (
         ),
       ).pipe(
         Layer.provide(SpaceDirectory.layer),
+        // Workload identity (Vaults ticket 07): the test's issuer, else its `publicUrl`, if any.
+        Layer.provideMerge(
+          IdentityTokens.layer.pipe(
+            Layer.provideMerge(IdentityKeys.layer),
+            Layer.provideMerge(
+              Layer.succeed(
+                IdentityIssuer.IdentityIssuer,
+                IdentityIssuer.make({ configured: identityIssuer, publicUrl: config.publicUrl }),
+              ),
+            ),
+            Layer.provide(
+              Layer.mock(ServerEnvironment.ServerEnvironment)({
+                getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-test")),
+              }),
+            ),
+          ),
+        ),
         Layer.provideMerge(AuditLog.layer),
         // Provider entries' reads: a test's own drivers and providers, or the Hub's.
         Layer.provideMerge(
@@ -353,6 +374,8 @@ export const serveAuthHttpWith = Effect.fn(function* (
     ) => Layer.Layer<never, never, HttpRouter.HttpRouter>;
     /** The Hub machine's Secret files (contract 16); without it, it takes none. */
     readonly secretFiles?: Layer.Layer<ThreadSecretFiles.ThreadSecretFiles>;
+    /** `T3CODE_IDENTITY_ISSUER` (Vaults ticket 07); without it nor `publicUrl`, identity is off. */
+    readonly identityIssuer?: string;
   } = {},
 ) {
   const base = yield* Layer.build(
@@ -367,6 +390,7 @@ export const serveAuthHttpWith = Effect.fn(function* (
       config.sshInstallPolicy,
       config.providerReads,
       config.secretFiles,
+      config.identityIssuer,
     ),
   );
   const services = config.extend === undefined ? base : yield* config.extend(base);

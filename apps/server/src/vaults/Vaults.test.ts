@@ -54,9 +54,10 @@ const ADMIN_WRITES = "admin-wrote-this-value-99";
 const ADMIN_REPLACES = "admin-replaced-value-42";
 const VALUES = [ORIGINAL, ROTATED, ACME_OWN, ADMIN_WRITES, ADMIN_REPLACES];
 
-const hub = Effect.gen(function* () {
+/** The Hub of these tests; `identityIssuer` makes it a workload identity issuer (ticket 07). */
+const hubWith = Effect.fn(function* (options: { readonly identityIssuer?: string } = {}) {
   const provider = makeFakeSecretProvider();
-  const server = yield* serveAuthHttpWith({ providerReads: provider.options });
+  const server = yield* serveAuthHttpWith({ providerReads: provider.options, ...options });
   const authenticator = yield* makeAuthenticator();
   const { created } = yield* bootstrapOwner(server, authenticator);
   const owner = created.cookie ?? "";
@@ -130,6 +131,8 @@ const hub = Effect.gen(function* () {
     reveal,
   };
 });
+
+const hub = hubWith();
 
 type Hub = Effect.Success<typeof hub>;
 
@@ -1489,5 +1492,152 @@ it.effect("an entry that only feeds a template is said to reach nothing until on
       .putEntry({ vaultId: acme.id, entryId: raw.entry.id, name: "RAW_TOKEN", description: "x" })
       .pipe(as(ownerId));
     assert.deepEqual(again.warnings, []);
+  }),
+);
+
+// Vaults ticket 07: workload identity entries, a token the Hub signs, the Owner's alone.
+it.effect("a workload identity entry is the Owner's alone, always a sealed Secret file", () =>
+  Effect.gen(function* () {
+    const setup = yield* hubWith({ identityIssuer: "https://hub.example.com" });
+    const { vaults, as, ownerId, acmeId, people } = setup;
+    const acme = yield* vaults.create({ name: "Acme cluster", spaceId: acmeId }).pipe(as(ownerId));
+    const added = yield* vaults
+      .putEntry({ vaultId: acme.id, name: "KUBE_TOKEN", identity: { audience: "kubernetes" } })
+      .pipe(as(ownerId));
+    assert.deepInclude(added.entry, {
+      kind: "identity",
+      class: "secret",
+      sealed: true,
+      delivery: "file",
+      identity: { audience: "kubernetes", ttlSeconds: 600 },
+    });
+    // An Admin of the Organization neither adds, changes nor deletes one.
+    const admin = as(people.admin.id);
+    assert.strictEqual(
+      yield* reasonOf(
+        vaults
+          .putEntry({ vaultId: acme.id, name: "OTHER", identity: { audience: "vault" } })
+          .pipe(admin),
+      ),
+      "forbidden",
+    );
+    assert.strictEqual(
+      yield* reasonOf(
+        vaults.putEntry({ vaultId: acme.id, entryId: added.entry.id, name: "RENAMED" }).pipe(admin),
+      ),
+      "forbidden",
+    );
+    assert.strictEqual(
+      yield* reasonOf(
+        vaults.deleteEntry({ vaultId: acme.id, entryId: added.entry.id }).pipe(admin),
+      ),
+      "forbidden",
+    );
+    // It takes no value, class or reveal, is never an environment variable, and never names the
+    // Hub itself as audience; its lifetime is 1 minute to 1 hour.
+    const owner = as(ownerId);
+    for (const input of [
+      { name: "A", identity: { audience: "vault" }, value: Redacted.make("x") },
+      { name: "B", identity: { audience: "vault" }, allowReveal: true },
+      { name: "C", identity: { audience: "vault" }, delivery: "env" as const },
+      { name: "D", identity: { audience: "https://hub.example.com" } },
+      { name: "E", identity: { audience: "a b" } },
+      { name: "F", identity: { audience: "vault", ttlSeconds: 3601 } },
+      { name: "G", identity: { audience: "vault", ttlSeconds: 59 } },
+    ]) {
+      assert.strictEqual(
+        yield* reasonOf(vaults.putEntry({ vaultId: acme.id, ...input }).pipe(owner)),
+        "invalid-value",
+        input.name,
+      );
+    }
+    // The Owner changes its audience and lifetime; a value never.
+    const changed = yield* vaults
+      .putEntry({
+        vaultId: acme.id,
+        entryId: added.entry.id,
+        name: "KUBE_TOKEN",
+        identity: { audience: "https://k8s.example.com", ttlSeconds: 900 },
+      })
+      .pipe(owner);
+    assert.deepStrictEqual(changed.entry.identity, {
+      audience: "https://k8s.example.com",
+      ttlSeconds: 900,
+    });
+    assert.strictEqual(
+      yield* reasonOf(
+        vaults
+          .putEntry({
+            vaultId: acme.id,
+            entryId: added.entry.id,
+            name: "KUBE_TOKEN",
+            value: Redacted.make("not-a-token"),
+          })
+          .pipe(owner),
+      ),
+      "invalid-value",
+    );
+    // A template takes only its file's path, never the token itself.
+    assert.strictEqual(
+      yield* reasonOf(
+        vaults
+          .putEntry({
+            vaultId: acme.id,
+            name: "KUBECONFIG",
+            template: { text: "token: {{ KUBE_TOKEN }}" },
+            delivery: "file",
+          })
+          .pipe(owner),
+      ),
+      "invalid-template",
+    );
+    const kubeconfig = yield* vaults
+      .putEntry({
+        vaultId: acme.id,
+        name: "KUBECONFIG",
+        template: { text: "tokenFile: {{ KUBE_TOKEN | path }}" },
+        delivery: "file",
+      })
+      .pipe(owner);
+    assert.isFalse(kubeconfig.entry.broken);
+    // Nobody links or copies one out of the Main vault.
+    const main = yield* vaults
+      .putEntry({ vaultId: MAIN_VAULT_ID, name: "HUB_ID", identity: { audience: "vault" } })
+      .pipe(owner);
+    assert.strictEqual(
+      yield* reasonOf(
+        vaults.linkEntry({ vaultId: acme.id, sourceEntryId: main.entry.id }).pipe(owner),
+      ),
+      "not-linkable",
+    );
+    assert.strictEqual(
+      yield* reasonOf(
+        vaults.copyEntry({ vaultId: acme.id, sourceEntryId: main.entry.id }).pipe(owner),
+      ),
+      "not-linkable",
+    );
+    // The Owner deletes it.
+    const removed = yield* vaults
+      .deleteEntry({ vaultId: acme.id, entryId: kubeconfig.entry.id })
+      .pipe(
+        Effect.andThen(vaults.deleteEntry({ vaultId: acme.id, entryId: added.entry.id })),
+        owner,
+      );
+    assert.isTrue(removed.deleted);
+  }),
+);
+
+it.effect("without an issuer the Hub keeps no workload identity entry", () =>
+  Effect.gen(function* () {
+    const { vaults, as, ownerId, acmeId } = yield* hub;
+    const acme = yield* vaults.create({ name: "Acme", spaceId: acmeId }).pipe(as(ownerId));
+    assert.strictEqual(
+      yield* reasonOf(
+        vaults
+          .putEntry({ vaultId: acme.id, name: "KUBE_TOKEN", identity: { audience: "kubernetes" } })
+          .pipe(as(ownerId)),
+      ),
+      "identity-no-issuer",
+    );
   }),
 );

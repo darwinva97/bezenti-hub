@@ -8,6 +8,8 @@
 import {
   type EnvironmentId,
   HUB_MACHINE_ENVIRONMENT_ID,
+  IDENTITY_TTL_MAX_SECONDS,
+  IDENTITY_TTL_MIN_SECONDS,
   type SpaceId,
   type ThreadId,
   type UserId,
@@ -26,8 +28,6 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as IdentityIssuer from "./IdentityIssuer.ts";
 import * as IdentityKeys from "./IdentityKeys.ts";
 
-const IDENTITY_TTL_MAX_SECONDS = 3600;
-const IDENTITY_TTL_MIN_SECONDS = 60;
 /** The Hub's own sign-in to a provider. */
 const HUB_TTL_SECONDS = 300;
 /** `nbf` this far before `iat`: a verifier whose clock is a little behind still accepts. */
@@ -50,7 +50,7 @@ export interface IssuedToken {
  * Why `audience` is not one a token may carry, or undefined: empty, too long, a list, or the Hub
  * itself (a token for the Hub would be a way into it).
  */
-const audienceProblem = (
+export const audienceProblem = (
   audience: string,
   hubOrigins: ReadonlyArray<string>,
 ): string | undefined => {

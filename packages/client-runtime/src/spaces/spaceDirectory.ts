@@ -169,6 +169,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "provider_scope.update": "Changed a provider scope",
   "provider_scope.delete": "Deleted a provider scope",
   "provider_scope.allow": "Changed which Vaults use a provider scope",
+  "identity.issue": "Signed a workload identity token",
 };
 
 export const INSTALLATION_PERMISSION_LABELS: Record<InstallationPermission, string> = {

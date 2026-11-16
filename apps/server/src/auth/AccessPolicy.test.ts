@@ -1548,6 +1548,22 @@ const rows: ReadonlyArray<Row> = [
   // Ticket 03: a Provider entry is the Vault's editors' (an Admin's only through a scope allowed
   // to the Vault, which Vaults checks); Members and Guests never.
   ["Owner adds a Provider entry", owner, "vault.providerEntry", orgVault, allow],
+  // Vaults ticket 07: a workload identity entry is the Owner's alone, in any Vault.
+  ["Owner adds a workload identity entry", owner, "vault.identityEntry", orgVault, allow],
+  [
+    "not an Admin, even of its Organization",
+    admin,
+    "vault.identityEntry",
+    orgVault,
+    deny("owner-only"),
+  ],
+  [
+    "nor on a Vault allowed to Acme",
+    admin,
+    "vault.identityEntry",
+    allowedToAcme,
+    deny("owner-only"),
+  ],
   ["an Admin adds one to its Organization's Vault", admin, "vault.providerEntry", orgVault, allow],
   ...([member, guest] as const).map((actor): Row => [
     `${actor.userId}: no Provider entry`,

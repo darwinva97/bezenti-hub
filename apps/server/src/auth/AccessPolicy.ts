@@ -199,6 +199,11 @@ export type Action =
    * scope allowed to it (Vaults decides), the Owner also «Direct».
    */
   | "vault.providerEntry"
+  /**
+   * Add, change or delete a workload identity entry (Vaults ticket 07, question 7): a token the
+   * Hub signs for any audience is the Owner's to hand out, in any Vault.
+   */
+  | "vault.identityEntry"
   /** Secret providers' scopes and «Test connection», decided on the Installation: the Owner. */
   | "secretProvider.manage"
   /** Add, replace, rename and delete a Vault's secrets without reading them. */
@@ -562,6 +567,7 @@ const VAULT_ACTIONS: ReadonlySet<Action> = new Set([
   "vault.view",
   "vault.readVariables",
   "vault.providerEntry",
+  "vault.identityEntry",
   "vault.edit",
   "vault.manage",
   "vault.reveal",

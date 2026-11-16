@@ -527,7 +527,11 @@ const layerAuth = Layer.mergeAll(
   SpaceVisibility.layer,
   AuditLog.layer,
   // Vaults: their start checks the database against the master key and sweeps orphaned values.
-  Vaults.layer.pipe(Layer.provide(AuditLog.layer), Layer.provide(ProviderReads.layer)),
+  Vaults.layer.pipe(
+    Layer.provide(AuditLog.layer),
+    Layer.provide(ProviderReads.layer),
+    Layer.provide(layerIdentity),
+  ),
   // What a Thread's turns, terminals and scripts receive (spec 5 ticket 03), delivered as
   // environment variables by SecretDelivery (ticket 04), whose values SecretMasker shows as
   // `[NAME]` in everything the Hub stores or sends (ticket 05). Provider entries are read by
@@ -535,6 +539,7 @@ const layerAuth = Layer.mergeAll(
   SecretDelivery.layer.pipe(
     Layer.provideMerge(layerSecretMasking),
     Layer.provide(ProviderReads.layer),
+    Layer.provide(layerIdentity),
   ),
   // Workload identity (Vaults ticket 07): the issuer, its sealed signing keys and the tokens.
   layerIdentity,

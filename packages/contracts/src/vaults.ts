@@ -216,7 +216,19 @@ export const looksLikeCredential = (name: string, value?: string): boolean => {
  * `provider`: read from a Secret provider when a process starts; a sealed Secret (ADR 0008).
  * `template`: composed from entries of the same Vault (`vaultTemplates.ts`); its text holds names.
  */
-export const VaultEntryKind = Schema.Literals(["own", "copy", "link", "provider", "template"]);
+/** A workload identity token's lifetime (ticket 07, question 7): 10 minutes unless set, 1 hour at most. */
+export const IDENTITY_TTL_DEFAULT_SECONDS = 600;
+export const IDENTITY_TTL_MIN_SECONDS = 60;
+export const IDENTITY_TTL_MAX_SECONDS = 3600;
+
+export const VaultEntryKind = Schema.Literals([
+  "own",
+  "copy",
+  "link",
+  "provider",
+  "template",
+  "identity",
+]);
 
 /**
  * How an entry reaches a process: an environment variable, a Secret file in memory whose path the
@@ -321,6 +333,10 @@ export const VaultEntry = Schema.Struct({
   ),
   /** A Template entry's text (names, never values), for whoever may read Variables; else null. */
   template: Schema.optionalKey(Schema.Struct({ text: Schema.NullOr(Schema.String) })),
+  /** A workload identity entry's audience and lifetime (ticket 07): never a token. */
+  identity: Schema.optionalKey(
+    Schema.Struct({ audience: Schema.String, ttlSeconds: Schema.Number }),
+  ),
   delivery: VaultEntryDelivery,
   /**
    * Shown, never delivered: a broken Secret link, a Provider entry whose provider is gone or cannot
@@ -370,6 +386,8 @@ export const VaultErrorReason = Schema.Literals([
   "invalid-reference",
   /** A template's syntax, or a name that is not another, non-template entry of its Vault. */
   "invalid-template",
+  /** Workload identity is off: the Hub has no issuer (`T3CODE_IDENTITY_ISSUER`, `T3CODE_PUBLIC_URL`). */
+  "identity-no-issuer",
   "storage",
 ]);
 export type VaultErrorReason = typeof VaultErrorReason.Type;
@@ -442,7 +460,25 @@ export const VaultEntryPutInput = Schema.Struct({
   template: Schema.optionalKey(
     Schema.Struct({ text: Schema.String.check(Schema.isMaxLength(TEMPLATE_TEXT_MAX_LENGTH)) }),
   ),
-  /** `env` when omitted on an add; a template is never `none`. */
+  /**
+   * A workload identity entry (ticket 07, the Owner's alone) instead of a `value`: a token the Hub
+   * signs for one audience, always a sealed Secret file.
+   */
+  identity: Schema.optionalKey(
+    Schema.Struct({
+      audience: Schema.String.check(Schema.isMaxLength(256)),
+      ttlSeconds: Schema.optionalKey(
+        Schema.Number.check(
+          Schema.isInt(),
+          Schema.isBetween({
+            minimum: IDENTITY_TTL_MIN_SECONDS,
+            maximum: IDENTITY_TTL_MAX_SECONDS,
+          }),
+        ),
+      ),
+    }),
+  ),
+  /** `env` when omitted on an add; a template is never `none`; an identity entry is a `file`. */
   delivery: Schema.optionalKey(VaultEntryDelivery),
   /** The Owner confirms a name that changes how tools run (`secretNameRisk`: dangerous). */
   confirmDangerous: Schema.optionalKey(Schema.Boolean),

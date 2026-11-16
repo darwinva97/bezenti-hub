@@ -4,6 +4,9 @@
  * `reveal` returns a value; everything is audited without one. See docs/internals/secrets.md.
  */
 import {
+  IDENTITY_TTL_DEFAULT_SECONDS,
+  IDENTITY_TTL_MAX_SECONDS,
+  IDENTITY_TTL_MIN_SECONDS,
   MAIN_VAULT_ID,
   type ProjectId,
   SECRET_MASK_MIN_LENGTH,
@@ -67,6 +70,8 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as IdentityIssuer from "../identity/IdentityIssuer.ts";
+import * as IdentityTokens from "../identity/IdentityTokens.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { projectSpaceSql } from "../spaces/SpaceDirectory.ts";
 import * as ProviderReads from "./ProviderReads.ts";
@@ -200,6 +205,9 @@ interface EntryRow {
   readonly delivery: VaultEntryDelivery;
   /** A Template entry's text: names of entries of its Vault, never values. */
   readonly templateText: string | null;
+  /** A workload identity entry's audience and lifetime (ticket 07). */
+  readonly identityAudience: string | null;
+  readonly identityTtlSeconds: number | null;
 }
 
 /** An entry's class: a link's original's; a broken link's, a Secret. */
@@ -234,7 +242,8 @@ const ENTRY_COLUMNS = `
   o.class AS "linkedClass", o.revealable AS "linkedRevealable",
   e.provider_id AS "providerId", e.provider_reference AS "providerReference",
   e.provider_scope_id AS "providerScopeId", s.label AS "scopeLabel",
-  e.delivery AS "delivery", e.template_text AS "templateText"
+  e.delivery AS "delivery", e.template_text AS "templateText",
+  e.identity_audience AS "identityAudience", e.identity_ttl_seconds AS "identityTtlSeconds"
 `;
 
 /** UTF-8 text without NUL, not empty, at most SECRET_VALUE_MAX_BYTES. Says why, never what. */
@@ -271,12 +280,23 @@ const templateProblem = (
   if (parsed._tag === "invalid") return parsed.message;
   const byName = new Map(inputs.map((input) => [input.name, input]));
   const paths = templatePathNames(parsed.parts);
+  // A token is the Hub's to refresh in its file: a template takes the file, never the token.
+  const valueUses = new Set(
+    parsed.parts.flatMap((part) =>
+      part._tag === "ref" && !(part.filters.length === 1 && part.filters[0] === "path")
+        ? [part.name]
+        : [],
+    ),
+  );
   for (const name of templateNames(parsed.parts)) {
     const input = byName.get(name);
     if (input === undefined) {
       return `${name} is not an entry of this Vault: a template names entries of its own Vault only.`;
     }
     if (input.kind === "template") return `${name} is a template: a template never names another.`;
+    if (input.kind === "identity" && valueUses.has(name)) {
+      return `${name} is a workload identity token: a template takes its file ({{ ${name} | path }}), never the token.`;
+    }
     if (paths.has(name) && input.delivery !== "file") {
       return `{{ ${name} | path }} takes ${name}'s Secret file: deliver ${name} as a file.`;
     }
@@ -426,6 +446,14 @@ const entryOf = (
     ...(row.kind === "template"
       ? { template: { text: readsVariables ? row.templateText : null } }
       : {}),
+    ...(row.kind === "identity"
+      ? {
+          identity: {
+            audience: row.identityAudience ?? "",
+            ttlSeconds: row.identityTtlSeconds ?? IDENTITY_TTL_DEFAULT_SECONDS,
+          },
+        }
+      : {}),
     delivery: row.delivery,
     broken: providerBroken || (broken && (seesMain || canEdit)),
     linkedFrom:
@@ -475,6 +503,8 @@ const invalidName = (name: string) =>
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const spaces = yield* SpaceDirectory.SpaceDirectory;
+  // Workload identity (ticket 07): its issuer, when the Hub has one.
+  const identityIssuer = yield* Effect.serviceOption(IdentityIssuer.IdentityIssuer);
   const audit = yield* AuditLog.AuditLog;
   const values = yield* ServerSecretStore.VaultValueStore;
   // Provider entries (ticket 02): what Settings says of their provider; never a read here.
@@ -1343,6 +1373,139 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * A workload identity entry (ticket 07, ADR 0009): a token the Hub signs for each Thread, for one
+   * audience, delivered as a sealed Secret file it refreshes. The Owner's alone, in any Vault. It
+   * holds no value: only its audience and lifetime, and nobody reveals it.
+   */
+  const putIdentityEntry = Effect.fn("Vaults.putIdentityEntry")(function* (
+    input: VaultEntryPutInput,
+    context: {
+      readonly userId: UserId;
+      readonly can: Can;
+      readonly row: VaultRow;
+      readonly resource: AccessPolicy.VaultResource;
+      readonly dangerous: boolean;
+      readonly existing: EntryRow | undefined;
+    },
+  ) {
+    const { userId, can, row, resource, dangerous, existing } = context;
+    if (!can("vault.identityEntry", resource)) {
+      return yield* fail("forbidden", "Only the Owner adds or changes workload identity entries.");
+    }
+    if (existing !== undefined && existing.kind !== "identity") {
+      return yield* fail(
+        "invalid-value",
+        `${existing.name} is not a workload identity entry: delete it and add one instead.`,
+      );
+    }
+    if (
+      input.value !== undefined ||
+      input.class !== undefined ||
+      input.allowReveal !== undefined ||
+      input.provider !== undefined ||
+      input.template !== undefined ||
+      (input.delivery !== undefined && input.delivery !== "file")
+    ) {
+      return yield* fail(
+        "invalid-value",
+        "A workload identity entry is a token the Hub signs, delivered as a sealed Secret file: it takes no value, class, reveal or other delivery.",
+      );
+    }
+    const issuer = Option.flatMap(identityIssuer, (found) =>
+      Option.map(found.issuer, () => found.hubOrigins),
+    );
+    if (Option.isNone(issuer)) {
+      return yield* fail(
+        "identity-no-issuer",
+        "Workload identity is off on this Hub: its operator sets T3CODE_IDENTITY_ISSUER or T3CODE_PUBLIC_URL.",
+      );
+    }
+    const audience = input.identity?.audience ?? existing?.identityAudience ?? "";
+    const audienceIssue = IdentityTokens.audienceProblem(audience, issuer.value);
+    if (audienceIssue !== undefined) return yield* fail("invalid-value", audienceIssue);
+    const ttl =
+      input.identity?.ttlSeconds ?? existing?.identityTtlSeconds ?? IDENTITY_TTL_DEFAULT_SECONDS;
+    if (
+      !Number.isInteger(ttl) ||
+      ttl < IDENTITY_TTL_MIN_SECONDS ||
+      ttl > IDENTITY_TTL_MAX_SECONDS
+    ) {
+      return yield* fail(
+        "invalid-value",
+        `A token lives ${IDENTITY_TTL_MIN_SECONDS} to ${IDENTITY_TTL_MAX_SECONDS} seconds.`,
+      );
+    }
+    const at = yield* now;
+    if (existing === undefined) {
+      yield* nameTaken(row.vaultId, input.name);
+      const entryId = yield* newId("secret");
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* stillWritable(row.vaultId);
+            yield* sql`
+              INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id,
+                unmasked, class, revealable, delivery, identity_audience, identity_ttl_seconds,
+                version, created_at, updated_at, updated_by)
+              VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null},
+                'identity', NULL, 0, 'secret', 0, 'file', ${audience}, ${ttl}, 1, ${at}, ${at},
+                ${userId})
+            `;
+            yield* refreshTemplateClasses(row.vaultId);
+            yield* recordEdit({
+              userId,
+              vault: row,
+              entryId,
+              name: input.name,
+              kind: "identity",
+              op: "add",
+              dangerous,
+            });
+          }),
+        )
+        .pipe(Effect.catch(orStorage("add the workload identity entry")));
+      return yield* result(can, resource, row.vaultId, entryId, []);
+    }
+    const renamed = input.name !== existing.name;
+    if (renamed) yield* nameTaken(row.vaultId, input.name, existing.entryId);
+    const described = input.description !== undefined && input.description !== existing.description;
+    const retargeted =
+      audience !== existing.identityAudience || ttl !== existing.identityTtlSeconds;
+    if (!renamed && !described && !retargeted) {
+      return yield* result(can, resource, row.vaultId, existing.entryId, []);
+    }
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* stillWritable(row.vaultId);
+          yield* sql`
+            UPDATE vault_entries SET
+              name = ${input.name},
+              description = ${input.description === undefined ? existing.description : input.description},
+              identity_audience = ${audience},
+              identity_ttl_seconds = ${ttl},
+              version = version + ${retargeted ? 1 : 0},
+              updated_at = ${at},
+              updated_by = ${userId}
+            WHERE entry_id = ${existing.entryId}
+          `;
+          yield* recordEdit({
+            userId,
+            vault: row,
+            entryId: existing.entryId,
+            name: input.name,
+            kind: "identity",
+            op: retargeted ? "identity" : renamed ? "rename" : "describe",
+            ...(renamed ? { from: existing.name } : {}),
+            dangerous,
+          });
+        }),
+      )
+      .pipe(Effect.catch(orStorage("change the workload identity entry")));
+    return yield* result(can, resource, row.vaultId, existing.entryId, []);
+  });
+
+  /**
    * A Template entry: a text naming entries of the same Vault, never values, so it is stored in
    * clear. Whoever edits the Vault adds or changes one. Its class follows its entries (a Variable
    * only when all are), and it is never revealed: nobody reads its value from the Hub.
@@ -1472,6 +1635,9 @@ const make = Effect.gen(function* () {
     }
     if (input.template !== undefined || existing?.kind === "template") {
       return yield* putTemplateEntry(input, { userId, can, row, resource, dangerous, existing });
+    }
+    if (input.identity !== undefined || existing?.kind === "identity") {
+      return yield* putIdentityEntry(input, { userId, can, row, resource, dangerous, existing });
     }
     const value = input.value === undefined ? undefined : Redacted.value(input.value);
     if (value !== undefined) {
@@ -1658,8 +1824,11 @@ const make = Effect.gen(function* () {
     `.pipe(Effect.catch(storage("read the Secret links")));
 
   const deleteEntry = Effect.fn("Vaults.deleteEntry")(function* (input: VaultEntryDeleteInput) {
-    const { userId, row } = yield* authorizeVault(input.vaultId, "vault.edit");
+    const { userId, row, can, resource } = yield* authorizeVault(input.vaultId, "vault.edit");
     const entry = yield* findEntry(row.vaultId, input.entryId);
+    if (entry.kind === "identity" && !can("vault.identityEntry", resource)) {
+      return yield* fail("forbidden", "Only the Owner changes workload identity entries.");
+    }
     // Only the Main vault's secrets have links, and only the Owner edits it: the list is theirs.
     const links = row.vaultId === MAIN_VAULT_ID ? yield* linksTo(entry.entryId) : [];
     if (links.length > 0 && input.breakLinks !== true) {
@@ -1717,6 +1886,13 @@ const make = Effect.gen(function* () {
       return yield* fail(
         "not-linkable",
         `${source.name} is a template of the Main vault: add a template with the same text in this Vault instead.`,
+      );
+    }
+    // A token is signed for each Thread: there is no value to link or copy.
+    if (source.kind === "identity") {
+      return yield* fail(
+        "not-linkable",
+        `${source.name} is a workload identity token the Hub signs: add one with the same audience in this Vault instead.`,
       );
     }
     // Copying would read the provider into the Hub (ticket 08's «Copy into the Hub»).

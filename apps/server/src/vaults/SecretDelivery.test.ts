@@ -23,6 +23,7 @@ import * as Redacted from "effect/Redacted";
 import * as CommandActor from "../auth/CommandActor.ts";
 import { bootstrapOwner, makeAuthenticator, serveAuthHttp } from "../auth/UserAuth.testkit.ts";
 import * as SecretDelivery from "./SecretDelivery.ts";
+import * as SecretMasker from "./SecretMasker.ts";
 import * as Vaults from "./Vaults.ts";
 
 const HUB = {
@@ -37,7 +38,12 @@ const ownersThread = Effect.gen(function* () {
   const vaults = Context.get(server.services, Vaults.Vaults);
   const delivery = Context.get(server.services, SecretDelivery.SecretDelivery);
   const entries = new Map<string, VaultEntryId>();
-  const put = (name: string, value: string, confirmDangerous?: boolean) =>
+  const put = (
+    name: string,
+    value: string,
+    confirmDangerous?: boolean,
+    entryClass?: "secret" | "variable",
+  ) =>
     vaults
       .putEntry({
         vaultId: MAIN_VAULT_ID,
@@ -45,6 +51,7 @@ const ownersThread = Effect.gen(function* () {
         value: Redacted.make(value),
         ...(entries.has(name) ? { entryId: entries.get(name)! } : {}),
         ...(confirmDangerous === undefined ? {} : { confirmDangerous }),
+        ...(entryClass === undefined ? {} : { class: entryClass }),
       })
       .pipe(
         CommandActor.actAs(owner),
@@ -141,6 +148,43 @@ it.effect("a machine that does not serve the Thread's Space gets nothing", () =>
       fingerprint: "none",
       variables: [],
     });
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a Variable is delivered plain: never remembered for masking, never masked", () =>
+  Effect.gen(function* () {
+    const { server, put, thread, forTurn } = yield* ownersThread;
+    yield* put("OWNER_TOKEN", "owner-token-value");
+    yield* put("AWS_REGION", "eu-central-1", undefined, "variable");
+    const threadId = yield* thread("thread:variables");
+    const before = yield* forTurn({ threadId, target: HUB });
+    assert.deepEqual(
+      before?.variables?.map((variable) => ({ ...variable })),
+      [
+        { name: "AWS_REGION", value: "eu-central-1", plain: true },
+        { name: "OWNER_TOKEN", value: "owner-token-value" },
+      ],
+    );
+    // Only the Secret is recorded as delivered for the Thread's masking.
+    const remembered = yield* server.sql<{ readonly name: string }>`
+      SELECT name FROM thread_secret_values WHERE thread_id = ${threadId}
+    `;
+    assert.deepEqual(
+      remembered.map((row) => row.name),
+      ["OWNER_TOKEN"],
+    );
+    const masker = yield* Context.get(server.services, SecretMasker.SecretMasker).forThread(
+      threadId,
+    );
+    assert.equal(
+      masker.mask("region eu-central-1, token owner-token-value"),
+      "region eu-central-1, token [OWNER_TOKEN]",
+    );
+    // Turned into a Secret, it goes as one: a new set, so a new fingerprint.
+    yield* put("AWS_REGION", "eu-central-1-secret", undefined, "secret");
+    const after = yield* forTurn({ threadId, target: HUB });
+    assert.notEqual(before?.fingerprint, after?.fingerprint);
+    assert.isUndefined(after?.variables?.find((variable) => variable.name === "AWS_REGION")?.plain);
   }).pipe(Effect.scoped),
 );
 

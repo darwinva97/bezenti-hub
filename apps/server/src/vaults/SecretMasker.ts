@@ -206,7 +206,10 @@ export const make = Effect.gen(function* () {
   /** An owner's effective set: nothing for a User no longer in the Space; storage fails. */
   const effectiveSet = (compute: Effect.Effect<EffectiveVaults.EffectiveSet, VaultError>) =>
     compute.pipe(
-      Effect.map((set) => set.variables.filter((variable) => !variable.unmasked)),
+      // A Variable is configuration, never masked; a short Secret neither (it would hide text).
+      Effect.map((set) =>
+        set.variables.filter((variable) => !variable.unmasked && variable.class === "secret"),
+      ),
       Effect.catchIf(
         (error) => error.reason !== "storage",
         () => Effect.succeed([]),
@@ -446,7 +449,7 @@ export const make = Effect.gen(function* () {
   yield* Effect.gen(function* () {
     const rows = yield* sql<{ readonly name: string; readonly valueId: string }>`
       SELECT name, value_id AS "valueId" FROM vault_entries
-      WHERE value_id IS NOT NULL AND unmasked = 0
+      WHERE value_id IS NOT NULL AND unmasked = 0 AND class = 'secret'
       UNION SELECT name, value_id AS "valueId" FROM thread_secret_values
     `;
     const secrets: Array<MaskableSecret> = [];

@@ -6,8 +6,16 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 /** The executor contract from which a machine receives `secretEnv`. */
 export const SECRET_ENV_CONTRACT_VERSION = 10;
 
-/** One variable of a Thread's secrets, with its value. Sent only over the Environment's link. */
-export const SecretEnvVariable = Schema.Struct({ name: Schema.String, value: Schema.String });
+/**
+ * One variable of a Thread's secrets, with its value. Sent only over the Environment's link.
+ * `plain`: a Vault Variable, never masked. An older executor ignores it and masks it in its own
+ * logs (more masking, never less).
+ */
+export const SecretEnvVariable = Schema.Struct({
+  name: Schema.String,
+  value: Schema.String,
+  plain: Schema.optionalKey(Schema.Literal(true)),
+});
 export type SecretEnvVariable = typeof SecretEnvVariable.Type;
 
 /** The fingerprint of no secrets: sent explicitly, so a set that became empty is a change. */

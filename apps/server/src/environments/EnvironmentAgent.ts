@@ -87,7 +87,10 @@ import { makeWorkspaceRpcCalls } from "../workspace/WorkspaceRpcCalls.ts";
  * and provider event logs from then on (the Hub masks what it stores and shows).
  */
 const knowSecrets = (secretEnv: SecretEnv | undefined) => {
-  if (secretEnv?.variables !== undefined) rememberKnownSecrets(secretEnv.variables);
+  if (secretEnv?.variables !== undefined) {
+    // A Vault Variable is configuration: never masked.
+    rememberKnownSecrets(secretEnv.variables.filter((variable) => variable.plain !== true));
+  }
 };
 
 /** Calls answered, by idempotency key, so a resend gets the first answer instead of a rerun. */

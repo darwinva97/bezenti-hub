@@ -42,7 +42,12 @@ export interface SecretPlan {
   readonly target: SecretTarget;
   /** The Thread whose process receives it: what it receives is masked there (ticket 05). */
   readonly threadId?: ThreadId;
-  readonly variables: ReadonlyArray<{ readonly name: string; readonly valueId: string }>;
+  /** `plain`: a Vault Variable, delivered as the others and never masked. */
+  readonly variables: ReadonlyArray<{
+    readonly name: string;
+    readonly valueId: string;
+    readonly plain?: true;
+  }>;
   /**
    * Spec 5 ticket 07: the Space the set was planned for (the Thread's, read by the same
    * `forThread`) and the User whose set it is; null when nothing was computed. A shell keeps them.
@@ -99,15 +104,22 @@ export class SecretDelivery extends Context.Service<
   }
 >()("t3/vaults/SecretDelivery") {}
 
-/** The fingerprint of a set: its User, names and value ids (a replace writes a new id). */
-const fingerprintOf = (
-  actingUserId: UserId,
-  variables: ReadonlyArray<{ readonly name: string; readonly valueId: string }>,
-): string =>
+/**
+ * The fingerprint of a set: its User, names and value ids (a replace writes a new id), and which
+ * are Variables (a Secret's stays as before Variables existed).
+ */
+const fingerprintOf = (actingUserId: UserId, variables: SecretPlan["variables"]): string =>
   variables.length === 0
     ? NO_SECRETS_FINGERPRINT
     : NodeCrypto.createHash("sha256")
-        .update(JSON.stringify([actingUserId, variables.map((v) => [v.name, v.valueId])]))
+        .update(
+          JSON.stringify([
+            actingUserId,
+            variables.map((v) =>
+              v.plain === true ? [v.name, v.valueId, "plain"] : [v.name, v.valueId],
+            ),
+          ]),
+        )
         .digest("hex")
         .slice(0, 32);
 
@@ -196,7 +208,11 @@ const make = Effect.gen(function* () {
     );
     const variables = set.value.variables
       .filter((v) => !v.dangerous || trusted.has(v.valueId))
-      .map((v) => ({ name: v.name, valueId: v.valueId }));
+      .map((v) => ({
+        name: v.name,
+        valueId: v.valueId,
+        ...(v.class === "variable" ? { plain: true as const } : {}),
+      }));
     return {
       fingerprint: fingerprintOf(input.actingUserId, variables),
       target: input.target,
@@ -265,7 +281,7 @@ const make = Effect.gen(function* () {
         ...(environmentName === undefined ? {} : { environmentName }),
       });
     }
-    const delivered: Array<SecretMasker.DeliveredSecret> = [];
+    const delivered: Array<SecretMasker.DeliveredSecret & { readonly plain?: true }> = [];
     for (const variable of planned.variables) {
       const bytes = yield* values
         .get(variable.valueId)
@@ -276,15 +292,22 @@ const make = Effect.gen(function* () {
         name: variable.name,
         value: new TextDecoder().decode(bytes.value),
         valueId: variable.valueId,
+        ...(variable.plain === true ? { plain: true as const } : {}),
       });
     }
-    // Masked in the Thread before the process that gets them can print anything (ticket 05).
+    // Masked in the Thread before the process that gets them can print anything (ticket 05);
+    // Variables never are.
     if (planned.threadId !== undefined && Option.isSome(masker)) {
-      yield* masker.value.remember(planned.threadId, delivered);
+      yield* masker.value.remember(
+        planned.threadId,
+        delivered.filter((secret) => secret.plain !== true),
+      );
     }
     return {
       fingerprint: planned.fingerprint,
-      variables: delivered.map(({ name, value }) => ({ name, value })),
+      variables: delivered.map(({ name, value, plain }) =>
+        plain === true ? { name, value, plain } : { name, value },
+      ),
     } satisfies SecretEnv;
   });
 

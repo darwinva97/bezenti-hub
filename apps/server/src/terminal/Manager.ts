@@ -2647,12 +2647,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             // Spec 5: the secrets go into this shell's environment and are then dropped here.
             const secrets = session.pendingSecretEnv;
             session.pendingSecretEnv = null;
-            // Its history file masks the values the shell got (none of another User's).
-            if (secrets?.variables !== undefined && secrets.variables.length > 0) {
-              addHistorySecrets(
-                toSessionKey(session.threadId, session.terminalId),
-                secrets.variables,
-              );
+            // Its history file masks the values the shell got (none of another User's), never a
+            // Vault Variable's.
+            const masked = (secrets?.variables ?? []).filter((v) => v.plain !== true);
+            if (masked.length > 0) {
+              addHistorySecrets(toSessionKey(session.threadId, session.terminalId), masked);
             }
             session.facts = session.pendingFacts;
             session.pendingFacts = null;

@@ -122,9 +122,24 @@ jobs:
           EXPO_PUBLIC_T3CODE_PUBLIC_URL: ${{ env.HUB_URL }}
           NODE_ENV: production
           CI: "1"
+        # ML Kit (genai-speech-recognition, del dictado por voz) arrastra genai-common 1.0.0-beta5, compilado
+        # con Kotlin 2.4; el Kotlin del proyecto (2.2) solo lee metadatos hasta 2.3 y falla. Solo en ese módulo
+        # se salta la comprobación de versión de metadatos. Quitarlo cuando el proyecto suba de Kotlin.
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon assembleRelease -PreactNativeArchitectures=arm64-v8a
+          init="$RUNNER_TEMP/kotlin-metadata.gradle"
+          cat > "$init" <<'GRADLE'
+          gradle.beforeProject { p ->
+            if (p.name == 't3-voice-transcription') {
+              p.tasks.configureEach { t ->
+                if (t.class.name.contains('KotlinCompile')) {
+                  t.compilerOptions.freeCompilerArgs.add('-Xskip-metadata-version-check')
+                }
+              }
+            }
+          }
+          GRADLE
+          ./gradlew --no-daemon --init-script "$init" assembleRelease -PreactNativeArchitectures=arm64-v8a
           ls -la app/build/outputs/apk/release/
 
       # La plantilla de Expo firma `release` con la clave de depuración; apksigner sustituye esa firma.

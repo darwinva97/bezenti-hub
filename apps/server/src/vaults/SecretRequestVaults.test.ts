@@ -302,6 +302,16 @@ it.effect("an Admin's answer is saved in Acme secrets, audited, and the next Thr
       .pipe(t.as(t.ada));
 
     assert.deepStrictEqual(yield* t.entryNames(t.acmeVault), ["STRIPE_KEY"]);
+    // What someone typed for an agent is a sealed Secret: nobody reads it back, the Owner neither.
+    const [saved] = (yield* t.vaults.listEntries({ vaultId: t.acmeVault }).pipe(t.as(t.ownerId)))
+      .entries;
+    assert.deepStrictEqual([saved?.class, saved?.sealed], ["secret", true]);
+    assert.equal(
+      yield* reasonOf(
+        t.vaults.reveal({ vaultId: t.acmeVault, entryId: saved!.id }).pipe(t.as(t.ownerId)),
+      ),
+      "sealed",
+    );
     // The turn still gets its one-use ref, as today.
     assert.deepStrictEqual(
       t.dispatched.map((command) =>

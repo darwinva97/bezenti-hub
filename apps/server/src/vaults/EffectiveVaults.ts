@@ -9,6 +9,7 @@ import {
   type SpaceId,
   ThreadId,
   type UserId,
+  type VaultEntryClass,
   VaultEntryId,
   VaultError,
   type VaultErrorReason,
@@ -44,6 +45,8 @@ export interface EffectiveVariable {
    * A new id after every replace, so it also says whether the value changed.
    */
   readonly valueId: string;
+  /** A link's original's. A Variable is never masked. */
+  readonly class: VaultEntryClass;
   readonly unmasked: boolean;
   /** A name that changes how tools run; only the Owner sets one (`secretNameRisk`). */
   readonly dangerous: boolean;
@@ -126,6 +129,7 @@ interface EntryRow {
   readonly description: string | null;
   readonly valueId: string | null;
   readonly unmasked: number | null;
+  readonly class: VaultEntryClass | null;
 }
 
 const make = Effect.gen(function* () {
@@ -147,7 +151,8 @@ const make = Effect.gen(function* () {
           SELECT e.vault_id AS "vaultId", e.entry_id AS "entryId", e.name AS "name",
             e.description AS "description",
             CASE WHEN e.kind = 'link' THEN o.value_id ELSE e.value_id END AS "valueId",
-            CASE WHEN e.kind = 'link' THEN o.unmasked ELSE e.unmasked END AS "unmasked"
+            CASE WHEN e.kind = 'link' THEN o.unmasked ELSE e.unmasked END AS "unmasked",
+            CASE WHEN e.kind = 'link' THEN o.class ELSE e.class END AS "class"
           FROM vault_entries e
           LEFT JOIN vault_entries o
             ON e.kind = 'link' AND o.entry_id = e.linked_entry_id
@@ -307,6 +312,7 @@ const make = Effect.gen(function* () {
             vaultName: row.name,
             source,
             valueId: entry.valueId,
+            class: entry.class ?? "secret",
             unmasked: entry.unmasked === 1,
             dangerous: risk === "dangerous",
             shadowed: [],
@@ -386,6 +392,7 @@ const make = Effect.gen(function* () {
         vaultId: variable.vaultId,
         vaultName: variable.vaultName,
         source: variable.source,
+        class: variable.class,
         unmasked: variable.unmasked,
         dangerous: variable.dangerous,
         shadowed: variable.shadowed,

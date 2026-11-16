@@ -44,11 +44,17 @@ const failVault = (
   error: VaultError,
 ): Effect.Effect<
   never,
-  EnvironmentHttpForbiddenError | EnvironmentInternalError | EnvironmentResourceNotFoundError
+  | EnvironmentHttpForbiddenError
+  | EnvironmentHttpConflictError
+  | EnvironmentInternalError
+  | EnvironmentResourceNotFoundError
 > => {
   switch (error.reason) {
     case "not-found":
       return failEnvironmentNotFound("secret_not_found");
+    // Sealed: refused before the factor is asked for and before the value is read.
+    case "sealed":
+      return Effect.fail(new EnvironmentHttpConflictError({ message: error.message }));
     case "storage":
       return failEnvironmentInternal("vaults_failed");
     default:

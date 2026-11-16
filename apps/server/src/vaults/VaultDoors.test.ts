@@ -103,8 +103,11 @@ const team = Effect.gen(function* () {
   const effective = Context.get(server.services, EffectiveVaults.EffectiveVaults);
   const delivery = Context.get(server.services, SecretDelivery.SecretDelivery);
   const as = (userId: UserId) => CommandActor.actAs(userId);
+  // Revealable, as every secret was before sealing: the Owner's reveal is one of the doors.
   const put = (vaultId: VaultId, name: string, value: string) =>
-    vaults.putEntry({ vaultId, name, value: Redacted.make(value) }).pipe(as(ownerId));
+    vaults
+      .putEntry({ vaultId, name, value: Redacted.make(value), allowReveal: true })
+      .pipe(as(ownerId));
 
   // Full Vaults: the Main vault (one kept, one linked and copied into Acme's), Acme's and Globex's
   // own, one of the Owner's allowed to Acme and one allowed to Grace alone.

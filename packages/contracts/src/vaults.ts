@@ -172,7 +172,52 @@ export const secretNameRisk = (name: string): "invalid" | "gateway" | "dangerous
   return undefined;
 };
 
+const CREDENTIAL_NAME = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|KEY|PAT)$/u;
+const CREDENTIAL_PREFIXES = [
+  "ghp_",
+  "gho_",
+  "ghs_",
+  "github_pat_",
+  "glpat-",
+  "sk-",
+  "xox",
+  "AKIA",
+  "-----BEGIN",
+] as const;
+const JWT = /^[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}$/u;
+const URL_LIKE = /^[a-z][a-z0-9+.-]*:\/\//iu;
+
+/** Shannon entropy in bits per character. */
+const entropy = (value: string): number => {
+  const counts = new Map<string, number>();
+  for (const char of value) counts.set(char, (counts.get(char) ?? 0) + 1);
+  const length = [...value].length;
+  let bits = 0;
+  for (const count of counts.values()) bits -= (count / length) * Math.log2(count / length);
+  return bits;
+};
+
+/**
+ * Whether a Variable's name or value looks like a credential: the `looks-like-credential`
+ * warning, shown live in the form and returned by the save. Never blocks.
+ */
+export const looksLikeCredential = (name: string, value?: string): boolean => {
+  if (CREDENTIAL_NAME.test(name.toUpperCase())) return true;
+  if (value === undefined) return false;
+  const text = value.trim();
+  if (CREDENTIAL_PREFIXES.some((prefix) => text.startsWith(prefix))) return true;
+  if (JWT.test(text)) return true;
+  return [...text].length >= 20 && !/\s/u.test(text) && !URL_LIKE.test(text) && entropy(text) >= 4;
+};
+
 export const VaultEntryKind = Schema.Literals(["own", "copy", "link"]);
+
+/**
+ * A Variable is configuration: its value is shown to whoever sees its name (Guests excepted) and
+ * never masked. A Secret is never shown, and revealed only while it is revealable.
+ */
+export const VaultEntryClass = Schema.Literals(["secret", "variable"]);
+export type VaultEntryClass = typeof VaultEntryClass.Type;
 
 /**
  * Whom the Owner allows a Vault to (ticket 03): a Space (its Threads may receive it) or a User
@@ -220,13 +265,19 @@ export const VaultSummary = Schema.Struct({
 });
 export type VaultSummary = typeof VaultSummary.Type;
 
-/** A secret's name and what it is. Never its value. */
+/** An entry's name and what it is. Never a Secret's value. */
 export const VaultEntry = Schema.Struct({
   id: VaultEntryId,
   vaultId: VaultId,
   name: Schema.String,
   description: Schema.NullOr(Schema.String),
   kind: VaultEntryKind,
+  /** A link's original's; a broken link is a sealed Secret. */
+  class: VaultEntryClass,
+  /** A Secret nobody reveals, not even the Owner: only replaced or deleted. */
+  sealed: Schema.Boolean,
+  /** A Variable's value, for whoever may read Variables (`vault.readVariables`): never a Secret's. */
+  value: Schema.optionalKey(Schema.String),
   /** A Secret link whose original in the Main vault is gone: shown, never delivered. */
   broken: Schema.Boolean,
   /** A link's original, for whoever sees the Main vault (the Owner); null for anyone else. */
@@ -239,7 +290,7 @@ export const VaultEntry = Schema.Struct({
 });
 export type VaultEntry = typeof VaultEntry.Type;
 
-export const VaultWarning = Schema.Literals(["short-value"]);
+export const VaultWarning = Schema.Literals(["short-value", "looks-like-credential"]);
 export type VaultWarning = typeof VaultWarning.Type;
 
 export const VaultErrorReason = Schema.Literals([
@@ -259,6 +310,10 @@ export const VaultErrorReason = Schema.Literals([
   "not-allowed",
   /** Vaults live on the Hub: a joined machine has none. */
   "unavailable",
+  /** A sealed Secret: nobody reveals it. */
+  "sealed",
+  /** Allowing reveal, or making a Secret a Variable, takes a new value in the same request. */
+  "needs-new-value",
   "storage",
 ]);
 export type VaultErrorReason = typeof VaultErrorReason.Type;
@@ -309,13 +364,19 @@ export const VaultEntriesListResult = Schema.Struct({
 });
 export type VaultEntriesListResult = typeof VaultEntriesListResult.Type;
 
-/** Adds a secret (no `entryId`, a value) or changes one: its name, description or value. */
+/**
+ * Adds an entry (no `entryId`, a value) or changes one: its name, description, value or class.
+ * `allowReveal`: `false` seals a Secret (one way); `true` needs a new `value`, as does making a
+ * Secret a Variable. A new Secret is sealed unless `allowReveal`.
+ */
 export const VaultEntryPutInput = Schema.Struct({
   vaultId: VaultId,
   entryId: Schema.optionalKey(VaultEntryId),
   name: SecretName,
   description: Schema.optionalKey(Schema.NullOr(VaultDescription)),
   value: Schema.optionalKey(SecretValueInput),
+  class: Schema.optionalKey(VaultEntryClass),
+  allowReveal: Schema.optionalKey(Schema.Boolean),
   /** The Owner confirms a name that changes how tools run (`secretNameRisk`: dangerous). */
   confirmDangerous: Schema.optionalKey(Schema.Boolean),
 });
@@ -465,6 +526,8 @@ export const VaultThreadVariable = Schema.Struct({
   vaultId: VaultId,
   vaultName: Schema.String,
   source: VaultSource,
+  /** Names only here: a Variable's value travels in `vaults.entries.list` alone. */
+  class: VaultEntryClass,
   /** Shorter than SECRET_MASK_MIN_LENGTH: delivered, never masked. */
   unmasked: Schema.Boolean,
   /** A name that changes how tools run, set by the Owner (`secretNameRisk`). */

@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { EnvironmentHttpApi, SecretEnv, WsRpcGroup } from "@t3tools/contracts";
+import { EnvironmentHttpApi, SecretEnv, VaultEntry, WsRpcGroup } from "@t3tools/contracts";
 import type * as SchemaAST from "effect/SchemaAST";
 import { describe, expect, it } from "@effect/vitest";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -103,6 +103,33 @@ const successFields = (
   return into;
 };
 
+/** Every object schema, at any depth, that has a field named `name`. */
+const objectsWith = (
+  ast: SchemaAST.AST,
+  name: string,
+  into: Set<SchemaAST.AST> = new Set(),
+  seen: Set<SchemaAST.AST> = new Set(),
+): Set<SchemaAST.AST> => {
+  if (seen.has(ast)) return into;
+  seen.add(ast);
+  switch (ast._tag) {
+    case "Objects":
+      if (ast.propertySignatures.some((property) => property.name === name)) into.add(ast);
+      for (const property of ast.propertySignatures) objectsWith(property.type, name, into, seen);
+      break;
+    case "Arrays":
+      for (const element of [...ast.elements, ...ast.rest]) objectsWith(element, name, into, seen);
+      break;
+    case "Union":
+      for (const member of ast.types) objectsWith(member, name, into, seen);
+      break;
+    case "Suspend":
+      objectsWith(ast.thunk(), name, into, seen);
+      break;
+  }
+  return into;
+};
+
 const undeclared = (doors: ReadonlyArray<string>, rules: Readonly<Record<string, unknown>>) =>
   [...new Set(doors)].filter((door) => !Object.hasOwn(rules, door)).toSorted();
 const stale = (doors: ReadonlyArray<string>, rules: Readonly<Record<string, unknown>>) =>
@@ -151,13 +178,31 @@ describe("every door of the Hub declares its rule", () => {
         /vault|reveal/iu.test(name),
       ),
     ).toEqual([]);
-    // No WS answer about Vaults has a field that could carry a value.
+    // No WS answer about Vaults has a field that could carry a Secret's value: the one `value` is
+    // a Variable's, in VaultEntry (ticket 01 of «Variables y Secrets sellados»; Vaults.shown
+    // fills it for Variables alone, Vaults.test.ts).
     const vaultRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
       rpc._tag.startsWith("vaults."),
     );
     expect(vaultRpcs.length).toBe(14);
+    expect(
+      vaultRpcs
+        .filter((rpc) => objectsWith(rpc.successSchema.ast, "value").has(VaultEntry.ast))
+        .map((rpc) => rpc._tag)
+        .toSorted(),
+    ).toEqual([
+      "vaults.entries.copy",
+      "vaults.entries.link",
+      "vaults.entries.list",
+      "vaults.entries.put",
+    ]);
     for (const rpc of vaultRpcs) {
-      expect(successFields(rpc.successSchema.ast), rpc._tag).not.toContain("value");
+      expect(
+        [...objectsWith(rpc.successSchema.ast, "value")].filter(
+          (holder) => holder !== VaultEntry.ast,
+        ),
+        rpc._tag,
+      ).toEqual([]);
       // Spec 5 ticket 03: nor the id of one (EffectiveVaults' are for delivery alone).
       expect(successFields(rpc.successSchema.ast), rpc._tag).not.toContain("valueId");
     }
@@ -192,7 +237,7 @@ describe("every door of the Hub declares its rule", () => {
       "vaults/SecretDelivery.ts", // reads: the environment of a process that starts
       "vaults/SecretMasker.ts", // reads: what to show as [NAME]
       "vaults/VaultReachLoss.ts", // removes values no row holds
-      "vaults/Vaults.ts", // reads: the reveal and a copy (sealed again, never answered)
+      "vaults/Vaults.ts", // reads: the reveal, a copy (sealed again), Variables (shown)
     ]);
     const readers = files
       .filter(({ file }) => holders.includes(file))
@@ -203,9 +248,13 @@ describe("every door of the Hub declares its rule", () => {
       "vaults/SecretMasker.ts",
       "vaults/Vaults.ts",
     ]);
-    // In Vaults, a value is read for the reveal and for a copy, nothing else.
+    // In Vaults, a value is read for the reveal, for a copy and for a Variable shown (`shown`, its
+    // class checked), nothing else; the reveal refuses a sealed one before its read.
     const vaults = files.find(({ file }) => file === "vaults/Vaults.ts")?.text ?? "";
-    expect(vaults.match(/\breadValue\(/gu)?.length).toBe(2);
+    expect(vaults.match(/\breadValue\(/gu)?.length).toBe(3);
+    expect(vaults).toMatch(
+      /classOf\(row\) === "variable" && valueIdOf\(row\) !== null\s*\?\s*readValue\(/u,
+    );
     // The Vaults' tables: the modules of the Vaults and their migrations, nothing else.
     expect(
       files
@@ -217,6 +266,7 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/111_Vaults.ts",
       "persistence/Migrations/115_VaultReachLoss.ts",
       "persistence/Migrations/116_ThreadSecretValues.ts",
+      "persistence/Migrations/119_VaultEntryClass.ts",
       "vaults/EffectiveVaults.ts",
       "vaults/SecretDelivery.ts",
       "vaults/SecretMasker.ts",

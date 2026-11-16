@@ -29,6 +29,8 @@ import {
   VaultError,
   type VaultErrorReason,
   VaultId,
+  type VaultEntryClass,
+  looksLikeCredential,
   type VaultListResult,
   type VaultSummary,
   type VaultUpdateInput,
@@ -160,6 +162,9 @@ interface EntryRow {
   readonly linkedEntryId: string | null;
   readonly valueId: string | null;
   readonly unmasked: number;
+  /** Null on a link: its original's. */
+  readonly class: VaultEntryClass | null;
+  readonly revealable: number | null;
   readonly version: number;
   readonly updatedAt: string;
   readonly updatedBy: string | null;
@@ -167,7 +172,24 @@ interface EntryRow {
   readonly linkedName: string | null;
   readonly linkedUnmasked: number | null;
   readonly linkedValueId: string | null;
+  readonly linkedClass: VaultEntryClass | null;
+  readonly linkedRevealable: number | null;
 }
+
+/** An entry's class: a link's original's; a broken link's, a Secret. */
+const classOf = (row: EntryRow): VaultEntryClass =>
+  (row.kind === "link" ? row.linkedClass : row.class) ?? "secret";
+
+/** A Secret nobody reveals: a broken link's too. */
+const isSealed = (row: EntryRow): boolean =>
+  classOf(row) === "secret" &&
+  (row.kind === "link"
+    ? row.linkedName === null || row.linkedRevealable !== 1
+    : row.revealable !== 1);
+
+/** The store entry holding what an entry delivers: a link's original's. */
+const valueIdOf = (row: EntryRow): string | null =>
+  row.kind === "link" ? row.linkedValueId : row.valueId;
 
 const VAULT_COLUMNS = `
   v.vault_id AS "vaultId", v.name AS "name", v.description AS "description",
@@ -179,9 +201,11 @@ const VAULT_COLUMNS = `
 const ENTRY_COLUMNS = `
   e.entry_id AS "entryId", e.vault_id AS "vaultId", e.name AS "name",
   e.description AS "description", e.kind AS "kind", e.linked_entry_id AS "linkedEntryId",
-  e.value_id AS "valueId", e.unmasked AS "unmasked", e.version AS "version",
+  e.value_id AS "valueId", e.unmasked AS "unmasked", e.class AS "class",
+  e.revealable AS "revealable", e.version AS "version",
   e.updated_at AS "updatedAt", e.updated_by AS "updatedBy",
-  o.name AS "linkedName", o.unmasked AS "linkedUnmasked", o.value_id AS "linkedValueId"
+  o.name AS "linkedName", o.unmasked AS "linkedUnmasked", o.value_id AS "linkedValueId",
+  o.class AS "linkedClass", o.revealable AS "linkedRevealable"
 `;
 
 /** UTF-8 text without NUL, not empty, at most SECRET_VALUE_MAX_BYTES. Says why, never what. */
@@ -289,15 +313,24 @@ const summaryOf = (row: VaultRow, known: Known, can: Can): VaultSummary => {
  * Main vault learns nothing of it (whether it is short, or gone) beyond the link's own row; its
  * editors learn that it broke.
  */
-const entryOf = (row: EntryRow, seesMain: boolean, canEdit: boolean): VaultEntry => {
+const entryOf = (
+  row: EntryRow,
+  seesMain: boolean,
+  canEdit: boolean,
+  variableValue: string | undefined,
+): VaultEntry => {
   const isLink = row.kind === "link";
   const broken = isLink && row.linkedName === null;
+  const entryClass = classOf(row);
   return {
     id: VaultEntryId.make(row.entryId),
     vaultId: VaultId.make(row.vaultId),
     name: row.name,
     description: row.description,
     kind: row.kind,
+    class: entryClass,
+    sealed: isSealed(row),
+    ...(entryClass === "variable" && variableValue !== undefined ? { value: variableValue } : {}),
     broken: broken && (seesMain || canEdit),
     linkedFrom:
       seesMain && isLink && row.linkedEntryId !== null && !broken
@@ -622,6 +655,7 @@ const make = Effect.gen(function* () {
     readonly from?: string;
     readonly brokenLinks?: number;
     readonly dangerous?: boolean;
+    readonly class?: VaultEntryClass;
   }) =>
     audit.record({
       actor: AuditLog.userActor(input.userId),
@@ -636,6 +670,7 @@ const make = Effect.gen(function* () {
         ...(input.from === undefined ? {} : { from: input.from }),
         ...(input.brokenLinks === undefined ? {} : { brokenLinks: input.brokenLinks }),
         ...(input.dangerous === true ? { dangerous: true } : {}),
+        ...(input.class === undefined ? {} : { class: input.class }),
       },
     });
 
@@ -647,10 +682,29 @@ const make = Effect.gen(function* () {
     warnings: ReadonlyArray<VaultWarning>,
   ) {
     const row = yield* findEntry(vaultId, entryId);
-    return {
-      entry: entryOf(row, can("vault.view", mainResource), can("vault.edit", resource)),
-      warnings,
-    } satisfies VaultEntryResult;
+    const [entry] = yield* shown([row], can, resource);
+    return { entry: entry!, warnings } satisfies VaultEntryResult;
+  });
+
+  /**
+   * Entries as the caller sees them: a Variable's value for whoever may read Variables (Guests
+   * never), the only value a WS answer carries; a Secret's, never. One the store cannot give is
+   * left out rather than failing the list.
+   */
+  const shown = Effect.fn("Vaults.shown")(function* (
+    rows: ReadonlyArray<EntryRow>,
+    can: Can,
+    resource: AccessPolicy.VaultResource,
+  ) {
+    const seesMain = can("vault.view", mainResource);
+    const canEdit = can("vault.edit", resource);
+    const readsVariables = can("vault.readVariables", resource);
+    return yield* Effect.forEach(rows, (row) =>
+      (readsVariables && classOf(row) === "variable" && valueIdOf(row) !== null
+        ? readValue(valueIdOf(row)).pipe(Effect.orElseSucceed(() => undefined))
+        : Effect.succeed(undefined)
+      ).pipe(Effect.map((value) => entryOf(row, seesMain, canEdit, value))),
+    );
   });
 
   /**
@@ -848,11 +902,9 @@ const make = Effect.gen(function* () {
   const listEntries = Effect.fn("Vaults.listEntries")(function* (input: VaultEntriesListInput) {
     const { can, row, resource, known } = yield* authorizeVault(input.vaultId, "vault.view");
     const entries = yield* entriesOf(row.vaultId);
-    const seesMain = can("vault.view", mainResource);
-    const canEdit = can("vault.edit", resource);
     return {
       vault: summaryOf(row, known, can),
-      entries: entries.map((entry) => entryOf(entry, seesMain, canEdit)),
+      entries: yield* shown(entries, can, resource),
     } satisfies VaultEntriesListResult;
   });
 
@@ -864,20 +916,33 @@ const make = Effect.gen(function* () {
       const problem = valueProblem(value);
       if (problem !== undefined) return yield* fail("invalid-value", problem);
     }
-    const warnings: ReadonlyArray<VaultWarning> =
-      value !== undefined && isShort(value) ? ["short-value"] : [];
+    /** A Secret's short value is never masked; a Variable's credential-looking one is a mistake. */
+    const warningsFor = (
+      entryClass: VaultEntryClass,
+      checked: boolean,
+    ): ReadonlyArray<VaultWarning> =>
+      entryClass === "variable"
+        ? checked && looksLikeCredential(input.name, value)
+          ? ["looks-like-credential"]
+          : []
+        : value !== undefined && isShort(value)
+          ? ["short-value"]
+          : [];
     const at = yield* now;
 
     if (input.entryId === undefined) {
       if (value === undefined) return yield* fail("invalid-value", "A secret needs a value.");
+      // A new Secret is sealed unless reveal is allowed now, with its value.
+      const entryClass = input.class ?? "secret";
+      const revealable = entryClass === "secret" && input.allowReveal === true ? 1 : 0;
       yield* nameTaken(row.vaultId, input.name);
       const entryId = yield* newId("secret");
       yield* withNewValue(value, "add the secret", (valueId) =>
         Effect.gen(function* () {
           yield* stillWritable(row.vaultId);
           yield* sql`
-            INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id, unmasked, version, created_at, updated_at, updated_by)
-            VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null}, 'own', ${valueId}, ${isShort(value) ? 1 : 0}, 1, ${at}, ${at}, ${userId})
+            INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id, unmasked, class, revealable, version, created_at, updated_at, updated_by)
+            VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null}, 'own', ${valueId}, ${isShort(value) ? 1 : 0}, ${entryClass}, ${revealable}, 1, ${at}, ${at}, ${userId})
           `;
           yield* recordEdit({
             userId,
@@ -887,6 +952,7 @@ const make = Effect.gen(function* () {
             kind: "own",
             op: "add",
             dangerous,
+            ...(entryClass === "variable" ? { class: entryClass } : {}),
           });
         }),
       ).pipe(
@@ -895,22 +961,59 @@ const make = Effect.gen(function* () {
           nameTaken(row.vaultId, input.name).pipe(Effect.andThen(Effect.fail(error))),
         ),
       );
-      return yield* result(can, resource, row.vaultId, entryId, warnings);
+      return yield* result(can, resource, row.vaultId, entryId, warningsFor(entryClass, true));
     }
 
     const entry = yield* findEntry(row.vaultId, input.entryId);
-    if (value !== undefined && entry.kind === "link") {
-      return yield* fail(
-        "not-linkable",
-        `${entry.name} is a Secret link: its value is the Main vault's. Replace the original there, or delete the link and add a secret of this Vault's own.`,
-      );
+    if (entry.kind === "link") {
+      if (value !== undefined) {
+        return yield* fail(
+          "not-linkable",
+          `${entry.name} is a Secret link: its value is the Main vault's. Replace the original there, or delete the link and add a secret of this Vault's own.`,
+        );
+      }
+      if (input.class !== undefined || input.allowReveal !== undefined) {
+        return yield* fail(
+          "not-linkable",
+          `${entry.name} is a Secret link: it is what its original in the Main vault is. Change the original there.`,
+        );
+      }
     }
     // A name that changes how tools run stays the Owner's, whatever the change.
     yield* checkName(entry.name, can, resource, input.confirmDangerous);
     const renamed = input.name !== entry.name;
     if (renamed) yield* nameTaken(row.vaultId, input.name, entry.entryId);
     const described = input.description !== undefined && input.description !== entry.description;
-    if (value === undefined && !renamed && !described) {
+
+    // Class and reveal: sealing is one way; undoing it, or showing a Secret as a Variable, takes a
+    // new value in the same request, so the old one is never read for it.
+    const wasClass = classOf(entry);
+    const wasRevealable = wasClass === "secret" && entry.revealable === 1;
+    const nextClass = input.class ?? wasClass;
+    const classChanged = entry.kind !== "link" && nextClass !== wasClass;
+    if (classChanged && nextClass === "variable" && value === undefined) {
+      return yield* fail(
+        "needs-new-value",
+        `Making ${entry.name} a Variable takes a new value: a Secret's is never shown.`,
+      );
+    }
+    const nextRevealable =
+      entry.kind === "link" || nextClass === "variable"
+        ? false
+        : input.allowReveal === undefined
+          ? classChanged
+            ? false
+            : wasRevealable
+          : input.allowReveal;
+    if (nextRevealable && !(wasRevealable && !classChanged) && value === undefined) {
+      return yield* fail(
+        "needs-new-value",
+        `${entry.name} is sealed: allowing reveal takes a new value, so the sealed one is never read.`,
+      );
+    }
+    const revealChanged =
+      !classChanged && entry.kind !== "link" && nextRevealable !== wasRevealable;
+    if (value === undefined && !renamed && !described && !classChanged && !revealChanged) {
       return yield* result(can, resource, row.vaultId, entry.entryId, []);
     }
     // The new value under a new id; the row, its version and the audit move to it together.
@@ -928,26 +1031,43 @@ const make = Effect.gen(function* () {
             description = ${input.description === undefined ? entry.description : input.description},
             value_id = ${valueId ?? before.valueId},
             unmasked = ${value === undefined ? entry.unmasked : isShort(value) ? 1 : 0},
+            class = ${entry.kind === "link" ? null : nextClass},
+            revealable = ${entry.kind === "link" ? null : nextRevealable ? 1 : 0},
             version = version + ${value === undefined ? 0 : 1},
             updated_at = ${at},
             updated_by = ${userId}
           WHERE entry_id = ${entry.entryId}
         `;
-        yield* recordEdit({
-          userId,
-          vault: row,
-          entryId: entry.entryId,
-          name: input.name,
-          kind: entry.kind,
-          op: value !== undefined ? "replace" : renamed ? "rename" : "describe",
-          ...(renamed ? { from: entry.name } : {}),
-          dangerous,
-        });
+        const edit = { userId, vault: row, entryId: entry.entryId, name: input.name };
+        if (classChanged) {
+          yield* recordEdit({ ...edit, kind: entry.kind, op: "class", class: nextClass });
+        } else if (revealChanged) {
+          yield* recordEdit({
+            ...edit,
+            kind: entry.kind,
+            op: nextRevealable ? "allow-reveal" : "seal",
+          });
+        }
+        if (value !== undefined || renamed || described) {
+          yield* recordEdit({
+            ...edit,
+            kind: entry.kind,
+            op: value !== undefined ? "replace" : renamed ? "rename" : "describe",
+            ...(renamed ? { from: entry.name } : {}),
+            dangerous,
+          });
+        }
         return valueId === null ? null : before.valueId;
       }),
     );
     yield* removeValue(replaced);
-    return yield* result(can, resource, row.vaultId, entry.entryId, warnings);
+    return yield* result(
+      can,
+      resource,
+      row.vaultId,
+      entry.entryId,
+      warningsFor(nextClass, value !== undefined || renamed || classChanged),
+    );
   });
 
   const linksTo = (entryId: string) =>
@@ -1023,8 +1143,10 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* stillWritable(row.vaultId);
         yield* sql`
-          INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, linked_entry_id, value_id, unmasked, version, created_at, updated_at, updated_by)
-          VALUES (${entryId}, ${row.vaultId}, ${name}, ${description}, ${kind}, ${kind === "link" ? source.entryId : null}, ${valueId}, ${source.unmasked}, 1, ${at}, ${at}, ${userId})
+          INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, linked_entry_id, value_id, unmasked, class, revealable, version, created_at, updated_at, updated_by)
+          VALUES (${entryId}, ${row.vaultId}, ${name}, ${description}, ${kind}, ${kind === "link" ? source.entryId : null}, ${valueId}, ${source.unmasked},
+            ${kind === "link" ? null : classOf(source)}, ${kind === "link" ? null : source.revealable === 1 ? 1 : 0},
+            1, ${at}, ${at}, ${userId})
         `;
         yield* recordEdit({
           userId,
@@ -1038,11 +1160,13 @@ const make = Effect.gen(function* () {
         });
       }),
     );
-    const warnings: ReadonlyArray<VaultWarning> = source.unmasked === 1 ? ["short-value"] : [];
+    const warnings: ReadonlyArray<VaultWarning> =
+      classOf(source) === "secret" && source.unmasked === 1 ? ["short-value"] : [];
     return yield* result(can, resource, row.vaultId, entryId, warnings);
   });
 
-  const reveal = Effect.fn("Vaults.reveal")(function* (input: {
+  /** An entry the Owner may reveal: refused before its value is read, a sealed one always. */
+  const revealable = Effect.fn("Vaults.revealable")(function* (input: {
     readonly vaultId: VaultId;
     readonly entryId: VaultEntryId;
   }) {
@@ -1051,7 +1175,21 @@ const make = Effect.gen(function* () {
     if (entry.kind === "link" && entry.linkedName === null) {
       return yield* fail("not-found", `${entry.name} is a broken link: its original is gone.`);
     }
-    const value = yield* readValue(entry.kind === "link" ? entry.linkedValueId : entry.valueId);
+    if (isSealed(entry)) {
+      return yield* fail(
+        "sealed",
+        `${entry.name} is sealed: nobody reveals it, not even the Owner. Replace it or delete it.`,
+      );
+    }
+    return { userId, row, entry };
+  });
+
+  const reveal = Effect.fn("Vaults.reveal")(function* (input: {
+    readonly vaultId: VaultId;
+    readonly entryId: VaultEntryId;
+  }) {
+    const { userId, row, entry } = yield* revealable(input);
+    const value = yield* readValue(valueIdOf(entry));
     // Recorded before the value leaves: one whose reveal could not be recorded is not shown.
     yield* audit
       .record({
@@ -1069,8 +1207,7 @@ const make = Effect.gen(function* () {
     readonly vaultId: VaultId;
     readonly entryId: VaultEntryId;
   }) {
-    const { row } = yield* authorizeVault(input.vaultId, "vault.reveal");
-    yield* findEntry(row.vaultId, input.entryId);
+    yield* revealable(input);
   });
 
   // Spec 5 ticket 03: allowances, a Space's defaults and a Project's choices. Which Vaults may

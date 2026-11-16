@@ -1508,6 +1508,43 @@ const rows: ReadonlyArray<Row> = [
     vault(null, { isMain: true, allowedSpaces: [organization], allowedUsers: ["ada"] }),
     deny("owner-only"),
   ],
+  // Spec «Variables y Secrets sellados», ticket 01 (decision 4): whoever sees a Vault reads its
+  // Variables' values, Guests excepted (an invitation can leave the Organization).
+  ["Owner reads Variables of the Main vault", owner, "vault.readVariables", mainVault, allow],
+  ["Owner reads an Organization's Variables", owner, "vault.readVariables", orgVault, allow],
+  ["an Admin reads its Organization's Variables", admin, "vault.readVariables", orgVault, allow],
+  ["a Member reads its Organization's Variables", member, "vault.readVariables", orgVault, allow],
+  [
+    "a Guest does not read its Organization's Variables",
+    guest,
+    "vault.readVariables",
+    orgVault,
+    deny("role-not-allowed"),
+  ],
+  [
+    "another Organization's Admin does not",
+    outsider,
+    "vault.readVariables",
+    orgVault,
+    deny("not-a-member"),
+  ],
+  ["nor an Admin the Main vault's", admin, "vault.readVariables", mainVault, deny("owner-only")],
+  ["a Member reads a Vault allowed to Acme", member, "vault.readVariables", allowedToAcme, allow],
+  [
+    "a Guest does not read a Vault allowed to Acme",
+    guest,
+    "vault.readVariables",
+    allowedToAcme,
+    deny("owner-only"),
+  ],
+  ["the allowed User reads its Variables", member, "vault.readVariables", allowedToGrace, allow],
+  [
+    "a Personal space's User reads one allowed to it",
+    personalCreator,
+    "vault.readVariables",
+    allowedToGracesPersonal,
+    allow,
+  ],
   // Choosing a Space's defaults and its Projects' adds and removes.
   ["Owner chooses an Organization's Vaults", owner, "vault.choose", organization, allow],
   ["Owner chooses a Personal space's Vaults", owner, "vault.choose", personalOf("grace"), allow],

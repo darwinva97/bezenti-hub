@@ -192,6 +192,8 @@ export type Action =
   // Vaults (`VaultResource`; see `decideVault`).
   /** See a Vault and its secrets' names and descriptions, never values. */
   | "vault.view"
+  /** Read its Variables' values: whoever sees it, Guests excepted (decision 4). */
+  | "vault.readVariables"
   /** Add, replace, rename and delete a Vault's secrets without reading them. */
   | "vault.edit"
   /** Create, rename, describe, archive and delete a Vault: the Owner. */
@@ -551,6 +553,7 @@ const decideMove = (principal: Principal, { from, to }: MoveResource): Decision 
 
 const VAULT_ACTIONS: ReadonlySet<Action> = new Set([
   "vault.view",
+  "vault.readVariables",
   "vault.edit",
   "vault.manage",
   "vault.reveal",
@@ -560,18 +563,28 @@ const VAULT_ACTIONS: ReadonlySet<Action> = new Set([
 /**
  * Vaults. The Owner does everything, and alone creates, manages, allows and reveals; the Main
  * vault is the Owner's alone. An Organization's Vault: its Admins add, replace and delete secrets
- * without reading them; its Members and Guests see names only.
+ * without reading them; its Members and Guests see names only, and Variables' values but Guests.
  */
 const decideVault = (principal: Principal, action: Action, vault: VaultResource): Decision => {
   if (principal.isOwner) return allow;
-  if (action !== "vault.view" && action !== "vault.edit") return deny("owner-only");
+  if (action !== "vault.view" && action !== "vault.edit" && action !== "vault.readVariables") {
+    return deny("owner-only");
+  }
   if (vault.isMain) return deny("owner-only");
   const space = vault.space;
   if (space === null) return decideAllowedVault(principal, action, vault);
   if (space.kind !== "organization") return deny("wrong-resource");
   if (space.archived) return deny("space-archived");
   if (space.frozen) return deny("space-frozen");
-  return inOrganization(principal, space, action === "vault.edit" ? ADMIN_ONLY : undefined);
+  return inOrganization(
+    principal,
+    space,
+    action === "vault.edit"
+      ? ADMIN_ONLY
+      : action === "vault.readVariables"
+        ? ROLES_THAT_CREATE_PROJECTS
+        : undefined,
+  );
 };
 
 /**
@@ -593,6 +606,16 @@ const decideAllowedVault = (
       : inOrganization(principal, space)._tag === "Allow");
   if (action === "vault.view") {
     return vault.allowedUsers.includes(principal.userId) || vault.allowedSpaces.some(sees)
+      ? allow
+      : deny("owner-only");
+  }
+  if (action === "vault.readVariables") {
+    const works = (space: SpaceResource) =>
+      open(space) &&
+      (space.kind === "personal"
+        ? inPersonalSpace(principal, space)._tag === "Allow"
+        : inOrganization(principal, space, ROLES_THAT_CREATE_PROJECTS)._tag === "Allow");
+    return vault.allowedUsers.includes(principal.userId) || vault.allowedSpaces.some(works)
       ? allow
       : deny("owner-only");
   }

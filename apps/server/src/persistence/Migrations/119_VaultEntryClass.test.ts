@@ -49,10 +49,10 @@ it.effect("keeps a Hub's existing secrets revealable, links inheriting, and seal
     `;
     assert.deepEqual({ ...fresh[0] }, { class: "secret", revealable: 0 });
 
-    const refused = (insert: Effect.Effect<unknown, unknown>) =>
+    const refused = <E>(insert: Effect.Effect<unknown, E>) =>
       insert.pipe(
         Effect.as(false),
-        Effect.catch(() => Effect.succeed(true)),
+        Effect.orElseSucceed(() => true),
       );
     const entry = (id: string, kind: string, klass: string | null, revealable: number | null) =>
       sql`

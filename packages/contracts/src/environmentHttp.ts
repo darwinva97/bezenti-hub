@@ -1554,10 +1554,12 @@ class EnvironmentVaultsHttpApi extends HttpApiGroup.make("vaults")
       headers: OptionalBearerHeaders,
       payload: VaultRevealRequest,
       success: VaultRevealResult,
+      // Conflict: a sealed Secret, refused before the factor and before its value is read.
       error: [
         ...EnvironmentVaultsErrors,
         EnvironmentRateLimitedError,
         EnvironmentResourceNotFoundError,
+        EnvironmentHttpConflictError,
       ],
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}

@@ -594,7 +594,17 @@ function EntryRow(props: {
             {entry.value}
           </code>
         ) : null}
-        {entry.kind === "link" ? (
+        {entry.kind === "provider" ? (
+          // Ticket 02: read from a Secret provider when a process starts; never shown here.
+          entry.broken ? (
+            <Badge variant="destructive">broken</Badge>
+          ) : (
+            <Badge variant="outline">
+              Provider: {entry.provider?.label ?? "gone"}
+              {entry.provider?.reference ? ` (${entry.provider.reference})` : ""}
+            </Badge>
+          )
+        ) : entry.kind === "link" ? (
           entry.broken ? (
             <Badge variant="destructive">broken</Badge>
           ) : (

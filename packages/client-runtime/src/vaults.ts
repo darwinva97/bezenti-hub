@@ -68,10 +68,12 @@ export function entryActions(
   const base = vaultActions(vault, context);
   const dangerousOnPhone =
     context.surface === "mobile" && secretNameRisk(entry.name) === "dangerous";
+  // A Provider entry's value is its provider's: nothing to replace, seal or reclassify here.
   const mayReplace =
     base.replace &&
     !dangerousOnPhone &&
     entry.kind !== "link" &&
+    entry.kind !== "provider" &&
     (secretNameRisk(entry.name) !== "dangerous" || context.isOwner);
   const isVariable = entry.class === "variable";
   return {

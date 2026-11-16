@@ -51,7 +51,7 @@ import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
-import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
+import type { RunId, UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { useUsageLimitsPanel } from "./chat/useUsageLimitsPanel";
 import { useWorktreeSetup } from "./chat/useWorktreeSetup";
@@ -1920,6 +1920,37 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
   const sendAppMessageStable = useStableCallback(sendAppMessage);
+  // «Retry» after a Secret provider did not give a value (Vaults ticket 02): the run never
+  // started, so its message is sent again as a new turn; the Hub reads the provider again.
+  const retrySecretProviderRun = async (runId: RunId) => {
+    if (!isServerThread || activeThreadId === null || serverProjection === null) return;
+    const run = serverProjection.runs.find((candidate) => candidate.id === runId);
+    const message = serverProjection.messages.find(
+      (candidate) => candidate.id === run?.userMessageId,
+    );
+    if (message === undefined) return;
+    setThreadError(activeThreadId, null);
+    const result = await startThreadTurn({
+      environmentId,
+      input: {
+        threadId: activeThreadId,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text: message.text,
+          attachments: message.attachments ?? [],
+        },
+        runtimeMode,
+        interactionMode,
+        dispatchMode: "start",
+      },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      setThreadError(activeThreadId, error instanceof Error ? error.message : "Could not retry.");
+    }
+  };
+  const retrySecretProviderRunStable = useStableCallback(retrySecretProviderRun);
   const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
 
   const {
@@ -3580,6 +3611,7 @@ export default function ChatView(props: ChatViewProps) {
                   onCancelWorktreeSetup={onCancelWorktreeSetupStable}
                   retryableWorkspacePreparationRunIds={retryableWorkspacePreparationRunIds}
                   onRetryWorkspacePreparation={onRetryWorkspacePreparationStable}
+                  onRetrySecretProviderRun={retrySecretProviderRunStable}
                   {...(draftId
                     ? { onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocallyStable }
                     : {})}

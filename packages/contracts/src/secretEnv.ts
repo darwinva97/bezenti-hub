@@ -42,7 +42,7 @@ export type SecretEnv = typeof SecretEnv.Type;
 export const SECRET_ENV_FIELD = "secretEnv";
 
 /** Run failures whose code starts with this are a Secret provider's: «Retry» starts the turn again. */
-const SECRET_PROVIDER_FAILURE_CODE_PREFIX = "secret_provider_";
+export const SECRET_PROVIDER_FAILURE_CODE_PREFIX = "secret_provider_";
 
 /**
  * A Secret provider did not give a Provider entry's value, so the process did not start: nothing

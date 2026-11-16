@@ -110,6 +110,16 @@ describe("entryActions", () => {
       makeVariable: false,
       makeSecret: true,
     });
+    // A Provider entry is its provider's: sealed, nothing to replace, reveal or reclassify.
+    expect(
+      entryActions(owner, entry({ kind: "provider", class: "secret", sealed: true }), web),
+    ).toMatchObject({
+      replace: false,
+      reveal: false,
+      seal: false,
+      allowReveal: false,
+      makeVariable: false,
+    });
     // A link is what its original is; a viewer who does not edit changes nothing.
     expect(
       entryActions(owner, entry({ kind: "link", class: "secret", sealed: false }), web),

@@ -8,6 +8,7 @@ import {
 } from "@t3tools/client-runtime/work-log/user-input";
 import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  SECRET_PROVIDER_FAILURE_CODE_PREFIX,
   type EnvironmentId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -223,6 +224,13 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       failureItem.failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE
         ? failureItem.runId
         : null;
+    // A Secret provider that did not give a value (Vaults ticket 02): the turn starts again.
+    const providerRetryRunId =
+      failureItem.runId !== null &&
+      ctx.onRetrySecretProviderRun !== null &&
+      failureItem.failure.code?.startsWith(SECRET_PROVIDER_FAILURE_CODE_PREFIX) === true
+        ? failureItem.runId
+        : null;
     return (
       <WorkLogRow
         data-v2-item-type="error"
@@ -260,6 +268,19 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               size="xs"
               variant="outline"
               onClick={() => onRetryWorkspacePreparation(retryRunId)}
+            >
+              <RotateCcwIcon aria-hidden />
+              Retry
+            </Button>
+          </div>
+        ) : null}
+        {providerRetryRunId !== null && ctx.onRetrySecretProviderRun !== null ? (
+          <div className="ms-7 pb-1">
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => ctx.onRetrySecretProviderRun?.(providerRetryRunId)}
             >
               <RotateCcwIcon aria-hidden />
               Retry

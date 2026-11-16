@@ -1,9 +1,17 @@
 import { builtInSecretProviderDefinitions } from "@t3tools/secret-provider-definitions/registry";
 import type { SecretProviderDefinition } from "@t3tools/secret-provider-core/shared/definition";
 import * as OnePasswordDriver from "@t3tools/secret-provider-onepassword/server/driver";
+import * as OpenBaoDriver from "@t3tools/secret-provider-openbao/server/driver";
 
 /** In the shared registry's order. */
-export const BUILT_IN_SECRET_PROVIDER_DRIVER_LIST = [OnePasswordDriver.driver] as const;
+export const BUILT_IN_SECRET_PROVIDER_DRIVER_LIST = [
+  OnePasswordDriver.driver,
+  OpenBaoDriver.driver,
+] as const;
+
+/** The built-in driver of a kind, for what only it can check (files, say) when one is saved. */
+export const secretProviderDriverFor = (kind: string) =>
+  BUILT_IN_SECRET_PROVIDER_DRIVER_LIST.find((driver) => driver.kind === kind);
 
 export const secretProviderDefinitions = builtInSecretProviderDefinitions;
 

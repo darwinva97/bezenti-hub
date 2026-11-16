@@ -322,7 +322,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       const settings = yield* decodeServerSettings({
         secretProviders: {
           personal: { kind: "one_password", label: "Personal", config: { account: "my" } },
-          vault: { kind: "openbao", label: "Vault", config: { token: "bao-token" } },
+          vault: { kind: "future_kind", label: "Vault", config: { token: "bao-token" } },
         },
       });
       assert.deepStrictEqual<unknown>(
@@ -330,7 +330,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           .secretProviders,
         {
           personal: { kind: "one_password", label: "Personal", config: { account: "my" } },
-          vault: { kind: "openbao", label: "Vault" },
+          vault: { kind: "future_kind", label: "Vault" },
         },
       );
     }),
@@ -348,6 +348,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         { kind: "one_password", label: "Personal", config: { account: "--help" } },
         { kind: "one_password", label: "Personal" },
         { kind: "openbao", label: "Vault", config: { address: "https://x" } },
+        { kind: "future_kind", label: "Vault", config: { address: "https://x" } },
       ]) {
         assert.deepInclude(yield* write(entry), { operation: "write-secret-provider" });
       }
@@ -395,6 +396,53 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       const kept = (yield* service.getSettings).secretProviders[SecretProviderId.make("vault")];
       assert.deepEqual(kept?.config, { address: "https://bao.example", token: KNOWN_CREDENTIAL });
     }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  // Vaults ticket 04: a real kind with credentials, and a file path the Owner types.
+  it.effect(
+    "seals an OpenBao secret id and refuses a token file outside the operator's roots",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const { settingsPath } = yield* ServerConfig.ServerConfig;
+        const openBao = (config: Record<string, unknown>) => ({
+          kind: "openbao",
+          label: "OpenBao",
+          config: {
+            address: "https://bao.example:8200",
+            mounts: [{ path: "kv", version: 2 }],
+            ...config,
+          },
+        });
+        yield* decodeServerSettingsPatch({
+          secretProviders: {
+            bao: openBao({ authMethod: "approle", roleId: "hub", secretId: KNOWN_CREDENTIAL }),
+          },
+        }).pipe(Effect.flatMap(service.updateSettings));
+        const own = yield* service.getSettings;
+        const config = own.secretProviders[SecretProviderId.make("bao")]?.config as {
+          readonly secretId?: unknown;
+        };
+        assert.strictEqual(config.secretId, KNOWN_CREDENTIAL);
+        const forClient = ServerSettingsModule.redactServerSettingsForClient(own, {
+          secretReferences: true,
+        });
+        assert.notInclude(JSON.stringify(forClient), KNOWN_CREDENTIAL);
+        assert.notInclude(yield* fileSystem.readFileString(settingsPath), KNOWN_CREDENTIAL);
+        for (const tokenFile of ["/etc/passwd", "/var/run/secrets/../../etc/passwd"]) {
+          const refused = yield* decodeServerSettingsPatch({
+            secretProviders: {
+              k8s: openBao({ authMethod: "kubernetes", authRole: "hub", tokenFile }),
+            },
+          }).pipe(Effect.flatMap(service.updateSettings), Effect.flip);
+          assert.deepInclude(refused, { operation: "write-secret-provider" });
+          assert.include(String(refused.cause), "T3CODE_SECRET_PROVIDER_FILE_ROOTS");
+        }
+        assert.isUndefined(
+          (yield* service.getSettings).secretProviders[SecretProviderId.make("k8s")],
+        );
+      }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 
   it.effect("refuses a provider credential read from itself, directly or in a circle", () =>

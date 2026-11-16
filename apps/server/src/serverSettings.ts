@@ -56,7 +56,10 @@ import {
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
-import { secretProviderDefinitionFor } from "./secrets/secretProviderDefinitions.ts";
+import {
+  secretProviderDefinitionFor,
+  secretProviderDriverFor,
+} from "./secrets/secretProviderDefinitions.ts";
 import {
   readSecretFieldValues,
   sourceControlHostSecretName,
@@ -297,6 +300,24 @@ function ensureSecretProviderWritesAllowed(
   }
   return Effect.void;
 }
+
+/** What a kind's driver checks beyond its schema, such as a token file under the operator's roots. */
+const ensureSecretProviderConfigUsable = Effect.fn(
+  "ServerSettings.ensureSecretProviderConfigUsable",
+)(function* (patch: ServerSettingsPatch, settingsPath: string) {
+  for (const [id, entry] of Object.entries(patch.secretProviders ?? {})) {
+    if (entry === null) continue;
+    const check = secretProviderDriverFor(entry.kind)?.configProblem;
+    const problem = check === undefined ? undefined : yield* check(entry.config);
+    if (problem !== undefined) {
+      return yield* new ServerSettingsError({
+        settingsPath,
+        operation: "write-secret-provider",
+        cause: new Error(`Secret provider ${id}: ${problem}`),
+      });
+    }
+  }
+});
 
 function ensureProviderInstanceMutationAllowed(
   settings: ServerSettings,
@@ -1530,6 +1551,9 @@ const make = Effect.gen(function* () {
       updateAndPersistSettings(patch, (current) =>
         Effect.gen(function* () {
           yield* ensureSecretProviderWritesAllowed(patch, settingsPath);
+          yield* ensureSecretProviderConfigUsable(patch, settingsPath).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+          );
           const next = applyServerSettingsPatch(current, patch);
           yield* ensureNoSecretProviderCycle(next, settingsPath);
           return next;
@@ -1539,6 +1563,9 @@ const make = Effect.gen(function* () {
       updateAndPersistSettings(patch, (current) =>
         Effect.gen(function* () {
           yield* ensureSecretProviderWritesAllowed(patch, settingsPath);
+          yield* ensureSecretProviderConfigUsable(patch, settingsPath).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+          );
           yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
           const patched = applyServerSettingsPatch(current, patch);
           yield* ensureNoSecretProviderCycle(patched, settingsPath);

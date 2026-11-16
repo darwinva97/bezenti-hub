@@ -148,7 +148,7 @@ export const openBaoRequest = Effect.fn("OpenBao.request")(function* (
     if (raw === undefined) return { _tag: "unreachable", why: "timeout" } as OpenBaoResponse;
     if (raw === "network") return { _tag: "unreachable", why: "network" } as OpenBaoResponse;
     if (raw.status >= 300 && raw.status < 400) {
-      const next = raw.location === undefined ? undefined : URL.parse(raw.location, url);
+      const next = raw.location === undefined ? undefined : URL.parse(raw.location, url.href);
       if (hop > 0 || next === null || next === undefined || next.origin !== url.origin) {
         return { _tag: "unreachable", why: "redirect" } as OpenBaoResponse;
       }

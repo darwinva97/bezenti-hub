@@ -272,4 +272,114 @@ describe("ProviderReads", () => {
       assert.isAbove(logs.length, 0);
     }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
   });
+
+  // Vaults ticket 04: a scope signs in its own way (a role, say), on the provider's credentials.
+  it.effect(
+    "a scope's auth is laid over its provider's config; what the kind refuses is invalid",
+    () =>
+      Effect.gen(function* () {
+        const tested: Array<unknown> = [];
+        const driver = defineSecretProviderDriver({
+          kind: FAKE,
+          definition: defineSecretProvider({
+            kind: FAKE,
+            label: "Fake",
+            configSchema: Schema.Struct({
+              account: Schema.String,
+              role: Schema.optional(Schema.String),
+            }),
+            isReference: (reference) => reference.startsWith("kv/"),
+            referencePlaceholder: "kv/path#key",
+            invalidReferenceMessage: "Use kv/path#key.",
+            withScopeAuth: (config, auth) =>
+              Object.keys(auth).every((key) => key === "role")
+                ? { ...config, role: auth.role }
+                : undefined,
+          }),
+          read: (config, references) =>
+            Effect.succeed(
+              references.map((reference) => readValue(`${config.role ?? "own"}:${reference}`)),
+            ),
+          test: (config) => Effect.sync(() => (tested.push(config), { ok: true })),
+        });
+        const auth: Record<string, Record<string, string>> = {
+          reader: { role: "reader" },
+          plain: {},
+          other: { method: "approle" },
+        };
+        const service = yield* ProviderReads.make({
+          drivers: [driver],
+          secretProviders: Effect.sync(() => providers()),
+          scopeAllows: () => Effect.succeed(true),
+          scopeAuth: (scopeId) => Effect.succeed(auth[scopeId] ?? {}),
+        }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
+        const scoped = (scopeId: string) => ({
+          providerId: VAULT,
+          scopeId,
+          reference: "kv/a",
+          vaultId: "v",
+        });
+        assert.deepEqual(
+          yield* service.read([scoped("reader"), scoped("plain"), scoped("other"), ref("kv/a")]),
+          [
+            { _tag: "value", value: "reader:kv/a" },
+            { _tag: "value", value: "own:kv/a" },
+            { _tag: "error", error: "invalid", label: "OpenBao" },
+            { _tag: "value", value: "own:kv/a" },
+          ],
+        );
+        // The scope's role changes: a value read with the old one is not served.
+        auth.reader = { role: "writer" };
+        assert.deepEqual(yield* service.read([scoped("reader")]), [
+          { _tag: "value", value: "writer:kv/a" },
+        ]);
+        // «Test connection» for a scope signs in as the scope's reads do.
+        yield* service.test(VAULT, undefined, { role: "reader" });
+        assert.deepEqual(tested, [{ account: "a", role: "reader" }]);
+        assert.deepEqual(yield* service.test(VAULT, undefined, { method: "approle" }), {
+          auth: { ok: false, error: "invalid" },
+        });
+      }),
+  );
+
+  it.effect("a kind that cannot honour a scope's auth reads nothing through it", () =>
+    Effect.gen(function* () {
+      const { driver, batches } = fakeProvider(() => readValue("v"));
+      const service = yield* ProviderReads.make({
+        drivers: [driver],
+        secretProviders: Effect.sync(() => providers()),
+        scopeAllows: () => Effect.succeed(true),
+        scopeAuth: () => Effect.succeed({ role: "reader" }),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
+      assert.deepEqual(
+        yield* service.read([{ providerId: VAULT, scopeId: "s", reference: "kv/a", vaultId: "v" }]),
+        [{ _tag: "error", error: "invalid", label: "OpenBao" }],
+      );
+      assert.lengthOf(batches, 0);
+    }),
+  );
+
+  it.effect("asks the kind at save whether a reference fits the provider's config", () =>
+    Effect.gen(function* () {
+      const { driver } = fakeProvider(() => readValue("v"));
+      const mounted = defineSecretProviderDriver({
+        ...driver,
+        definition: {
+          ...driver.definition,
+          configReferenceProblem: (config, reference) =>
+            reference.startsWith(`kv/${(config as { readonly account: string }).account}/`)
+              ? undefined
+              : "Not under this account's mount.",
+        },
+        read: driver.read,
+        test: driver.test,
+      });
+      const service = yield* reads(mounted);
+      assert.strictEqual(yield* service.referenceProblem(ref("kv/a/x")), undefined);
+      assert.strictEqual(
+        yield* service.referenceProblem(ref("kv/b/x")),
+        "Not under this account's mount.",
+      );
+    }),
+  );
 });

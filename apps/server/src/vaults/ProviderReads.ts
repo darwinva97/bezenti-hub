@@ -31,7 +31,7 @@ import * as Stream from "effect/Stream";
 
 import { BUILT_IN_SECRET_PROVIDER_DRIVER_LIST } from "../secrets/secretProviderDefinitions.ts";
 import * as Settings from "../serverSettings.ts";
-import { scopeAllows } from "./providerScopeRules.ts";
+import { scopeAllows, scopeAuthOf } from "./providerScopeRules.ts";
 
 /** What one read waits for a provider, at most; past it the group is `unavailable`. */
 const PROVIDER_READ_TIMEOUT = Duration.seconds(10);
@@ -91,6 +91,8 @@ export class ProviderReads extends Context.Service<
     readonly test: (
       providerId: string,
       probe?: string,
+      /** A scope's `auth`, laid over the provider's config as for its reads. */
+      auth?: Readonly<Record<string, string>>,
     ) => Effect.Effect<{
       readonly auth: SecretProviderCheck;
       readonly probe?: SecretProviderCheck;
@@ -150,12 +152,29 @@ const refreshIntervalOf = (config: unknown): Duration.Duration => {
 interface Plan {
   readonly driver: SecretProviderDriver;
   readonly config: unknown;
+  /** The provider's config, then a scope's `auth` after a NUL: what a held value was read with. */
   readonly configKey: string;
   readonly label: string;
   readonly refresh: Duration.Duration;
 }
 
 const UNAVAILABLE: SecretReadResult = { _tag: "error", error: "unavailable" };
+
+// JSON escapes a NUL, so the provider's part of a key never contains one.
+const authKeyOf = (auth: Readonly<Record<string, string>>) =>
+  JSON.stringify(Object.entries(auth).sort(([a], [b]) => a.localeCompare(b)));
+
+/**
+ * `plan` with a scope's `auth` laid over its config, or undefined when its kind cannot honour
+ * that `auth` (a scope may not change the sign-in method, nor set what the kind has no use for).
+ */
+const withAuth = (plan: Plan, auth: Readonly<Record<string, string>>): Plan | undefined => {
+  if (Object.keys(auth).length === 0) return plan;
+  const config = plan.driver.definition.withScopeAuth?.(plan.config, auth);
+  return config === undefined
+    ? undefined
+    : { ...plan, config, configKey: `${plan.configKey}\u0000${authKeyOf(auth)}` };
+};
 
 export const make = Effect.fn("ProviderReads.make")(function* (options: {
   readonly drivers: ReadonlyArray<SecretProviderDriver>;
@@ -166,6 +185,8 @@ export const make = Effect.fn("ProviderReads.make")(function* (options: {
   readonly scopeAllows?: (ref: ProviderRef) => Effect.Effect<boolean>;
   /** A provider credential read from another provider; unreadable: undefined. */
   readonly readCredential?: (reference: SecretReference) => Effect.Effect<string | undefined>;
+  /** The `auth` a scope lays over its provider's config (role, mount...); without it, none. */
+  readonly scopeAuth?: (scopeId: string) => Effect.Effect<Readonly<Record<string, string>>>;
 }) {
   const context = yield* Effect.context<SecretProviderDriverServices>();
   const drivers = new Map(
@@ -232,7 +253,12 @@ export const make = Effect.fn("ProviderReads.make")(function* (options: {
       for (const [key, cached] of cache) {
         const providerId = key.slice(0, key.indexOf("\u0000"));
         // A credential read elsewhere is not known here: its provider's entries go too.
-        if (!ids.has(providerId) || planOf(providers, providerId)?.configKey !== cached.configKey) {
+        const configKey = planOf(providers, providerId)?.configKey;
+        if (
+          !ids.has(providerId) ||
+          configKey === undefined ||
+          (cached.configKey !== configKey && !cached.configKey.startsWith(`${configKey}\u0000`))
+        ) {
           cache.delete(key);
         }
       }
@@ -240,6 +266,11 @@ export const make = Effect.fn("ProviderReads.make")(function* (options: {
   if (options.changes !== undefined) {
     yield* options.changes.pipe(Stream.runForEach(forgetChanged), Effect.forkScoped);
   }
+
+  const scopeAuthFor = (ref: ProviderRef) =>
+    ref.scopeId === null || options.scopeAuth === undefined
+      ? Effect.succeed({})
+      : options.scopeAuth(ref.scopeId);
 
   const allowed: ProviderReads["Service"]["allowed"] = (ref) =>
     ref.scopeId === null
@@ -288,6 +319,12 @@ export const make = Effect.fn("ProviderReads.make")(function* (options: {
     const pathProblem = referencePathProblem(ref.reference);
     if (pathProblem !== undefined) return pathProblem;
     if (!definition.isReference(ref.reference)) return definition.invalidReferenceMessage;
+    const plan = planOf(current, ref.providerId);
+    const configProblem =
+      plan === undefined
+        ? undefined
+        : definition.configReferenceProblem?.(plan.config, ref.reference);
+    if (configProblem !== undefined) return configProblem;
     if (!(yield* allowed(ref))) return "That path is outside the scope allowed to this Vault.";
     return undefined;
   });
@@ -375,13 +412,18 @@ export const make = Effect.fn("ProviderReads.make")(function* (options: {
     // Misses this call reads, by provider and scope; a reference already being read is awaited.
     const groups = new Map<string, { readonly plan: Plan; readonly refs: Array<ProviderRef> }>();
     for (const ref of refs) {
-      const plan = planOf(current, ref.providerId);
+      const providerPlan = planOf(current, ref.providerId);
       // Provider gone, or a scope that no longer allows it here: broken, never read.
-      if (plan === undefined || !(yield* allowed(ref))) {
+      if (providerPlan === undefined || !(yield* allowed(ref))) {
         known({ _tag: "broken" });
         continue;
       }
-      plans.set(ref.providerId, plan);
+      plans.set(ref.providerId, providerPlan);
+      const plan = withAuth(providerPlan, yield* scopeAuthFor(ref));
+      if (plan === undefined) {
+        known({ _tag: "error", error: "invalid", label: providerPlan.label });
+        continue;
+      }
       if (
         referencePathProblem(ref.reference) !== undefined ||
         !plan.driver.definition.isReference(ref.reference)
@@ -426,32 +468,33 @@ export const make = Effect.fn("ProviderReads.make")(function* (options: {
     );
   });
 
-  const test: ProviderReads["Service"]["test"] = Effect.fn("ProviderReads.test")(
-    function* (providerId, probe) {
-      const plan = planOf(yield* providersNow, providerId);
-      if (plan === undefined) {
-        return {
-          auth: { ok: false, error: "invalid" as const },
-          ...(probe === undefined ? {} : { probe: { ok: false, error: "invalid" as const } }),
-        };
-      }
-      const signedIn = yield* bounded(plan, plan.driver.test(plan.config));
-      const auth: SecretProviderCheck = Option.match(signedIn, {
-        onNone: () => ({ ok: false, error: "unavailable" }),
-        onSome: (report) =>
-          report.ok
-            ? { ok: true }
-            : { ok: false, ...(report.error ? { error: report.error } : {}) },
-      });
-      if (probe === undefined) return { auth };
-      const read = yield* bounded(plan, plan.driver.read(plan.config, [probe]));
-      const result = Option.isSome(read) ? (read.value[0] ?? UNAVAILABLE) : UNAVAILABLE;
+  const test: ProviderReads["Service"]["test"] = Effect.fn("ProviderReads.test")(function* (
+    providerId,
+    probe,
+    scopeAuth = {},
+  ) {
+    const providerPlan = planOf(yield* providersNow, providerId);
+    const plan = providerPlan === undefined ? undefined : withAuth(providerPlan, scopeAuth);
+    if (plan === undefined) {
       return {
-        auth,
-        probe: result._tag === "value" ? { ok: true } : { ok: false, error: result.error },
+        auth: { ok: false, error: "invalid" as const },
+        ...(probe === undefined ? {} : { probe: { ok: false, error: "invalid" as const } }),
       };
-    },
-  );
+    }
+    const signedIn = yield* bounded(plan, plan.driver.test(plan.config));
+    const auth: SecretProviderCheck = Option.match(signedIn, {
+      onNone: () => ({ ok: false, error: "unavailable" }),
+      onSome: (report) =>
+        report.ok ? { ok: true } : { ok: false, ...(report.error ? { error: report.error } : {}) },
+    });
+    if (probe === undefined) return { auth };
+    const read = yield* bounded(plan, plan.driver.read(plan.config, [probe]));
+    const result = Option.isSome(read) ? (read.value[0] ?? UNAVAILABLE) : UNAVAILABLE;
+    return {
+      auth,
+      probe: result._tag === "value" ? { ok: true } : { ok: false, error: result.error },
+    };
+  });
 
   return ProviderReads.of({ status, providers, referenceProblem, allowed, read, test });
 });
@@ -476,6 +519,9 @@ export const layer = Layer.effect(
       secretProviders: providers,
       changes: settings.streamChanges.pipe(Stream.map((current) => current.secretProviders)),
       scopeAllows: (ref) => scopeAllows(sql, ref).pipe(Effect.orElseSucceed(() => false)),
+      // A scope whose `auth` cannot be read reads nothing it was not given: `invalid`.
+      scopeAuth: (scopeId) =>
+        scopeAuthOf(sql, scopeId).pipe(Effect.orElseSucceed(() => ({ unreadable: "" }))),
       ...(Option.isNone(resolver)
         ? {}
         : {

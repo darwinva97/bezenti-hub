@@ -39,7 +39,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
-import { pathsOf, prefixAllows } from "./providerScopeRules.ts";
+import { authOf, pathsOf, prefixAllows } from "./providerScopeRules.ts";
 import * as ProviderReads from "./ProviderReads.ts";
 
 export class SecretProviderScopes extends Context.Service<
@@ -103,21 +103,6 @@ interface EntryRow {
   readonly reference: string;
   readonly providerId: string;
 }
-
-const decodeAuth = (json: string): Readonly<Record<string, string>> => {
-  try {
-    const parsed: unknown = JSON.parse(json);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        (entry): entry is [string, string] =>
-          typeof entry[1] === "string" && AUTH_FIELDS.has(entry[0]),
-      ),
-    );
-  } catch {
-    return {};
-  }
-};
 
 const breakOf = (row: EntryRow): ProviderEntryBreak => ({
   vaultId: VaultId.make(row.vaultId),
@@ -203,7 +188,7 @@ const make = Effect.gen(function* () {
       providerId: row.providerId as SecretProviderId,
       providerLabel: status.label,
       label: row.label,
-      auth: decodeAuth(row.auth),
+      auth: authOf(row.auth),
       allowedPaths: pathsOf(row.paths),
       writable: row.writable === 1,
       probeReference: row.probeReference,
@@ -441,12 +426,15 @@ const make = Effect.gen(function* () {
     const userId = yield* owner;
     let probe: string | undefined;
     let scopeLabel: string | null = null;
+    let auth: Readonly<Record<string, string>> = {};
     if (input.scopeId !== undefined) {
       const scope = yield* findScope(input.scopeId);
       if (scope.providerId !== input.providerId) {
         return yield* fail("invalid", "That scope reads another provider.");
       }
       scopeLabel = scope.label;
+      // Signed in as the scope's reads are: its role, mount, and namespace.
+      auth = authOf(scope.auth);
       // The probe is read only inside the scope's own paths (it may have been narrowed since).
       if (scope.probeReference !== null) {
         if (
@@ -458,7 +446,7 @@ const make = Effect.gen(function* () {
         probe = scope.probeReference;
       }
     }
-    const result = yield* reads.test(input.providerId, probe);
+    const result = yield* reads.test(input.providerId, probe, auth);
     yield* record(
       userId,
       "secret_provider.test",

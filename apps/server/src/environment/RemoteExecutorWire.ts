@@ -85,6 +85,7 @@ import {
   MovePublishScratchResult,
 } from "./MovedWorkspace.ts";
 import * as PreviewProxy from "../preview/PreviewProxy.ts";
+import * as MachineAssets from "../assets/MachineAssets.ts";
 
 const RuntimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy;
 const ProviderThread = OrchestrationV2ProviderThread;
@@ -499,6 +500,21 @@ export const REMOTE_OPERATIONS = {
     ProjectWriteFileResult,
     ProjectWriteFileError,
   ),
+  /** Contract 15: a Thread's file a URL will serve, as it is now on the machine. */
+  "files.inspectAsset": workspace(
+    MachineAssets.MachineAssetInspectInput,
+    MachineAssets.MachineAssetInspection,
+    MachineAssets.MachineAssetError,
+  ),
+  /** Contract 15: one window of that file, streamed back (`MachineAssetItem`s). */
+  "files.streamAsset": workspace(
+    Schema.Struct({
+      subscriptionId: Schema.String,
+      ...MachineAssets.MachineAssetReadInput.fields,
+    }),
+    Schema.Void,
+    MachineAssets.MachineAssetError,
+  ),
   "search.paths": workspace(
     rooted(ProjectSearchEntriesInput),
     ProjectSearchEntriesResult,
@@ -612,6 +628,7 @@ export const REMOTE_STREAM_ITEMS = {
   "preview.events": PreviewEvent,
   "preview.proxyHttp": PreviewProxy.PreviewProxyHttpItem,
   "preview.proxySocket": PreviewProxy.PreviewProxySocketItem,
+  "files.streamAsset": MachineAssets.MachineAssetItem,
 } as const;
 export type RemoteStreamOperation = keyof typeof REMOTE_STREAM_ITEMS;
 export type RemoteStreamItem<O extends RemoteStreamOperation> =

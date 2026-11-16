@@ -48,12 +48,15 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../attachmentStore.ts";
+import * as MachineAssets from "../assets/MachineAssets.ts";
+import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import * as HubRepository from "../checkpointing/HubRepository.ts";
 import * as ScratchWorkspace from "../environment/ScratchWorkspace.ts";
 import * as ServerConfig from "../config.ts";
@@ -205,6 +208,13 @@ export const make = Effect.fn("EnvironmentAgent.make")(function* (input: Environ
     }),
   );
   const workspaceCalls = Effect.map(workspaceRpc, makeWorkspaceRpcCalls);
+  /** This machine's own state, which a Thread's file URL never serves. */
+  const isServerInternalPath = yield* makeIsServerInternalPath.pipe(
+    Effect.map(
+      (check) => (filePath: string) => check(filePath).pipe(Effect.orElseSucceed(() => true)),
+    ),
+    Effect.provide(Path.layer),
+  );
   /** Dev servers on this machine, for the previews the Hub serves. */
   const previewProxy = makePreviewProxyTarget();
 
@@ -977,6 +987,50 @@ export const make = Effect.fn("EnvironmentAgent.make")(function* (input: Environ
             (input) => [underCwd(input.cwd, input.relativePath)],
             calls.writeFile,
           ),
+        );
+      }
+      // Ticket 15: a Thread's file a URL serves; the Hub authorized it and named its root.
+      case "files.inspectAsset": {
+        const asked = request as RemoteInput<"files.inspectAsset">;
+        return roots
+          .withRoot(asked.root, (workspace) =>
+            MachineAssets.inspectOnMachine(workspace, asked.relativePath, isServerInternalPath),
+          )
+          .pipe(
+            Effect.catchTags({
+              WorkspaceRootEscapeError: () =>
+                Effect.fail(
+                  new MachineAssets.MachineAssetError({
+                    reason: "outside",
+                    relativePath: asked.relativePath,
+                  }),
+                ),
+            }),
+          );
+      }
+      case "files.streamAsset": {
+        const { subscriptionId, root, ...read } = request as RemoteInput<"files.streamAsset">;
+        const window = roots
+          .withRoot(root, (workspace) =>
+            MachineAssets.readOnMachine(workspace, read, isServerInternalPath),
+          )
+          .pipe(
+            Effect.catchTags({
+              WorkspaceRootEscapeError: () =>
+                Effect.fail(
+                  new MachineAssets.MachineAssetError({
+                    reason: "outside",
+                    relativePath: read.relativePath,
+                  }),
+                ),
+            }),
+            Effect.map((items) => Stream.fromIterable(items)),
+          );
+        return openWorkspaceStream(
+          "files.streamAsset",
+          subscriptionId,
+          Stream.unwrap(window),
+          origin,
         );
       }
       case "search.paths": {

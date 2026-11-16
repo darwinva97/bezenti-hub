@@ -589,6 +589,8 @@ export const EXECUTOR_OPERATIONS: Record<RemoteOperation | RemoteStreamOperation
   "move.recover": none("refs"),
   "files.read": masked("vaults/maskWorkspace.ts"),
   "files.write": masked("vaults/maskWorkspace.ts"),
+  "files.inspectAsset": none("a file's path, size and identity"),
+  "files.streamAsset": masked("vaults/maskAssets.ts"),
   "search.paths": none("file paths"),
   "search.contents": masked("vaults/maskWorkspace.ts"),
   "entries.list": none("file names"),

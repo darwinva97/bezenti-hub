@@ -23,9 +23,12 @@ import {
  * 8: Hub previews. 9: checkouts from the Hub. 10: `secretEnv`. 11: `aiGateway` in
  * `provider.openSession`. 12: shells keep and report their `facts`, and `terminal.reconcile`; the
  * Hub refuses terminals of a machine before 12. 13: `secretEnv.aiCredential` (a direct AI
- * account's credential, with every ambient AI credential dropped).
+ * account's credential, with every ambient AI credential dropped). 15: see below.
  */
-export const ENVIRONMENT_EXECUTOR_CONTRACT_VERSION = 13;
+export const ENVIRONMENT_EXECUTOR_CONTRACT_VERSION = 15;
+
+/** 15: `files.inspectAsset` and `files.streamAsset`, a Thread's files served by URL (ticket 15). */
+export const REMOTE_ASSETS_CONTRACT_VERSION = 15;
 
 /** The first contract whose shells report their facts (spec 5 ticket 07). */
 export const SHELL_FACTS_CONTRACT_VERSION = 12;
@@ -151,6 +154,8 @@ const ENVIRONMENT_EXECUTOR_OPERATIONS = {
     "files.read",
     "files.write",
     "files.metadata",
+    "files.inspectAsset",
+    "files.streamAsset",
     "search.paths",
     "search.contents",
     "entries.list",

@@ -118,6 +118,8 @@ const MAX_STREAM_BACKLOG = 4_096;
 const STREAM_BACKLOG: Partial<Record<RemoteStreamOperation, number>> = {
   "preview.proxyHttp": 512,
   "preview.proxySocket": 1_024,
+  // A whole window of a Thread's file (8 MiB in 64 KiB chunks) and its head.
+  "files.streamAsset": 160,
 };
 
 type SessionQueue = Queue.Queue<

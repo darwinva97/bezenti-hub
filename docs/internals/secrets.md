@@ -354,6 +354,51 @@ on the Thread's behalf: [ADR 0008](../adr/0008-vault-entries-read-from-secret-pr
 - **Not built yet:** scopes and Settings → Secret providers (03), OpenBao (04), files and
   templates (05), Dynamic secrets (06), Provider Variables, and the `secret.read` audit.
 
+## Provider scopes («Variables, Secretos sellados y Secret providers», ticket 03)
+
+A Provider scope sets what Vaults may read through a provider: the provider role the Hub signs in
+with (`auth`) and the path prefixes allowed. The Owner decides which Vaults may use each scope.
+
+- **Data** (migration 121):
+  - `secret_provider_scopes` (provider, label, `auth_json`, `allowed_paths_json` with at least
+    one prefix, `allowed_dynamic_json` for ticket 06, `writable` for ticket 08, `probe_reference`);
+  - `vault_provider_scopes` (Vault ↔ scope).
+  - `auth` holds only non-secret fields (`role`, `mount`, `method`, `namespace`, `audience`,
+    `project`, `environment`, `PROVIDER_SCOPE_AUTH_FIELDS`). Any other key is refused, both by the
+    RPC schema and by the service. A scope's credentials (ticket 04) are sealed, like a provider's.
+- **Providers themselves** stay in `settings.secretProviders`, behind the existing settings door
+  (`server.updateSettings`, the Owner). A definition's `credentialFields` are
+  `SettingsSecretValue`s:
+  - a literal is sealed in the store as `secret-provider-<id>-<field>` and redacted for clients
+    and in `settings.json`, by the same `settingsSecrets` machinery as other credentials;
+  - a reference names another provider and is filled in by `ProviderReads` before the driver runs;
+  - a credential read from its own provider, directly or in a circle (A → B → A), is refused at
+    write.
+  - A change is audited `secret_provider.create|update|delete` with the kind and the names of the
+    fields that changed, never a value.
+- **Who** (`secretProvider.manage`, Installation RPCs, the Owner only):
+  - `secretProviders.scopes.list|put|delete|allow`, `secretProviders.test` and
+    `secretProviders.impact`.
+  - A Vault's editors read `vaults.providerScopes`: the scopes allowed to it, without `auth`, and
+    for the Owner also each provider as «Direct».
+  - `vault.providerEntry` now means the same as `vault.edit`. Vaults then requires an Admin to
+    name a scope (never «Direct») that is allowed to the Vault.
+- **The rule** (`providerScopeRules.ts`), checked at save and again before every read:
+  - the scope exists, reads the entry's provider, and is allowed to the entry's Vault;
+  - the reference is one of the prefixes, or lies under one at a segment boundary (`/`, `#`, `?`),
+    case-sensitive. `kv/acme` admits `kv/acme`, `kv/acme/app` and `kv/acme#token`, but not
+    `kv/acme-evil` or `KV/acme`. The path tricks of ticket 02 are refused first.
+- **Changes that break entries:** narrowing a scope, changing its provider, deleting it, or taking
+  it back from a Vault answers with the entries that would break and changes nothing until it is
+  sent again with `confirm`. After that those entries are «broken»: listed as such, not delivered,
+  and the start does not fail.
+- **«Test connection»:** the driver's `test` for sign-in, plus a read of the scope's
+  `probe_reference`, which must lie inside the scope's prefixes both when saved and when tested.
+  It reads directly (no cache), answers only with classes, and is audited `secret_provider.test`.
+- **Web:** Settings → Secrets has «Test connection» per provider, the «Provider scopes» section,
+  and on removal a list of what would break. Each Vault has «Add a Provider entry» (choose a
+  scope, or «Direct» for the Owner). Mobile comes in ticket 16.
+
 ## Allowing Vaults (spec 5, ticket 03)
 
 Which Vaults may reach a Space or a User is one rule, `vaults/VaultReach.ts`, used by the doors

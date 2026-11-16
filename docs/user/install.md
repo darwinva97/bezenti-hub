@@ -391,6 +391,31 @@ someone who has the Hub's disk and its master key, and it does not stop the agen
 that receives the value from printing it. Use short-lived credentials when that
 matters.
 
+### Read secrets from a provider: Provider scopes
+
+**Settings → Secrets** lists the secret providers the Hub can read (1Password today).
+**Test connection** checks that the Hub can sign in. It never shows a secret.
+
+A **Provider scope** says what Vaults may read through a provider:
+
+- the **allowed path prefixes**, one per line. `kv/acme` allows `kv/acme` and everything
+  under it (`kv/acme/app#token`), but not `kv/acme-evil`. Paths are case-sensitive;
+- the **role** (and mount or namespace) the Hub signs in with for this scope;
+- a **probe path** inside those prefixes, which **Test connection** reads to check the scope;
+- the **Vaults** that may use it (tick them under the scope).
+
+Give each scope its own role in the provider, limited to the same paths. Then the provider's own
+policy keeps Organizations apart too, not only the Hub.
+
+In a Vault, **Add a Provider entry** picks a scope and a reference, for example
+`kv/acme/app#token`. The value is read from the provider each time a turn, terminal or script
+starts. It is never stored in the Hub and never shown. An Organization's Admins can add these only
+through the scopes allowed to their Vault. You can also add one **Direct**, without a scope.
+
+Narrowing or deleting a scope, or taking it away from a Vault, first lists the entries that would
+break and asks you to confirm. After that, those entries show «broken» and are no longer
+delivered. Removing a provider shows the same list first.
+
 ### Invite people
 
 To add someone to an organization, switch to it in the Space selector, choose

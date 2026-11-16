@@ -96,6 +96,27 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "vaults.entries.copy": none("Vaults and secret names; values only through HTTP vaults.reveal"),
   "vaults.allow": none("Vaults and secret names; values only through HTTP vaults.reveal"),
   "vaults.choices": none("Vaults and secret names; values only through HTTP vaults.reveal"),
+  "vaults.providerScopes": none(
+    "providers, scopes and Vault names; a test answers ok or a class of error, never a value",
+  ),
+  "secretProviders.test": none(
+    "providers, scopes and Vault names; a test answers ok or a class of error, never a value",
+  ),
+  "secretProviders.impact": none(
+    "providers, scopes and Vault names; a test answers ok or a class of error, never a value",
+  ),
+  "secretProviders.scopes.list": none(
+    "providers, scopes and Vault names; a test answers ok or a class of error, never a value",
+  ),
+  "secretProviders.scopes.put": none(
+    "providers, scopes and Vault names; a test answers ok or a class of error, never a value",
+  ),
+  "secretProviders.scopes.delete": none(
+    "providers, scopes and Vault names; a test answers ok or a class of error, never a value",
+  ),
+  "secretProviders.scopes.allow": none(
+    "providers, scopes and Vault names; a test answers ok or a class of error, never a value",
+  ),
   "vaults.spaceDefaults.set": none(
     "Vaults and secret names; values only through HTTP vaults.reveal",
   ),
@@ -511,6 +532,8 @@ export const MCP_DOOR_RULES: Record<string, DoorRule> = {
   t3_environment_read: none("the calling agent's own work; what it says next is an event (masked)"),
   t3_pending_request: none("the calling agent's own work; what it says next is an event (masked)"),
   t3_preview_close: none("the calling agent's own work; what it says next is an event (masked)"),
+  t3_theme_propose: none("a theme the agent proposes: colours and names, no secret"),
+  t3_theme_read: none("the environment's theme: colours and names, no secret"),
   t3_preview_list: none("the calling agent's own work; what it says next is an event (masked)"),
   t3_project_clone: none("the calling agent's own work; what it says next is an event (masked)"),
   t3_project_create: none("the calling agent's own work; what it says next is an event (masked)"),

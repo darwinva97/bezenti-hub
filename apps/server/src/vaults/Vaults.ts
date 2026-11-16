@@ -61,6 +61,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { projectSpaceSql } from "../spaces/SpaceDirectory.ts";
+import * as ProviderReads from "./ProviderReads.ts";
 import * as ThreadSecretValues from "./ThreadSecretValues.ts";
 import * as VaultKeyCheck from "./VaultKeyCheck.ts";
 import * as VaultReach from "./VaultReach.ts";
@@ -174,6 +175,9 @@ interface EntryRow {
   readonly linkedValueId: string | null;
   readonly linkedClass: VaultEntryClass | null;
   readonly linkedRevealable: number | null;
+  /** A Provider entry's provider (a key of `settings.secretProviders`) and reference. */
+  readonly providerId: string | null;
+  readonly providerReference: string | null;
 }
 
 /** An entry's class: a link's original's; a broken link's, a Secret. */
@@ -205,7 +209,8 @@ const ENTRY_COLUMNS = `
   e.revealable AS "revealable", e.version AS "version",
   e.updated_at AS "updatedAt", e.updated_by AS "updatedBy",
   o.name AS "linkedName", o.unmasked AS "linkedUnmasked", o.value_id AS "linkedValueId",
-  o.class AS "linkedClass", o.revealable AS "linkedRevealable"
+  o.class AS "linkedClass", o.revealable AS "linkedRevealable",
+  e.provider_id AS "providerId", e.provider_reference AS "providerReference"
 `;
 
 /** UTF-8 text without NUL, not empty, at most SECRET_VALUE_MAX_BYTES. Says why, never what. */
@@ -318,9 +323,12 @@ const entryOf = (
   seesMain: boolean,
   canEdit: boolean,
   variableValue: string | undefined,
+  provider: ProviderReads.ProviderStatus | undefined,
 ): VaultEntry => {
   const isLink = row.kind === "link";
-  const broken = isLink && row.linkedName === null;
+  // A Provider entry whose provider is gone (or cannot be read here) is broken for everyone.
+  const providerBroken = row.kind === "provider" && (provider === undefined || provider.broken);
+  const broken = (isLink && row.linkedName === null) || providerBroken;
   const entryClass = classOf(row);
   return {
     id: VaultEntryId.make(row.entryId),
@@ -331,7 +339,16 @@ const entryOf = (
     class: entryClass,
     sealed: isSealed(row),
     ...(entryClass === "variable" && variableValue !== undefined ? { value: variableValue } : {}),
-    broken: broken && (seesMain || canEdit),
+    ...(row.kind === "provider"
+      ? {
+          provider: {
+            label: provider?.label ?? null,
+            // Where it reads is its editors' to know, as a link's original is the Owner's.
+            reference: canEdit ? row.providerReference : null,
+          },
+        }
+      : {}),
+    broken: providerBroken || (broken && (seesMain || canEdit)),
     linkedFrom:
       seesMain && isLink && row.linkedEntryId !== null && !broken
         ? { entryId: VaultEntryId.make(row.linkedEntryId), name: row.linkedName ?? "" }
@@ -380,6 +397,12 @@ const make = Effect.gen(function* () {
   const spaces = yield* SpaceDirectory.SpaceDirectory;
   const audit = yield* AuditLog.AuditLog;
   const values = yield* ServerSecretStore.VaultValueStore;
+  // Provider entries (ticket 02): what Settings says of their provider; never a read here.
+  const providerReads = yield* Effect.serviceOption(ProviderReads.ProviderReads);
+  const providerStatus = (providerId: string | null) =>
+    providerId === null || Option.isNone(providerReads)
+      ? Effect.succeed(undefined)
+      : providerReads.value.status(providerId);
   const random = yield* SecureRandom.SecureRandom;
   const path = yield* Path.Path;
   const { baseDir } = yield* ServerConfig.ServerConfig;
@@ -656,6 +679,8 @@ const make = Effect.gen(function* () {
     readonly brokenLinks?: number;
     readonly dangerous?: boolean;
     readonly class?: VaultEntryClass;
+    /** A Provider entry's provider, by its label; never its reference. */
+    readonly provider?: string;
   }) =>
     audit.record({
       actor: AuditLog.userActor(input.userId),
@@ -671,6 +696,7 @@ const make = Effect.gen(function* () {
         ...(input.brokenLinks === undefined ? {} : { brokenLinks: input.brokenLinks }),
         ...(input.dangerous === true ? { dangerous: true } : {}),
         ...(input.class === undefined ? {} : { class: input.class }),
+        ...(input.provider === undefined ? {} : { provider: input.provider }),
       },
     });
 
@@ -700,10 +726,12 @@ const make = Effect.gen(function* () {
     const canEdit = can("vault.edit", resource);
     const readsVariables = can("vault.readVariables", resource);
     return yield* Effect.forEach(rows, (row) =>
-      (readsVariables && classOf(row) === "variable" && valueIdOf(row) !== null
-        ? readValue(valueIdOf(row)).pipe(Effect.orElseSucceed(() => undefined))
-        : Effect.succeed(undefined)
-      ).pipe(Effect.map((value) => entryOf(row, seesMain, canEdit, value))),
+      Effect.all([
+        readsVariables && classOf(row) === "variable" && valueIdOf(row) !== null
+          ? readValue(valueIdOf(row)).pipe(Effect.orElseSucceed(() => undefined))
+          : Effect.succeed(undefined),
+        providerStatus(row.providerId),
+      ]).pipe(Effect.map(([value, provider]) => entryOf(row, seesMain, canEdit, value, provider))),
     );
   });
 
@@ -908,9 +936,134 @@ const make = Effect.gen(function* () {
     } satisfies VaultEntriesListResult;
   });
 
+  /**
+   * A Provider entry (ticket 02, ADR 0008): where a sealed Secret's value is read, never a value.
+   * The Owner's alone (`vault.providerEntry`) to add or change; ticket 03 lets Admins within the
+   * scopes allowed to the Vault. The reference is checked here and again before every read.
+   */
+  const putProviderEntry = Effect.fn("Vaults.putProviderEntry")(function* (
+    input: VaultEntryPutInput,
+    context: {
+      readonly userId: UserId;
+      readonly can: Can;
+      readonly row: VaultRow;
+      readonly resource: AccessPolicy.VaultResource;
+      readonly dangerous: boolean;
+      readonly existing: EntryRow | undefined;
+    },
+  ) {
+    const { userId, can, row, resource, dangerous, existing } = context;
+    if (!can("vault.providerEntry", resource)) {
+      return yield* fail("forbidden", "Only the Owner adds or changes a Provider entry.");
+    }
+    if (existing !== undefined && existing.kind !== "provider") {
+      return yield* fail(
+        "invalid-value",
+        `${existing.name} holds a value of its own: delete it and add a Provider entry instead.`,
+      );
+    }
+    if (input.value !== undefined || input.class !== undefined || input.allowReveal !== undefined) {
+      return yield* fail(
+        "invalid-value",
+        "A Provider entry is a sealed Secret read from its provider: it takes no value, class or reveal.",
+      );
+    }
+    const source =
+      input.provider ??
+      (existing === undefined
+        ? undefined
+        : { providerId: existing.providerId ?? "", reference: existing.providerReference ?? "" });
+    if (source === undefined) return yield* fail("invalid-value", "Name the provider to read.");
+    if (input.provider !== undefined) {
+      const problem = Option.isNone(providerReads)
+        ? "Secret providers are read only on a Hub."
+        : yield* providerReads.value.referenceProblem({
+            providerId: source.providerId,
+            scopeId: null,
+            reference: source.reference,
+          });
+      if (problem !== undefined) return yield* fail("invalid-reference", problem);
+    }
+    const label = (yield* providerStatus(source.providerId))?.label ?? source.providerId;
+    const at = yield* now;
+    if (existing === undefined) {
+      yield* nameTaken(row.vaultId, input.name);
+      const entryId = yield* newId("secret");
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* stillWritable(row.vaultId);
+            yield* sql`
+              INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id,
+                unmasked, class, revealable, provider_id, provider_reference, version, created_at,
+                updated_at, updated_by)
+              VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null},
+                'provider', NULL, 0, 'secret', 0, ${source.providerId}, ${source.reference}, 1,
+                ${at}, ${at}, ${userId})
+            `;
+            yield* recordEdit({
+              userId,
+              vault: row,
+              entryId,
+              name: input.name,
+              kind: "provider",
+              op: "add",
+              dangerous,
+              provider: label,
+            });
+          }),
+        )
+        .pipe(Effect.catch(orStorage("add the Provider entry")));
+      return yield* result(can, resource, row.vaultId, entryId, []);
+    }
+    const renamed = input.name !== existing.name;
+    if (renamed) yield* nameTaken(row.vaultId, input.name, existing.entryId);
+    const described = input.description !== undefined && input.description !== existing.description;
+    const moved =
+      source.providerId !== existing.providerId || source.reference !== existing.providerReference;
+    if (!renamed && !described && !moved) {
+      return yield* result(can, resource, row.vaultId, existing.entryId, []);
+    }
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* stillWritable(row.vaultId);
+          yield* sql`
+            UPDATE vault_entries SET
+              name = ${input.name},
+              description = ${input.description === undefined ? existing.description : input.description},
+              provider_id = ${source.providerId},
+              provider_reference = ${source.reference},
+              version = version + ${moved ? 1 : 0},
+              updated_at = ${at},
+              updated_by = ${userId}
+            WHERE entry_id = ${existing.entryId}
+          `;
+          yield* recordEdit({
+            userId,
+            vault: row,
+            entryId: existing.entryId,
+            name: input.name,
+            kind: "provider",
+            op: moved ? "reference" : renamed ? "rename" : "describe",
+            ...(renamed ? { from: existing.name } : {}),
+            dangerous,
+            provider: label,
+          });
+        }),
+      )
+      .pipe(Effect.catch(orStorage("change the Provider entry")));
+    return yield* result(can, resource, row.vaultId, existing.entryId, []);
+  });
+
   const putEntry = Effect.fn("Vaults.putEntry")(function* (input: VaultEntryPutInput) {
     const { userId, can, row, resource } = yield* authorizeVault(input.vaultId, "vault.edit");
     const dangerous = yield* checkName(input.name, can, resource, input.confirmDangerous);
+    const existing =
+      input.entryId === undefined ? undefined : yield* findEntry(row.vaultId, input.entryId);
+    if (input.provider !== undefined || existing?.kind === "provider") {
+      return yield* putProviderEntry(input, { userId, can, row, resource, dangerous, existing });
+    }
     const value = input.value === undefined ? undefined : Redacted.value(input.value);
     if (value !== undefined) {
       const problem = valueProblem(value);
@@ -1131,6 +1284,13 @@ const make = Effect.gen(function* () {
     const source = yield* findEntry(MAIN_VAULT_ID, input.sourceEntryId);
     if (source.kind === "link") {
       return yield* fail("not-linkable", "A Secret link points at a secret, never at a link.");
+    }
+    // Copying would read the provider into the Hub (ticket 08's «Copy into the Hub»).
+    if (source.kind === "provider") {
+      return yield* fail(
+        "not-linkable",
+        `${source.name} is read from a provider: add a Provider entry with the same reference in this Vault instead.`,
+      );
     }
     const name = input.name ?? source.name;
     const dangerous = yield* checkName(name, can, resource, input.confirmDangerous);

@@ -194,6 +194,8 @@ export type Action =
   | "vault.view"
   /** Read its Variables' values: whoever sees it, Guests excepted (decision 4). */
   | "vault.readVariables"
+  /** Add or change a Provider entry (read from a Secret provider): the Owner (ticket 03: scopes). */
+  | "vault.providerEntry"
   /** Add, replace, rename and delete a Vault's secrets without reading them. */
   | "vault.edit"
   /** Create, rename, describe, archive and delete a Vault: the Owner. */
@@ -554,6 +556,7 @@ const decideMove = (principal: Principal, { from, to }: MoveResource): Decision 
 const VAULT_ACTIONS: ReadonlySet<Action> = new Set([
   "vault.view",
   "vault.readVariables",
+  "vault.providerEntry",
   "vault.edit",
   "vault.manage",
   "vault.reveal",

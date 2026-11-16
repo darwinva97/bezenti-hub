@@ -248,6 +248,18 @@ describe("every door of the Hub declares its rule", () => {
       "vaults/SecretMasker.ts",
       "vaults/Vaults.ts",
     ]);
+    // Ticket 02: values read from Secret providers, kept sealed only to mask them. Delivery seals
+    // them, the masker reads them, DeliveredValues removes them with their Thread: nothing else.
+    const deliveredHolders = files
+      .filter(({ text }) => /\bDeliveredValueStore\b/u.test(text))
+      .map(({ file }) => file)
+      .filter((file) => file !== "auth/ServerSecretStore.ts");
+    expect(deliveredHolders.toSorted()).toEqual([
+      "vaults/DeliveredValues.ts", // removes a deleted Thread's, sweeps at the start
+      "vaults/SecretDelivery.ts", // seals what a process receives
+      "vaults/SecretMasker.ts", // reads: what to show as [NAME]
+      "vaults/deliveredValueId.ts", // a comment: where they are read back from
+    ]);
     // In Vaults, a value is read for the reveal, for a copy and for a Variable shown (`shown`, its
     // class checked), nothing else; the reveal refuses a sealed one before its read.
     const vaults = files.find(({ file }) => file === "vaults/Vaults.ts")?.text ?? "";
@@ -268,12 +280,14 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/116_ThreadSecretValues.ts",
       "persistence/Migrations/119_VaultEntryClass.ts",
       "persistence/Migrations/120_VaultProviderEntries.ts",
+      "vaults/DeliveredValues.ts",
       "vaults/EffectiveVaults.ts",
       "vaults/SecretDelivery.ts",
       "vaults/SecretMasker.ts",
       "vaults/ThreadSecretValues.ts",
       "vaults/VaultReachLoss.ts",
       "vaults/Vaults.ts",
+      "vaults/deliveredValueId.ts", // a comment: how a provider's value is named there
     ]);
     // A direct AI account's credential (spec 4 ticket 07) is a value too: read in AiAccounts,
     // handed only to the session manager opening a provider process (issueDirect), which

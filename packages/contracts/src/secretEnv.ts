@@ -41,6 +41,43 @@ export type SecretEnv = typeof SecretEnv.Type;
 /** The key `secretEnv` travels under in a request payload. */
 export const SECRET_ENV_FIELD = "secretEnv";
 
+/** Run failures whose code starts with this are a Secret provider's: «Retry» starts the turn again. */
+const SECRET_PROVIDER_FAILURE_CODE_PREFIX = "secret_provider_";
+
+/**
+ * A Secret provider did not give a Provider entry's value, so the process did not start: nothing
+ * of the set is delivered (never the last value known). Names the provider (its label), the scope
+ * and the entries; never a value nor anything the provider said.
+ */
+export class SecretProviderReadError extends Schema.TaggedError<SecretProviderReadError>()(
+  "SecretProviderReadError",
+  {
+    reason: Schema.Literals(["unavailable", "forbidden", "not-found", "invalid"]),
+    provider: Schema.String,
+    scope: Schema.NullOr(Schema.String),
+    entries: Schema.Array(Schema.String),
+  },
+) {
+  /** The run failure's code (`secret_provider_<reason>`): clients offer «Retry» on it. */
+  get code(): string {
+    return `${SECRET_PROVIDER_FAILURE_CODE_PREFIX}${this.reason.replace("-", "_")}`;
+  }
+
+  override get message(): string {
+    const names = this.entries.join(", ");
+    switch (this.reason) {
+      case "unavailable":
+        return `${this.provider} didn't answer for ${names}. Retry, or start without them by removing them from the Thread's Vaults.`;
+      case "forbidden":
+        return `${this.provider} refused to give ${names}: check the role the Hub signs in with.`;
+      case "not-found":
+        return `${this.provider} has nothing at the reference of ${names}.`;
+      case "invalid":
+        return `${names}: the reference is not one ${this.provider} reads.`;
+    }
+  }
+}
+
 /**
  * Why a process of a Thread with secrets was not started: never started without them.
  * - `outdated-machine`: the machine runs an executor contract before 10.

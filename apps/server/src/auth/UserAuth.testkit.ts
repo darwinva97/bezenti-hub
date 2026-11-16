@@ -43,6 +43,7 @@ import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as VaultsHttp from "../vaults/http.ts";
 import * as Vaults from "../vaults/Vaults.ts";
 import * as EffectiveVaults from "../vaults/EffectiveVaults.ts";
+import * as ProviderReads from "../vaults/ProviderReads.ts";
 import * as SecretDelivery from "../vaults/SecretDelivery.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
 import * as MasterKeyBackup from "./MasterKeyBackup.ts";
@@ -200,6 +201,7 @@ const makeLayerServices = (
   { hubRunsAgents = true, ...registryOptions }: TestRegistryOptions = {},
   sandboxImageBuilder?: SandboxImage.SandboxImageBuilder["Service"],
   sshInstallPolicy?: SshInstall.SshInstallPolicy["Service"],
+  providerReads?: Parameters<typeof ProviderReads.make>[0],
 ) =>
   // Archive and delete reach Projects and Thread reads; no Thread in these tests runs.
   OrganizationLifecycle.layer.pipe(
@@ -262,7 +264,16 @@ const makeLayerServices = (
           Layer.provideMerge(SecretMasker.layer),
           Layer.provideMerge(EffectiveVaults.layer),
         ),
-      ).pipe(Layer.provide(SpaceDirectory.layer), Layer.provideMerge(AuditLog.layer)),
+      ).pipe(
+        Layer.provide(SpaceDirectory.layer),
+        Layer.provideMerge(AuditLog.layer),
+        // Provider entries' reads: a test's own drivers and providers, or the Hub's.
+        Layer.provideMerge(
+          providerReads === undefined
+            ? ProviderReads.layer.pipe(Layer.provide(ServerSettings.layerTest()))
+            : Layer.effect(ProviderReads.ProviderReads, ProviderReads.make(providerReads)),
+        ),
+      ),
     ),
     Layer.provide(ManagedPolicy.layerTest()),
     Layer.provideMerge(OwnerPresence.layer),
@@ -313,6 +324,8 @@ export const serveAuthHttpWith = Effect.fn(function* (
     readonly sandboxImageBuilder?: SandboxImage.SandboxImageBuilder["Service"];
     /** How the Owner's SSH installs run (timeouts, the T3 they install). */
     readonly sshInstallPolicy?: SshInstall.SshInstallPolicy["Service"];
+    /** Provider entries' drivers and providers (a fake provider), instead of the Hub's. */
+    readonly providerReads?: Parameters<typeof ProviderReads.make>[0];
   } = {},
 ) {
   const base = yield* Layer.build(
@@ -325,6 +338,7 @@ export const serveAuthHttpWith = Effect.fn(function* (
       config.registry,
       config.sandboxImageBuilder,
       config.sshInstallPolicy,
+      config.providerReads,
     ),
   );
   const services = config.extend === undefined ? base : yield* config.extend(base);

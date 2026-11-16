@@ -10,6 +10,7 @@ import {
   UserId,
 } from "./baseSchemas.ts";
 import { AI_GATEWAY_ENV_NAMES } from "./aiGatewaySession.ts";
+import { SecretProviderId } from "./secretReference.ts";
 import { AuthReauth } from "./userAccounts.ts";
 
 /** The master key that encrypts the Hub's secrets, as the Owner sees it in Settings. */
@@ -210,7 +211,19 @@ export const looksLikeCredential = (name: string, value?: string): boolean => {
   return [...text].length >= 20 && !/\s/u.test(text) && !URL_LIKE.test(text) && entropy(text) >= 4;
 };
 
-export const VaultEntryKind = Schema.Literals(["own", "copy", "link"]);
+/** `provider`: read from a Secret provider when a process starts; a sealed Secret (ADR 0008). */
+export const VaultEntryKind = Schema.Literals(["own", "copy", "link", "provider"]);
+
+/** Where a Provider entry reads its value: a provider of the Owner's settings and a reference. */
+const VAULT_PROVIDER_REFERENCE_MAX_LENGTH = 1024;
+export const VaultProviderSource = Schema.Struct({
+  providerId: SecretProviderId,
+  reference: Schema.String.check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(VAULT_PROVIDER_REFERENCE_MAX_LENGTH),
+  ),
+});
+export type VaultProviderSource = typeof VaultProviderSource.Type;
 
 /**
  * A Variable is configuration: its value is shown to whoever sees its name (Guests excepted) and
@@ -278,7 +291,17 @@ export const VaultEntry = Schema.Struct({
   sealed: Schema.Boolean,
   /** A Variable's value, for whoever may read Variables (`vault.readVariables`): never a Secret's. */
   value: Schema.optionalKey(Schema.String),
-  /** A Secret link whose original in the Main vault is gone: shown, never delivered. */
+  /**
+   * A Provider entry's provider (its label; null once it is gone) and, for whoever edits the
+   * Vault, its reference. Never a value: none is read to list it.
+   */
+  provider: Schema.optionalKey(
+    Schema.Struct({ label: Schema.NullOr(Schema.String), reference: Schema.NullOr(Schema.String) }),
+  ),
+  /**
+   * Shown, never delivered: a Secret link whose original in the Main vault is gone, or a Provider
+   * entry whose provider is gone or cannot be read by this Hub.
+   */
   broken: Schema.Boolean,
   /** A link's original, for whoever sees the Main vault (the Owner); null for anyone else. */
   linkedFrom: Schema.NullOr(Schema.Struct({ entryId: VaultEntryId, name: Schema.String })),
@@ -314,6 +337,8 @@ export const VaultErrorReason = Schema.Literals([
   "sealed",
   /** Allowing reveal, or making a Secret a Variable, takes a new value in the same request. */
   "needs-new-value",
+  /** A Provider entry's reference its provider does not read, or a path that leaves it. */
+  "invalid-reference",
   "storage",
 ]);
 export type VaultErrorReason = typeof VaultErrorReason.Type;
@@ -377,6 +402,11 @@ export const VaultEntryPutInput = Schema.Struct({
   value: Schema.optionalKey(SecretValueInput),
   class: Schema.optionalKey(VaultEntryClass),
   allowReveal: Schema.optionalKey(Schema.Boolean),
+  /**
+   * A Provider entry (the Owner's, `vault.providerEntry`) instead of a `value`: where its value is
+   * read. Always a sealed Secret.
+   */
+  provider: Schema.optionalKey(VaultProviderSource),
   /** The Owner confirms a name that changes how tools run (`secretNameRisk`: dangerous). */
   confirmDangerous: Schema.optionalKey(Schema.Boolean),
 });

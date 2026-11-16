@@ -31,6 +31,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { credentialIdOfValueId } from "../ai/aiCredentialValue.ts";
+import { storeIdOfValueId } from "./deliveredValueId.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
 import * as EffectiveVaults from "./EffectiveVaults.ts";
@@ -147,6 +148,7 @@ export const make = Effect.gen(function* () {
   const effective = yield* Effect.serviceOption(EffectiveVaults.EffectiveVaults);
   const values = yield* Effect.serviceOption(ServerSecretStore.VaultValueStore);
   const aiCredentials = yield* Effect.serviceOption(ServerSecretStore.AiAccountCredentialStore);
+  const deliveredValues = yield* Effect.serviceOption(ServerSecretStore.DeliveredValueStore);
   const cache = new Map<string, Entry>();
   const roots = new Map<string, string>();
   // A value id names one value for good (a replace writes a new id): read once.
@@ -183,6 +185,16 @@ export const make = Effect.gen(function* () {
       setBounded(decrypted, valueId, value);
       return Option.some(value);
     }
+    // Ticket 02: a value read from a Secret provider that a process of the Thread received.
+    const deliveredId = storeIdOfValueId(valueId);
+    if (deliveredId !== undefined) {
+      if (Option.isNone(deliveredValues)) return Option.none<string>();
+      const bytes = yield* deliveredValues.value.get(deliveredId);
+      if (Option.isNone(bytes)) return Option.none<string>();
+      const value = new TextDecoder().decode(bytes.value);
+      setBounded(decrypted, valueId, value);
+      return Option.some(value);
+    }
     if (Option.isNone(values)) return Option.none<string>();
     const bytes = yield* values.value.get(valueId);
     if (Option.isNone(bytes)) return Option.none<string>();
@@ -207,8 +219,13 @@ export const make = Effect.gen(function* () {
   const effectiveSet = (compute: Effect.Effect<EffectiveVaults.EffectiveSet, VaultError>) =>
     compute.pipe(
       // A Variable is configuration, never masked; a short Secret neither (it would hide text).
+      // A Provider entry's value is masked once delivered (its `delivered:` row), never before.
       Effect.map((set) =>
-        set.variables.filter((variable) => !variable.unmasked && variable.class === "secret"),
+        set.variables.flatMap((variable) =>
+          !variable.unmasked && variable.class === "secret" && variable.valueId !== null
+            ? [{ name: variable.name, valueId: variable.valueId }]
+            : [],
+        ),
       ),
       Effect.catchIf(
         (error) => error.reason !== "storage",

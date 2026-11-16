@@ -206,6 +206,22 @@ export class AiAccountTokenStore extends Context.Service<
   }
 >()("t3/auth/ServerSecretStore/AiAccountTokenStore") {}
 
+/**
+ * Values read from Secret providers that a Thread received (its `delivered:<id>` values, see
+ * vaults/DeliveredValues.ts): their own folder (`secrets/delivered-values/`) and purpose, kept only
+ * to mask them in that Thread, and removed with it. Never revealed, never delivered from here.
+ */
+export class DeliveredValueStore extends Context.Service<
+  DeliveredValueStore,
+  {
+    readonly get: (id: string) => Effect.Effect<Option.Option<Uint8Array>, SecretStoreError>;
+    readonly set: (id: string, value: Uint8Array) => Effect.Effect<void, SecretStoreError>;
+    readonly remove: (id: string) => Effect.Effect<void, SecretStoreError>;
+    /** The ids of every value stored, for the start's sweep of ones no Thread holds. */
+    readonly list: Effect.Effect<ReadonlyArray<string>, SecretStoreError>;
+  }
+>()("t3/auth/ServerSecretStore/DeliveredValueStore") {}
+
 /** The master key the store opened with; none on a joined machine. */
 export class MasterKeyring extends Context.Service<
   MasterKeyring,
@@ -575,6 +591,17 @@ const makeWith = Effect.fn("ServerSecretStore.make")(function* (mode: StoreMode)
     remove: Effect.fn("AiAccountTokenStore.remove")(aiTokenStore.remove),
     list: aiTokenStore.list,
   });
+  const deliveredStore = sealedOnly(
+    MasterKeyFile.DELIVERED_VALUES_NAMESPACE,
+    "delivered value",
+    "Values read from Secret providers are kept only on a Hub, sealed with its master key.",
+  );
+  const deliveredValues = DeliveredValueStore.of({
+    get: Effect.fn("DeliveredValueStore.get")(deliveredStore.get),
+    set: Effect.fn("DeliveredValueStore.set")(deliveredStore.set),
+    remove: Effect.fn("DeliveredValueStore.remove")(deliveredStore.remove),
+    list: deliveredStore.list,
+  });
 
   return Context.make(
     ServerSecretStore,
@@ -590,6 +617,7 @@ const makeWith = Effect.fn("ServerSecretStore.make")(function* (mode: StoreMode)
     Context.add(VaultValueStore, vaultValues),
     Context.add(AiAccountCredentialStore, aiAccountCredentials),
     Context.add(AiAccountTokenStore, aiAccountTokens),
+    Context.add(DeliveredValueStore, deliveredValues),
     Context.add(
       MasterKeyring,
       MasterKeyring.of({

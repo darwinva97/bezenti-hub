@@ -34,8 +34,13 @@ import {
   joinOrganization,
   makeAuthenticator,
   passkeyReauth,
-  serveAuthHttp,
+  serveAuthHttpWith,
 } from "../auth/UserAuth.testkit.ts";
+import {
+  FAKE_PROVIDER_ID,
+  FAKE_PROVIDER_LABEL,
+  makeFakeSecretProvider,
+} from "./ProviderReads.testkit.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as VaultKeyCheck from "./VaultKeyCheck.ts";
 import * as Vaults from "./Vaults.ts";
@@ -50,7 +55,8 @@ const ADMIN_REPLACES = "admin-replaced-value-42";
 const VALUES = [ORIGINAL, ROTATED, ACME_OWN, ADMIN_WRITES, ADMIN_REPLACES];
 
 const hub = Effect.gen(function* () {
-  const server = yield* serveAuthHttp;
+  const provider = makeFakeSecretProvider();
+  const server = yield* serveAuthHttpWith({ providerReads: provider.options });
   const authenticator = yield* makeAuthenticator();
   const { created } = yield* bootstrapOwner(server, authenticator);
   const owner = created.cookie ?? "";
@@ -108,6 +114,7 @@ const hub = Effect.gen(function* () {
     server.request(REVEAL, { cookie, body: { vaultId, entryId, reauth } });
   return {
     server,
+    provider,
     authenticator,
     owner,
     ownerId,
@@ -1168,4 +1175,153 @@ it.effect("a database another key sealed stops the start before the database cha
     const rows = yield* server.sql<{ readonly n: number }>`SELECT COUNT(*) AS n FROM vaults`;
     assert.equal(rows[0]?.n, 0, "the Main vault was written before the key check");
   }),
+);
+
+// Ticket 02 of «Variables, Secretos sellados y Secret providers»: Provider entries.
+
+it.effect(
+  "only the Owner adds a Provider entry: a sealed Secret nobody reveals, its path for editors",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* hub;
+      const { vaults, as, ownerId, people, provider, server, owner, reveal } = setup;
+      const { acme } = yield* acmeSecrets(setup);
+      const source = { providerId: FAKE_PROVIDER_ID, reference: "kv/acme/kube#token" };
+      for (const who of Object.values(people)) {
+        assert.oneOf(
+          yield* reasonOf(
+            vaults
+              .putEntry({ vaultId: acme.id, name: "KUBE_TOKEN", provider: source })
+              .pipe(as(who.id)),
+          ),
+          ["forbidden", "not-found"],
+          who.id,
+        );
+      }
+      const added = yield* vaults
+        .putEntry({ vaultId: acme.id, name: "KUBE_TOKEN", provider: source })
+        .pipe(as(ownerId));
+      assert.deepEqual(
+        [added.entry.kind, added.entry.class, added.entry.sealed, added.entry.broken],
+        ["provider", "secret", true, false],
+      );
+      assert.deepEqual(added.entry.provider, {
+        label: FAKE_PROVIDER_LABEL,
+        reference: "kv/acme/kube#token",
+      });
+      // A Member sees «Provider: OpenBao», never where it reads.
+      const seen = (yield* vaults
+        .listEntries({ vaultId: acme.id })
+        .pipe(as(people.member.id))).entries.find((entry) => entry.name === "KUBE_TOKEN");
+      assert.deepEqual(seen?.provider, { label: FAKE_PROVIDER_LABEL, reference: null });
+      // Sealed: refused before the factor, and the provider is never asked.
+      assert.equal(
+        yield* reasonOf(
+          vaults.reveal({ vaultId: acme.id, entryId: added.entry.id }).pipe(as(ownerId)),
+        ),
+        "sealed",
+      );
+      assert.equal((yield* reveal(owner, acme.id, added.entry.id, BOGUS_REAUTH)).status, 409);
+      assert.lengthOf(provider.state.batches, 0);
+      // It takes no value, class or reveal; an Admin changes nothing of it but may delete it.
+      for (const change of [
+        { value: Redacted.make("x".repeat(9)) },
+        { class: "variable" as const },
+        { allowReveal: true },
+      ]) {
+        assert.equal(
+          yield* reasonOf(
+            vaults
+              .putEntry({
+                vaultId: acme.id,
+                entryId: added.entry.id,
+                name: "KUBE_TOKEN",
+                ...change,
+              })
+              .pipe(as(ownerId)),
+          ),
+          "invalid-value",
+        );
+      }
+      assert.equal(
+        yield* reasonOf(
+          vaults
+            .putEntry({ vaultId: acme.id, entryId: added.entry.id, name: "KUBE_RENAMED" })
+            .pipe(as(people.admin.id)),
+        ),
+        "forbidden",
+      );
+      // Audited with its provider's label, never its reference or a value.
+      const [audited] = yield* server.sql<{ readonly detail_json: string }>`
+        SELECT detail_json FROM audit_log WHERE action = 'secret.edit' AND target_name = 'KUBE_TOKEN'
+      `;
+      assert.deepEqual(JSON.parse(audited?.detail_json ?? "{}"), {
+        vault: "Acme secrets",
+        vaultId: acme.id,
+        kind: "provider",
+        op: "add",
+        provider: FAKE_PROVIDER_LABEL,
+      });
+      const deleted = yield* vaults
+        .deleteEntry({ vaultId: acme.id, entryId: added.entry.id })
+        .pipe(as(people.admin.id));
+      assert.isTrue(deleted.deleted);
+    }),
+);
+
+it.effect(
+  "a reference that leaves its path is refused; a Provider entry is neither linked nor copied",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* hub;
+      const { vaults, as, ownerId, provider } = setup;
+      const { acme } = yield* acmeSecrets(setup);
+      for (const reference of [
+        "kv/acme/../globex#token",
+        "kv/acme//token",
+        "kv/acme/%2e%2e/globex",
+        "op://not/this/kind",
+      ]) {
+        assert.equal(
+          yield* reasonOf(
+            vaults
+              .putEntry({
+                vaultId: acme.id,
+                name: "KUBE_TOKEN",
+                provider: { providerId: FAKE_PROVIDER_ID, reference },
+              })
+              .pipe(as(ownerId)),
+          ),
+          "invalid-reference",
+          reference,
+        );
+      }
+      const main = yield* vaults
+        .putEntry({
+          vaultId: MAIN_VAULT_ID,
+          name: "MAIN_KUBE",
+          provider: { providerId: FAKE_PROVIDER_ID, reference: "kv/main#token" },
+        })
+        .pipe(as(ownerId));
+      assert.equal(
+        yield* reasonOf(
+          vaults.linkEntry({ vaultId: acme.id, sourceEntryId: main.entry.id }).pipe(as(ownerId)),
+        ),
+        "not-linkable",
+      );
+      assert.equal(
+        yield* reasonOf(
+          vaults
+            .copyEntry({ vaultId: acme.id, sourceEntryId: main.entry.id, name: "COPIED" })
+            .pipe(as(ownerId)),
+        ),
+        "not-linkable",
+      );
+      // A provider removed from the settings: «broken», shown to everyone, never read.
+      provider.state.providers = {};
+      const listed = yield* vaults.listEntries({ vaultId: MAIN_VAULT_ID }).pipe(as(ownerId));
+      const broken = listed.entries.find((entry) => entry.name === "MAIN_KUBE");
+      assert.deepEqual([broken?.broken, broken?.provider?.label], [true, null]);
+      assert.lengthOf(provider.state.batches, 0);
+    }),
 );

@@ -128,7 +128,18 @@ export const AUDIT_DETAIL_KEYS = {
    * `allow-reveal` or `class` (`class`: the new one); `dangerous` when the Owner confirmed a name
    * that changes how tools run.
    */
-  "secret.edit": ["vault", "vaultId", "kind", "op", "from", "brokenLinks", "dangerous", "class"],
+  "secret.edit": [
+    "vault",
+    "vaultId",
+    "kind",
+    "op",
+    "from",
+    "brokenLinks",
+    "dangerous",
+    "class",
+    // A Provider entry's provider, by label (`op: reference` when it reads elsewhere).
+    "provider",
+  ],
   "vault.create": [],
   /** The name `from` and `to`, whether it was described, and `archived` when that changed. */
   "vault.update": ["from", "to", "described", "archived"],

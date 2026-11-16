@@ -249,7 +249,7 @@ it.effect("a Vault allowed to Grace reaches her turns only, never Ada's in the s
     const shown = JSON.stringify(shownToGrace);
     assert.isFalse(VALUES.some((value) => shown.includes(value)));
     assert.notInclude(shown, "valueId");
-    assert.notInclude(shown, hers.variables[0]!.valueId);
+    assert.notInclude(shown, hers.variables[0]!.valueId ?? "no value id");
   }),
 );
 

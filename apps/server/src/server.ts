@@ -61,6 +61,8 @@ import * as SourceControlSignIn from "./sourceControl/SourceControlSignIn.ts";
 import { BUILT_IN_SOURCE_CONTROL_DRIVER_LIST } from "./sourceControl/sourceControlDefinitions.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as SecretResolver from "./secrets/SecretResolver.ts";
+import * as DeliveredValues from "./vaults/DeliveredValues.ts";
+import * as ProviderReads from "./vaults/ProviderReads.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -512,11 +514,15 @@ const layerAuth = Layer.mergeAll(
   SpaceVisibility.layer,
   AuditLog.layer,
   // Vaults: their start checks the database against the master key and sweeps orphaned values.
-  Vaults.layer.pipe(Layer.provide(AuditLog.layer)),
+  Vaults.layer.pipe(Layer.provide(AuditLog.layer), Layer.provide(ProviderReads.layer)),
   // What a Thread's turns, terminals and scripts receive (spec 5 ticket 03), delivered as
   // environment variables by SecretDelivery (ticket 04), whose values SecretMasker shows as
-  // `[NAME]` in everything the Hub stores or sends (ticket 05).
-  SecretDelivery.layer.pipe(Layer.provideMerge(layerSecretMasking)),
+  // `[NAME]` in everything the Hub stores or sends (ticket 05). Provider entries are read by
+  // ProviderReads (one instance, one cache: the same layer).
+  SecretDelivery.layer.pipe(
+    Layer.provideMerge(layerSecretMasking),
+    Layer.provide(ProviderReads.layer),
+  ),
   // The Sandboxes' base image: built on this Hub, one build at a time.
   SandboxImage.layer,
   // CLIProxyAPI, run by the Hub on loopback (`T3CODE_AI_GATEWAY`), and the AI accounts it gets
@@ -664,6 +670,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ProviderUsageLimitsIngestion.layer,
   // Gateway keys revoked as their sessions and Threads end (spec 4 ticket 04).
   AiGatewayKeyRevocation.layer,
+  // Values read from Secret providers go with the Thread that received them (Vaults ticket 02).
+  DeliveredValues.layer,
   // Provider keys become AI accounts where AI accounts are in use; settings refuse new ones there
   // (spec 4 ticket 09).
   ProviderKeyMigration.layer,

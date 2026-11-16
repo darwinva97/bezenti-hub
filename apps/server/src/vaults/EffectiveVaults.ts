@@ -44,7 +44,16 @@ export interface EffectiveVariable {
    * The VaultValueStore entry holding the value (a link's original's): read by delivery alone.
    * A new id after every replace, so it also says whether the value changed.
    */
-  readonly valueId: string;
+  readonly valueId: string | null;
+  /**
+   * A Provider entry (ADR 0008): where its value is read when a process starts; then `valueId` is
+   * null. A sealed Secret, read by SecretDelivery alone.
+   */
+  readonly provider: {
+    readonly providerId: string;
+    readonly scopeId: string | null;
+    readonly reference: string;
+  } | null;
   /** A link's original's. A Variable is never masked. */
   readonly class: VaultEntryClass;
   readonly unmasked: boolean;
@@ -130,6 +139,9 @@ interface EntryRow {
   readonly valueId: string | null;
   readonly unmasked: number | null;
   readonly class: VaultEntryClass | null;
+  readonly providerId: string | null;
+  readonly providerReference: string | null;
+  readonly providerScopeId: string | null;
 }
 
 const make = Effect.gen(function* () {
@@ -152,7 +164,9 @@ const make = Effect.gen(function* () {
             e.description AS "description",
             CASE WHEN e.kind = 'link' THEN o.value_id ELSE e.value_id END AS "valueId",
             CASE WHEN e.kind = 'link' THEN o.unmasked ELSE e.unmasked END AS "unmasked",
-            CASE WHEN e.kind = 'link' THEN o.class ELSE e.class END AS "class"
+            CASE WHEN e.kind = 'link' THEN o.class ELSE e.class END AS "class",
+            e.provider_id AS "providerId", e.provider_reference AS "providerReference",
+            e.provider_scope_id AS "providerScopeId"
           FROM vault_entries e
           LEFT JOIN vault_entries o
             ON e.kind = 'link' AND o.entry_id = e.linked_entry_id
@@ -293,8 +307,17 @@ const make = Effect.gen(function* () {
     const winners = new Map<string, { variable: EffectiveVariable; shadowed: VaultShadowed[] }>();
     for (const { row, source } of groups) {
       for (const entry of byVault.get(row.vaultId) ?? []) {
-        // A broken link holds nothing; a name the Hub keeps (or not a variable) is never set.
-        if (entry.valueId === null) continue;
+        // A broken link holds nothing; a name the Hub keeps (or not a variable) is never set. A
+        // Provider entry holds where to read its value (SecretDelivery reads it, ProviderReads).
+        const provider =
+          entry.providerId !== null && entry.providerReference !== null
+            ? {
+                providerId: entry.providerId,
+                reference: entry.providerReference,
+                scopeId: entry.providerScopeId,
+              }
+            : null;
+        if (entry.valueId === null && provider === null) continue;
         const risk = secretNameRisk(entry.name);
         if (risk === "invalid" || risk === "gateway") continue;
         const winner = winners.get(entry.name);
@@ -311,7 +334,8 @@ const make = Effect.gen(function* () {
             vaultId: row.vaultId,
             vaultName: row.name,
             source,
-            valueId: entry.valueId,
+            valueId: provider === null ? entry.valueId : null,
+            provider,
             class: entry.class ?? "secret",
             unmasked: entry.unmasked === 1,
             dangerous: risk === "dangerous",

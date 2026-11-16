@@ -12,6 +12,7 @@ import {
   SECRET_ENV_CONTRACT_VERSION,
   type SecretEnv,
   SecretDeliveryError,
+  SecretProviderReadError,
   type SpaceId,
   type ThreadId,
   UserId,
@@ -27,8 +28,41 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { machineNameOf } from "../environments/machineName.ts";
 import { threadTurnOwner } from "../orchestration-v2/threadTurnOwner.ts";
 import { servesSpace } from "../sandboxes/sandboxSpace.ts";
+import * as DeliveredValueId from "./deliveredValueId.ts";
 import * as EffectiveVaults from "./EffectiveVaults.ts";
+import * as ProviderReads from "./ProviderReads.ts";
 import * as SecretMasker from "./SecretMasker.ts";
+
+type ProviderRead = { readonly name: string; readonly ref: ProviderReads.ProviderRef };
+
+/**
+ * The failure of a set's Provider entries: the first provider and class that failed, with every
+ * entry that failed alike. Names only.
+ */
+const readFailureOf = (
+  reads: ReadonlyArray<ProviderRead>,
+  outcomes: ReadonlyArray<ProviderReads.ProviderOutcome>,
+): SecretProviderReadError | undefined => {
+  const first = outcomes.find(
+    (outcome): outcome is Extract<ProviderReads.ProviderOutcome, { readonly _tag: "error" }> =>
+      outcome._tag === "error",
+  );
+  if (first === undefined) return undefined;
+  const entries = reads.flatMap((read, index) => {
+    const outcome = outcomes[index];
+    return outcome?._tag === "error" &&
+      outcome.label === first.label &&
+      outcome.error === first.error
+      ? [read.name]
+      : [];
+  });
+  return new SecretProviderReadError({
+    reason: first.error,
+    provider: first.label,
+    scope: null,
+    entries,
+  });
+};
 
 /** The machine a process starts on: the Thread's Active environment, and its executor contract. */
 export interface SecretTarget {
@@ -42,12 +76,22 @@ export interface SecretPlan {
   readonly target: SecretTarget;
   /** The Thread whose process receives it: what it receives is masked there (ticket 05). */
   readonly threadId?: ThreadId;
-  /** `plain`: a Vault Variable, delivered as the others and never masked. */
+  /**
+   * `plain`: a Vault Variable, delivered as the others and never masked. `provider`: a Provider
+   * entry, read again (through ProviderReads' cache) when the process starts; its `valueId` is
+   * the delivered value's (`delivered:<HMAC>`), so a rotation in the provider changes the plan.
+   */
   readonly variables: ReadonlyArray<{
     readonly name: string;
     readonly valueId: string;
     readonly plain?: true;
+    readonly provider?: ProviderReads.ProviderRef;
   }>;
+  /**
+   * A Provider entry that could not be read when planning: the start fails with it, whole
+   * (decision 3). Its fingerprint differs from any set's, so a running process is not kept.
+   */
+  readonly failure?: SecretProviderReadError;
   /**
    * Spec 5 ticket 07: the Space the set was planned for (the Thread's, read by the same
    * `forThread`) and the User whose set it is; null when nothing was computed. A shell keeps them.
@@ -56,7 +100,7 @@ export interface SecretPlan {
   readonly userId: UserId | null;
 }
 
-export type SecretDeliveryFailure = VaultError | SecretDeliveryError;
+export type SecretDeliveryFailure = VaultError | SecretDeliveryError | SecretProviderReadError;
 
 export class SecretDelivery extends Context.Service<
   SecretDelivery,
@@ -142,6 +186,9 @@ const make = Effect.gen(function* () {
   const effective = yield* EffectiveVaults.EffectiveVaults;
   const values = yield* ServerSecretStore.VaultValueStore;
   const masker = yield* Effect.serviceOption(SecretMasker.SecretMasker);
+  const providerReads = yield* Effect.serviceOption(ProviderReads.ProviderReads);
+  const deliveredStore = yield* Effect.serviceOption(ServerSecretStore.DeliveredValueStore);
+  const secretStore = yield* ServerSecretStore.ServerSecretStore;
 
   const storage = (what: string) => (cause: unknown) =>
     Effect.logError(`SecretDelivery: could not ${what}`, { cause }).pipe(
@@ -152,23 +199,69 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  // The HMAC key, read once (it never changes).
+  const hmacKey = yield* Effect.cached(
+    DeliveredValueId.fingerprintKey.pipe(
+      Effect.provideService(ServerSecretStore.ServerSecretStore, secretStore),
+      Effect.catch(storage("read the Hub's fingerprint key")),
+    ),
+  );
+
+  /**
+   * Provider entries' values, through ProviderReads' cache. Broken ones (provider gone) are left
+   * out, like a broken link; a failure is the whole set's.
+   */
+  const readProviders = Effect.fn("SecretDelivery.readProviders")(function* (
+    reads: ReadonlyArray<ProviderRead>,
+  ) {
+    if (reads.length === 0) return { values: new Map<string, string>(), failure: undefined };
+    if (Option.isNone(providerReads)) {
+      return { values: new Map<string, string>(), failure: undefined };
+    }
+    const outcomes = yield* providerReads.value.read(reads.map((read) => read.ref));
+    const found = new Map<string, string>();
+    reads.forEach((read, index) => {
+      const outcome = outcomes[index];
+      if (outcome?._tag === "value") found.set(read.name, outcome.value);
+    });
+    return { values: found, failure: readFailureOf(reads, outcomes) };
+  });
+
   const turnOwner = Effect.fn("SecretDelivery.turnOwner")(function* (threadId: ThreadId) {
     return yield* threadTurnOwner(sql, threadId).pipe(
       Effect.catch(storage("read who owns the Thread")),
     );
   });
 
-  /** A name that changes how tools run reaches a process only as the Owner last set it. */
+  /**
+   * A name that changes how tools run reaches a process only as the Owner last set it: its value
+   * (a link's is its original's), or a Provider entry's row. The entry ids of those trusted.
+   */
   const ownerSet = Effect.fn("SecretDelivery.ownerSet")(function* (
-    valueIds: ReadonlyArray<string>,
+    dangerous: ReadonlyArray<EffectiveVaults.EffectiveVariable>,
   ) {
-    if (valueIds.length === 0) return new Set<string>();
-    const rows = yield* sql<{ readonly valueId: string }>`
-      SELECT e.value_id AS "valueId" FROM vault_entries e
+    if (dangerous.length === 0) return new Set<string>();
+    const valueIds = dangerous.flatMap((v) => (v.valueId === null ? [] : [v.valueId]));
+    const entryIds = dangerous.flatMap((v) => (v.provider === null ? [] : [v.entryId]));
+    const rows = yield* sql<{ readonly valueId: string | null; readonly entryId: string }>`
+      SELECT e.value_id AS "valueId", e.entry_id AS "entryId" FROM vault_entries e
       JOIN users u ON u.user_id = e.updated_by AND u.is_owner = 1
-      WHERE e.value_id IN ${sql.in(valueIds)}
+      WHERE e.value_id IN ${sql.in(valueIds.length === 0 ? [""] : valueIds)}
+        OR (e.kind = 'provider' AND e.entry_id IN ${sql.in(entryIds.length === 0 ? [""] : entryIds)})
     `.pipe(Effect.catch(storage("check who set the Thread's secrets")));
-    return new Set(rows.map((row) => row.valueId));
+    const trustedValues = new Set(
+      rows.flatMap((row) => (row.valueId === null ? [] : [row.valueId])),
+    );
+    const trustedEntries = new Set(rows.map((row) => row.entryId as string));
+    return new Set(
+      dangerous
+        .filter((v) =>
+          v.provider === null
+            ? v.valueId !== null && trustedValues.has(v.valueId)
+            : trustedEntries.has(v.entryId),
+        )
+        .map((v) => v.entryId as string),
+    );
   });
 
   const machineName = (environmentId: EnvironmentId) => machineNameOf(sql, environmentId);
@@ -203,16 +296,45 @@ const make = Effect.gen(function* () {
       );
       if (!serves) return emptyPlan(input.target, facts);
     }
-    const trusted = yield* ownerSet(
-      set.value.variables.filter((v) => v.dangerous).map((v) => v.valueId),
+    const trusted = yield* ownerSet(set.value.variables.filter((v) => v.dangerous));
+    const chosen = set.value.variables.filter((v) => !v.dangerous || trusted.has(v.entryId));
+    // Provider entries are read now, through the cache: their value names the set (HMAC).
+    const reads = chosen.flatMap((v) =>
+      v.provider === null ? [] : [{ name: v.name, ref: v.provider }],
     );
-    const variables = set.value.variables
-      .filter((v) => !v.dangerous || trusted.has(v.valueId))
-      .map((v) => ({
-        name: v.name,
-        valueId: v.valueId,
-        ...(v.class === "variable" ? { plain: true as const } : {}),
-      }));
+    const read = yield* readProviders(reads);
+    const key = reads.length === 0 ? undefined : yield* hmacKey;
+    const variables = chosen.flatMap((v): Array<SecretPlan["variables"][number]> => {
+      if (v.provider !== null) {
+        const value = read.values.get(v.name);
+        if (value === undefined || key === undefined) return [];
+        return [
+          {
+            name: v.name,
+            valueId: DeliveredValueId.deliveredValueId(DeliveredValueId.deliveredIdOf(key, value)),
+            provider: v.provider,
+          },
+        ];
+      }
+      if (v.valueId === null) return [];
+      return [
+        {
+          name: v.name,
+          valueId: v.valueId,
+          ...(v.class === "variable" ? { plain: true as const } : {}),
+        },
+      ];
+    });
+    if (read.failure !== undefined) {
+      return {
+        fingerprint: `failed:${fingerprintOf(input.actingUserId, variables)}`,
+        target: input.target,
+        threadId: input.threadId,
+        variables,
+        failure: read.failure,
+        ...facts,
+      } satisfies SecretPlan;
+    }
     return {
       fingerprint: fingerprintOf(input.actingUserId, variables),
       target: input.target,
@@ -262,15 +384,15 @@ const make = Effect.gen(function* () {
       );
       if (!serves) return [];
     }
-    const trusted = yield* ownerSet(
-      set.value.variables.filter((v) => v.dangerous).map((v) => v.valueId),
-    );
+    const trusted = yield* ownerSet(set.value.variables.filter((v) => v.dangerous));
     return set.value.variables
-      .filter((v) => !v.dangerous || trusted.has(v.valueId))
+      .filter((v) => !v.dangerous || trusted.has(v.entryId))
       .map((v) => ({ name: v.name, description: v.description, vault: v.vaultName }));
   });
 
   const resolve = Effect.fn("SecretDelivery.resolve")(function* (planned: SecretPlan) {
+    // A Provider entry that could not be read: nothing of the set goes (decision 3).
+    if (planned.failure !== undefined) return yield* planned.failure;
     if (planned.variables.length === 0) {
       return { fingerprint: NO_SECRETS_FINGERPRINT, variables: [] } satisfies SecretEnv;
     }
@@ -281,8 +403,36 @@ const make = Effect.gen(function* () {
         ...(environmentName === undefined ? {} : { environmentName }),
       });
     }
+    // Provider entries again, through the cache (a hit since the plan, unless it expired).
+    const reads = planned.variables.flatMap((variable) =>
+      variable.provider === undefined ? [] : [{ name: variable.name, ref: variable.provider }],
+    );
+    const read = yield* readProviders(reads);
+    if (read.failure !== undefined) return yield* read.failure;
+    const key = reads.length === 0 ? undefined : yield* hmacKey;
     const delivered: Array<SecretMasker.DeliveredSecret & { readonly plain?: true }> = [];
     for (const variable of planned.variables) {
+      if (variable.provider !== undefined) {
+        const value = read.values.get(variable.name);
+        // A provider gone since the plan (broken): left out, like a broken link.
+        if (value === undefined || key === undefined) continue;
+        const id = DeliveredValueId.deliveredIdOf(key, value);
+        // Sealed first: masked in the Thread from its first byte, for the Thread's life.
+        if (Option.isNone(deliveredStore)) {
+          return yield* storage("keep a provider's value for masking")(
+            "no delivered values' store on this machine",
+          );
+        }
+        yield* deliveredStore.value
+          .set(id, new TextEncoder().encode(value))
+          .pipe(Effect.catch(storage("keep a provider's value for masking")));
+        delivered.push({
+          name: variable.name,
+          value,
+          valueId: DeliveredValueId.deliveredValueId(id),
+        });
+        continue;
+      }
       const bytes = yield* values
         .get(variable.valueId)
         .pipe(Effect.catch(storage("read the Thread's secrets")));

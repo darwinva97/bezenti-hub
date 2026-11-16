@@ -1545,6 +1545,22 @@ const rows: ReadonlyArray<Row> = [
     allowedToGracesPersonal,
     allow,
   ],
+  // Ticket 02: Provider entries are the Owner's to add or change until ticket 03's scopes.
+  ["Owner adds a Provider entry", owner, "vault.providerEntry", orgVault, allow],
+  ...([admin, member, guest] as const).map((actor): Row => [
+    `${actor.userId}: no Provider entry`,
+    actor,
+    "vault.providerEntry",
+    orgVault,
+    deny("owner-only"),
+  ]),
+  [
+    "nor an Admin on a Vault allowed to Acme",
+    admin,
+    "vault.providerEntry",
+    allowedToAcme,
+    deny("owner-only"),
+  ],
   // Choosing a Space's defaults and its Projects' adds and removes.
   ["Owner chooses an Organization's Vaults", owner, "vault.choose", organization, allow],
   ["Owner chooses a Personal space's Vaults", owner, "vault.choose", personalOf("grace"), allow],

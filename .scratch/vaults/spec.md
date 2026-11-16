@@ -238,7 +238,7 @@ Cada puerta nueva se declara donde le toca y el test de inventario de `DoorRules
 
 - **Secretos usados sin que el agente los vea** (proxy de credenciales): mejora futura según «Cierre del mapa».
 - **`.env.schema` por Project** y varlock: mejora futura.
-- **Backends externos** de secretos para los Vaults (1Password, varlock): decisión 2, sin backends externos. Las referencias de 1Password de los ajustes (`secretReference.ts`) siguen como están, solo para ajustes del Owner.
+- **Backends externos** de secretos para los Vaults (1Password, varlock): decisión 2, sin backends externos. Las referencias de 1Password de los ajustes (`secretReference.ts`) siguen como están, solo para ajustes del Owner. **Reabierto** por la ADR 0008 y el spec `../vault-variables-and-providers/spec.md`.
 - **AI accounts y sus credenciales:** spec 4, aunque se guardan en este almacén.
 - **Vista de procesos:** spec 6.
 

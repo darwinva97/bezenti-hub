@@ -120,6 +120,7 @@ import Migration0117 from "./Migrations/117_AiAccountMigratedKeys.ts";
 import Migration0118 from "./Migrations/118_AiAccountReachLoss.ts";
 import Migration0119 from "./Migrations/119_VaultEntryClass.ts";
 import Migration0120 from "./Migrations/120_VaultProviderEntries.ts";
+import Migration0121 from "./Migrations/121_SecretProviderScopes.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -242,6 +243,7 @@ const migrationEntries = [
   [118, "AiAccountReachLoss", Migration0118],
   [119, "VaultEntryClass", Migration0119],
   [120, "VaultProviderEntries", Migration0120],
+  [121, "SecretProviderScopes", Migration0121],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

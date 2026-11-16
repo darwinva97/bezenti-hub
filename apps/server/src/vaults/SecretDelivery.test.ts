@@ -494,7 +494,7 @@ it.effect(
     }).pipe(Effect.scoped),
 );
 
-it.effect("a machine before contract 14 or without memory gets no file, and nothing instead", () =>
+it.effect("a machine before contract 16 or without memory gets no file, and nothing instead", () =>
   Effect.gen(function* () {
     const setup = yield* ownersThreadWith();
     const { thread, delivery, forTurn, server } = setup;
@@ -508,17 +508,20 @@ it.effect("a machine before contract 14 or without memory gets no file, and noth
       isDeliveryError(notInMemory) ? [notInMemory.reason, ...(notInMemory.entries ?? [])] : [],
       ["files-not-in-memory", "KUBECONFIG", "KUBE_TOKEN"],
     );
-    // A machine of contract 13: refused before anything is read.
-    const old = yield* delivery.planTurn({
-      threadId,
-      target: { environmentId: HUB_MACHINE_ENVIRONMENT_ID, contractVersion: 13 },
-    });
-    assert.equal(
-      isDeliveryError(old.failure) ? old.failure.reason : undefined,
-      "outdated-machine-files",
-    );
-    const refused = yield* Effect.flip(delivery.resolve(old));
-    assert.match(refused.message, /needs an update to receive this Thread's secret files/);
+    // A machine before contract 16 (15 included): refused before anything is read.
+    for (const contractVersion of [13, 14, 15]) {
+      const old = yield* delivery.planTurn({
+        threadId,
+        target: { environmentId: HUB_MACHINE_ENVIRONMENT_ID, contractVersion },
+      });
+      assert.equal(
+        isDeliveryError(old.failure) ? old.failure.reason : undefined,
+        "outdated-machine-files",
+        `contract ${contractVersion}`,
+      );
+      const refused = yield* Effect.flip(delivery.resolve(old));
+      assert.match(refused.message, /needs an update to receive this Thread's secret files/);
+    }
     // Nothing of the set was delivered: nothing is recorded for the Thread's masking.
     const remembered =
       yield* server.sql`SELECT 1 FROM thread_secret_values WHERE thread_id = ${threadId}`;

@@ -1,5 +1,5 @@
 /**
- * Where each machine writes Secret files (executor contract 14), as the Hub knows it: the Hub
+ * Where each machine writes Secret files (executor contract 16), as the Hub knows it: the Hub
  * machine's own root, and each joined machine's from its last hello. SecretDelivery sends files
  * only to a machine whose root is in memory, and renders `{{ X | path }}` under that root.
  */
@@ -18,7 +18,7 @@ import * as ThreadSecretFiles from "../secrets/ThreadSecretFiles.ts";
 export class MachineSecretFiles extends Context.Service<
   MachineSecretFiles,
   {
-    /** The machine's root; undefined when it never said (a machine before contract 14). */
+    /** The machine's root; undefined when it never said (a machine before contract 16). */
     readonly rootOf: (environmentId: EnvironmentId) => SecretFilesRoot | undefined;
     /** What a joined machine said in its hello (null: no folder at all). */
     readonly remember: (

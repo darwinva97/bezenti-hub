@@ -193,7 +193,7 @@ export interface RemoteConnection {
   readonly flushAcks: Effect.Effect<void>;
 }
 
-/** Whether a request carries Secret files (contract 14), or is the call that rewrites them. */
+/** Whether a request carries Secret files (contract 16), or is the call that rewrites them. */
 const carriesSecretFiles = (input: unknown): boolean => {
   if (typeof input !== "object" || input === null) return false;
   if ("filesFolder" in input && "files" in input) return true;
@@ -343,7 +343,7 @@ const make = Effect.gen(function* () {
   const visibility = yield* Effect.serviceOption(SpaceVisibility.SpaceVisibility);
   // A Sandbox is told which turns run on it, so an image update never cuts one short.
   const demand = yield* Effect.serviceOption(EnvironmentDemand.EnvironmentDemand);
-  // Contract 14: where each machine writes Secret files, as its hello says (SecretDelivery reads).
+  // Contract 16: where each machine writes Secret files, as its hello says (SecretDelivery reads).
   const machineFiles = yield* Effect.serviceOption(MachineSecretFiles.MachineSecretFiles);
   const turnKey = (providerSessionId: string, runOrdinal: number) =>
     `${providerSessionId}:${runOrdinal}`;
@@ -484,7 +484,7 @@ const make = Effect.gen(function* () {
     ) {
       return { _tag: "failed", error: yield* outdatedRefusal(link, operation, input) };
     }
-    // Contract 14: Secret files only to a machine that writes them in memory; an older one would
+    // Contract 16: Secret files only to a machine that writes them in memory; an older one would
     // drop them (an unknown key) and start the process without. Never sent, never made a variable.
     if (link.contractVersion < SECRET_FILES_CONTRACT_VERSION && carriesSecretFiles(input)) {
       return {

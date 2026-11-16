@@ -352,7 +352,7 @@ interface TerminalSessionState {
   shell: string | null;
   unsubscribeData: (() => void) | null;
   unsubscribeExit: (() => void) | null;
-  /** Lets the shell's Secret files go (contract 14): the folder goes with its last process. */
+  /** Lets the shell's Secret files go (contract 16): the folder goes with its last process. */
   releaseSecretFiles: (() => void) | null;
   hasRunningSubprocess: boolean;
   childCommandLabel: string | null;
@@ -1632,7 +1632,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const runFork = Effect.runForkWith(context);
   // A Hub that runs no agents opens no shell in its own process (setup scripts included).
   const runsAgents = yield* HubRunsAgents.HubRunsAgents;
-  // Contract 14: where a shell's Secret files go. Without it, a shell with files never starts.
+  // Contract 16: where a shell's Secret files go. Without it, a shell with files never starts.
   const secretFiles = yield* Effect.serviceOption(ThreadSecretFiles.ThreadSecretFiles);
   const materializeSecretFiles = (
     secrets: SecretEnv,
@@ -2669,7 +2669,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             // Spec 5: the secrets go into this shell's environment and are then dropped here.
             const pending = session.pendingSecretEnv;
             session.pendingSecretEnv = null;
-            // Contract 14: Secret files written in memory first; the shell gets their paths.
+            // Contract 16: Secret files written in memory first; the shell gets their paths.
             const written =
               pending === null ? null : yield* materializeSecretFiles(pending, session.threadId);
             const secrets = written === null ? null : written.secretEnv;

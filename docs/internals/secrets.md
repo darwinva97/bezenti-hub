@@ -386,10 +386,10 @@ on the Thread's behalf: [ADR 0008](../adr/0008-vault-entries-read-from-secret-pr
   - The plan reads a template's Provider entries in the same grouped round. Its value id is
     `template:<HMAC(text, entries' value ids)>`, so a rotation of any entry reopens the session.
     No value is read to plan.
-  - Any `file` entry needs the target's executor contract 14 and a root in memory
+  - Any `file` entry needs the target's executor contract 16 and a root in memory
     (`MachineSecretFiles`: the Hub machine's own, a joined machine's from its hello). Otherwise
     the start fails with `SecretDeliveryError`:
-    - `outdated-machine-files` before contract 14;
+    - `outdated-machine-files` before contract 16;
     - `files-not-in-memory` without a root in memory, naming the entries.
       Nothing is written to a disk, sent, or turned into a variable instead.
   - `filesFolder` is `HMAC(key, "secret-files|<thread root>|<user>")`, cut to 32 hex: the same for
@@ -400,7 +400,7 @@ on the Thread's behalf: [ADR 0008](../adr/0008-vault-entries-read-from-secret-pr
   - Masked in the Thread before the process starts: every Secret delivered, the rendered text of a
     Secret template (sealed in `DeliveredValueStore` as `delivered:<id>`), and every Secret entry
     the template took, `none` ones included.
-- **Executor contract 14** (`secretEnv.files: [{ name, content, mode, plain? }]`, `filesFolder`,
+- **Executor contract 16** (`secretEnv.files: [{ name, content, mode, plain? }]`, `filesFolder`,
   hello `secretFilesRoot`, operation `secrets.refreshFiles`):
   - The Hub's last guard (`RemoteEnvironments.invoke`) refuses files to a machine before 14, so
     an older executor never drops them silently.

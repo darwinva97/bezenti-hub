@@ -351,7 +351,7 @@ export const serveAuthHttpWith = Effect.fn(function* (
     readonly moreRoutes?: (
       services: Context.Context<HubServices>,
     ) => Layer.Layer<never, never, HttpRouter.HttpRouter>;
-    /** The Hub machine's Secret files (contract 14); without it, it takes none. */
+    /** The Hub machine's Secret files (contract 16); without it, it takes none. */
     readonly secretFiles?: Layer.Layer<ThreadSecretFiles.ThreadSecretFiles>;
   } = {},
 ) {

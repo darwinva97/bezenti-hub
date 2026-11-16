@@ -432,7 +432,7 @@ const startEnvironment = Effect.fn("HubWithEnvironments.startEnvironment")(funct
   readonly onRefused?: (reason: EnvironmentCloseReason | undefined) => Effect.Effect<void>;
   /** The executor contract its hello names; the current one by default. */
   readonly executorContractVersion?: number;
-  /** Its Secret files' root (a tmpfs folder); without one it takes none (contract 14). */
+  /** Its Secret files' root (a tmpfs folder); without one it takes none (contract 16). */
   readonly secretFilesRoot?: SecretFilesRoot;
 }) {
   const scope = yield* Effect.scope;

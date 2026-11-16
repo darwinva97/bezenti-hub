@@ -570,14 +570,15 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
     }).pipe(Effect.scoped),
   );
 
-  it.live("refuse, never strip, Secret files sent to a machine before contract 14", () =>
+  it.live("refuse, never strip, Secret files sent to a machine before contract 16", () =>
     Effect.gen(function* () {
       const instanceId = "claudeAgent" as ProviderInstanceId;
       const hub = yield* makeHub();
       const old = yield* hub.join({
         name: "Old laptop",
         adapters: idleAdapters(instanceId),
-        executorContractVersion: 13,
+        // The contract just before files (remote assets'): refused like any older one.
+        executorContractVersion: 15,
       });
       const projectId = ProjectId.make("project:old-files");
       yield* seedProject(hub.server, { projectId, title: "Old", defaultModelSelection: null });

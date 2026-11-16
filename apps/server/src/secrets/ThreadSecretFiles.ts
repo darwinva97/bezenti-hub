@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - statfs, O_NOFOLLOW/O_EXCL writes and renames: synchronous on purpose.
 /**
- * Secret files (executor contract 14): a folder per Thread root and User under one owner-only root
+ * Secret files (executor contract 16): a folder per Thread root and User under one owner-only root
  * in memory (tmpfs or ramfs, by statfs), never on a disk. It goes with the last process holding it,
  * and the whole root at every start. docs/internals/secrets.md, «Secret files».
  */

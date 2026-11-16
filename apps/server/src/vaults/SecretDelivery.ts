@@ -126,7 +126,7 @@ export interface SecretPlan {
   readonly files?: { readonly root: string; readonly folder: string };
   /**
    * A Provider entry that could not be read when planning, or Secret files the target cannot take
-   * (before contract 14, or no folder in memory): the start fails with it, whole (decision 3). Its
+   * (before contract 16, or no folder in memory): the start fails with it, whole (decision 3). Its
    * fingerprint differs from any set's, so a running process is not kept.
    */
   readonly failure?: SecretProviderReadError | SecretDeliveryError;
@@ -467,7 +467,7 @@ const make = Effect.gen(function* () {
 
   /**
    * Where the set's Secret files go: nowhere without any; refused, never sent nor turned into
-   * variables, to a machine before contract 14 or without a folder in memory; else its root and
+   * variables, to a machine before contract 16 or without a folder in memory; else its root and
    * the folder of this Thread root and User (an HMAC id: the same for all their processes there).
    */
   const filesFor = Effect.fn("SecretDelivery.filesFor")(function* (

@@ -74,7 +74,7 @@ export interface EffectiveVariable {
    * Variable only when every one is.
    */
   readonly class: VaultEntryClass;
-  /** A Secret file in memory whose path the variable holds (contract 14), or the variable. */
+  /** A Secret file in memory whose path the variable holds (contract 16), or the variable. */
   readonly delivery: "env" | "file";
   /** A Template entry: its text and the entries of its Vault it names, each found. */
   readonly template: {

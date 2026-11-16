@@ -5,7 +5,7 @@ Ticket: `07-workload-identity-tokens.md`, ADR 0009, spec «Workload identity tok
 Se apoya en:
 
 - el 04: driver OpenBao y `ProviderReads`;
-- el 05: entrega `file`, `filesFolder`, `secrets.refreshFiles`, contrato 14 y la migración 122. Una entrada `file` falla cerrada si la máquina no tiene raíz en memoria.
+- el 05: entrega `file`, `filesFolder`, `secrets.refreshFiles`, contrato 16 (`SECRET_FILES_CONTRACT_VERSION`; el 15 son los assets remotos) y la migración 122. El 07 no cambia el contrato; si lo necesitara, sería el 17. Una entrada `file` falla cerrada si la máquina no tiene raíz en memoria.
 
 Se construye cuando el 05 esté en `vault-fase-1`.
 
@@ -67,7 +67,7 @@ Se construye cuando el 05 esté en `vault-fase-1`.
 - **`vaults.entries.put`** gana `identity: { audience, ttlSeconds? }`. Acción nueva `vault.identityEntry`, solo del Owner. Un Admin recibe `forbidden`, también al editar o borrar.
 - **`vaults.reveal`** responde `sealed`.
 - **Entrega (05):**
-  - `plan` comprueba el contrato 14 y la raíz en memoria. Si no, falla cerrado.
+  - `plan` comprueba el contrato 16 y la raíz en memoria. Si no, falla cerrado.
   - `resolve` emite un token por (raíz del Thread, User, entrada) y lo reutiliza mientras le quede más de 1/3 de vida.
   - Va como archivo `NOMBRE`, sellado como `delivered:<hmac>` para el enmascarado.
 - **Plantillas:** una plantilla solo puede nombrar una entrada `identity` con `| path`, nunca su valor. Así un refresco no obliga a volver a renderizar.
@@ -106,7 +106,7 @@ Se construye cuando el 05 esté en `vault-fase-1`.
   - CHECK de la 123 (`env`, revelable o con valor → rechazo);
   - una plantilla con la identidad sin `| path` → rechazo.
 - **`SecretDelivery.test.ts`:**
-  - contrato 13 o raíz en disco → falla cerrado;
+  - contrato < 16 o raíz en disco → falla cerrado;
   - token reutilizado y reemitido en sus umbrales;
   - el refresco llama a `refreshFiles`, y `not-held` lo para.
 - **`DoorRules.test.ts`, `MaskedPaths.test.ts` y `AuditLog.test.ts`:** las dos rutas públicas, `identity.issue` sin token, y `vault.identityEntry`.

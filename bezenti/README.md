@@ -93,8 +93,20 @@ Después de desplegar, actualizar la VPS a la versión nueva (infra-contabo, «T
 
 Si Eijun publica algún día sus propias Releases, no se usan: la VPS y el Hub siempre salen de este CI.
 
+## App de Android
+
+`.github/workflows/bezenti-android.yml` corre después de cada `bezenti` correcto en `main` (o a mano con el
+tag de una Release) y añade a esa misma Release `bezenti-hub-<versión>.apk` y su línea en `SHA256SUMS`,
+compilado del mismo commit que el Hub (la app y el Hub tienen que ir en la misma versión). En el móvil:
+abrir `https://github.com/darwinva97/bezenti-hub/releases/latest`, descargar el `.apk`, permitir
+«instalar apps desconocidas» para el navegador e instalar; cada versión se instala encima de la anterior.
+
+Firma: secretos `BEZENTI_ANDROID_KEYSTORE_B64` (PKCS12 en base64) y `BEZENTI_ANDROID_KEYSTORE_PASSWORD`.
+GitHub no deja leerlos de vuelta: la copia de la clave se guarda fuera (gestor de contraseñas). Si se
+pierde, los móviles tienen que desinstalar la app para instalar una firmada con otra clave.
+
 ## Workflows del original
 
 Están **desactivados** en este fork (Actions → cada workflow → «Disable workflow», o `gh workflow disable`):
-usan runners de Blacksmith que aquí no existen y se quedarían en cola para siempre. Solo corre `bezenti`.
+usan runners de Blacksmith que aquí no existen y se quedarían en cola para siempre. Solo corren `bezenti` y `bezenti-android`.
 Si un merge de Eijun añade workflows nuevos, desactivarlos también.

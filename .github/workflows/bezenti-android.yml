@@ -1,0 +1,162 @@
+# APK de Android de bezenti (solo en este fork, darwinva97/bezenti-hub). Ver bezenti/README.md.
+#
+# Después de cada ejecución correcta de `bezenti` en main (y a mano, para una Release ya publicada):
+# compila la app móvil del MISMO commit que la Release `v<versión>` (el Hub y sus clientes tienen que ir
+# en la misma versión: otra da «orchestration_protocol_incompatible») y le añade
+# `bezenti-hub-<versión>.apk` y su línea en SHA256SUMS.
+#
+# - Variante `production` de apps/mobile/app.config.ts, con EXPO_PUBLIC_T3CODE_PUBLIC_URL del Hub
+#   (los enlaces de Threads abren la app). Sin OTA (ya desactivadas) y sin google-services: sin push.
+# - Solo arm64-v8a (todos los móviles actuales): compila más rápido y pesa menos.
+# - versionCode = número de ejecución de `bezenti`, para que cada APK se instale encima del anterior.
+# - Firma: secretos BEZENTI_ANDROID_KEYSTORE_B64 (PKCS12 en base64) y BEZENTI_ANDROID_KEYSTORE_PASSWORD.
+#   Con otra clave, Android no deja actualizar: hay que desinstalar. Guardar copia fuera de GitHub.
+name: bezenti-android
+
+on:
+  workflow_run:
+    workflows: [bezenti]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release ya publicada (p. ej. v0.1.7-bezenti.17)
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bezenti-android-${{ github.event.workflow_run.head_sha || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  HUB_URL: https://claude.bezenti.com
+
+jobs:
+  apk:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Release y commit
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            tag="$INPUT_TAG"
+          else
+            base=$(gh api "repos/$GITHUB_REPOSITORY/contents/apps/server/package.json?ref=$RUN_SHA" --jq .content | base64 -d | jq -r .version)
+            tag="v${base}-bezenti.${RUN_NUMBER}"
+          fi
+          case "$tag" in v*-bezenti.*) ;; *) echo "Tag inesperado: $tag" >&2; exit 1;; esac
+          sha=$(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)
+          # Una Release creada con --target guarda el SHA; si no, el tag lo resuelve.
+          if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+          fi
+          version="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "version_code=${version##*.}" >> "$GITHUB_OUTPUT"
+          echo "Release $tag, commit $sha"
+
+      # Sin .repos (referencias vendorizadas con gitlinks huérfanos), como en bezenti.yml.
+      - name: Checkout
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --depth=1 origin "$SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach FETCH_HEAD
+
+      # La compilación nativa necesita bastante más disco del que deja libre el runner.
+      - name: Liberar disco
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Dependencias
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=@t3tools/mobile...
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Proyecto nativo (expo prebuild)
+        working-directory: apps/mobile
+        env:
+          APP_VARIANT: production
+          EXPO_PUBLIC_T3CODE_PUBLIC_URL: ${{ env.HUB_URL }}
+          EXPO_NO_GIT_STATUS: "1"
+          EXPO_NO_TELEMETRY: "1"
+          CI: "1"
+          VERSION_CODE: ${{ steps.release.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/expo prebuild --clean --platform android --no-install
+          gradle=android/app/build.gradle
+          grep -qE '^\s*versionCode [0-9]+' "$gradle" || { echo "No encuentro versionCode en $gradle" >&2; exit 1; }
+          sed -i -E "s/^(\s*)versionCode [0-9]+/\1versionCode ${VERSION_CODE}/" "$gradle"
+          grep -nE 'versionCode|versionName|applicationId' "$gradle"
+
+      - name: Compilar (assembleRelease, arm64-v8a)
+        working-directory: apps/mobile/android
+        env:
+          APP_VARIANT: production
+          EXPO_PUBLIC_T3CODE_PUBLIC_URL: ${{ env.HUB_URL }}
+          NODE_ENV: production
+          CI: "1"
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon assembleRelease -PreactNativeArchitectures=arm64-v8a
+          ls -la app/build/outputs/apk/release/
+
+      # La plantilla de Expo firma `release` con la clave de depuración; apksigner sustituye esa firma.
+      - name: Firmar
+        env:
+          KEYSTORE_B64: ${{ secrets.BEZENTI_ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.BEZENTI_ANDROID_KEYSTORE_PASSWORD }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "$KEYSTORE_B64" ] && [ -n "$KS_PASS" ] || { echo "Faltan los secretos de firma" >&2; exit 1; }
+          ks="$RUNNER_TEMP/bezenti.p12"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$ks"
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          mkdir -p salida
+          out="salida/bezenti-hub-${VERSION}.apk"
+          "$bt/apksigner" sign --ks "$ks" --ks-type PKCS12 --ks-pass env:KS_PASS --out "$out" \
+            apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          rm -f "$ks"
+          "$bt/apksigner" verify --print-certs "$out" | grep -E 'Signer #1 certificate (DN|SHA-256)'
+          ls -la salida
+
+      - name: Subir a la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd salida
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p SHA256SUMS -O SHA256SUMS
+          grep -v '\.apk$' SHA256SUMS > SHA256SUMS.nuevo || true
+          sha256sum bezenti-hub-*.apk >> SHA256SUMS.nuevo
+          mv SHA256SUMS.nuevo SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" bezenti-hub-*.apk SHA256SUMS --clobber -R "$GITHUB_REPOSITORY"

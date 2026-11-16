@@ -7,6 +7,9 @@
 /** Shorter values are delivered but never masked (the Vault marks them `unmasked`). */
 export const MIN_MASKED_SECRET_LENGTH = 6;
 
+/** A line of a multiline value is masked on its own from this length, when it has no spaces. */
+const MIN_MASKED_LINE_LENGTH = 20;
+
 /** A base64 or hex run shorter than this is too likely to occur by chance. */
 const MIN_ENCODED_LENGTH = 8;
 
@@ -95,6 +98,14 @@ export const secretForms = (value: string): ReadonlyArray<string> => {
     if (core.length >= MIN_ENCODED_LENGTH && BASE64_CORE.test(core)) {
       forms.add(core);
       forms.add(core.replace(/\+/g, "-").replace(/\//g, "_"));
+    }
+  }
+  // Spec «Variables y secretos sellados», question 6: a multiline value (a file, a PEM, a
+  // kubeconfig) is also masked line by line, where a line is long and has no spaces, as printed.
+  if (value.includes("\n")) {
+    for (const line of value.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed.length >= MIN_MASKED_LINE_LENGTH && !/\s/.test(trimmed)) forms.add(trimmed);
     }
   }
   return [...forms].filter((form) => form.length >= MIN_MASKED_SECRET_LENGTH);

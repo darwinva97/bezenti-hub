@@ -203,6 +203,45 @@ describe("secretMasking", () => {
     assert.equal(maskWhole(patterns, "x abcdefghij"), "x [A]");
   });
 
+  it("masks each long line of a multiline value, and only those without spaces", () => {
+    const body = [
+      "MIIBszCCAVmgAwIBAgIUQ2xpZW50Q0FfZm9yX3QzY29kZV90ZXN0",
+      "c3RfY2VydGlmaWNhdGVfYm9keQ",
+    ];
+    const pem = `-----BEGIN CERTIFICATE-----\n${body.join("\n")}\nshort\n-----END CERTIFICATE-----\n`;
+    const kubeconfig = "apiVersion: v1\r\nkind: Config\r\ncurrent-context: production-cluster\r\n";
+    const forms = secretForms(pem);
+    assert.include(forms, body[0]);
+    assert.include(forms, body[1]);
+    assert.notInclude(forms, "short");
+    // A line with spaces is ordinary text («kind: Config»): only the whole value covers it.
+    assert.notInclude(secretForms(kubeconfig), "apiVersion: v1");
+    assert.notInclude(secretForms(kubeconfig), "current-context: production-cluster");
+    const patterns = makeSecretPatterns([{ name: "KUBE_CA", value: pem }]);
+    // A tool that prints one line of it (`sed -n 2p`) prints no part of it raw.
+    assert.equal(
+      patterns.mask(`$ sed -n 2p ca.pem\n${body[0]}\n`),
+      "$ sed -n 2p ca.pem\n[KUBE_CA]\n",
+    );
+    assert.equal(patterns.mask(pem), "[KUBE_CA]");
+  });
+
+  it("masks lines of several kubeconfigs among many values in a large text", () => {
+    const configs = Array.from({ length: 3 }, (_, index) => ({
+      name: `KUBECONFIG_${index}`,
+      value: `apiVersion: v1\nusers:\n- name: u\n  user:\n    token:\n      eyJhbGciOiJSUzI1NiJ9.cluster${index}.c2lnbmF0dXJlX29mX3RoZV90b2tlbg\n`,
+    }));
+    const others = Array.from({ length: 47 }, (_, index) => ({
+      name: `S${index}`,
+      value: `value-${index.toString(36)}-${"y".repeat(14)}`,
+    }));
+    const patterns = makeSecretPatterns([...configs, ...others]);
+    const line = `eyJhbGciOiJSUzI1NiJ9.cluster2.c2lnbmF0dXJlX29mX3RoZV90b2tlbg`;
+    const text = "an ordinary log line about nothing secret at all\n".repeat(20_000);
+    assert.equal(patterns.mask(text), text);
+    assert.equal(patterns.mask(`${text}${line}\n`), `${text}[KUBECONFIG_2]\n`);
+  });
+
   it("matches among thousands of values", () => {
     const many = Array.from({ length: 4000 }, (_, index) => ({
       name: `S${index}`,

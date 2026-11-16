@@ -15,7 +15,10 @@ const IDENTITY_ISSUER_ENV = "T3CODE_IDENTITY_ISSUER";
 
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
-/** `https://` (or `http://` to loopback), no user, query nor fragment; no trailing slash. */
+/**
+ * An origin: `https://` (or `http://` to loopback), no user, path, query nor fragment. The
+ * discovery document lives at the origin's `/.well-known`, as it does for an issuer without a path.
+ */
 const issuerOf = (value: string): string | undefined => {
   const url = URL.parse(value);
   if (url === null) return undefined;
@@ -26,11 +29,12 @@ const issuerOf = (value: string): string | undefined => {
     url.username !== "" ||
     url.password !== "" ||
     url.search !== "" ||
-    url.hash !== ""
+    url.hash !== "" ||
+    (url.pathname !== "/" && url.pathname !== "")
   ) {
     return undefined;
   }
-  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  return url.origin;
 };
 
 export class IdentityIssuer extends Context.Service<
@@ -47,10 +51,10 @@ export const make = (input: {
   readonly configured: string | undefined;
   readonly publicUrl: URL | undefined;
 }) => {
-  const issuer = issuerOf(input.configured ?? input.publicUrl?.href ?? "");
+  const issuer = issuerOf(input.configured ?? input.publicUrl?.origin ?? "");
   const hubOrigins = [
     ...(input.publicUrl === undefined ? [] : [input.publicUrl.origin]),
-    ...(issuer === undefined ? [] : [issuer, new URL(issuer).origin]),
+    ...(issuer === undefined ? [] : [issuer]),
   ];
   return IdentityIssuer.of({
     issuer: Option.fromUndefinedOr(issuer),
@@ -70,7 +74,7 @@ export const layer = Layer.effect(
     const issuer = make({ configured, publicUrl: config.publicUrl });
     if (configured !== undefined && Option.isNone(issuer.issuer)) {
       yield* Effect.logWarning(
-        `${IDENTITY_ISSUER_ENV} is not an https:// URL (http:// only to localhost): workload identity is off.`,
+        `${IDENTITY_ISSUER_ENV} is not an https:// origin without a path (http:// only to localhost): workload identity is off.`,
       );
     }
     return issuer;

@@ -845,6 +845,8 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerBrowserStream.routeLayer,
     HubPreviewRoute.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
+    // The issuer's public documents (Vaults ticket 07), the static handler's while unused.
+    ServerHttp.layerIdentityRoutes,
     Ws.layer,
     EnvironmentConnectRoute.layer,
     EnvironmentGitRoute.layer,

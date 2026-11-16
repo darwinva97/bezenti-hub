@@ -177,6 +177,13 @@ export const RAW_ROUTE_RULES: Readonly<Record<string, DoorRule>> = {
   "guest/http.ts: POST `${GUEST_ROUTE_PREFIX}/messages`": GUEST,
   "guest/http.ts: POST `${GUEST_ROUTE_PREFIX}/redeem`": GUEST,
   'http.ts: GET "*"': own("public: the web app's static files"),
+  // Vaults ticket 07: public on purpose (verifiers fetch them unsigned in): public keys only.
+  "http.ts: GET IDENTITY_DISCOVERY_PATH": own(
+    "public: the issuer's discovery document; the static handler's answer while identity is unused",
+  ),
+  "http.ts: GET IDENTITY_JWKS_PATH": own(
+    "public: the issuer's public keys, by an allow-list of members; the static handler's answer while identity is unused",
+  ),
   "http.ts: GET `${ASSET_ROUTE_PREFIX}/*`": rpc(WS_METHODS.assetsCreateUrl),
   "http.ts: POST OTLP_TRACES_PROXY_PATH": own(
     "diagnostics:read, which only the Owner's sessions hold (heldByUser), as getTraceDiagnostics",
@@ -338,6 +345,12 @@ export const AMBIENT_COOKIE_RULES: Readonly<Record<string, AmbientCookieRule>> =
   ),
   'http.ts: GET "*"': none(
     "public static files; HTML is not framed by a preview (frame-ancestors)",
+  ),
+  "http.ts: GET IDENTITY_DISCOVERY_PATH": refused(
+    "reads no cookie and no session: public on purpose, the same for every caller",
+  ),
+  "http.ts: GET IDENTITY_JWKS_PATH": refused(
+    "reads no cookie and no session: public on purpose, the same for every caller",
   ),
   "http.ts: GET `${ASSET_ROUTE_PREFIX}/*`": none("a signed asset URL; no cookie"),
   "http.ts: POST OTLP_TRACES_PROXY_PATH": BY_ENVIRONMENT_AUTH,

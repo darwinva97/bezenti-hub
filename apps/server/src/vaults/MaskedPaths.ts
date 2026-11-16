@@ -446,6 +446,10 @@ export const RAW_DOOR_RULES: Record<string, DoorRule> = {
   "guest/http.ts: POST `${GUEST_ROUTE_PREFIX}/messages`": HISTORY,
   "guest/http.ts: POST `${GUEST_ROUTE_PREFIX}/redeem`": HISTORY,
   'http.ts: GET "*"': none("the web app, assets, uploads and browser traces"),
+  "http.ts: GET IDENTITY_DISCOVERY_PATH": none(
+    "the issuer's discovery document (Vaults ticket 07)",
+  ),
+  "http.ts: GET IDENTITY_JWKS_PATH": none("the issuer's public keys (Vaults ticket 07)"),
   "http.ts: GET `${ASSET_ROUTE_PREFIX}/*`": masked("vaults/maskAssets.ts"),
   "http.ts: POST OTLP_TRACES_PROXY_PATH": none("the web app, assets, uploads and browser traces"),
   "http.ts: POST `${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/*`": none(

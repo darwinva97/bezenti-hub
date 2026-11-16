@@ -28,6 +28,9 @@ import {
 import { ORCHESTRATION_PROTOCOL_HEADER } from "@t3tools/contracts";
 
 import * as ServerConfig from "./config.ts";
+import * as IdentityIssuer from "./identity/IdentityIssuer.ts";
+import * as IdentityKeys from "./identity/IdentityKeys.ts";
+import * as IdentityTokens from "./identity/IdentityTokens.ts";
 
 import { assetResponseHeaders, assetFileResponse, downloadContentDisposition } from "./http.ts";
 import * as ServerHttp from "./http.ts";
@@ -204,11 +207,15 @@ describe("untraced requests", () => {
 
 const layerFileResponse = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
 
-const makeStaticRequest = Effect.fn("HttpTest.makeStaticRequest")(function* (staticDir: string) {
+const makeStaticRequest = Effect.fn("HttpTest.makeStaticRequest")(function* <Extra = never>(
+  staticDir: string,
+  extra?: Layer.Layer<Extra>,
+) {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
-  const layerApp = Layer.merge(
+  const layerApp = Layer.mergeAll(
     ServerHttp.layerStaticAndDevRoute,
+    ServerHttp.layerIdentityRoutes,
     ServerHttp.layerHttpCompression,
   ).pipe(Layer.provideMerge(NodeHttpPlatform.layer));
   // HttpRouter.serve prefers outer services; inject the test FileSystem between it and NodeHttpServer.layerTest.
@@ -216,6 +223,7 @@ const makeStaticRequest = Effect.fn("HttpTest.makeStaticRequest")(function* (sta
     HttpRouter.serve(layerApp, { disableListenLog: true }).pipe(
       Layer.provideMerge(ServerConfig.layer({ ...config, staticDir })),
       Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, fileSystem)),
+      Layer.provideMerge(extra ?? Layer.empty),
       Layer.provideMerge(NodeHttpServer.layerTest),
     ),
   );
@@ -871,4 +879,90 @@ describe("downloadContentDisposition", () => {
       `attachment; filename="bad_name.pdf"; filename*=UTF-8''bad%EF%BF%BDname.pdf`,
     );
   });
+});
+
+// Vaults ticket 07: the issuer's public documents, behind the same handler as any path.
+const IDENTITY_KEY: IdentityKeys.PublicJwk = {
+  kty: "EC",
+  crv: "P-256",
+  x: "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+  y: "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+  kid: "kid-1",
+  alg: "ES256",
+  use: "sig",
+};
+
+const layerIdentity = (inUse: boolean) =>
+  Layer.mergeAll(
+    Layer.succeed(
+      IdentityIssuer.IdentityIssuer,
+      IdentityIssuer.make({ configured: "https://hub.example.com", publicUrl: undefined }),
+    ),
+    Layer.mock(IdentityTokens.IdentityTokens)({ inUse: Effect.succeed(inUse) }),
+    Layer.mock(IdentityKeys.IdentityKeys)({ published: Effect.succeed([IDENTITY_KEY]) }),
+  );
+
+it.layer(
+  ServerConfig.layerTest(process.cwd(), { prefix: "t3-identity-http-test-" }).pipe(
+    Layer.provideMerge(NodeServices.layer),
+  ),
+)("workload identity documents", (it) => {
+  const DOCUMENTS = ["/.well-known/openid-configuration", "/.well-known/jwks.json"];
+
+  it.effect("answer exactly as an unknown path while identity is not in use", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-identity-off-" });
+      yield* fs.writeFileString(path.join(staticDir, "index.html"), "<html>app</html>");
+      const request = yield* makeStaticRequest(staticDir, layerIdentity(false));
+      const answer = Effect.fn("HttpTest.answer")(function* (resource: string) {
+        const response = yield* request(resource);
+        return {
+          status: response.status,
+          contentType: response.headers["content-type"],
+          cacheControl: response.headers["cache-control"],
+          body: yield* response.text,
+        };
+      });
+      const unknown = yield* answer("/.well-known/nope");
+      for (const resource of DOCUMENTS) {
+        expect(yield* answer(resource), resource).toEqual(unknown);
+      }
+      // No identity services at all (a joined machine): the same.
+      const bare = yield* makeStaticRequest(staticDir);
+      for (const resource of DOCUMENTS) {
+        const response = yield* bare(resource);
+        expect({ status: response.status, body: yield* response.text }).toEqual({
+          status: unknown.status,
+          body: unknown.body,
+        });
+      }
+    }),
+  );
+
+  it.effect("publish the configured issuer and public keys only, whatever Host is sent", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const staticDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-identity-on-" });
+      const request = yield* makeStaticRequest(staticDir, layerIdentity(true));
+      const forged = { headers: { host: "evil.example", "x-forwarded-host": "evil.example" } };
+      const discovery = yield* request("/.well-known/openid-configuration", forged);
+      expect(discovery.status).toBe(200);
+      expect(discovery.headers["cache-control"]).toBe("public, max-age=300");
+      const document = JSON.parse(yield* discovery.text) as Record<string, unknown>;
+      expect(document.issuer).toBe("https://hub.example.com");
+      expect(document.jwks_uri).toBe("https://hub.example.com/.well-known/jwks.json");
+      expect(document.id_token_signing_alg_values_supported).toEqual(["ES256"]);
+      const jwks = yield* request("/.well-known/jwks.json", forged);
+      const raw = yield* jwks.text;
+      expect(JSON.parse(raw)).toEqual({ keys: [IDENTITY_KEY] });
+      for (const text of [raw, JSON.stringify(document)]) {
+        for (const member of ["d", "p", "q", "dp", "dq", "qi", "k", "oth"]) {
+          expect(text, member).not.toContain(`"${member}":`);
+        }
+        expect(text).not.toContain("evil.example");
+      }
+    }),
+  );
 });

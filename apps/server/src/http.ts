@@ -62,6 +62,7 @@ import {
   browserApiCorsAllowedMethods,
   DESKTOP_RENDERER_ORIGINS,
 } from "./httpCors.ts";
+import { IDENTITY_DISCOVERY_PATH, IDENTITY_JWKS_PATH, identityResponse } from "./identity/http.ts";
 import { requestUrl } from "./requestUrl.ts";
 import { maskedAssetText } from "./vaults/maskAssets.ts";
 import {
@@ -724,6 +725,32 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
     PlatformError: () =>
       Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
   }),
+);
+
+/**
+ * The issuer's documents (Vaults ticket 07). Until workload identity is in use they answer what
+ * the static handler answers any other path: the same handler, so the same response.
+ */
+const identityOrStatic = Effect.fn("identityOrStatic")(function* (
+  immutableBuildAssets: ReadonlySet<string>,
+) {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const url = requestUrl(request);
+  const identity = Option.isNone(url) ? Option.none() : yield* identityResponse(url.value);
+  return Option.isSome(identity)
+    ? identity.value
+    : yield* handleStaticAndDevRequest(immutableBuildAssets);
+});
+
+export const layerIdentityRoutes = Layer.unwrap(
+  loadImmutableBuildAssets.pipe(
+    Effect.map((assets) =>
+      Layer.mergeAll(
+        HttpRouter.add("GET", IDENTITY_DISCOVERY_PATH, identityOrStatic(assets)),
+        HttpRouter.add("GET", IDENTITY_JWKS_PATH, identityOrStatic(assets)),
+      ),
+    ),
+  ),
 );
 
 export const layerStaticAndDevRoute = Layer.unwrap(

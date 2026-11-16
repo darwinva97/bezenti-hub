@@ -319,12 +319,14 @@ describe("every door of the Hub declares its rule", () => {
         .toSorted(),
     ).toEqual([
       "ai/aiCredentialValue.ts", // a comment: how a direct AI credential is named there
+      "identity/IdentityTokens.ts", // names only: whether any identity entry exists (question 12)
       "persistence/Migrations/111_Vaults.ts",
       "persistence/Migrations/115_VaultReachLoss.ts",
       "persistence/Migrations/116_ThreadSecretValues.ts",
       "persistence/Migrations/119_VaultEntryClass.ts",
       "persistence/Migrations/120_VaultProviderEntries.ts",
       "persistence/Migrations/122_VaultEntryDelivery.ts",
+      "persistence/Migrations/123_WorkloadIdentity.ts",
       "vaults/DeliveredValues.ts",
       "vaults/EffectiveVaults.ts",
       "vaults/SecretDelivery.ts",

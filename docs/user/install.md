@@ -474,6 +474,38 @@ directories once links are followed, and it must be a regular file of at most 64
 path is refused when the provider is saved, and again at each sign-in, and is never opened. This
 stops a settings change from sending a file the Hub can read to an address someone typed in.
 
+### Vaults: files and templates
+
+**Delivery** says how an entry reaches the agent:
+
+- **Environment variable** (the default): the variable holds the value.
+- **File**: the value is written to a file in memory on the Thread's machine,
+  readable only by the user T3 runs as. The variable holds the file's path, so
+  `KUBECONFIG`, `GOOGLE_APPLICATION_CREDENTIALS` and the like work as tools expect.
+  The file goes when the last terminal, script or session of that Thread ends on
+  the machine, and the machine clears them all when T3 starts.
+- **Not delivered**: no process gets it by itself; it only feeds a template of the
+  same Vault. Settings warns you while no template uses it.
+
+A file is never written to a disk. A machine with no folder in memory (macOS,
+Windows, or Linux without `/dev/shm` or `$XDG_RUNTIME_DIR`) refuses to start a
+Thread that would get one, and says which entries. Switch those entries to
+**Environment variable** if you accept that. A machine that has not been updated
+refuses too, until you update it.
+
+A **Template** (in **Kind**) composes a value from entries of its own Vault, such
+as a kubeconfig or a `DATABASE_URL`. Write `{{ NAME }}`, or `{{ NAME | filter }}`
+with `base64`, `base64decode`, `urlencode`, `json` (escaped for inside a JSON
+string), `trim` or `path` (the path of that entry's file; the entry must be
+delivered as a **File**). Filters chain left to right. Write `{{"{{"}}` for a
+literal `{{`. A template never names another template or another Vault's entries,
+and the form previews it with `[NAME]` in place of each value.
+
+A template is a Variable only if every entry it uses is one; otherwise it is a
+sealed Secret, never revealed. If one of its entries cannot be read, the Thread's
+turn does not start. Its text and each long line of a file (a certificate, a key)
+are hidden in the Thread's history like any Secret.
+
 ### Invite people
 
 To add someone to an organization, switch to it in the Space selector, choose

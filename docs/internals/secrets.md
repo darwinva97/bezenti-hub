@@ -351,8 +351,77 @@ on the Thread's behalf: [ADR 0008](../adr/0008-vault-entries-read-from-secret-pr
   - `DeliveredValues` removes a deleted Thread's rows, and every value no other Thread holds, as
     the `thread.deleted` event arrives.
   - At start it also sweeps values that no row holds.
-- **Not built yet:** scopes and Settings → Secret providers (03), OpenBao (04), files and
-  templates (05), Dynamic secrets (06), Provider Variables, and the `secret.read` audit.
+- **Not built yet:** scopes and Settings → Secret providers (03), OpenBao (04), Dynamic secrets
+  (06), Provider Variables, and the `secret.read` audit.
+
+## Secret files and Template entries («Variables, Secretos sellados y Secret providers», ticket 05)
+
+- **Data** (migration 122, a rebuild of `vault_entries`):
+  - `delivery`: `env`, `file` or `none`.
+  - `template_text`: names and literal text only, never a value, so it is stored in clear.
+  - `kind = 'template'`.
+  - A template holds no value, is never revealable and never `none` (CHECK).
+  - «`none` only if a template of the Vault names it» spans rows: it is the put warning
+    `not-used-by-template`, not a CHECK.
+  - A template's stored `class` (shown in the list) is recalculated in every write to its Vault.
+    Delivery recomputes it from its entries as they are then: a Variable only if every one is.
+- **Templates** (`packages/contracts/src/vaultTemplates.ts`, one parser for the web and the Hub):
+  - Syntax: `{{ NAME }}` and `{{ NAME | f1 | f2 }}`, with the filters `base64`, `base64decode`,
+    `urlencode`, `json` (no outer quotes), `trim` and `path`. `path` goes alone. `{{"{{"}}` is
+    the only escape.
+  - At most 64 KiB and 64 references.
+  - When saved, every name must be a non-template entry of the same Vault, and `| path` needs an
+    entry delivered as `file`. That entry cannot leave `file` while a template takes its path.
+  - Link or copy of a Main vault template: `not-linkable`. Reveal answers `sealed`.
+  - Who: whoever edits the Vault (`vault.edit`). Its text is shown like a Variable's value: to
+    the Owner, Admins and Members, never to Guests.
+  - There is no preview door: the form previews with the shared parser, as `[NAME]`, and reads
+    nothing.
+- **Effective set** (`EffectiveVaults`):
+  - A `none` entry takes no name, so a same-named entry of another Vault still delivers.
+  - A template's entries are found by name in its own Vault, even when shadowed or `none`. A
+    missing one, a broken link or another template leaves the template out (broken).
+  - A dangerous-named template goes only as the Owner last set it, like a Provider entry.
+- **Delivery** (`SecretDelivery`):
+  - The plan reads a template's Provider entries in the same grouped round. Its value id is
+    `template:<HMAC(text, entries' value ids)>`, so a rotation of any entry reopens the session.
+    No value is read to plan.
+  - Any `file` entry needs the target's executor contract 14 and a root in memory
+    (`MachineSecretFiles`: the Hub machine's own, a joined machine's from its hello). Otherwise
+    the start fails with `SecretDeliveryError`:
+    - `outdated-machine-files` before contract 14;
+    - `files-not-in-memory` without a root in memory, naming the entries.
+      Nothing is written to a disk, sent, or turned into a variable instead.
+  - `filesFolder` is `HMAC(key, "secret-files|<thread root>|<user>")`, cut to 32 hex: the same for
+    every process of that Thread root and User on a machine, and unguessable without the Hub's key.
+  - `resolve` renders each template with `| path` = `<root>/<filesFolder>/<NAME>`. A filter that
+    cannot take its value fails the start (`template`, names only). A provider failure fails it
+    whole (decision 3).
+  - Masked in the Thread before the process starts: every Secret delivered, the rendered text of a
+    Secret template (sealed in `DeliveredValueStore` as `delivered:<id>`), and every Secret entry
+    the template took, `none` ones included.
+- **Executor contract 14** (`secretEnv.files: [{ name, content, mode, plain? }]`, `filesFolder`,
+  hello `secretFilesRoot`, operation `secrets.refreshFiles`):
+  - The Hub's last guard (`RemoteEnvironments.invoke`) refuses files to a machine before 14, so
+    an older executor never drops them silently.
+  - On the machine, `secrets/ThreadSecretFiles.ts` is the only writer:
+    - Root: `<$XDG_RUNTIME_DIR | /dev/shm>/t3code-thread-files-<hash(stateDir)>`, only if `statfs`
+      says tmpfs or ramfs. It reuses `SecretFilesDirectory`'s `ownFolder`: 0700, no symlink, this
+      uid. There is no disk fallback: without a root, every file is refused.
+    - Each file is written to a fresh `O_CREAT|O_EXCL|O_NOFOLLOW` name with exactly its mode, then
+      renamed over the old one. A link planted at a file's path is replaced, never followed.
+    - `materialize` returns the env with each file's path as a `plain` variable instead of its
+      content, and a release. A provider session holds the folder for its scope, a terminal or
+      setup script until its process exits (`terminal/Manager.ts`). The last release removes it.
+    - The whole root is swept at every start.
+    - `secrets.refreshFiles` rewrites a held folder in place and never creates one (`not-held`).
+      Leases (06) and identity tokens (07) will call it; nothing does yet.
+  - The Sandbox's server uses the container's private `/dev/shm` (tmpfs); `podman run` is
+    unchanged. The Hub machine and a personal Linux machine use `$XDG_RUNTIME_DIR` or `/dev/shm`.
+    All Users of one machine share its uid (ADR 0004).
+- **Masking of multiline values** (`secretForms`): the whole value, its CRLF form, and each line of
+  20 characters or more without spaces. The base64 and URL forms already cover every value of 6
+  characters or more.
 
 ## Provider scopes («Variables, Secretos sellados y Secret providers», ticket 03)
 

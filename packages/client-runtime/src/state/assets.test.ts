@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   type AssetCreateUrlResult,
+  AssetRemoteEnvironmentError,
   type AssetResource,
+  AssetWorkspaceAssetNotFoundError,
   EnvironmentId,
   ThreadId,
   WS_METHODS,
@@ -26,6 +28,7 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type * as RpcSession from "../rpc/session.ts";
 import {
   ASSET_URL_MAX_IN_FLIGHT,
+  assetUrlStateFromResult,
   createAssetEnvironmentAtoms,
   createProjectFaviconUrlAtomFamily,
   makeRevisionedAssetUrlFamily,
@@ -382,5 +385,28 @@ describe("makeRevisionedAssetUrlFamily", () => {
     settle("file-b");
     expect(url("mutation-4")).toBe("/a/5");
     edited();
+  });
+});
+
+describe("assetUrlStateFromResult", () => {
+  it("says why a Thread's machine cannot serve a file, and nothing more for other failures", () => {
+    const resource = {
+      _tag: "media-file",
+      threadId: ThreadId.make("thread-1"),
+      path: "/work/doc.pdf",
+    } as const;
+    const offline = new AssetRemoteEnvironmentError({
+      resource,
+      reason: "environment_offline",
+      detail: "Environment offline: Laptop is not connected.",
+    });
+    expect(assetUrlStateFromResult(AsyncResult.failure(Cause.fail(offline)), null)).toEqual({
+      _tag: "Failure",
+      message: "Environment offline: Laptop is not connected.",
+    });
+    const missing = new AssetWorkspaceAssetNotFoundError({ resource });
+    expect(assetUrlStateFromResult(AsyncResult.failure(Cause.fail(missing)), null)).toEqual({
+      _tag: "Failure",
+    });
   });
 });

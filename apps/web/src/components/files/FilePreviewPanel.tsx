@@ -205,7 +205,7 @@ function WorkspaceImagePreview(props: {
     return (
       <MediaActions source={actionsSource}>
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
-          Unable to load workspace image.
+          {assetUrl.message ?? "Unable to load workspace image."}
         </div>
       </MediaActions>
     );
@@ -256,7 +256,7 @@ export function WorkspaceBrowserPreview(props: {
   if (assetUrl._tag === "Failure") {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
-        Unable to load file preview.
+        {assetUrl.message ?? "Unable to load file preview."}
       </div>
     );
   }
@@ -371,7 +371,9 @@ function WorkspaceAudioPreview(props: {
   if (assetUrl._tag === "Failure" || (url !== null && failedUrl === url)) {
     return (
       <FileSurfaceFailure
-        message="Unable to load audio."
+        message={
+          (assetUrl._tag === "Failure" ? assetUrl.message : undefined) ?? "Unable to load audio."
+        }
         onRetry={() => {
           setFailedUrl(null);
           void refreshAssetUrl().catch(() => undefined);
@@ -1633,7 +1635,7 @@ export function WorkspaceLargeTextPreview(props: {
   if (assetUrl._tag === "Failure")
     return (
       <FileSurfaceFailure
-        message="Unable to load file preview."
+        message={assetUrl.message ?? "Unable to load file preview."}
         onRetry={() => {
           setRevision((value) => value + 1);
           void refreshAssetUrl().catch(showError);

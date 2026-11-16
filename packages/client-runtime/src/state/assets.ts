@@ -2,6 +2,7 @@ import {
   type AssetCreateUrlInput,
   type AssetCreateUrlResult,
   type AssetImageDimensions,
+  AssetRemoteEnvironmentError,
   AssetResource,
   EnvironmentId,
   type ProjectCloneSnapshot,
@@ -75,6 +76,11 @@ export type AssetUrlState =
   | {
       readonly _tag: "Failure";
       readonly reason?: "missing-file-access";
+      /**
+       * What to show instead of a generic failure: why a Thread's machine cannot serve the file
+       * now (offline, needs an update, outside the Thread's workspace).
+       */
+      readonly message?: string;
     }
   | {
       readonly _tag: "Success";
@@ -111,11 +117,18 @@ export function blockedAssetUrlState(
     : { _tag: "Failure" };
 }
 
+const isRemoteEnvironmentError = Schema.is(AssetRemoteEnvironmentError);
+
 export function assetUrlStateFromResult(
   result: AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>,
   httpBaseUrl: string | null,
 ): AssetUrlState {
-  if (result._tag === "Failure") return { _tag: "Failure" };
+  if (result._tag === "Failure") {
+    const error = Cause.findErrorOption(result.cause);
+    return Option.isSome(error) && isRemoteEnvironmentError(error.value)
+      ? { _tag: "Failure", message: error.value.detail }
+      : { _tag: "Failure" };
+  }
   if (httpBaseUrl === null || result._tag !== "Success") return { _tag: "Loading" };
   const url = resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);
   if (url === null) return { _tag: "Failure" };

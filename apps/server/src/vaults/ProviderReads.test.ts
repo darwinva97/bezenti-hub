@@ -342,6 +342,67 @@ describe("ProviderReads", () => {
       }),
   );
 
+  // Vaults ticket 07: a provider signing in as the Hub gets a token per scope, never saved.
+  it.effect("a provider that signs in as the Hub gets the Hub's token for each scope", () =>
+    Effect.gen(function* () {
+      const seen: Array<unknown> = [];
+      const minted: Array<{ readonly audience: string; readonly scopeId: string | null }> = [];
+      const driver = defineSecretProviderDriver({
+        kind: FAKE,
+        definition: defineSecretProvider({
+          kind: FAKE,
+          label: "Fake",
+          configSchema: Schema.Struct({
+            account: Schema.String,
+            identityToken: Schema.optional(Schema.String),
+          }),
+          isReference: (reference) => reference.startsWith("kv/"),
+          referencePlaceholder: "kv/path#key",
+          invalidReferenceMessage: "Use kv/path#key.",
+          withScopeAuth: (config) => config,
+          hubIdentity: (config) => (config.account === "hub" ? { audience: "vault" } : undefined),
+        }),
+        read: (config, references) =>
+          Effect.sync(() => {
+            seen.push(config);
+            return references.map(() => readValue("v"));
+          }),
+        test: (config) => Effect.sync(() => (seen.push(config), { ok: true })),
+      });
+      const service = yield* ProviderReads.make({
+        drivers: [driver],
+        secretProviders: Effect.sync(() =>
+          providers("hub", { [OTHER]: { kind: FAKE, label: "Other", config: { account: "b" } } }),
+        ),
+        scopeAllows: () => Effect.succeed(true),
+        scopeAuth: () => Effect.succeed({ role: "r" }),
+        hubIdentity: (input) =>
+          Effect.sync(() => {
+            minted.push(input);
+            return `jwt-for-${input.scopeId ?? "direct"}`;
+          }),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
+      yield* service.read([
+        { providerId: VAULT, scopeId: "s1", reference: "kv/a", vaultId: "v" },
+        ref("kv/b"),
+        ref("kv/c", OTHER),
+      ]);
+      assert.deepEqual(seen, [
+        { account: "hub", identityToken: "jwt-for-s1" },
+        { account: "hub", identityToken: "jwt-for-direct" },
+        { account: "b" },
+      ]);
+      assert.deepEqual(minted, [
+        { audience: "vault", scopeId: "s1" },
+        { audience: "vault", scopeId: null },
+      ]);
+      // «Test connection» signs in the same way.
+      seen.length = 0;
+      yield* service.test(VAULT);
+      assert.deepEqual(seen, [{ account: "hub", identityToken: "jwt-for-direct" }]);
+    }),
+  );
+
   it.effect("a kind that cannot honour a scope's auth reads nothing through it", () =>
     Effect.gen(function* () {
       const { driver, batches } = fakeProvider(() => readValue("v"));

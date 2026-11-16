@@ -48,6 +48,8 @@ const identityOf = (config: OpenBaoSecretProviderConfig) =>
         config.authMethod,
         config.authMount ?? "",
         config.authRole ?? "",
+        // Not the Hub's token itself: a newer one is the same sign-in.
+        config.audience ?? "",
         config.tokenFile ?? "",
         config.roleId ?? "",
         literal(config.secretId),
@@ -131,6 +133,11 @@ const loginBody = Effect.fn("OpenBao.loginBody")(function* (config: OpenBaoSecre
         : config.authRole === undefined
           ? {}
           : { name: config.authRole };
+    case "hub_identity": {
+      // The Hub's own token, signed for this read; without an issuer there is none.
+      const jwt = config.identityToken ?? "";
+      return jwt.length === 0 ? undefined : { role: config.authRole, jwt };
+    }
     case "token":
       return undefined;
   }
@@ -156,7 +163,8 @@ const signIn = Effect.fn("OpenBao.signIn")(function* (config: OpenBaoSecretProvi
   }
   const body = yield* loginBody(config);
   if (body === undefined) return failed("invalid");
-  const mount = config.authMount ?? (config.authMethod as string);
+  const mount =
+    config.authMount ?? (config.authMethod === "hub_identity" ? "jwt" : config.authMethod);
   const response = yield* openBaoRequest(endpoint, {
     method: "POST",
     path: `auth/${mount}/login`,

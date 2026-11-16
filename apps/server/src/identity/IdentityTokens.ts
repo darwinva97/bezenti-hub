@@ -19,12 +19,15 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeCrypto from "node:crypto";
 
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { secretProviderDefinitionFor } from "../secrets/secretProviderDefinitions.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as IdentityIssuer from "./IdentityIssuer.ts";
 import * as IdentityKeys from "./IdentityKeys.ts";
 
@@ -136,7 +139,23 @@ export const make = Effect.gen(function* () {
   const audit = yield* AuditLog.AuditLog;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const installation = yield* environment.getEnvironmentId;
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const held = new Map<string, IssuedToken>();
+
+  /** The token kept under `key` while more than a third of its life is left, else a new one. */
+  const reused = Effect.fn("IdentityTokens.reused")(function* (
+    key: string,
+    issue: Effect.Effect<IssuedToken, IdentityError>,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    const kept = held.get(key);
+    if (kept !== undefined && now < kept.expiresAt - (kept.expiresAt - kept.issuedAt) / 3) {
+      return kept;
+    }
+    const issued = yield* issue;
+    held.set(key, issued);
+    return issued;
+  });
 
   const failStorage = (what: string) => (cause: unknown) =>
     Effect.logError(`IdentityTokens: could not ${what}`, { cause: String(cause) }).pipe(
@@ -243,6 +262,7 @@ export const make = Effect.gen(function* () {
   }) {
     const { facts } = input;
     const key = [
+      "thread",
       facts.threadId,
       facts.userId,
       facts.environmentId,
@@ -250,12 +270,16 @@ export const make = Effect.gen(function* () {
       input.audience,
       input.ttlSeconds,
     ].join("\u0000");
-    const now = yield* Clock.currentTimeMillis;
-    const kept = held.get(key);
-    // Reused while more than a third of its life is left.
-    if (kept !== undefined && now < kept.expiresAt - (kept.expiresAt - kept.issuedAt) / 3) {
-      return kept;
-    }
+    return yield* reused(key, signForThread(input));
+  });
+
+  const signForThread = Effect.fn("IdentityTokens.signForThread")(function* (input: {
+    readonly facts: ThreadFacts;
+    readonly entryId: string;
+    readonly audience: string;
+    readonly ttlSeconds: number;
+  }) {
+    const { facts } = input;
     const row = yield* claimRow(facts);
     const username = row?.loginName ?? facts.userId;
     const project = row?.projectId ?? null;
@@ -286,7 +310,6 @@ export const make = Effect.gen(function* () {
       spaceId: facts.spaceId,
       threadId: facts.threadId,
     });
-    held.set(key, issued);
     return issued;
   });
 
@@ -294,15 +317,34 @@ export const make = Effect.gen(function* () {
     readonly audience: string;
     readonly scopeId: string | null;
   }) {
-    return yield* issue({
-      audience: input.audience,
-      ttlSeconds: HUB_TTL_SECONDS,
-      subject: `t3:hub:${installation}`,
-      claims: { installation, scope: input.scopeId ?? "direct" },
-      target: { kind: "provider_scope", id: input.scopeId ?? "direct" },
-      spaceId: null,
-      threadId: null,
-    });
+    return yield* reused(
+      ["hub", input.audience, input.scopeId ?? ""].join("\u0000"),
+      issue({
+        audience: input.audience,
+        ttlSeconds: HUB_TTL_SECONDS,
+        subject: `t3:hub:${installation}`,
+        claims: { installation, scope: input.scopeId ?? "direct" },
+        target: { kind: "provider_scope", id: input.scopeId ?? "direct" },
+        spaceId: null,
+        threadId: null,
+      }),
+    );
+  });
+
+  /** A provider of the settings that signs in as the Hub (OpenBao's `hub_identity`, say). */
+  const providerSignsInAsHub = Option.match(settings, {
+    onNone: () => Effect.succeed(false),
+    onSome: (service) =>
+      service.getSettings.pipe(
+        Effect.map((current) =>
+          Object.values(current.secretProviders).some(
+            (provider) =>
+              secretProviderDefinitionFor(provider.kind)?.hubIdentity?.(provider.config) !==
+              undefined,
+          ),
+        ),
+        Effect.orElseSucceed(() => false),
+      ),
   });
 
   const inUse = sql<{ readonly found: number }>`
@@ -310,6 +352,7 @@ export const make = Effect.gen(function* () {
   `.pipe(
     Effect.map((rows) => rows[0]?.found === 1),
     Effect.orElseSucceed(() => false),
+    Effect.flatMap((found) => (found ? Effect.succeed(true) : providerSignsInAsHub)),
   );
 
   return IdentityTokens.of({ inUse, forThread, forHub });

@@ -521,6 +521,9 @@ const layerIdentity = IdentityTokens.layer.pipe(
   Layer.provide(AuditLog.layer),
 );
 
+/** Provider entries' reads, one instance: with the Hub's identity for `hub_identity` sign-ins. */
+const layerProviderReads = ProviderReads.layer.pipe(Layer.provide(layerIdentity));
+
 const layerAuth = Layer.mergeAll(
   InvitationService.layer,
   MembershipService.layer,
@@ -530,7 +533,7 @@ const layerAuth = Layer.mergeAll(
   // Vaults: their start checks the database against the master key and sweeps orphaned values.
   Vaults.layer.pipe(
     Layer.provide(AuditLog.layer),
-    Layer.provide(ProviderReads.layer),
+    Layer.provide(layerProviderReads),
     Layer.provide(layerIdentity),
   ),
   // What a Thread's turns, terminals and scripts receive (spec 5 ticket 03), delivered as
@@ -539,16 +542,13 @@ const layerAuth = Layer.mergeAll(
   // ProviderReads (one instance, one cache: the same layer).
   SecretDelivery.layer.pipe(
     Layer.provideMerge(layerSecretMasking),
-    Layer.provide(ProviderReads.layer),
+    Layer.provide(layerProviderReads),
     Layer.provide(layerIdentity),
   ),
   // Workload identity (Vaults ticket 07): the issuer, its sealed signing keys and the tokens.
   layerIdentity,
   // Secret providers' scopes and «Test connection» (Vaults ticket 03), over the same reads.
-  SecretProviderScopes.layer.pipe(
-    Layer.provide(ProviderReads.layer),
-    Layer.provide(AuditLog.layer),
-  ),
+  SecretProviderScopes.layer.pipe(Layer.provide(layerProviderReads), Layer.provide(AuditLog.layer)),
   // The Sandboxes' base image: built on this Hub, one build at a time.
   SandboxImage.layer,
   // CLIProxyAPI, run by the Hub on loopback (`T3CODE_AI_GATEWAY`), and the AI accounts it gets

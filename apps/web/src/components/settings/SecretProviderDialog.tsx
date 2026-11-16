@@ -43,6 +43,7 @@ const OPENBAO_METHODS: ReadonlyArray<{
   { value: "approle", label: "AppRole" },
   { value: "cert", label: "Client certificate" },
   { value: "token", label: "Token" },
+  { value: "hub_identity", label: "This Hub's own identity (JWT)" },
 ];
 
 function Field(props: {
@@ -165,7 +166,7 @@ function OpenBaoFields({
           id="openbao-role"
           label={method === "cert" ? "Certificate role (optional)" : "Role"}
           hint={
-            method === "kubernetes" || method === "jwt"
+            method === "kubernetes" || method === "jwt" || method === "hub_identity"
               ? "A Provider scope can sign in with its own role instead."
               : undefined
           }
@@ -191,6 +192,21 @@ function OpenBaoFields({
             }
             value={draft.tokenFile}
             onChange={(event) => onChange({ tokenFile: event.target.value })}
+            spellCheck={false}
+          />
+        </Field>
+      ) : null}
+      {method === "hub_identity" ? (
+        <Field
+          id="openbao-audience"
+          label="Audience"
+          hint="What OpenBao's JWT role expects in the token's aud. The Hub signs a token per Provider scope (claim scope), with no credential stored."
+        >
+          <Input
+            id="openbao-audience"
+            placeholder="vault"
+            value={draft.audience}
+            onChange={(event) => onChange({ audience: event.target.value })}
             spellCheck={false}
           />
         </Field>
@@ -228,7 +244,7 @@ function OpenBaoFields({
       <Field id="openbao-auth-mount" label="Sign-in mount (optional)">
         <Input
           id="openbao-auth-mount"
-          placeholder={method}
+          placeholder={method === "hub_identity" ? "jwt" : method}
           value={draft.authMount}
           onChange={(event) => onChange({ authMount: event.target.value })}
           spellCheck={false}

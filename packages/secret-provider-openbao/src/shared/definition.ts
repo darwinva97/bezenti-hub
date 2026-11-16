@@ -67,7 +67,14 @@ const AbsoluteFile = Schema.String.check(
   ),
 );
 
-export const OpenBaoAuthMethod = Schema.Literals(["kubernetes", "jwt", "approle", "token", "cert"]);
+export const OpenBaoAuthMethod = Schema.Literals([
+  "kubernetes",
+  "jwt",
+  "approle",
+  "token",
+  "cert",
+  "hub_identity",
+]);
 export type OpenBaoAuthMethod = typeof OpenBaoAuthMethod.Type;
 
 const OpenBaoMount = Schema.Struct({ path: OpenBaoPath, version: Schema.Literals([1, 2]) });
@@ -79,6 +86,7 @@ const REQUIRED_BY_METHOD: Readonly<Record<OpenBaoAuthMethod, ReadonlyArray<strin
   approle: ["roleId", "secretId"],
   token: ["token"],
   cert: ["clientCert", "clientKey"],
+  hub_identity: ["authRole", "audience"],
 };
 
 /**
@@ -106,6 +114,13 @@ export const OpenBaoSecretProviderConfig = Schema.Struct({
   token: Schema.optional(SettingsSecretValue),
   clientCert: Schema.optional(Certificate),
   clientKey: Schema.optional(SettingsSecretValue),
+  /** `hub_identity`: the audience OpenBao's JWT role expects of the Hub's token. */
+  audience: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
+  /**
+   * `hub_identity`: the token the Hub signed for this read, set by the Hub before every call and
+   * never saved (a saved one is refused).
+   */
+  identityToken: Schema.optional(Schema.String),
   refreshIntervalSeconds: Schema.optional(
     Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 86_400 })),
   ),
@@ -207,6 +222,10 @@ export const definition = defineSecretProvider({
       : undefined;
   },
   withScopeAuth,
+  hubIdentity: (config) =>
+    config.authMethod === "hub_identity" && config.audience !== undefined
+      ? { audience: config.audience }
+      : undefined,
   referencePlaceholder: "kv/acme/app#token",
   invalidReferenceMessage: "Use a reference like kv/acme/app#token or kv/acme/app?version=2#token.",
   credentialFields: ["token", "secretId", "clientKey"],

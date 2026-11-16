@@ -23,6 +23,12 @@ export interface SecretProviderDefinition<Config = unknown> {
    */
   withScopeAuth?(config: Config, auth: Readonly<Record<string, string>>): Config | undefined;
   /**
+   * Whether this config signs in with the Hub's own workload identity (ticket 07), and for which
+   * audience: the Hub then signs a token per Provider scope and hands it to the driver in the
+   * config's `identityToken`, which is never saved.
+   */
+  hubIdentity?(config: Config): { readonly audience: string } | undefined;
+  /**
    * Config fields holding a credential (`SettingsSecretValue`: a literal or a reference to another
    * provider). The server seals a literal in its store and never sends it to a client.
    */

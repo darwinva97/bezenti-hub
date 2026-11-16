@@ -30,6 +30,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 import { BUILT_IN_SECRET_PROVIDER_DRIVER_LIST } from "../secrets/secretProviderDefinitions.ts";
+import * as IdentityTokens from "../identity/IdentityTokens.ts";
 import * as Settings from "../serverSettings.ts";
 import { scopeAllows, scopeAuthOf } from "./providerScopeRules.ts";
 
@@ -187,6 +188,14 @@ export const make = Effect.fn("ProviderReads.make")(function* (options: {
   readonly readCredential?: (reference: SecretReference) => Effect.Effect<string | undefined>;
   /** The `auth` a scope lays over its provider's config (role, mount...); without it, none. */
   readonly scopeAuth?: (scopeId: string) => Effect.Effect<Readonly<Record<string, string>>>;
+  /**
+   * Ticket 07: the Hub's own token for a provider that signs in as the Hub, for its audience and
+   * the scope read through (null: «Direct»); undefined when the Hub is no issuer.
+   */
+  readonly hubIdentity?: (input: {
+    readonly audience: string;
+    readonly scopeId: string | null;
+  }) => Effect.Effect<string | undefined>;
 }) {
   const context = yield* Effect.context<SecretProviderDriverServices>();
   const drivers = new Map(
@@ -356,15 +365,38 @@ export const make = Effect.fn("ProviderReads.make")(function* (options: {
       ),
     );
 
+  /**
+   * The config a driver call gets: with the Hub's token for this scope when the provider signs in
+   * as the Hub (ticket 07). It is never saved, nor part of what a held value was read with.
+   */
+  const withHubIdentity = (plan: Plan, scopeId: string | null) => {
+    const wanted = plan.driver.definition.hubIdentity?.(plan.config);
+    if (wanted === undefined || options.hubIdentity === undefined) {
+      return Effect.succeed(plan.config);
+    }
+    return options
+      .hubIdentity({ audience: wanted.audience, scopeId })
+      .pipe(
+        Effect.map((identityToken) =>
+          identityToken === undefined
+            ? plan.config
+            : { ...(plan.config as Record<string, unknown>), identityToken },
+        ),
+      );
+  };
+
   /** One provider's batch: bounded, every reference answered, the waiting reads released. */
   const readGroup = (plan: Plan, refs: ReadonlyArray<ProviderRef>) =>
-    bounded(
-      plan,
-      plan.driver.read(
-        plan.config,
-        refs.map((ref) => ref.reference),
+    withHubIdentity(plan, refs[0]?.scopeId ?? null).pipe(
+      Effect.flatMap((config) =>
+        bounded(
+          plan,
+          plan.driver.read(
+            config,
+            refs.map((ref) => ref.reference),
+          ),
+        ),
       ),
-    ).pipe(
       Effect.map(
         Option.match({
           onNone: () => refs.map(() => UNAVAILABLE),
@@ -481,14 +513,15 @@ export const make = Effect.fn("ProviderReads.make")(function* (options: {
         ...(probe === undefined ? {} : { probe: { ok: false, error: "invalid" as const } }),
       };
     }
-    const signedIn = yield* bounded(plan, plan.driver.test(plan.config));
+    const config = yield* withHubIdentity(plan, null);
+    const signedIn = yield* bounded(plan, plan.driver.test(config));
     const auth: SecretProviderCheck = Option.match(signedIn, {
       onNone: () => ({ ok: false, error: "unavailable" }),
       onSome: (report) =>
         report.ok ? { ok: true } : { ok: false, ...(report.error ? { error: report.error } : {}) },
     });
     if (probe === undefined) return { auth };
-    const read = yield* bounded(plan, plan.driver.read(plan.config, [probe]));
+    const read = yield* bounded(plan, plan.driver.read(config, [probe]));
     const result = Option.isSome(read) ? (read.value[0] ?? UNAVAILABLE) : UNAVAILABLE;
     return {
       auth,
@@ -510,6 +543,8 @@ export const layer = Layer.effect(
     const settings = yield* Settings.ServerSettingsService;
     const sql = yield* SqlClient.SqlClient;
     const resolver = yield* Effect.serviceOption(SecretResolver.SecretResolver);
+    // Ticket 07: the Hub's own token, for providers that sign in as the Hub.
+    const identity = yield* Effect.serviceOption(IdentityTokens.IdentityTokens);
     const providers = settings.getSettings.pipe(
       Effect.map((current) => current.secretProviders),
       Effect.orElseSucceed((): ServerSettings["secretProviders"] => ({})),
@@ -527,6 +562,15 @@ export const layer = Layer.effect(
         : {
             readCredential: (reference: SecretReference) =>
               resolver.value.read([reference]).pipe(Effect.map((values) => values[0])),
+          }),
+      ...(Option.isNone(identity)
+        ? {}
+        : {
+            hubIdentity: (input: { readonly audience: string; readonly scopeId: string | null }) =>
+              identity.value.forHub(input).pipe(
+                Effect.map((issued): string | undefined => issued.token),
+                Effect.orElseSucceed(() => undefined),
+              ),
           }),
     });
   }),

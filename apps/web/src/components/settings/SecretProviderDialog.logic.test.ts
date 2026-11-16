@@ -110,6 +110,33 @@ describe("OpenBao drafts", () => {
     expect(issue({})).toBeUndefined();
   });
 
+  it("signs in as the Hub with a role and an audience, and no credential (ticket 07)", () => {
+    const result = secretProviderFromDraft(
+      draft({
+        address: "https://bao.internal:8200",
+        authMethod: "hub_identity",
+        authRole: "t3-acme",
+        audience: "vault",
+        credential: "left-over",
+      }),
+      new Set(),
+      { mode: "add" },
+    );
+    expect(Result.isSuccess(result) && result.success.config.config).toEqual({
+      address: "https://bao.internal:8200",
+      mounts: [{ path: "kv", version: 2 }],
+      authMethod: "hub_identity",
+      authRole: "t3-acme",
+      audience: "vault",
+    });
+    const missing = secretProviderFromDraft(
+      draft({ address: "https://bao.internal:8200", authMethod: "hub_identity", authRole: "r" }),
+      new Set(),
+      { mode: "add" },
+    );
+    expect(Result.isFailure(missing) && missing.failure.openBao).toMatch(/audience/);
+  });
+
   it("edits a saved provider without seeing its credential, keeping what the form has no field for", () => {
     const saved = {
       kind: SecretProviderKind.make("openbao"),

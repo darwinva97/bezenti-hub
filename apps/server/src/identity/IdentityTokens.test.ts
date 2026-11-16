@@ -6,6 +6,7 @@
  */
 import { assert, describe, it } from "@effect/vitest";
 import {
+  type ServerSettings as ServerSettingsShape,
   EnvironmentId,
   HUB_MACHINE_ENVIRONMENT_ID,
   SpaceId,
@@ -25,6 +26,7 @@ import * as Jose from "jose";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as IdentityIssuer from "./IdentityIssuer.ts";
 import * as IdentityKeys from "./IdentityKeys.ts";
@@ -36,12 +38,20 @@ const AT = "2026-11-17T00:00:00.000Z";
 const DAY = 24 * 60 * 60;
 
 const audits: Array<AuditLog.AuditRecord> = [];
+let settingsProviders: Record<string, unknown> = {};
 const logged: Array<string> = [];
 const sealed = new Map<string, Uint8Array>();
 
 const layerFor = (issuer: string | undefined) =>
   Layer.effect(IdentityTokens.IdentityTokens, IdentityTokens.make).pipe(
     Layer.provideMerge(Layer.effect(IdentityKeys.IdentityKeys, IdentityKeys.make)),
+    Layer.provideMerge(
+      Layer.mock(ServerSettings.ServerSettingsService)({
+        getSettings: Effect.sync(
+          () => ({ secretProviders: settingsProviders }) as unknown as ServerSettingsShape,
+        ),
+      }),
+    ),
     Layer.provideMerge(
       Layer.succeed(
         IdentityIssuer.IdentityIssuer,
@@ -110,6 +120,7 @@ const facts = {
 };
 
 const reset = Effect.sync(() => {
+  settingsProviders = {};
   audits.length = 0;
   logged.length = 0;
   sealed.clear();
@@ -299,7 +310,8 @@ describe("IdentityTokens", () => {
       const after = (yield* keys.published).map((key) => key.kid);
       assert.lengthOf(after, 1);
       assert.notInclude(after, before);
-      const next = yield* tokens.forHub({ audience: "vault", scopeId: null });
+      // (A restore runs with the Hub stopped: no token is held in memory across it.)
+      const next = yield* tokens.forHub({ audience: "vault", scopeId: "after-restore" });
       assert.strictEqual(Jose.decodeProtectedHeader(next.token).kid, after[0]);
     }).pipe(Effect.provide(layerFor(ISSUER))),
   );
@@ -334,6 +346,63 @@ describe("IdentityTokens", () => {
       });
       const direct = yield* tokens.forHub({ audience: "vault", scopeId: null });
       assert.strictEqual(Jose.decodeJwt(direct.token).scope, "direct");
+    }).pipe(Effect.provide(layerFor(ISSUER))),
+  );
+
+  it.effect("the Hub's own token is reused while a third of its life is left", () =>
+    Effect.gen(function* () {
+      yield* reset;
+      yield* seed;
+      yield* TestClock.setTime(Date.parse(AT));
+      const tokens = yield* IdentityTokens.IdentityTokens;
+      const first = yield* tokens.forHub({ audience: "vault", scopeId: "scope-1" });
+      yield* TestClock.adjust("199 seconds");
+      assert.strictEqual(
+        (yield* tokens.forHub({ audience: "vault", scopeId: "scope-1" })).jti,
+        first.jti,
+      );
+      // Another scope is another token: its claim says which.
+      const other = yield* tokens.forHub({ audience: "vault", scopeId: "scope-2" });
+      assert.notStrictEqual(other.jti, first.jti);
+      yield* TestClock.adjust("2 seconds");
+      assert.notStrictEqual(
+        (yield* tokens.forHub({ audience: "vault", scopeId: "scope-1" })).jti,
+        first.jti,
+      );
+      assert.lengthOf(audits, 3);
+    }).pipe(Effect.provide(layerFor(ISSUER))),
+  );
+
+  it.effect("is in use once an identity entry or a provider signing in as the Hub exists", () =>
+    Effect.gen(function* () {
+      yield* reset;
+      yield* seed;
+      const tokens = yield* IdentityTokens.IdentityTokens;
+      assert.isFalse(yield* tokens.inUse);
+      settingsProviders = {
+        bao: {
+          kind: "openbao",
+          label: "Bao",
+          config: { authMethod: "hub_identity", audience: "vault" },
+        },
+      };
+      assert.isTrue(yield* tokens.inUse);
+      settingsProviders = {
+        bao: { kind: "openbao", label: "Bao", config: { authMethod: "approle" } },
+      };
+      assert.isFalse(yield* tokens.inUse);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        INSERT INTO vaults (vault_id, name, is_main, created_at, updated_at)
+        VALUES ('tools', 'Tools', 0, ${AT}, ${AT})
+      `;
+      yield* sql`
+        INSERT INTO vault_entries (entry_id, vault_id, name, kind, class, revealable, delivery,
+          identity_audience, identity_ttl_seconds, created_at, updated_at)
+        VALUES ('id-1', 'tools', 'KUBE_TOKEN', 'identity', 'secret', 0, 'file', 'kubernetes', 600,
+          ${AT}, ${AT})
+      `;
+      assert.isTrue(yield* tokens.inUse);
     }).pipe(Effect.provide(layerFor(ISSUER))),
   );
 

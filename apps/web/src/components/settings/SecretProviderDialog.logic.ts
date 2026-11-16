@@ -64,6 +64,7 @@ export const OPENBAO_CREDENTIAL: Readonly<
   approle: { field: "secretId", label: "secret ID" },
   token: { field: "token", label: "token" },
   cert: { field: "clientKey", label: "client key" },
+  hub_identity: undefined,
 };
 
 export interface OpenBaoDraft {
@@ -79,6 +80,8 @@ export interface OpenBaoDraft {
   readonly tokenFile: string;
   readonly roleId: string;
   readonly clientCert: string;
+  /** `hub_identity` (ticket 07): the audience OpenBao's JWT role expects of the Hub's token. */
+  readonly audience: string;
   /** The method's credential: a new value, the saved marker, or a reference to another provider. */
   readonly credential: string | SecretReference;
   /** Kept from a saved provider; the form has no field for it. */
@@ -96,6 +99,7 @@ export const emptyOpenBaoDraft: OpenBaoDraft = {
   tokenFile: "",
   roleId: "",
   clientCert: "",
+  audience: "",
   credential: "",
 };
 
@@ -131,6 +135,7 @@ export function draftFromSecretProvider(provider: SecretProviderConfig): SecretP
         tokenFile: config.tokenFile ?? "",
         roleId: config.roleId ?? "",
         clientCert: config.clientCert ?? "",
+        audience: config.audience ?? "",
         credential: (saved as string | SecretReference | undefined) ?? "",
         ...(config.refreshIntervalSeconds === undefined
           ? {}
@@ -209,6 +214,7 @@ function openBaoConfigFromDraft(draft: OpenBaoDraft): Result.Result<unknown, str
     ...(method === "kubernetes" || method === "jwt" ? optional("tokenFile", draft.tokenFile) : {}),
     ...(method === "approle" ? optional("roleId", draft.roleId) : {}),
     ...(method === "cert" ? optional("clientCert", draft.clientCert) : {}),
+    ...(method === "hub_identity" ? optional("audience", draft.audience) : {}),
     ...(credential === undefined ? {} : { [credential.field]: draft.credential }),
     ...(draft.refreshIntervalSeconds === undefined
       ? {}

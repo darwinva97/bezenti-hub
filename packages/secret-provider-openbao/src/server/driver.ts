@@ -163,6 +163,9 @@ const test = Effect.fn("OpenBaoDriver.test")(function* (config: OpenBaoSecretPro
 const configProblem = Effect.fn("OpenBaoDriver.configProblem")(function* (
   config: OpenBaoSecretProviderConfig,
 ) {
+  if (config.identityToken !== undefined) {
+    return "identityToken is the Hub's to set at each read: it is never saved.";
+  }
   if (config.tokenFile === undefined) return undefined;
   if (config.authMethod !== "kubernetes" && config.authMethod !== "jwt") return undefined;
   const problem = yield* providerFileProblem(config.tokenFile);

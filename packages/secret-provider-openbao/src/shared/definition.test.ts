@@ -140,6 +140,15 @@ describe("OpenBao definition", () => {
     expect(Object.keys(decoded)).not.toContain("insecure");
   });
 
+  it("signs in as the Hub with its own identity: a role and an audience, no credential", () => {
+    const hub = { ...base, authMethod: "hub_identity", audience: "vault" };
+    expect(isConfig(hub)).toBe(true);
+    expect(isConfig({ ...hub, audience: undefined })).toBe(false);
+    expect(isConfig({ ...hub, authRole: undefined })).toBe(false);
+    expect(definition.hubIdentity!(decode(hub))).toEqual({ audience: "vault" });
+    expect(definition.hubIdentity!(decode(base))).toBeUndefined();
+  });
+
   it("declares its credentials", () => {
     expect(definition.credentialFields).toEqual(["token", "secretId", "clientKey"]);
   });

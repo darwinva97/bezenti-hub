@@ -223,6 +223,39 @@ describe("OpenBao driver", () => {
       ),
   );
 
+  it.effect("signs in as the Hub with the JWT the Hub gave it, never saved", () =>
+    run(
+      Effect.gen(function* () {
+        const fake = yield* startFakeOpenBao(baoModel({ kv2: KV2 }).route);
+        const config = {
+          address: fake.address,
+          mounts: MOUNTS,
+          authMethod: "hub_identity",
+          authRole: "t3-acme",
+          audience: "vault",
+        };
+        // Without the Hub's token (no issuer): nothing to sign in with.
+        assert.deepStrictEqual(yield* driver.read(config, ["kv/acme/other#key"]), [
+          readError("invalid"),
+        ]);
+        assert.deepStrictEqual(fake.seen, []);
+        const withToken = { ...config, identityToken: "hub.jwt.token" };
+        assert.deepStrictEqual(yield* driver.read(withToken, ["kv/acme/other#key"]), [
+          { _tag: "value", value: "other-key", version: "1" },
+        ]);
+        assert.deepStrictEqual(
+          logins(fake.seen).map((request) => [request.url, request.body]),
+          [["/v1/auth/jwt/login", { role: "t3-acme", jwt: "hub.jwt.token" }]],
+        );
+        // A newer JWT is the same sign-in: the session it opened goes on.
+        yield* driver.read({ ...config, identityToken: "hub.jwt.newer" }, ["kv/acme/app#user"]);
+        assert.lengthOf(logins(fake.seen), 1);
+        // The token is the Hub's to set at each read: one saved in the settings is refused.
+        assert.match((yield* driver.configProblem!(withToken)) ?? "", /never saved/);
+      }),
+    ),
+  );
+
   it.effect("uses a token as given, after looking it up", () =>
     run(
       Effect.gen(function* () {

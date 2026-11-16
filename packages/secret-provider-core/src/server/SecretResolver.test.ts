@@ -13,7 +13,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-import { defineSecretProviderDriver } from "./driver.ts";
+import { defineSecretProviderDriver, readError, readValue } from "./driver.ts";
 import * as SecretResolver from "./SecretResolver.ts";
 import { defineSecretProvider } from "../shared/definition.ts";
 
@@ -49,10 +49,14 @@ function fakeDriver(
         Effect.andThen(
           Effect.sync(() => {
             reads.push({ account, references });
-            return references.map((reference) => answer(account, reference));
+            return references.map((reference) => {
+              const value = answer(account, reference);
+              return value === undefined ? readError("not-found") : readValue(value);
+            });
           }),
         ),
       ),
+    test: () => Effect.succeed({ ok: true }),
   });
   return { driver, reads };
 }

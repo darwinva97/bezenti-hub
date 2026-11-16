@@ -9,7 +9,11 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
-import type { SecretProviderDriver, SecretProviderDriverServices } from "./driver.ts";
+import {
+  type SecretProviderDriver,
+  type SecretProviderDriverServices,
+  valueOfRead,
+} from "./driver.ts";
 
 export class SecretResolver extends Context.Service<
   SecretResolver,
@@ -120,7 +124,10 @@ export const make = Effect.fn("SecretResolver.make")(function* (options: {
           const values = yield* plan.driver.read(plan.config, [...byReference.keys()]);
           [...byReference.values()].forEach((sameReference, index) => {
             for (const reference of sameReference) {
-              cache.set(cacheKey(reference), { config: plan.configKey, value: values[index] });
+              cache.set(cacheKey(reference), {
+                config: plan.configKey,
+                value: valueOfRead(values[index]),
+              });
             }
           });
         }

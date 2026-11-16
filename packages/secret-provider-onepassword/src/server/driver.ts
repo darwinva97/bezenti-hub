@@ -1,5 +1,11 @@
 import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
-import { defineSecretProviderDriver } from "@t3tools/secret-provider-core/server/driver";
+import {
+  defineSecretProviderDriver,
+  readError,
+  readValue,
+  type SecretProviderTestReport,
+  type SecretReadResult,
+} from "@t3tools/secret-provider-core/server/driver";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
@@ -25,8 +31,10 @@ const runOnePassword = Effect.fn("OnePasswordDriver.runOnePassword")(function* (
   );
 });
 
-// A secret is passed on verbatim; surrounding whitespace can be part of it.
-const nonEmpty = (value: string) => (value.trim().length > 0 ? value : undefined);
+// A secret is passed on verbatim; surrounding whitespace can be part of it. An empty answer is
+// one 1Password does not hold. `op` does not tell a missing item from a refused one: not-found.
+const toResult = (value: string): SecretReadResult =>
+  value.trim().length > 0 ? readValue(value) : readError("not-found");
 
 const readOne = Effect.fn("OnePasswordDriver.readOne")(function* (
   account: OnePasswordAccount,
@@ -34,13 +42,14 @@ const readOne = Effect.fn("OnePasswordDriver.readOne")(function* (
 ) {
   const result = yield* runOnePassword(["read", `--account=${account}`, "--no-newline", reference]);
   if (result.code !== 0) {
+    // The exit code only: `op`'s output can echo what it holds.
     yield* Effect.logWarning("Could not read secret from 1Password", {
       stage: "read",
       exitCode: result.code,
     });
-    return undefined;
+    return readError("not-found");
   }
-  return nonEmpty(result.stdout);
+  return toResult(result.stdout);
 });
 
 // One `op inject` costs one unlock for every reference in the template. `op` ignores piped stdin
@@ -73,13 +82,14 @@ const readTogether = Effect.fn("OnePasswordDriver.readTogether")(function* (
     });
     return undefined;
   }
-  return values.map(nonEmpty);
+  return values.map(toResult);
 }, Effect.scoped);
 
-/** `None` when 1Password did not answer in time; a failed run reads as `Some(undefined)`. */
+/** `None` when 1Password did not answer in time; `Some(onFailure)` when `op` could not run. */
 const bounded = <A, E extends { readonly _tag: string }, R>(
-  stage: "read" | "inject",
-  effect: Effect.Effect<A | undefined, E, R>,
+  stage: "read" | "inject" | "whoami",
+  effect: Effect.Effect<A, E, R>,
+  onFailure: A,
 ) =>
   effect.pipe(
     Effect.timeoutOption(READ_TIMEOUT),
@@ -90,23 +100,43 @@ const bounded = <A, E extends { readonly _tag: string }, R>(
     ),
     Effect.catch((error) =>
       Effect.logWarning("Could not run 1Password", { stage, error: error._tag }).pipe(
-        Effect.as(Option.some(undefined)),
+        Effect.as(Option.some(onFailure)),
       ),
     ),
   );
+
+const UNAVAILABLE = readError("unavailable");
 
 export const driver = defineSecretProviderDriver({
   kind: definition.kind,
   definition,
   read: Effect.fn("OnePasswordDriver.read")(function* ({ account }, references) {
     if (references.length > 1) {
-      const together = yield* bounded("inject", readTogether(account, references));
+      const together = yield* bounded("inject", readTogether(account, references), undefined);
       // Reading one by one after a timeout would only wait that long again for each reference.
-      if (Option.isNone(together)) return references.map(() => undefined);
+      if (Option.isNone(together)) return references.map(() => UNAVAILABLE);
       if (together.value !== undefined) return together.value;
     }
     return yield* Effect.forEach(references, (reference) =>
-      bounded("read", readOne(account, reference)).pipe(Effect.map(Option.getOrUndefined)),
+      bounded("read", readOne(account, reference), UNAVAILABLE).pipe(
+        Effect.map(Option.getOrElse(() => UNAVAILABLE)),
+      ),
     );
+  }),
+  // Signed in to the account, or not: `op`'s text never leaves.
+  test: Effect.fn("OnePasswordDriver.test")(function* ({ account }) {
+    const outcome = yield* bounded(
+      "whoami",
+      runOnePassword(["whoami", `--account=${account}`]).pipe(
+        Effect.map((result): SecretProviderTestReport =>
+          result.code === 0 ? { ok: true } : { ok: false, error: "forbidden" },
+        ),
+      ),
+      { ok: false, error: "unavailable" },
+    );
+    return Option.getOrElse(outcome, (): SecretProviderTestReport => ({
+      ok: false,
+      error: "unavailable",
+    }));
   }),
 });

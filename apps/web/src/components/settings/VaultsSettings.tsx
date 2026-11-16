@@ -4,10 +4,15 @@ import {
   type EnvironmentId,
   looksLikeCredential,
   MAIN_VAULT_ID,
+  parseTemplate,
+  previewTemplate,
   secretNameRisk,
+  templateNames,
+  templatePathNames,
   type SpaceId,
   type VaultEntry,
   type VaultEntryClass,
+  type VaultEntryDelivery,
   type VaultEntryId,
   type SecretProviderId,
   type VaultProviderScopes,
@@ -31,6 +36,7 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Textarea } from "../ui/textarea";
 import { emptyStepUp, StepUpFields, toStepUp } from "./AccountSettingsSection";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SpaceDefaultVaults, VaultAllowances } from "./VaultChoices";
@@ -82,17 +88,86 @@ const CREDENTIAL_WARNING =
 const SEAL_CONFIRM = (name: string) =>
   `Seal ${name}? Nobody will reveal it again, not even you. Only a new value can make it revealable.`;
 
-const KIND_ITEMS: ReadonlyArray<{ readonly value: VaultEntryClass; readonly label: string }> = [
+type AddKind = VaultEntryClass | "template";
+const KIND_ITEMS: ReadonlyArray<{ readonly value: AddKind; readonly label: string }> = [
   { value: "secret", label: "Secret" },
   { value: "variable", label: "Variable" },
+  { value: "template", label: "Template" },
 ];
+
+const DELIVERY_ITEMS: ReadonlyArray<{
+  readonly value: VaultEntryDelivery;
+  readonly label: string;
+}> = [
+  { value: "env", label: "Environment variable" },
+  { value: "file", label: "File" },
+  { value: "none", label: "Not delivered" },
+];
+const DELIVERY_HINT: Record<VaultEntryDelivery, string> = {
+  env: "",
+  file: "Written to a file in memory on the Thread's machine; the variable holds its path. A machine without memory for it refuses the Thread.",
+  none: "Only templates of this Vault use it: no process gets it by itself.",
+};
+
+/** Why a template's text would be refused by the Hub, from the Vault's entries (names only). */
+const templateProblem = (text: string, entries: ReadonlyArray<VaultEntry>): string | null => {
+  const parsed = parseTemplate(text);
+  if (parsed._tag === "invalid") return parsed.message;
+  const byName = new Map(entries.map((entry) => [entry.name, entry]));
+  const paths = templatePathNames(parsed.parts);
+  for (const name of templateNames(parsed.parts)) {
+    const entry = byName.get(name);
+    if (entry === undefined) return `${name} is not an entry of this Vault.`;
+    if (entry.kind === "template") return `${name} is a template: a template never names another.`;
+    if (paths.has(name) && entry.delivery !== "file") {
+      return `{{ ${name} | path }} takes ${name}'s file: deliver ${name} as a file.`;
+    }
+  }
+  return null;
+};
 
 /** What a change to an entry sends, besides its name: a value, a class, the reveal choice. */
 interface EntryChange {
   readonly value?: string;
   readonly class?: VaultEntryClass;
   readonly allowReveal?: boolean;
+  readonly delivery?: VaultEntryDelivery;
   readonly confirmDangerous: boolean;
+}
+
+/** How an entry reaches a process: a select for whoever edits it. */
+function DeliverySelect(props: {
+  readonly label: string;
+  readonly value: VaultEntryDelivery;
+  readonly disabled: boolean;
+  readonly allowNone: boolean;
+  readonly onChange: (next: VaultEntryDelivery) => void;
+}) {
+  const items = props.allowNone
+    ? DELIVERY_ITEMS
+    : DELIVERY_ITEMS.filter((item) => item.value !== "none");
+  return (
+    <Select
+      disabled={props.disabled}
+      items={items}
+      value={props.value}
+      onValueChange={(next) => {
+        const found = items.find((item) => item.value === next);
+        if (found !== undefined) props.onChange(found.value);
+      }}
+    >
+      <SelectTrigger aria-label={props.label}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectPopup>
+        {items.map((item) => (
+          <SelectItem key={item.value} value={item.value}>
+            {item.label}
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
+  );
 }
 
 /** The value form an entry row opens: a plain replace, or one of the changes that need a value. */
@@ -392,11 +467,13 @@ function VaultSection(props: {
     }
   };
   const savedMessage = (name: string, verb: string, warnings: ReadonlyArray<string>) =>
-    warnings.includes("short-value")
-      ? `${name} ${verb}. Shorter than 6 characters: it won't be masked in the history.`
-      : warnings.includes("looks-like-credential")
-        ? `${name} ${verb}. ${CREDENTIAL_WARNING}`
-        : `${name} ${verb}.`;
+    warnings.includes("not-used-by-template")
+      ? `${name} ${verb}. No template of this Vault uses it yet, so no process gets it.`
+      : warnings.includes("short-value")
+        ? `${name} ${verb}. Shorter than 6 characters: it won't be masked in the history.`
+        : warnings.includes("looks-like-credential")
+          ? `${name} ${verb}. ${CREDENTIAL_WARNING}`
+          : `${name} ${verb}.`;
   const change = (entry: VaultEntry, input: EntryChange) =>
     act(async () => {
       const result = await settle(
@@ -409,20 +486,23 @@ function VaultSection(props: {
             ...(input.value === undefined ? {} : { value: Redacted.make(input.value) }),
             ...(input.class === undefined ? {} : { class: input.class }),
             ...(input.allowReveal === undefined ? {} : { allowReveal: input.allowReveal }),
+            ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
             ...(input.confirmDangerous ? { confirmDangerous: true } : {}),
           },
         }),
       );
       const verb =
-        input.class === "variable"
-          ? "is now a Variable"
-          : input.class === "secret"
-            ? "is now a sealed Secret"
-            : input.allowReveal === false
-              ? "sealed"
-              : input.allowReveal === true
-                ? "replaced; you can reveal it"
-                : "replaced";
+        input.delivery !== undefined
+          ? `is now delivered as ${DELIVERY_ITEMS.find((item) => item.value === input.delivery)?.label.toLowerCase() ?? input.delivery}`
+          : input.class === "variable"
+            ? "is now a Variable"
+            : input.class === "secret"
+              ? "is now a sealed Secret"
+              : input.allowReveal === false
+                ? "sealed"
+                : input.allowReveal === true
+                  ? "replaced; you can reveal it"
+                  : "replaced";
       return savedMessage(entry.name, verb, result.warnings);
     });
   const owner = vault.isMain
@@ -501,6 +581,7 @@ function VaultSection(props: {
         <AddSecretForm
           vaultName={vault.name}
           isOwner={props.isOwner}
+          entries={props.entries}
           onAdd={(name, value, options) =>
             act(async () => {
               const result = await settle(
@@ -509,11 +590,13 @@ function VaultSection(props: {
                   input: {
                     vaultId: vault.id,
                     name,
-                    value: Redacted.make(value),
-                    class: options.class,
-                    ...(options.class === "secret" && options.allowReveal
+                    ...(options.kind === "template"
+                      ? { template: { text: value } }
+                      : { value: Redacted.make(value), class: options.kind }),
+                    ...(options.kind === "secret" && options.allowReveal
                       ? { allowReveal: true }
                       : {}),
+                    delivery: options.delivery,
                     ...(options.confirmDangerous ? { confirmDangerous: true } : {}),
                   },
                 }),
@@ -631,13 +714,36 @@ function EntryRow(props: {
           )
         ) : entry.kind === "copy" ? (
           <Badge variant="outline">copy</Badge>
+        ) : entry.kind === "template" ? (
+          entry.broken ? (
+            <Badge variant="destructive">broken</Badge>
+          ) : (
+            <Badge variant="outline">Template</Badge>
+          )
         ) : null}
+        {entry.delivery === "file" ? <Badge variant="outline">File</Badge> : null}
+        {entry.delivery === "none" ? <Badge variant="outline">Not delivered</Badge> : null}
         {entry.unmasked && !isVariable ? <Badge variant="outline">not masked</Badge> : null}
         {dangerous ? <Badge variant="outline">changes how tools run</Badge> : null}
         {entry.description === null ? null : (
           <span className="text-xs text-muted-foreground">{entry.description}</span>
         )}
         <span className="ms-auto flex flex-wrap gap-1">
+          {props.canEdit && (entry.kind !== "provider" || props.isOwner) ? (
+            <span className="w-48">
+              <DeliverySelect
+                label={`Delivery of ${entry.name}`}
+                value={entry.delivery}
+                disabled={false}
+                allowNone={entry.kind !== "template"}
+                onChange={(delivery) => {
+                  if (delivery !== entry.delivery) {
+                    void props.onChange({ delivery, confirmDangerous: dangerous });
+                  }
+                }}
+              />
+            </span>
+          ) : null}
           {actions.replace ? (
             <Button
               size="xs"
@@ -709,6 +815,14 @@ function EntryRow(props: {
           ) : null}
         </span>
       </div>
+      {entry.kind === "template" && entry.template?.text != null ? (
+        <pre
+          aria-label={`Template of ${entry.name}`}
+          className="max-h-40 overflow-auto rounded bg-muted px-2 py-1 text-xs whitespace-pre-wrap"
+        >
+          {entry.template.text}
+        </pre>
+      ) : null}
       {mode === null ? null : (
         <form
           className="flex max-w-md flex-col gap-2"
@@ -884,28 +998,38 @@ function RevealControl(props: { readonly vault: VaultSummary; readonly entry: Va
 function AddSecretForm(props: {
   readonly vaultName: string;
   readonly isOwner: boolean;
+  readonly entries: ReadonlyArray<VaultEntry>;
   readonly onAdd: (
     name: string,
     value: string,
     options: {
-      readonly class: VaultEntryClass;
+      readonly kind: AddKind;
       readonly allowReveal: boolean;
+      readonly delivery: VaultEntryDelivery;
       readonly confirmDangerous: boolean;
     },
   ) => Promise<boolean>;
 }) {
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
-  const [kind, setKind] = useState<VaultEntryClass>("secret");
+  const [kind, setKind] = useState<AddKind>("secret");
+  const [delivery, setDelivery] = useState<VaultEntryDelivery>("env");
   const [allowReveal, setAllowReveal] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
   const isVariable = kind === "variable";
+  const isTemplate = kind === "template";
   const hint = nameHint(name, props.isOwner);
   const dangerous = isDangerous(name);
+  // A template's text holds names only: checked and previewed here, as `[NAME]`, never a value.
+  const parsed = isTemplate && value.length > 0 ? parseTemplate(value) : null;
+  const problem = isTemplate && value.length > 0 ? templateProblem(value, props.entries) : null;
+  const preview = parsed?._tag === "parsed" ? previewTemplate(parsed.parts) : null;
+  const chosenDelivery = isTemplate && delivery === "none" ? "env" : delivery;
   const blocked =
     secretNameRisk(name) === "invalid" ||
     secretNameRisk(name) === "gateway" ||
+    problem !== null ||
     (dangerous && (!props.isOwner || !confirmed));
   return (
     <form
@@ -917,8 +1041,9 @@ function AddSecretForm(props: {
         setPending(true);
         void props
           .onAdd(name, value, {
-            class: kind,
-            allowReveal: !isVariable && allowReveal,
+            kind,
+            allowReveal: kind === "secret" && allowReveal,
+            delivery: chosenDelivery,
             confirmDangerous: dangerous && confirmed,
           })
           .then((saved) => {
@@ -927,6 +1052,7 @@ function AddSecretForm(props: {
             setName("");
             setValue("");
             setAllowReveal(false);
+            setDelivery("env");
             setConfirmed(false);
           })
           .finally(() => setPending(false));
@@ -939,7 +1065,9 @@ function AddSecretForm(props: {
             disabled={pending}
             items={KIND_ITEMS}
             value={kind}
-            onValueChange={(next) => setKind(next === "variable" ? "variable" : "secret")}
+            onValueChange={(next) =>
+              setKind(next === "variable" || next === "template" ? next : "secret")
+            }
           >
             <SelectTrigger aria-label="Kind">
               <SelectValue />
@@ -965,15 +1093,27 @@ function AddSecretForm(props: {
             onChange={(event) => setName(event.currentTarget.value.toUpperCase())}
           />
         </label>
-        <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
-          Value
-          <Input
-            aria-label="Value"
-            nativeInput
+        {isTemplate ? null : (
+          <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
+            Value
+            <Input
+              aria-label="Value"
+              nativeInput
+              disabled={pending}
+              {...(isVariable ? SEEN_INPUT_PROPS : VALUE_INPUT_PROPS)}
+              value={value}
+              onChange={(event) => setValue(event.currentTarget.value)}
+            />
+          </label>
+        )}
+        <label className="flex flex-col gap-1 text-xs font-medium sm:w-48">
+          Delivery
+          <DeliverySelect
+            label="Delivery"
+            value={chosenDelivery}
             disabled={pending}
-            {...(isVariable ? SEEN_INPUT_PROPS : VALUE_INPUT_PROPS)}
-            value={value}
-            onChange={(event) => setValue(event.currentTarget.value)}
+            allowNone={!isTemplate}
+            onChange={setDelivery}
           />
         </label>
         <Button
@@ -981,10 +1121,47 @@ function AddSecretForm(props: {
           size="sm"
           type="submit"
         >
-          {isVariable ? "Add variable" : "Add secret"}
+          {isTemplate ? "Add template" : isVariable ? "Add variable" : "Add secret"}
         </Button>
       </div>
-      {isVariable ? null : (
+      {isTemplate ? (
+        <div className="flex flex-col gap-2">
+          <label className="flex flex-col gap-1 text-xs font-medium">
+            Template
+            <Textarea
+              aria-label="Template"
+              rows={6}
+              spellCheck={false}
+              disabled={pending}
+              value={value}
+              placeholder="server: {{ KUBE_SERVER }}&#10;tokenFile: {{ KUBE_TOKEN | path }}"
+              onChange={(event) => setValue(event.currentTarget.value)}
+            />
+          </label>
+          <span className="text-xs text-muted-foreground">
+            Names entries of this Vault: {"{{ NAME }}"}, or {"{{ NAME | filter }}"} with base64,
+            base64decode, urlencode, json, trim or path. A Secret among them makes it a sealed
+            Secret.
+          </span>
+          {problem === null ? null : (
+            <span className="text-xs text-destructive" role="alert">
+              {problem}
+            </span>
+          )}
+          {preview === null ? null : (
+            <pre
+              aria-label="Template preview"
+              className="max-h-40 overflow-auto rounded bg-muted px-2 py-1 text-xs whitespace-pre-wrap"
+            >
+              {preview}
+            </pre>
+          )}
+        </div>
+      ) : null}
+      {DELIVERY_HINT[chosenDelivery].length === 0 ? null : (
+        <span className="text-xs text-muted-foreground">{DELIVERY_HINT[chosenDelivery]}</span>
+      )}
+      {kind !== "secret" ? null : (
         <label className="flex items-center gap-2 text-xs font-medium">
           <Checkbox
             aria-label="Allow reveal"

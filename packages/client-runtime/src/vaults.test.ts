@@ -34,6 +34,7 @@ const entry = (over: Partial<VaultEntry> = {}) =>
     name: "TOKEN",
     description: null,
     kind: "own",
+    delivery: "env",
     broken: false,
     linkedFrom: null,
     unmasked: false,
@@ -82,6 +83,13 @@ describe("entryActions", () => {
       }).replace,
     ).toBe(true);
     expect(entryActions(vault(), entry(), ctx).replace).toBe(true);
+    // A template is composed from its entries: no value to replace, seal or reveal.
+    const template = entryActions(
+      vault({ canReveal: true }),
+      entry({ kind: "template", class: "secret", sealed: true }),
+      { ...ctx, surface: "web", isOwner: true },
+    );
+    expect(template).toMatchObject({ replace: false, seal: false, reveal: false });
   });
 
   it("offers «Reveal» only on a revealable Secret; sealing, reveal and class to editors", () => {
@@ -138,6 +146,12 @@ describe("labels", () => {
     ).toEqual(["linked from Main vault (GH)"]);
     expect(entryBadges(entry({ kind: "link" }))).toEqual(["linked from Main vault"]);
     expect(entryBadges(entry({ kind: "copy", unmasked: true }))).toEqual(["copy", "not masked"]);
+    expect(entryBadges(entry({ kind: "template", delivery: "file" }))).toEqual([
+      "template",
+      "file",
+    ]);
+    expect(entryBadges(entry({ kind: "template", broken: true }))).toEqual(["broken"]);
+    expect(entryBadges(entry({ delivery: "none" }))).toEqual(["not delivered"]);
   });
   it("describes whose a Vault is", () => {
     expect(vaultOwnerLine(vault())).toBe("Acme's");

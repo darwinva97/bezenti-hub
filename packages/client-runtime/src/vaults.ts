@@ -68,18 +68,20 @@ export function entryActions(
   const base = vaultActions(vault, context);
   const dangerousOnPhone =
     context.surface === "mobile" && secretNameRisk(entry.name) === "dangerous";
-  // A Provider entry's value is its provider's: nothing to replace, seal or reclassify here.
+  // A Provider entry's value is its provider's, a template's its entries': nothing to replace,
+  // seal, reveal or reclassify here.
   const mayReplace =
     base.replace &&
     !dangerousOnPhone &&
     entry.kind !== "link" &&
     entry.kind !== "provider" &&
+    entry.kind !== "template" &&
     (secretNameRisk(entry.name) !== "dangerous" || context.isOwner);
   const isVariable = entry.class === "variable";
   return {
     ...base,
     replace: mayReplace,
-    reveal: base.reveal && !isVariable && entry.sealed !== true,
+    reveal: base.reveal && !isVariable && entry.sealed !== true && entry.kind !== "template",
     seal: mayReplace && !isVariable && entry.sealed !== true,
     allowReveal: mayReplace && !isVariable && entry.sealed === true,
     makeVariable: mayReplace && !isVariable,
@@ -97,7 +99,11 @@ export function entryBadges(entry: VaultEntry): ReadonlyArray<string> {
     );
   } else if (entry.kind === "copy") {
     badges.push("copy");
+  } else if (entry.kind === "template") {
+    badges.push(entry.broken ? "broken" : "template");
   }
+  if (entry.delivery === "file") badges.push("file");
+  if (entry.delivery === "none") badges.push("not delivered");
   if (entry.unmasked) badges.push("not masked");
   return badges;
 }

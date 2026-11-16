@@ -55,7 +55,7 @@ Cada spec decide sus superficies de cliente (web, desktop, móvil).
 
 ## Out of scope
 
-- SaaS público, registro abierto y facturación (ADR 0001).
+- SaaS público, registro abierto y facturación (ADR 0001). Reabierto en `../public-hub/map.md` (ADR 0008).
 - La implementación: sigue al mapa, vía `/to-spec` → `/to-tickets` → `/implement-spec`.
 - Secretos usados sin que el agente los vea (proxy de credenciales): mejora futura ([Cierre del mapa](issues/16-cierre-del-mapa.md)).
 - `.env.schema` por Project: mejora futura.

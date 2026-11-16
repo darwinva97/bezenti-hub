@@ -115,6 +115,9 @@ jobs:
           sed -i -E "s/^(\s*)versionCode [0-9]+/\1versionCode ${VERSION_CODE}/" "$gradle"
           grep -nE 'versionCode|versionName|applicationId' "$gradle"
 
+      # Caché de ~/.gradle (dependencias y salidas de tareas) entre compilaciones: la primera tardó ~23 min.
+      - uses: gradle/actions/setup-gradle@v5
+
       - name: Compilar (assembleRelease, arm64-v8a)
         working-directory: apps/mobile/android
         env:
@@ -159,7 +162,13 @@ jobs:
           "$bt/apksigner" sign --ks "$ks" --ks-type PKCS12 --ks-pass env:KS_PASS --out "$out" \
             apps/mobile/android/app/build/outputs/apk/release/app-release.apk
           rm -f "$ks"
-          "$bt/apksigner" verify --print-certs "$out" | grep -E 'Signer #1 certificate (DN|SHA-256)'
+          echo "apksigner: $bt"
+          # Solo informa: el formato de la línea cambia entre versiones de apksigner («Signer #1 …» o «Signer (minSdkVersion=…) …»).
+          "$bt/apksigner" verify --print-certs "$out" > verificacion.txt
+          grep -E 'certificate (DN|SHA-256 digest)' verificacion.txt || cat verificacion.txt
+          # Falla si no está firmada con NUESTRA clave (huella SHA-256 del certificado de la clave guardada).
+          grep -qi 'SHA-256 digest: ca:a1:74:86:a9:8c:9d:2b:ba:8d:d8:b4:96:67:25:6c:a4:c9:1e:a7:6c:1c:14:03:1e:1f:cc:e0:87:4a:90:9c\|SHA-256 digest: caa17486a98c9d2bba8dd8b49667256ca4c91ea76c1c14031e1fcce0874a909c' verificacion.txt \
+            || { echo "El APK no está firmado con la clave de bezenti" >&2; exit 1; }
           ls -la salida
 
       - name: Subir a la Release

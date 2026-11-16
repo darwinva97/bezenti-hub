@@ -11,6 +11,7 @@ import {
 } from "./baseSchemas.ts";
 import { AI_GATEWAY_ENV_NAMES } from "./aiGatewaySession.ts";
 import { SecretProviderId } from "./secretReference.ts";
+import { TEMPLATE_TEXT_MAX_LENGTH } from "./vaultTemplates.ts";
 import { AuthReauth } from "./userAccounts.ts";
 
 /** The master key that encrypts the Hub's secrets, as the Owner sees it in Settings. */
@@ -211,8 +212,18 @@ export const looksLikeCredential = (name: string, value?: string): boolean => {
   return [...text].length >= 20 && !/\s/u.test(text) && !URL_LIKE.test(text) && entropy(text) >= 4;
 };
 
-/** `provider`: read from a Secret provider when a process starts; a sealed Secret (ADR 0008). */
-export const VaultEntryKind = Schema.Literals(["own", "copy", "link", "provider"]);
+/**
+ * `provider`: read from a Secret provider when a process starts; a sealed Secret (ADR 0008).
+ * `template`: composed from entries of the same Vault (`vaultTemplates.ts`); its text holds names.
+ */
+export const VaultEntryKind = Schema.Literals(["own", "copy", "link", "provider", "template"]);
+
+/**
+ * How an entry reaches a process: an environment variable, a Secret file in memory whose path the
+ * variable holds, or not at all (it only feeds a template of its Vault).
+ */
+export const VaultEntryDelivery = Schema.Literals(["env", "file", "none"]);
+export type VaultEntryDelivery = typeof VaultEntryDelivery.Type;
 
 /** Where a Provider entry reads its value: a provider of the Owner's settings and a reference. */
 const VAULT_PROVIDER_REFERENCE_MAX_LENGTH = 1024;
@@ -308,9 +319,12 @@ export const VaultEntry = Schema.Struct({
       scope: Schema.optionalKey(Schema.NullOr(Schema.String)),
     }),
   ),
+  /** A Template entry's text (names, never values), for whoever may read Variables; else null. */
+  template: Schema.optionalKey(Schema.Struct({ text: Schema.NullOr(Schema.String) })),
+  delivery: VaultEntryDelivery,
   /**
-   * Shown, never delivered: a Secret link whose original in the Main vault is gone, or a Provider
-   * entry whose provider is gone or cannot be read by this Hub.
+   * Shown, never delivered: a broken Secret link, a Provider entry whose provider is gone or cannot
+   * be read here, or a template naming an entry its Vault no longer has.
    */
   broken: Schema.Boolean,
   /** A link's original, for whoever sees the Main vault (the Owner); null for anyone else. */
@@ -323,7 +337,12 @@ export const VaultEntry = Schema.Struct({
 });
 export type VaultEntry = typeof VaultEntry.Type;
 
-export const VaultWarning = Schema.Literals(["short-value", "looks-like-credential"]);
+/** `not-used-by-template`: a `none` entry no template of its Vault names, so nothing receives it. */
+export const VaultWarning = Schema.Literals([
+  "short-value",
+  "looks-like-credential",
+  "not-used-by-template",
+]);
 export type VaultWarning = typeof VaultWarning.Type;
 
 export const VaultErrorReason = Schema.Literals([
@@ -349,6 +368,8 @@ export const VaultErrorReason = Schema.Literals([
   "needs-new-value",
   /** A Provider entry's reference its provider does not read, or a path that leaves it. */
   "invalid-reference",
+  /** A template's syntax, or a name that is not another, non-template entry of its Vault. */
+  "invalid-template",
   "storage",
 ]);
 export type VaultErrorReason = typeof VaultErrorReason.Type;
@@ -417,6 +438,12 @@ export const VaultEntryPutInput = Schema.Struct({
    * read. Always a sealed Secret.
    */
   provider: Schema.optionalKey(VaultProviderSource),
+  /** A Template entry instead of a `value`: its text, naming entries of the same Vault only. */
+  template: Schema.optionalKey(
+    Schema.Struct({ text: Schema.String.check(Schema.isMaxLength(TEMPLATE_TEXT_MAX_LENGTH)) }),
+  ),
+  /** `env` when omitted on an add; a template is never `none`. */
+  delivery: Schema.optionalKey(VaultEntryDelivery),
   /** The Owner confirms a name that changes how tools run (`secretNameRisk`: dangerous). */
   confirmDangerous: Schema.optionalKey(Schema.Boolean),
 });

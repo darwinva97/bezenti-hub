@@ -1331,3 +1331,163 @@ it.effect(
       assert.lengthOf(provider.state.batches, 0);
     }),
 );
+
+it.effect(
+  "a template names its own Vault's entries only, never another template, and is never revealed",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* hub;
+      const { vaults, as, ownerId, people, reveal, owner, server } = setup;
+      const { acme } = yield* acmeSecrets(setup);
+      const put = (input: Omit<Parameters<typeof vaults.putEntry>[0], "vaultId">) =>
+        vaults.putEntry({ vaultId: acme.id, ...input });
+      yield* put({
+        name: "KUBE_SERVER",
+        value: Redacted.make("https://k3s:6443"),
+        class: "variable",
+      }).pipe(as(people.admin.id));
+      const token = yield* put({
+        name: "KUBE_TOKEN",
+        value: Redacted.make("kube-token-value-0001"),
+        delivery: "file",
+      }).pipe(as(people.admin.id));
+      const text = "server: {{ KUBE_SERVER }}\ntokenFile: {{ KUBE_TOKEN | path }}\n";
+      yield* vaults
+        .putEntry({
+          vaultId: MAIN_VAULT_ID,
+          name: "MAIN_URL",
+          value: Redacted.make("https://x"),
+          class: "variable",
+        })
+        .pipe(as(ownerId));
+      // Another Vault's name (the Main vault's MAIN_URL), syntax, an unknown filter, a `path` of
+      // an entry delivered as a variable: refused when saved.
+      for (const [bad, reason] of [
+        ["{{ MAIN_URL }}", "invalid-template"],
+        ["{{ KUBE_SERVER", "invalid-template"],
+        ["{{ KUBE_SERVER | upper }}", "invalid-template"],
+        ["{{ KUBE_SERVER | path }}", "invalid-template"],
+      ] as const) {
+        assert.equal(
+          yield* reasonOf(put({ name: "KUBECONFIG", template: { text: bad } }).pipe(as(ownerId))),
+          reason,
+          bad,
+        );
+      }
+      const kubeconfig = yield* put({
+        name: "KUBECONFIG",
+        template: { text },
+        delivery: "file",
+      }).pipe(as(people.admin.id));
+      // One input is a Secret: the template is a sealed Secret; no value is stored for it.
+      assert.deepEqual(
+        [
+          kubeconfig.entry.kind,
+          kubeconfig.entry.class,
+          kubeconfig.entry.sealed,
+          kubeconfig.entry.delivery,
+        ],
+        ["template", "secret", true, "file"],
+      );
+      assert.equal(kubeconfig.entry.template?.text, text);
+      assert.isUndefined(kubeconfig.entry.value);
+      // Another template is never an input.
+      assert.equal(
+        yield* reasonOf(
+          put({ name: "NESTED", template: { text: "{{ KUBECONFIG }}" } }).pipe(as(ownerId)),
+        ),
+        "invalid-template",
+      );
+      // A template is never `none`, and takes no value.
+      assert.equal(
+        yield* reasonOf(
+          put({ name: "NONE", template: { text: "{{ KUBE_SERVER }}" }, delivery: "none" }).pipe(
+            as(ownerId),
+          ),
+        ),
+        "invalid-template",
+      );
+      // The input whose path it takes stays a file.
+      assert.equal(
+        yield* reasonOf(
+          put({ entryId: token.entry.id, name: "KUBE_TOKEN", delivery: "env" }).pipe(as(ownerId)),
+        ),
+        "invalid-template",
+      );
+      // Nobody reveals it, the Owner included, and nothing is read for the refusal.
+      const revealed = yield* reveal(owner, acme.id, kubeconfig.entry.id, BOGUS_REAUTH);
+      assert.equal(revealed.status, 409);
+      // A Guest sees that it is a template, not its text; a Member sees the text (names only).
+      const asGuest = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(people.guest.id));
+      const asMember = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(people.member.id));
+      const shownTo = (list: typeof asGuest) =>
+        list.entries.find((entry) => entry.name === "KUBECONFIG")?.template?.text;
+      assert.deepEqual([shownTo(asGuest), shownTo(asMember)], [null, text]);
+      // A Variable-only template is a Variable; its input turning Secret makes it a Secret.
+      const region = yield* put({
+        name: "REGION_URL",
+        template: { text: "{{ KUBE_SERVER | urlencode }}" },
+      }).pipe(as(ownerId));
+      assert.equal(region.entry.class, "variable");
+      const server_ = (yield* vaults
+        .listEntries({ vaultId: acme.id })
+        .pipe(as(ownerId))).entries.find((entry) => entry.name === "KUBE_SERVER");
+      yield* put({
+        entryId: server_!.id,
+        name: "KUBE_SERVER",
+        class: "secret",
+      }).pipe(as(ownerId));
+      const after = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(ownerId));
+      assert.equal(after.entries.find((entry) => entry.name === "REGION_URL")?.class, "secret");
+      // An input gone breaks the template, shown «broken», not delivered.
+      yield* vaults.deleteEntry({ vaultId: acme.id, entryId: token.entry.id }).pipe(as(ownerId));
+      const gone = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(ownerId));
+      assert.isTrue(gone.entries.find((entry) => entry.name === "KUBECONFIG")?.broken);
+      // A template of the Main vault is neither linked nor copied.
+      const mainTemplate = yield* vaults
+        .putEntry({ vaultId: MAIN_VAULT_ID, name: "MAIN_T", template: { text: "{{ MAIN_URL }}" } })
+        .pipe(as(ownerId));
+      assert.equal(
+        yield* reasonOf(
+          vaults
+            .linkEntry({ vaultId: acme.id, sourceEntryId: mainTemplate.entry.id })
+            .pipe(as(ownerId)),
+        ),
+        "not-linkable",
+      );
+      // The audit names the template and its delivery, never its text.
+      const audited = yield* server.sql<{ readonly detail_json: string }>`
+        SELECT detail_json FROM audit_log WHERE target_name = 'KUBECONFIG'
+      `;
+      assert.isTrue(audited.length > 0);
+      for (const row of audited) assert.notInclude(row.detail_json, "tokenFile");
+    }),
+);
+
+it.effect("an entry that only feeds a template is said to reach nothing until one names it", () =>
+  Effect.gen(function* () {
+    const setup = yield* hub;
+    const { vaults, as, ownerId } = setup;
+    const { acme } = yield* acmeSecrets(setup);
+    const raw = yield* vaults
+      .putEntry({
+        vaultId: acme.id,
+        name: "RAW_TOKEN",
+        value: Redacted.make("raw-token-value-0002"),
+        delivery: "none",
+      })
+      .pipe(as(ownerId));
+    assert.deepEqual([raw.entry.delivery, raw.warnings], ["none", ["not-used-by-template"]]);
+    yield* vaults
+      .putEntry({
+        vaultId: acme.id,
+        name: "AUTH_HEADER",
+        template: { text: "Bearer {{ RAW_TOKEN }}" },
+      })
+      .pipe(as(ownerId));
+    const again = yield* vaults
+      .putEntry({ vaultId: acme.id, entryId: raw.entry.id, name: "RAW_TOKEN", description: "x" })
+      .pipe(as(ownerId));
+    assert.deepEqual(again.warnings, []);
+  }),
+);

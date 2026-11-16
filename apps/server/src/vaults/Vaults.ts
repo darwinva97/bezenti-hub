@@ -34,7 +34,11 @@ import {
   type VaultProviderScopesInput,
   ProviderScopeId,
   type SecretProviderId,
+  type VaultEntryDelivery,
   looksLikeCredential,
+  parseTemplate,
+  templateNames,
+  templatePathNames,
   type VaultListResult,
   type VaultSummary,
   type VaultUpdateInput,
@@ -193,6 +197,9 @@ interface EntryRow {
   /** Its Provider scope (ticket 03), and that scope's label; null: the Owner's «Direct». */
   readonly providerScopeId: string | null;
   readonly scopeLabel: string | null;
+  readonly delivery: VaultEntryDelivery;
+  /** A Template entry's text: names of entries of its Vault, never values. */
+  readonly templateText: string | null;
 }
 
 /** An entry's class: a link's original's; a broken link's, a Secret. */
@@ -226,7 +233,8 @@ const ENTRY_COLUMNS = `
   o.name AS "linkedName", o.unmasked AS "linkedUnmasked", o.value_id AS "linkedValueId",
   o.class AS "linkedClass", o.revealable AS "linkedRevealable",
   e.provider_id AS "providerId", e.provider_reference AS "providerReference",
-  e.provider_scope_id AS "providerScopeId", s.label AS "scopeLabel"
+  e.provider_scope_id AS "providerScopeId", s.label AS "scopeLabel",
+  e.delivery AS "delivery", e.template_text AS "templateText"
 `;
 
 /** UTF-8 text without NUL, not empty, at most SECRET_VALUE_MAX_BYTES. Says why, never what. */
@@ -240,6 +248,52 @@ const valueProblem = (value: string): string | undefined => {
 };
 
 const isShort = (value: string) => [...value].length < SECRET_MASK_MIN_LENGTH;
+
+/** An entry of a Vault as a template of that Vault sees it: names, never values. */
+interface TemplateInput {
+  readonly name: string;
+  readonly kind: VaultEntryKind;
+  /** A link's original's; a broken link's, a Secret. */
+  readonly class: VaultEntryClass;
+  readonly delivery: VaultEntryDelivery;
+}
+
+/**
+ * Why `text` is not a template its Vault can deliver, or undefined: its syntax, a name that is not
+ * an entry of the Vault (another Vault's never is), another template, or `| path` of an entry not
+ * delivered as a file. Names only.
+ */
+const templateProblem = (
+  text: string,
+  inputs: ReadonlyArray<TemplateInput>,
+): string | undefined => {
+  const parsed = parseTemplate(text);
+  if (parsed._tag === "invalid") return parsed.message;
+  const byName = new Map(inputs.map((input) => [input.name, input]));
+  const paths = templatePathNames(parsed.parts);
+  for (const name of templateNames(parsed.parts)) {
+    const input = byName.get(name);
+    if (input === undefined) {
+      return `${name} is not an entry of this Vault: a template names entries of its own Vault only.`;
+    }
+    if (input.kind === "template") return `${name} is a template: a template never names another.`;
+    if (paths.has(name) && input.delivery !== "file") {
+      return `{{ ${name} | path }} takes ${name}'s Secret file: deliver ${name} as a file.`;
+    }
+  }
+  return undefined;
+};
+
+/** A template is a Variable only when every entry it names is one; else a sealed Secret. */
+const templateClassOf = (text: string, inputs: ReadonlyArray<TemplateInput>): VaultEntryClass => {
+  const parsed = parseTemplate(text);
+  if (parsed._tag === "invalid") return "secret";
+  const byName = new Map(inputs.map((input) => [input.name, input]));
+  const names = templateNames(parsed.parts);
+  return names.length > 0 && names.every((name) => byName.get(name)?.class === "variable")
+    ? "variable"
+    : "secret";
+};
 
 type Can = (action: AccessPolicy.Action, resource: AccessPolicy.Resource) => boolean;
 type Spaces = ReadonlyMap<
@@ -338,12 +392,16 @@ const entryOf = (
   row: EntryRow,
   seesMain: boolean,
   canEdit: boolean,
+  readsVariables: boolean,
   variableValue: string | undefined,
   provider: ProviderReads.ProviderStatus | undefined,
+  templateBroken: boolean,
 ): VaultEntry => {
   const isLink = row.kind === "link";
-  // A Provider entry whose provider is gone (or cannot be read here) is broken for everyone.
-  const providerBroken = row.kind === "provider" && (provider === undefined || provider.broken);
+  // A Provider entry whose provider is gone (or cannot be read here) is broken for everyone, as is
+  // a template naming an entry its Vault no longer has.
+  const providerBroken =
+    (row.kind === "provider" && (provider === undefined || provider.broken)) || templateBroken;
   const broken = (isLink && row.linkedName === null) || providerBroken;
   const entryClass = classOf(row);
   return {
@@ -365,6 +423,10 @@ const entryOf = (
           },
         }
       : {}),
+    ...(row.kind === "template"
+      ? { template: { text: readsVariables ? row.templateText : null } }
+      : {}),
+    delivery: row.delivery,
     broken: providerBroken || (broken && (seesMain || canEdit)),
     linkedFrom:
       seesMain && isLink && row.linkedEntryId !== null && !broken
@@ -672,6 +734,61 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const inputsQuery = (vaultId: string) =>
+    sql<TemplateInput>`
+      SELECT e.name AS "name", e.kind AS "kind", e.delivery AS "delivery",
+        CASE WHEN e.kind = 'link' THEN COALESCE(o.class, 'secret') ELSE e.class END AS "class"
+      ${sql.literal(ENTRY_FROM)}
+      WHERE e.vault_id = ${vaultId}
+    `;
+  /** The entries a template of the Vault may name, as it sees them. */
+  const inputsOf = (vaultId: string) =>
+    inputsQuery(vaultId).pipe(Effect.catch(storage("read the Vault's secrets")));
+
+  /**
+   * In a write's transaction: each template of the Vault takes the class its entries give it now
+   * (delivery decides again from the live entries, so a stale one never shows a Secret).
+   */
+  const refreshTemplateClasses = Effect.fn("Vaults.refreshTemplateClasses")(function* (
+    vaultId: string,
+  ) {
+    const templates = yield* sql<{
+      readonly entryId: string;
+      readonly text: string;
+      readonly class: VaultEntryClass;
+    }>`
+      SELECT entry_id AS "entryId", template_text AS "text", class AS "class"
+      FROM vault_entries WHERE vault_id = ${vaultId} AND kind = 'template'
+    `;
+    if (templates.length === 0) return;
+    const inputs = yield* inputsQuery(vaultId);
+    for (const template of templates) {
+      const next = templateClassOf(template.text, inputs);
+      if (next !== template.class) {
+        yield* sql`UPDATE vault_entries SET class = ${next} WHERE entry_id = ${template.entryId}`;
+      }
+    }
+  });
+
+  /** Whether a template of the Vault names `name` (so a `none` entry reaches something). */
+  const namedByTemplate = Effect.fn("Vaults.namedByTemplate")(function* (
+    vaultId: string,
+    name: string,
+    pathOnly: boolean,
+  ) {
+    const templates = yield* sql<{ readonly text: string }>`
+      SELECT template_text AS "text" FROM vault_entries
+      WHERE vault_id = ${vaultId} AND kind = 'template'
+    `.pipe(Effect.catch(storage("read the Vault's templates")));
+    return templates.some((template) => {
+      const parsed = parseTemplate(template.text);
+      if (parsed._tag === "invalid") return false;
+      return pathOnly
+        ? templatePathNames(parsed.parts).has(name)
+        : templateNames(parsed.parts).includes(name);
+    });
+  });
+
   /** A new value under a new id: no row points at it until its transaction commits. */
   const writeValue = Effect.fn("Vaults.writeValue")(function* (value: string) {
     const valueId = yield* newId("value");
@@ -715,6 +832,7 @@ const make = Effect.gen(function* () {
     readonly class?: VaultEntryClass;
     /** A Provider entry's provider, by its label; never its reference. */
     readonly provider?: string;
+    readonly delivery?: VaultEntryDelivery;
   }) =>
     audit.record({
       actor: AuditLog.userActor(input.userId),
@@ -731,6 +849,7 @@ const make = Effect.gen(function* () {
         ...(input.dangerous === true ? { dangerous: true } : {}),
         ...(input.class === undefined ? {} : { class: input.class }),
         ...(input.provider === undefined ? {} : { provider: input.provider }),
+        ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
       },
     });
 
@@ -759,13 +878,29 @@ const make = Effect.gen(function* () {
     const seesMain = can("vault.view", mainResource);
     const canEdit = can("vault.edit", resource);
     const readsVariables = can("vault.readVariables", resource);
+    // A template is broken when it names what its Vault no longer has (no value is read for it).
+    const templates = rows.filter((row) => row.kind === "template");
+    const siblings = templates.length === 0 ? [] : yield* inputsOf(templates[0]!.vaultId);
     return yield* Effect.forEach(rows, (row) =>
       Effect.all([
         readsVariables && classOf(row) === "variable" && valueIdOf(row) !== null
           ? readValue(valueIdOf(row)).pipe(Effect.orElseSucceed(() => undefined))
           : Effect.succeed(undefined),
         providerStatusOf(row),
-      ]).pipe(Effect.map(([value, provider]) => entryOf(row, seesMain, canEdit, value, provider))),
+      ]).pipe(
+        Effect.map(([value, provider]) =>
+          entryOf(
+            row,
+            seesMain,
+            canEdit,
+            readsVariables,
+            value,
+            provider,
+            row.kind === "template" &&
+              templateProblem(row.templateText ?? "", siblings) !== undefined,
+          ),
+        ),
+      ),
     );
   });
 
@@ -1046,11 +1181,20 @@ const make = Effect.gen(function* () {
         `${existing.name} holds a value of its own: delete it and add a Provider entry instead.`,
       );
     }
-    if (input.value !== undefined || input.class !== undefined || input.allowReveal !== undefined) {
+    if (
+      input.value !== undefined ||
+      input.class !== undefined ||
+      input.allowReveal !== undefined ||
+      input.template !== undefined
+    ) {
       return yield* fail(
         "invalid-value",
         "A Provider entry is a sealed Secret read from its provider: it takes no value, class or reveal.",
       );
+    }
+    const delivery = input.delivery ?? existing?.delivery ?? "env";
+    if (existing !== undefined && delivery !== "file" && existing.delivery === "file") {
+      yield* keepsItsPath(row.vaultId, existing.name);
     }
     const source =
       input.provider === undefined
@@ -1095,11 +1239,12 @@ const make = Effect.gen(function* () {
             yield* sql`
               INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id,
                 unmasked, class, revealable, provider_id, provider_reference, provider_scope_id,
-                version, created_at, updated_at, updated_by)
+                delivery, version, created_at, updated_at, updated_by)
               VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null},
                 'provider', NULL, 0, 'secret', 0, ${source.providerId}, ${source.reference},
-                ${source.scopeId}, 1, ${at}, ${at}, ${userId})
+                ${source.scopeId}, ${delivery}, 1, ${at}, ${at}, ${userId})
             `;
+            yield* refreshTemplateClasses(row.vaultId);
             yield* recordEdit({
               userId,
               vault: row,
@@ -1113,7 +1258,13 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(Effect.catch(orStorage("add the Provider entry")));
-      return yield* result(can, resource, row.vaultId, entryId, []);
+      return yield* result(
+        can,
+        resource,
+        row.vaultId,
+        entryId,
+        yield* deliveryWarnings(row.vaultId, input.name, delivery),
+      );
     }
     const renamed = input.name !== existing.name;
     if (renamed) yield* nameTaken(row.vaultId, input.name, existing.entryId);
@@ -1122,7 +1273,8 @@ const make = Effect.gen(function* () {
       source.providerId !== existing.providerId ||
       source.reference !== existing.providerReference ||
       source.scopeId !== existing.providerScopeId;
-    if (!renamed && !described && !moved) {
+    const redelivered = delivery !== existing.delivery;
+    if (!renamed && !described && !moved && !redelivered) {
       return yield* result(can, resource, row.vaultId, existing.entryId, []);
     }
     yield* sql
@@ -1136,6 +1288,7 @@ const make = Effect.gen(function* () {
               provider_id = ${source.providerId},
               provider_reference = ${source.reference},
               provider_scope_id = ${source.scopeId},
+              delivery = ${delivery},
               version = version + ${moved ? 1 : 0},
               updated_at = ${at},
               updated_by = ${userId}
@@ -1147,14 +1300,165 @@ const make = Effect.gen(function* () {
             entryId: existing.entryId,
             name: input.name,
             kind: "provider",
-            op: moved ? "reference" : renamed ? "rename" : "describe",
+            op: moved ? "reference" : renamed ? "rename" : redelivered ? "delivery" : "describe",
             ...(renamed ? { from: existing.name } : {}),
+            ...(redelivered ? { delivery } : {}),
             dangerous,
             provider: label,
           });
+          yield* refreshTemplateClasses(row.vaultId);
         }),
       )
       .pipe(Effect.catch(orStorage("change the Provider entry")));
+    return yield* result(
+      can,
+      resource,
+      row.vaultId,
+      existing.entryId,
+      yield* deliveryWarnings(row.vaultId, input.name, delivery),
+    );
+  });
+
+  /** `| path` of an entry takes its Secret file: it stays a file while a template takes it. */
+  const keepsItsPath = Effect.fn("Vaults.keepsItsPath")(function* (vaultId: string, name: string) {
+    if (yield* namedByTemplate(vaultId, name, true)) {
+      return yield* fail(
+        "invalid-template",
+        `A template of this Vault takes ${name}'s Secret file ({{ ${name} | path }}): keep ${name} a file.`,
+      );
+    }
+  });
+
+  /** `none` reaches a process only through a template of its Vault: said when none names it. */
+  const deliveryWarnings = Effect.fn("Vaults.deliveryWarnings")(function* (
+    vaultId: string,
+    name: string,
+    delivery: VaultEntryDelivery,
+  ) {
+    const warnings: Array<VaultWarning> = [];
+    if (delivery === "none" && !(yield* namedByTemplate(vaultId, name, false))) {
+      warnings.push("not-used-by-template");
+    }
+    return warnings;
+  });
+
+  /**
+   * A Template entry: a text naming entries of the same Vault, never values, so it is stored in
+   * clear. Whoever edits the Vault adds or changes one. Its class follows its entries (a Variable
+   * only when all are), and it is never revealed: nobody reads its value from the Hub.
+   */
+  const putTemplateEntry = Effect.fn("Vaults.putTemplateEntry")(function* (
+    input: VaultEntryPutInput,
+    context: {
+      readonly userId: UserId;
+      readonly can: Can;
+      readonly row: VaultRow;
+      readonly resource: AccessPolicy.VaultResource;
+      readonly dangerous: boolean;
+      readonly existing: EntryRow | undefined;
+    },
+  ) {
+    const { userId, can, row, resource, dangerous, existing } = context;
+    if (existing !== undefined && existing.kind !== "template") {
+      return yield* fail(
+        "invalid-value",
+        `${existing.name} is not a template: delete it and add a template instead.`,
+      );
+    }
+    if (
+      input.value !== undefined ||
+      input.class !== undefined ||
+      input.allowReveal !== undefined ||
+      input.provider !== undefined
+    ) {
+      return yield* fail(
+        "invalid-value",
+        "A template is composed from its Vault's entries: it takes no value, class, reveal or provider.",
+      );
+    }
+    const text = input.template?.text ?? existing?.templateText ?? "";
+    const delivery = input.delivery ?? existing?.delivery ?? "env";
+    if (delivery === "none") {
+      return yield* fail(
+        "invalid-template",
+        "A template is delivered as a variable or a file, never only to other templates.",
+      );
+    }
+    const inputs = yield* inputsOf(row.vaultId);
+    const problem = templateProblem(text, inputs);
+    if (problem !== undefined) return yield* fail("invalid-template", problem);
+    const entryClass = templateClassOf(text, inputs);
+    const at = yield* now;
+    if (existing === undefined) {
+      yield* nameTaken(row.vaultId, input.name);
+      const entryId = yield* newId("secret");
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* stillWritable(row.vaultId);
+            yield* sql`
+              INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id,
+                unmasked, class, revealable, delivery, template_text, version, created_at,
+                updated_at, updated_by)
+              VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null},
+                'template', NULL, 0, ${entryClass}, 0, ${delivery}, ${text}, 1, ${at}, ${at},
+                ${userId})
+            `;
+            yield* recordEdit({
+              userId,
+              vault: row,
+              entryId,
+              name: input.name,
+              kind: "template",
+              op: "add",
+              dangerous,
+              class: entryClass,
+              delivery,
+            });
+          }),
+        )
+        .pipe(Effect.catch(orStorage("add the template")));
+      return yield* result(can, resource, row.vaultId, entryId, []);
+    }
+    const renamed = input.name !== existing.name;
+    if (renamed) yield* nameTaken(row.vaultId, input.name, existing.entryId);
+    const described = input.description !== undefined && input.description !== existing.description;
+    const rewritten = text !== existing.templateText;
+    const redelivered = delivery !== existing.delivery;
+    if (!renamed && !described && !rewritten && !redelivered) {
+      return yield* result(can, resource, row.vaultId, existing.entryId, []);
+    }
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* stillWritable(row.vaultId);
+          yield* sql`
+            UPDATE vault_entries SET
+              name = ${input.name},
+              description = ${input.description === undefined ? existing.description : input.description},
+              template_text = ${text},
+              class = ${entryClass},
+              delivery = ${delivery},
+              version = version + ${rewritten ? 1 : 0},
+              updated_at = ${at},
+              updated_by = ${userId}
+            WHERE entry_id = ${existing.entryId}
+          `;
+          yield* recordEdit({
+            userId,
+            vault: row,
+            entryId: existing.entryId,
+            name: input.name,
+            kind: "template",
+            op: rewritten ? "template" : redelivered ? "delivery" : renamed ? "rename" : "describe",
+            ...(renamed ? { from: existing.name } : {}),
+            ...(redelivered ? { delivery } : {}),
+            dangerous,
+            class: entryClass,
+          });
+        }),
+      )
+      .pipe(Effect.catch(orStorage("change the template")));
     return yield* result(can, resource, row.vaultId, existing.entryId, []);
   });
 
@@ -1165,6 +1469,9 @@ const make = Effect.gen(function* () {
       input.entryId === undefined ? undefined : yield* findEntry(row.vaultId, input.entryId);
     if (input.provider !== undefined || existing?.kind === "provider") {
       return yield* putProviderEntry(input, { userId, can, row, resource, dangerous, existing });
+    }
+    if (input.template !== undefined || existing?.kind === "template") {
+      return yield* putTemplateEntry(input, { userId, can, row, resource, dangerous, existing });
     }
     const value = input.value === undefined ? undefined : Redacted.value(input.value);
     if (value !== undefined) {
@@ -1190,15 +1497,17 @@ const make = Effect.gen(function* () {
       // A new Secret is sealed unless reveal is allowed now, with its value.
       const entryClass = input.class ?? "secret";
       const revealable = entryClass === "secret" && input.allowReveal === true ? 1 : 0;
+      const delivery = input.delivery ?? "env";
       yield* nameTaken(row.vaultId, input.name);
       const entryId = yield* newId("secret");
       yield* withNewValue(value, "add the secret", (valueId) =>
         Effect.gen(function* () {
           yield* stillWritable(row.vaultId);
           yield* sql`
-            INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id, unmasked, class, revealable, version, created_at, updated_at, updated_by)
-            VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null}, 'own', ${valueId}, ${isShort(value) ? 1 : 0}, ${entryClass}, ${revealable}, 1, ${at}, ${at}, ${userId})
+            INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id, unmasked, class, revealable, delivery, version, created_at, updated_at, updated_by)
+            VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null}, 'own', ${valueId}, ${isShort(value) ? 1 : 0}, ${entryClass}, ${revealable}, ${delivery}, 1, ${at}, ${at}, ${userId})
           `;
+          yield* refreshTemplateClasses(row.vaultId);
           yield* recordEdit({
             userId,
             vault: row,
@@ -1216,7 +1525,10 @@ const make = Effect.gen(function* () {
           nameTaken(row.vaultId, input.name).pipe(Effect.andThen(Effect.fail(error))),
         ),
       );
-      return yield* result(can, resource, row.vaultId, entryId, warningsFor(entryClass, true));
+      return yield* result(can, resource, row.vaultId, entryId, [
+        ...warningsFor(entryClass, true),
+        ...(yield* deliveryWarnings(row.vaultId, input.name, delivery)),
+      ]);
     }
 
     const entry = yield* findEntry(row.vaultId, input.entryId);
@@ -1268,7 +1580,17 @@ const make = Effect.gen(function* () {
     }
     const revealChanged =
       !classChanged && entry.kind !== "link" && nextRevealable !== wasRevealable;
-    if (value === undefined && !renamed && !described && !classChanged && !revealChanged) {
+    const delivery = input.delivery ?? entry.delivery;
+    const redelivered = delivery !== entry.delivery;
+    if (redelivered && entry.delivery === "file") yield* keepsItsPath(row.vaultId, entry.name);
+    if (
+      value === undefined &&
+      !renamed &&
+      !described &&
+      !classChanged &&
+      !revealChanged &&
+      !redelivered
+    ) {
       return yield* result(can, resource, row.vaultId, entry.entryId, []);
     }
     // The new value under a new id; the row, its version and the audit move to it together.
@@ -1288,6 +1610,7 @@ const make = Effect.gen(function* () {
             unmasked = ${value === undefined ? entry.unmasked : isShort(value) ? 1 : 0},
             class = ${entry.kind === "link" ? null : nextClass},
             revealable = ${entry.kind === "link" ? null : nextRevealable ? 1 : 0},
+            delivery = ${delivery},
             version = version + ${value === undefined ? 0 : 1},
             updated_at = ${at},
             updated_by = ${userId}
@@ -1303,6 +1626,9 @@ const make = Effect.gen(function* () {
             op: nextRevealable ? "allow-reveal" : "seal",
           });
         }
+        if (redelivered) {
+          yield* recordEdit({ ...edit, kind: entry.kind, op: "delivery", delivery });
+        }
         if (value !== undefined || renamed || described) {
           yield* recordEdit({
             ...edit,
@@ -1312,17 +1638,15 @@ const make = Effect.gen(function* () {
             dangerous,
           });
         }
+        yield* refreshTemplateClasses(row.vaultId);
         return valueId === null ? null : before.valueId;
       }),
     );
     yield* removeValue(replaced);
-    return yield* result(
-      can,
-      resource,
-      row.vaultId,
-      entry.entryId,
-      warningsFor(nextClass, value !== undefined || renamed || classChanged),
-    );
+    return yield* result(can, resource, row.vaultId, entry.entryId, [
+      ...warningsFor(nextClass, value !== undefined || renamed || classChanged),
+      ...(yield* deliveryWarnings(row.vaultId, input.name, delivery)),
+    ]);
   });
 
   const linksTo = (entryId: string) =>
@@ -1357,6 +1681,7 @@ const make = Effect.gen(function* () {
             op: "delete",
             ...(links.length > 0 ? { brokenLinks: links.length } : {}),
           });
+          yield* refreshTemplateClasses(row.vaultId);
           return deleted[0]?.valueId ?? null;
         }),
       )
@@ -1386,6 +1711,13 @@ const make = Effect.gen(function* () {
     const source = yield* findEntry(MAIN_VAULT_ID, input.sourceEntryId);
     if (source.kind === "link") {
       return yield* fail("not-linkable", "A Secret link points at a secret, never at a link.");
+    }
+    // A template's names are its own Vault's: elsewhere they would name other entries.
+    if (source.kind === "template") {
+      return yield* fail(
+        "not-linkable",
+        `${source.name} is a template of the Main vault: add a template with the same text in this Vault instead.`,
+      );
     }
     // Copying would read the provider into the Hub (ticket 08's «Copy into the Hub»).
     if (source.kind === "provider") {
@@ -1420,6 +1752,7 @@ const make = Effect.gen(function* () {
           from: source.name,
           dangerous,
         });
+        yield* refreshTemplateClasses(row.vaultId);
       }),
     );
     const warnings: ReadonlyArray<VaultWarning> =
@@ -1437,7 +1770,8 @@ const make = Effect.gen(function* () {
     if (entry.kind === "link" && entry.linkedName === null) {
       return yield* fail("not-found", `${entry.name} is a broken link: its original is gone.`);
     }
-    if (isSealed(entry)) {
+    // A template's value is composed when a process starts: nobody reads it from the Hub.
+    if (isSealed(entry) || entry.kind === "template") {
       return yield* fail(
         "sealed",
         `${entry.name} is sealed: nobody reveals it, not even the Owner. Replace it or delete it.`,

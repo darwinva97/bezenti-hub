@@ -150,6 +150,8 @@ export const AUDIT_DETAIL_KEYS = {
     "class",
     // A Provider entry's provider, by label (`op: reference` when it reads elsewhere).
     "provider",
+    // How it reaches a process (`op: delivery` when that changed); a template's text never goes.
+    "delivery",
   ],
   "vault.create": [],
   /** The name `from` and `to`, whether it was described, and `archived` when that changed. */

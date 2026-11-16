@@ -56,6 +56,13 @@ export interface SecretProviderDriver {
   readonly test: (
     config: unknown,
   ) => Effect.Effect<SecretProviderTestReport, never, SecretProviderDriverServices>;
+  /**
+   * When the Owner saves the provider: why its config cannot be used on this Hub (a file outside
+   * the operator's roots, say), or undefined. What the schema cannot see; never a read.
+   */
+  readonly configProblem?: (
+    config: unknown,
+  ) => Effect.Effect<string | undefined, never, FileSystem.FileSystem>;
 }
 
 export const defineSecretProviderDriver = <Config>(driver: {
@@ -68,11 +75,21 @@ export const defineSecretProviderDriver = <Config>(driver: {
   readonly test: (
     config: Config,
   ) => Effect.Effect<SecretProviderTestReport, never, SecretProviderDriverServices>;
+  readonly configProblem?: (
+    config: Config,
+  ) => Effect.Effect<string | undefined, never, FileSystem.FileSystem>;
 }): SecretProviderDriver => {
   const isConfig = Schema.is(driver.definition.configSchema);
+  const { configProblem } = driver;
   return {
     kind: driver.kind,
     definition: driver.definition,
+    ...(configProblem === undefined
+      ? {}
+      : {
+          configProblem: (config: unknown) =>
+            isConfig(config) ? configProblem(config) : Effect.undefined,
+        }),
     read: (config, references) =>
       isConfig(config)
         ? driver.read(config, references)

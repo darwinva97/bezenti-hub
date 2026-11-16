@@ -80,6 +80,14 @@ const checkedPath = Effect.fn("OpenBaoFileRoots.checkedPath")(function* (path: s
   return real.value;
 });
 
+/** Why `path` may not be read, or undefined; for the check when a provider is saved. */
+export const providerFileProblem = Effect.fn("OpenBaoFileRoots.providerFileProblem")(function* (
+  path: string,
+) {
+  const checked = yield* checkedPath(path);
+  return typeof checked === "string" ? undefined : checked.reason;
+});
+
 const decoder = new TextDecoder();
 
 /** The file's text, checked again on the open file: a swap after the check is refused too. */

@@ -474,6 +474,21 @@ Hub machine's own browser only. A dev server's port on the Thread's machine open
 at `/preview/<token>/`, relayed over the same streams and checked on every request; see
 [Previews through the Hub](./sandboxes.md#previews-through-the-hub).
 
+A Thread's file served by URL (`assets.createUrl` for `workspace-file` and `media-file`: image,
+PDF, HTML and media previews, large text and downloads) follows the same rule
+([ThreadAssets](../../apps/server/src/assets/ThreadAssets.ts)). For a Thread on another machine
+the Hub asks the machine to look at the file (`files.inspectAsset`, contract 15: inside the
+workspace, links followed, a regular file, not the machine's own state), applies the Hub machine's
+preview types to the path asked for and to where it leads, and signs a `thread-machine-file`
+token naming the Thread, the Environment, the User and a path relative to the workspace there.
+Fetching it ([MachineAssetResponse](../../apps/server/src/assets/MachineAssetResponse.ts)) checks
+the Thread is still on that machine for that User (another signed-in User gets 404), has the
+machine inspect the file again (15 s, else 504; offline 503), and streams it in windows of at most
+8 MiB (`files.streamAsset`), each re-resolved and pinned to the inspected file; a window with
+another file or bytes it did not announce cuts the response, whose `Content-Length` was announced.
+Text is masked as for the Hub machine's files and nothing is written on the Hub. A machine before
+contract 15 answers «needs an update», never a Hub copy.
+
 ### Logical workspace paths
 
 A Project's checkout is a per-Environment fact. The Hub machine's checkout is always the Project's

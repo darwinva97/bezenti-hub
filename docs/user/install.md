@@ -593,6 +593,15 @@ machine it runs on, in that machine's copy of the Project. When the machine is
 off they say **Environment offline** instead; nothing you type or save is kept
 for later, so start the machine and try again.
 
+Images, PDFs, HTML pages (with the images and styles they load), videos and
+downloads from the Files panel also come from that machine, streamed through the
+Hub; the Hub keeps no copy of them. Only files inside the Thread's workspace
+there open this way: a link to a file elsewhere on that machine says so instead.
+A link you were given stops working once the Thread moves to another machine;
+open the file again. A machine on a release from before this says
+**<machine> needs an update to preview and download this Thread's files**:
+install the Hub's release of T3 on it and start it again.
+
 ### Run Threads in your Space's Sandbox
 
 Every Space has a **Sandbox**: a server of its own that the Hub runs for that

@@ -350,8 +350,15 @@ it.live.skipIf(!posix || platform === undefined)(
       assert.deepEqual(namesOf(member.accounts), ["Acme OpenRouter", "Grace Gemini"]);
       for (const account of member.accounts) {
         assert.isNull(account.details, "a Member got an account's details");
-        assert.deepEqual(account.usableIn, [acmeId]);
       }
+      // Acme's is usable in Acme; the one allowed to her, wherever she works, her Personal space too.
+      assert.deepEqual(
+        member.accounts.map((account) => [account.name, account.usableIn]),
+        [
+          ["Acme OpenRouter", [acmeId]],
+          ["Grace Gemini", [acmeId, `personal:${people.member}`]],
+        ],
+      );
       // Same rule for an Admin and a Guest of Acme: Acme's, not Globex's, not grace's own.
       assert.deepEqual(namesOf((yield* seenBy(people.admin)).accounts), ["Acme OpenRouter"]);
       assert.deepEqual(namesOf((yield* seenBy(people.guest)).accounts), ["Acme OpenRouter"]);
@@ -412,7 +419,10 @@ it.live.skipIf(!posix || platform === undefined)(
       yield* directory.removeMembership({ spaceId: acmeId, userId: people.member });
       yield* directory.membershipsChanged([people.member]);
       assert.deepEqual(yield* ids(people.member, acmeId), []);
-      assert.deepEqual(namesOf((yield* accounts.list.pipe(as(people.member))).accounts), []);
+      // Out of Acme she still works in her Personal space, where the one allowed to her goes on.
+      assert.deepEqual(namesOf((yield* accounts.list.pipe(as(people.member))).accounts), [
+        "Grace Gemini",
+      ]);
     }),
 );
 

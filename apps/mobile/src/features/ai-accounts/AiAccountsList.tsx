@@ -1,4 +1,4 @@
-import { accountRows } from "@t3tools/client-runtime/ai-accounts-view";
+import { accountSections } from "@t3tools/client-runtime/ai-accounts-view";
 import {
   dayBefore,
   formatTokens,
@@ -19,10 +19,9 @@ import { commandFailureMessage } from "./failureMessage";
 const USAGE_DAYS = 30;
 
 /**
- * Settings → AI accounts on a phone (spec 4 story 42): the accounts the Hub lists for this User
- * with their status and quota, and what went through the gateway. Read-only: signing in to a
- * subscription, credentials, allowances, order and the gateway's update stay on web and desktop.
- * The Hub narrows every answer to what the session may see; nothing here asks for more.
+ * Settings → AI accounts on a phone: the Hub's list for this User by owner, with status and quota,
+ * and the gateway's usage. Read-only: adding, signing in, credentials, allowances and order stay
+ * on web and desktop; the Hub narrows every answer to what the session may see.
  */
 export function AiAccountsList(props: { readonly environmentId: EnvironmentId }) {
   const { environmentId } = props;
@@ -57,7 +56,7 @@ export function AiAccountsList(props: { readonly environmentId: EnvironmentId })
     }),
   );
   const summary = usage.data;
-  const rows = loaded === null ? [] : accountRows(loaded.accounts);
+  const sections = loaded === null ? [] : accountSections(loaded);
 
   return (
     <View className="gap-6">
@@ -66,17 +65,25 @@ export function AiAccountsList(props: { readonly environmentId: EnvironmentId })
           {error}
         </Text>
       )}
-      <ListSection title="AI accounts">
-        {loaded === null ? (
-          error === null ? (
-            <Text className="px-4 py-3 text-sm text-foreground-muted">Loading AI accounts…</Text>
-          ) : null
-        ) : rows.length === 0 ? (
-          <Text className="px-4 py-3 text-sm text-foreground-muted">
-            No AI account is available to you.
-          </Text>
-        ) : (
-          rows.map((row) => (
+      {loaded === null || sections.length === 0 ? (
+        <ListSection title="AI accounts">
+          {loaded === null ? (
+            error === null ? (
+              <Text className="px-4 py-3 text-sm text-foreground-muted">Loading AI accounts…</Text>
+            ) : null
+          ) : (
+            <Text className="px-4 py-3 text-sm text-foreground-muted">
+              No AI account is available to you. Add your own on the web or desktop app.
+            </Text>
+          )}
+        </ListSection>
+      ) : null}
+      {sections.map((section) => (
+        <ListSection
+          key={section.title}
+          title={section.title === "Mine" ? "My AI accounts" : section.title}
+        >
+          {section.rows.map((row) => (
             <View key={row.id} className="gap-1 px-4 py-3">
               <Text className="text-base text-foreground">{row.name}</Text>
               <Text className="text-xs text-foreground-muted">
@@ -95,9 +102,9 @@ export function AiAccountsList(props: { readonly environmentId: EnvironmentId })
                 <Text className="text-sm text-foreground-muted">{row.quota}</Text>
               )}
             </View>
-          ))
-        )}
-      </ListSection>
+          ))}
+        </ListSection>
+      ))}
       <ListSection title="Usage, last 30 days">
         {summary === null ? (
           <Text className="px-4 py-3 text-sm text-foreground-muted">

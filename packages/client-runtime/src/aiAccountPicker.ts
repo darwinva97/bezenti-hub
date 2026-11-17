@@ -41,7 +41,7 @@ export function aiAccountsDecide(
   );
 }
 
-/** The accounts `driver` can use, first to last by the Installation's priority. */
+/** The accounts `driver` can use, in the Hub's order (the Space owner's first). */
 export function aiAccountsFor(
   driver: string,
   picker: AiAccountPickerResult | null | undefined,

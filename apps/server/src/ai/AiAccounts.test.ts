@@ -275,14 +275,15 @@ const namesOf = (accounts: ReadonlyArray<AiAccountSummary>) =>
   accounts.map((account) => account.name).toSorted();
 
 it.live.skipIf(!posix || platform === undefined)(
-  "only the Owner creates, changes, allows, orders and deletes AI accounts",
+  "only the Owner changes, allows, orders and deletes the Owner's AI accounts",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub();
       const { accounts, as, ownerId, acmeId, people } = setup;
       const { acme } = yield* ownerSetup(setup);
+      const ownersOwn = { kind: "user", userId: ownerId } as const;
       // Everyone but the Owner, and the Owner's own agent bound to Acme's Sandbox, which acts
-      // on nothing Installation-wide.
+      // on nothing outside Acme.
       const callers: ReadonlyArray<readonly [UserId, SpaceId | undefined]> = [
         ...Object.values(people).map((userId) => [userId, undefined] as const),
         [ownerId, acmeId],
@@ -292,7 +293,12 @@ it.live.skipIf(!posix || platform === undefined)(
         const refused = [
           yield* reasonOf(
             accounts
-              .create({ name: `${who} key`, provider: "xai", apiKey: Redacted.make(ACME_KEY) })
+              .create({
+                name: `${who} key`,
+                provider: "xai",
+                apiKey: Redacted.make(ACME_KEY),
+                owner: ownersOwn,
+              })
               .pipe(run),
           ),
           yield* reasonOf(accounts.update({ accountId: acme.id, name: "Mine" }).pipe(run)),
@@ -304,11 +310,20 @@ it.live.skipIf(!posix || platform === undefined)(
               .allow({ accountId: acme.id, spaceIds: [acmeId], userIds: [UserId.make(who)] })
               .pipe(run),
           ),
-          yield* reasonOf(accounts.reorder({ accountIds: [acme.id] }).pipe(run)),
+          yield* reasonOf(accounts.reorder({ accountIds: [acme.id], owner: ownersOwn }).pipe(run)),
           yield* reasonOf(accounts.remove({ accountId: acme.id }).pipe(run)),
         ];
         assert.deepEqual(refused, Array(6).fill("forbidden"), `${who} managed an AI account`);
       }
+      // The Owner's agent bound to Acme adds nothing of the Owner's own either.
+      assert.equal(
+        yield* reasonOf(
+          accounts
+            .create({ name: "Agent's", provider: "xai", apiKey: Redacted.make(ACME_KEY) })
+            .pipe(as(ownerId, acmeId)),
+        ),
+        "forbidden",
+      );
       // Nothing changed: still the Owner's four, Acme's first.
       const listed = yield* accounts.list.pipe(as(ownerId));
       assert.isTrue(listed.canManage);
@@ -332,6 +347,138 @@ it.live.skipIf(!posix || platform === undefined)(
         yield* reasonOf(accounts.reorder({ accountIds: [acme.id] }).pipe(as(ownerId))),
         "invalid",
       );
+    }),
+);
+
+it.live.skipIf(!posix || platform === undefined)(
+  "any User adds and manages AI accounts of their own; the Owner sees only their name, provider, owner and status",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* hub();
+      const { accounts, allowed, as, ownerId, acmeId, people, server } = setup;
+      yield* ownerSetup(setup);
+      const grace = people.member;
+      const gracesOwn = { kind: "user", userId: grace } as const;
+      const mine = yield* accounts
+        .create({ name: "Grace Claude", provider: "claude", apiKey: Redacted.make(GLOBEX_KEY) })
+        .pipe(as(grace));
+      assert.deepEqual(mine.owner, gracesOwn);
+      assert.isTrue(mine.canManage);
+      assert.equal(mine.priority, 1);
+      assert.equal(mine.details?.keyHint, GLOBEX_KEY.slice(-4));
+      // Her own name space: the Owner's «Acme OpenRouter» does not block hers; her own twice does.
+      const second = yield* accounts
+        .create({
+          name: "Acme OpenRouter",
+          provider: "openai-compatible",
+          apiKey: Redacted.make(REPLACED_KEY),
+          baseUrl: "https://openrouter.example/api/v1",
+          models: ["deepseek-chat"],
+        })
+        .pipe(as(grace));
+      assert.equal(second.priority, 2);
+      assert.equal(
+        yield* reasonOf(
+          accounts
+            .create({ name: "grace claude", provider: "xai", apiKey: Redacted.make(ACME_KEY) })
+            .pipe(as(grace)),
+        ),
+        "duplicate-name",
+      );
+
+      // She sees hers, with details, and may add more for herself only.
+      const hers = yield* accounts.list.pipe(as(grace));
+      assert.isFalse(hers.canManage);
+      assert.deepEqual(hers.owners, [{ owner: gracesOwn, name: "grace" }]);
+      const listedMine = hers.accounts.filter((account) => account.canManage === true);
+      assert.deepEqual(
+        listedMine.map((account) => [account.name, account.priority]),
+        [
+          ["Grace Claude", 1],
+          ["Acme OpenRouter", 2],
+        ],
+      );
+      // She orders, renames, disables and deletes hers; the Owner's order is untouched.
+      const reordered = yield* accounts
+        .reorder({ accountIds: [second.id, mine.id] })
+        .pipe(as(grace));
+      assert.deepEqual(
+        reordered.accounts
+          .filter((account) => account.canManage === true)
+          .map((account) => account.name),
+        ["Acme OpenRouter", "Grace Claude"],
+      );
+      const renamed = yield* accounts
+        .update({ accountId: mine.id, name: "Grace's Claude" })
+        .pipe(as(grace));
+      assert.equal(renamed.name, "Grace's Claude");
+      // Allowances are the Owner's, on the Owner's accounts only: hers lend through Grants.
+      assert.equal(
+        yield* reasonOf(
+          accounts.allow({ accountId: mine.id, spaceIds: [acmeId], userIds: [] }).pipe(as(grace)),
+        ),
+        "forbidden",
+      );
+
+      // The Owner sees it with its owner and status, never its details; and changes nothing.
+      const owners = yield* accounts.list.pipe(as(ownerId));
+      const seen = owners.accounts.find((account) => account.id === mine.id);
+      assert.deepInclude(seen, {
+        name: "Grace's Claude",
+        provider: "claude",
+        owner: gracesOwn,
+        canManage: false,
+        details: null,
+      });
+      const ownerTries = [
+        yield* reasonOf(
+          accounts.update({ accountId: mine.id, name: "Mine now" }).pipe(as(ownerId)),
+        ),
+        yield* reasonOf(accounts.update({ accountId: mine.id, disabled: true }).pipe(as(ownerId))),
+        yield* reasonOf(accounts.remove({ accountId: mine.id }).pipe(as(ownerId))),
+        yield* reasonOf(
+          accounts.allow({ accountId: mine.id, spaceIds: [acmeId], userIds: [] }).pipe(as(ownerId)),
+        ),
+        yield* reasonOf(
+          accounts
+            .reorder({ accountIds: [mine.id, second.id], owner: gracesOwn })
+            .pipe(as(ownerId)),
+        ),
+      ];
+      assert.deepEqual(ownerTries, Array(5).fill("forbidden"));
+      // Nobody else sees or touches it.
+      for (const who of [people.admin, people.guest, people.globexMember]) {
+        const theirs = yield* accounts.list.pipe(as(who));
+        assert.notInclude(
+          theirs.accounts.map((account) => account.id),
+          mine.id,
+          `${who} saw Grace's own account`,
+        );
+        assert.equal(
+          yield* reasonOf(accounts.update({ accountId: mine.id, name: "x" }).pipe(as(who))),
+          "forbidden",
+        );
+      }
+
+      // It is usable only in her Personal space: never in Acme, where she works.
+      const usable = (userId: UserId, spaceId: SpaceId) =>
+        allowed.for(userId, spaceId).pipe(Effect.map((list) => list.map((account) => account.id)));
+      const personal = SpaceId.make(`personal:${grace}`);
+      assert.deepEqual((yield* usable(grace, personal)).slice(0, 2), [second.id, mine.id]);
+      assert.notInclude(yield* usable(grace, acmeId), mine.id);
+      assert.notInclude(yield* usable(grace, acmeId), second.id);
+
+      // Audited with its owner.
+      const [created] = yield* server.sql<{ readonly detail: string }>`
+        SELECT detail_json AS detail FROM audit_log
+        WHERE action = 'ai_account.create' AND target_id = ${mine.id}
+      `;
+      assert.deepInclude(JSON.parse(created?.detail ?? "{}"), {
+        ownerKind: "user",
+        ownerId: grace,
+      });
+      yield* accounts.remove({ accountId: second.id }).pipe(as(grace));
+      assert.notInclude(yield* usable(grace, personal), second.id);
     }),
 );
 
@@ -541,7 +688,12 @@ it.live.skipIf(!posix || platform === undefined)(
       // A refused write says why, never what.
       const refused = yield* Effect.flip(
         accounts
-          .create({ name: "Mine", provider: "claude", apiKey: Redacted.make(GLOBEX_KEY) })
+          .create({
+            name: "Mine",
+            provider: "claude",
+            apiKey: Redacted.make(GLOBEX_KEY),
+            owner: { kind: "user", userId: ownerId },
+          })
           .pipe(as(people.admin)),
       );
       assert.isFalse(mentionsAKey(JSON.stringify(refused) + refused.message));

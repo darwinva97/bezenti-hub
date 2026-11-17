@@ -285,27 +285,88 @@ const refreshInGateway = (stack: Stack, name: string) =>
     return (yield* response.json) as { readonly refresh_token: string };
   }).pipe(Effect.provide(FetchHttpClient.layer), Effect.orDie);
 
-live("only the Owner, from the session that started it, signs in to a subscription", () =>
-  Effect.gen(function* () {
-    const setup = yield* hub();
-    const { stack, as, ownerId, member, admin, acmeId } = setup;
-    // A Member, an Admin, and the Owner's own agent bound to Acme cannot start one.
-    for (const [who, limit] of [
-      [member, undefined],
-      [admin, undefined],
-      [ownerId, acmeId],
-    ] as const) {
+live(
+  "any User signs in to a subscription of their own, from the session that started it; the Owner sees its name, never who it is or its quota",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* hub();
+      const { stack, as, ownerId, member, admin, acmeId } = setup;
+      // The Owner's own agent bound to Acme starts none; a sign-in for someone else neither.
       assert.equal(
         yield* reasonOf(
           stack.accounts
-            .loginStart({ provider: "antigravity", name: "Mine" }, SESSION)
-            .pipe(as(who, limit)),
+            .loginStart({ provider: "claude", name: "Mine" }, SESSION)
+            .pipe(as(ownerId, acmeId)),
         ),
         "forbidden",
-        `${who} started a sign-in`,
       );
-    }
-    assert.deepEqual(oauthSeen(stack), [], "a refused caller reached CLIProxyAPI");
+      assert.equal(
+        yield* reasonOf(
+          stack.accounts
+            .loginStart(
+              { provider: "claude", name: "Hers", owner: { kind: "user", userId: member } },
+              SESSION,
+            )
+            .pipe(as(admin)),
+        ),
+        "forbidden",
+      );
+      assert.deepEqual(oauthSeen(stack), [], "a refused caller reached CLIProxyAPI");
+
+      const started = yield* stack.accounts
+        .loginStart({ provider: "claude", name: "Grace Claude" }, SESSION)
+        .pipe(as(member));
+      // One sign-in at a time on the Hub: another User waits rather than replacing hers.
+      assert.equal(
+        yield* reasonOf(
+          stack.accounts
+            .loginStart({ provider: "claude", name: "Ada Claude" }, SESSION)
+            .pipe(as(admin)),
+        ),
+        "pending",
+      );
+      const pasted = Redacted.make(landedOn(started.url));
+      // Nobody else completes it, the Owner included.
+      assert.equal(
+        yield* reasonOf(
+          stack.accounts
+            .loginComplete({ loginId: started.loginId, redirectUrl: pasted }, SESSION)
+            .pipe(as(ownerId)),
+        ),
+        "expired",
+      );
+      const hers = yield* stack.accounts
+        .loginComplete({ loginId: started.loginId, redirectUrl: pasted }, SESSION)
+        .pipe(as(member));
+      assert.deepEqual(hers.owner, { kind: "user", userId: member });
+      assert.equal(hers.type, "subscription");
+      assert.isString(hers.details?.signedInAs);
+      yield* stack.accounts.update({ accountId: hers.id, disabled: false }).pipe(as(member));
+
+      // The Owner: its name, provider, owner and status; never who it signed in as, nor its
+      // quota windows, in the list or in the Usage dialog's Hub limits.
+      const seen = yield* ownerView(setup, stack, hers.id);
+      assert.deepInclude(seen, { name: "Grace Claude", provider: "claude", details: null });
+      assert.notInclude(JSON.stringify(seen), "@");
+      yield* signIn(setup, stack, "claude", "Owner Claude");
+      const limits = yield* stack.accounts.ownerSubscriptionLimits.pipe(as(ownerId));
+      assert.deepEqual(
+        limits?.accounts.map((account) => account.name),
+        ["Owner Claude"],
+      );
+      // Her own list shows her windows; her limits in the Usage dialog stay the Owner's.
+      const own = (yield* stack.accounts.list.pipe(as(member))).accounts.find(
+        (account) => account.id === hers.id,
+      );
+      assert.isDefined(own?.details?.usageLimits ?? undefined);
+      assert.isNull(yield* stack.accounts.ownerSubscriptionLimits.pipe(as(member)));
+    }),
+);
+
+live("only who started it, from the same session, completes a sign-in", () =>
+  Effect.gen(function* () {
+    const setup = yield* hub();
+    const { stack, as, ownerId, member } = setup;
 
     const started = yield* stack.accounts
       .loginStart({ provider: "antigravity", name: "Owner Google" }, SESSION)
@@ -320,7 +381,7 @@ live("only the Owner, from the session that started it, signs in to a subscripti
           .loginComplete({ loginId: started.loginId, redirectUrl: pasted }, SESSION)
           .pipe(as(member)),
       ),
-      "forbidden",
+      "expired",
     );
     assert.equal(
       yield* reasonOf(
@@ -743,7 +804,11 @@ live("a Vertex service account is imported and sealed; anything else is refused"
     assert.equal(
       yield* reasonOf(
         stack.accounts
-          .importVertex({ name: "Vertex", serviceAccount: Redacted.make(key) })
+          .importVertex({
+            name: "Vertex",
+            serviceAccount: Redacted.make(key),
+            owner: { kind: "user", userId: ownerId },
+          })
           .pipe(as(member)),
       ),
       "forbidden",

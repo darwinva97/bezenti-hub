@@ -4,10 +4,12 @@
  */
 import {
   type AiAccountDetails,
+  type AiAccountListResult,
   type AiAccountStatus,
   type AiAccountId,
   type AiAccountSummary,
   type ModelSelection,
+  sameResourceOwner,
   WS_METHODS,
 } from "@t3tools/contracts";
 
@@ -52,7 +54,7 @@ const KIND_LABEL = {
   direct: "Direct",
 } as const;
 
-/** The accounts first to last by the Installation's priority, in words; read-only. */
+/** The accounts first to last by their owner's priority, in words; read-only. */
 export function accountRows(
   accounts: ReadonlyArray<AiAccountSummary>,
 ): ReadonlyArray<AiAccountRow> {
@@ -71,6 +73,45 @@ export function accountRows(
       quota: quotaText(account.details),
       signedInAs: account.details?.signedInAs ?? null,
     }));
+}
+
+export interface AiAccountSection {
+  readonly title: string;
+  readonly rows: ReadonlyArray<AiAccountRow>;
+}
+
+/**
+ * The list by owner (owned-resources 08, 09): the viewer's own («Mine»), each Organization they
+ * run, then what they may use of others', then (the Owner) everyone else's. Empty sections go.
+ */
+export function accountSections(
+  list: Pick<AiAccountListResult, "accounts" | "owners">,
+): ReadonlyArray<AiAccountSection> {
+  const sections: Array<AiAccountSection> = [];
+  const placed = new Set<string>();
+  for (const option of list.owners ?? []) {
+    const owned = list.accounts.filter(
+      (account) =>
+        account.canManage === true &&
+        account.owner !== undefined &&
+        sameResourceOwner(account.owner, option.owner),
+    );
+    for (const account of owned) placed.add(account.id);
+    sections.push({
+      title: option.owner.kind === "user" ? "Mine" : option.name,
+      rows: accountRows(owned),
+    });
+  }
+  const rest = list.accounts.filter((account) => !placed.has(account.id));
+  sections.push({
+    title: "You may use",
+    rows: accountRows(rest.filter((account) => account.usableIn.length > 0)),
+  });
+  sections.push({
+    title: "Other people's",
+    rows: accountRows(rest.filter((account) => account.usableIn.length === 0)),
+  });
+  return sections.filter((section) => section.rows.length > 0);
 }
 
 /**

@@ -286,7 +286,7 @@ const make = Effect.gen(function* () {
         allowed: everyAllowed,
       });
     }
-    // Through the gateway only, by global priority: what the gateway itself routes to.
+    // Through the gateway only, in AllowedAiAccounts' order: what the gateway itself routes to.
     const choice = yield* chooseAiAccount({
       driver: input.driver,
       allowed: everyAllowed,

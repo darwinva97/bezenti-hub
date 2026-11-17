@@ -191,20 +191,33 @@ describe("RPC authorization scopes", () => {
           ).pipe(Effect.flip);
           expect([method, refused.message]).toEqual([method, INSTALLATION_OWNER_ONLY_MESSAGE]);
         }
-        // The Installation's AI accounts: only the Owner registers, changes, allows and orders them.
+        // Owned-resources 08: any User manages AI accounts of their own (AiAccounts decides by
+        // AccessPolicy `aiAccount.manage` on the account's owner), with a standard session's
+        // access:write; only allowances stay the Owner's, on the Installation.
         for (const method of [
           WS_METHODS.aiAccountsCreate,
           WS_METHODS.aiAccountsUpdate,
           WS_METHODS.aiAccountsDelete,
-          WS_METHODS.aiAccountsAllow,
           WS_METHODS.aiAccountsReorder,
-          // Spec 4 ticket 03: signing in to a subscription and importing a Vertex account.
           WS_METHODS.aiAccountsLoginStart,
           WS_METHODS.aiAccountsLoginComplete,
           WS_METHODS.aiAccountsImportVertex,
-          // Ticket 15: importing CLIProxyAPI auth files.
           WS_METHODS.aiAccountsImportCliproxy,
         ]) {
+          expect([method, requiredScopeForRpcMethod(method)]).toEqual([
+            method,
+            AuthAccessWriteScope,
+          ]);
+          expect(typeof spaceAccessForRpcMethod(method)).toBe("object");
+          yield* guardRpcPayload(
+            method,
+            { accountId: "acct", accountIds: [] },
+            member,
+            {} as never,
+            UserId.make("member"),
+          );
+        }
+        for (const method of [WS_METHODS.aiAccountsAllow]) {
           expect([method, spaceAccessForRpcMethod(method)]).toEqual([method, "installation"]);
           const refused = yield* guardRpcPayload(
             method,

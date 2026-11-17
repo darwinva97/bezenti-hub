@@ -75,7 +75,12 @@ const VAULTS = {
 /** AI accounts name no Thread or Project: the list is AllowedAiAccounts' for the session. */
 const AI_ACCOUNTS_LIST = {
   unscoped:
-    "AI accounts: AiAccounts.list answers with what AllowedAiAccounts lets the session's User use in the Spaces SpaceDirectory.authorizer lets them act in (spaceLimit too); only the Owner, unlimited, sees every account and its details; no credential is returned",
+    "AI accounts: AiAccounts.list answers with the session's User's own and their Organizations' accounts they manage (with details), what AllowedAiAccounts lets them use in the Spaces SpaceDirectory.authorizer lets them act in (spaceLimit too), and, to the Owner, everyone else's name, provider, owner and status; no credential is returned",
+};
+/** AI accounts are their owners' (owned-resources 08): AiAccounts decides each write. */
+const AI_ACCOUNTS_WRITE = {
+  unscoped:
+    "AI accounts: AiAccounts decides each write by AccessPolicy `aiAccount.manage` on the account's owner (a User's own, an Organization's Admins), through SpaceDirectory.authorizer (spaceLimit too); importing CLIProxyAPI files and allowances stay the Owner's on the Installation; no credential is returned",
 };
 /** The picker names a Space: AllowedAiAccounts answers nothing where the User does not work. */
 const AI_ACCOUNTS_PICKER = {
@@ -139,6 +144,14 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.vaultsEntriesCopy]: VAULTS,
   [WS_METHODS.aiAccountsList]: AI_ACCOUNTS_LIST,
   [WS_METHODS.aiAccountsPicker]: AI_ACCOUNTS_PICKER,
+  [WS_METHODS.aiAccountsCreate]: AI_ACCOUNTS_WRITE,
+  [WS_METHODS.aiAccountsUpdate]: AI_ACCOUNTS_WRITE,
+  [WS_METHODS.aiAccountsDelete]: AI_ACCOUNTS_WRITE,
+  [WS_METHODS.aiAccountsReorder]: AI_ACCOUNTS_WRITE,
+  [WS_METHODS.aiAccountsLoginStart]: AI_ACCOUNTS_WRITE,
+  [WS_METHODS.aiAccountsLoginComplete]: AI_ACCOUNTS_WRITE,
+  [WS_METHODS.aiAccountsImportVertex]: AI_ACCOUNTS_WRITE,
+  [WS_METHODS.aiAccountsImportCliproxy]: AI_ACCOUNTS_WRITE,
   // Spec 4 ticket 08: a hidden Thread answers like a missing one; the switch is a command on the
   // Thread (`thread.continue` in the orchestrator) whose account AiAccountChoice decides.
   [WS_METHODS.threadSetAiAccount]: "thread",

@@ -242,14 +242,24 @@ export const AUDIT_DETAIL_KEYS = {
   "ai_gateway.enable": ["to"],
   /** The account's provider and type, and `via: "migration"` for a key moved from a provider
    * instance at the Hub's start (spec 4 ticket 09); never its credential, nor any part of it. */
-  "ai_account.create": ["provider", "type", "via"],
+  "ai_account.create": ["provider", "type", "via", "ownerKind", "ownerId"],
   /** What changed: `from` and `to` on a rename, `disabled`, `credential` (replaced), `endpoint`. */
-  "ai_account.update": ["provider", "from", "to", "disabled", "credential", "endpoint", "priority"],
-  "ai_account.delete": ["provider"],
+  "ai_account.update": [
+    "provider",
+    "from",
+    "to",
+    "disabled",
+    "credential",
+    "endpoint",
+    "priority",
+    "ownerKind",
+    "ownerId",
+  ],
+  "ai_account.delete": ["provider", "ownerKind", "ownerId"],
   /** How many Spaces and Users it is allowed to now, and the change. */
   "ai_account.allow": ["spaces", "users", "added", "removed"],
   /** Which provider, a new account or «Sign in again», and how it ended; never a token. */
-  "ai_account.login": ["provider", "kind", "outcome", "reason"],
+  "ai_account.login": ["provider", "kind", "outcome", "reason", "ownerKind", "ownerId"],
   /** The key's kind and Space; never the key, nor any part of it. */
   "ai_gateway_key.create": ["kind", "space"],
   /** Why: `revoked` by a person (its User or the Owner); `space-lost` or `user-inactive` by the Hub. */

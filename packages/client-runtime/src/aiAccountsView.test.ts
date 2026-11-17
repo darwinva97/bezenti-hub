@@ -1,8 +1,9 @@
-import type { AiAccountSummary } from "@t3tools/contracts";
+import { type AiAccountSummary, SpaceId, UserId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   accountRows,
+  accountSections,
   aiAccountSelection,
   MOBILE_FORBIDDEN_AI_METHODS,
   ownKeys,
@@ -23,6 +24,45 @@ const account = (over: Record<string, unknown>): AiAccountSummary =>
     details: null,
     ...over,
   }) as unknown as AiAccountSummary;
+
+describe("accountSections", () => {
+  it("groups by owner: mine first, then each Organization run, then usable, then others'", () => {
+    const grace = { kind: "user", userId: UserId.make("grace") } as const;
+    const acme = { kind: "organization", spaceId: SpaceId.make("acme") } as const;
+    const sections = accountSections({
+      owners: [
+        { owner: grace, name: "Grace" },
+        { owner: acme, name: "Acme" },
+      ],
+      accounts: [
+        account({ id: "o1", name: "Owner's", owner: { kind: "user", userId: "owner" } }),
+        account({ id: "a1", name: "Acme Claude", owner: acme, canManage: true }),
+        account({ id: "m2", name: "Mine B", owner: grace, canManage: true, priority: 2 }),
+        account({ id: "m1", name: "Mine A", owner: grace, canManage: true, priority: 1 }),
+        account({
+          id: "u1",
+          name: "Allowed",
+          owner: { kind: "user", userId: "owner" },
+          canManage: false,
+          usableIn: ["acme"],
+        }),
+      ],
+    });
+    expect(sections.map((section) => [section.title, section.rows.map((row) => row.name)])).toEqual(
+      [
+        ["Mine", ["Mine A", "Mine B"]],
+        ["Acme", ["Acme Claude"]],
+        ["You may use", ["Allowed"]],
+        ["Other people's", ["Owner's"]],
+      ],
+    );
+  });
+
+  it("an older Hub's list is one section of what the User may use", () => {
+    const sections = accountSections({ accounts: [account({ id: "x", usableIn: ["acme"] })] });
+    expect(sections.map((section) => section.title)).toEqual(["You may use"]);
+  });
+});
 
 describe("accountRows", () => {
   it("orders by priority and words the status", () => {

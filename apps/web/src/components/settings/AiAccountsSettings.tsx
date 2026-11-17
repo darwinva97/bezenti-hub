@@ -4,9 +4,10 @@ import {
   type AtomCommandResult,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { AI_CLIPROXY_IMPORT_MAX_FILES } from "@t3tools/contracts";
+import { AI_CLIPROXY_IMPORT_MAX_FILES, sameResourceOwner } from "@t3tools/contracts";
 import type {
   AiAccountDetails,
+  AiAccountOwnerOption,
   AiAccountImportCliproxyFileResult,
   AiAccountProvider,
   AiAccountLoginStartResult,
@@ -17,13 +18,14 @@ import type {
   AiSubscriptionProvider,
   EnvironmentId,
   InstallationUser,
+  ResourceOwner,
   SpaceId,
   UserId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { PrimaryEnvironmentHttpClient } from "../../environments/primary/httpClient";
 import { errorMessageOf } from "../../lib/errorMessage";
@@ -101,6 +103,11 @@ const providerLabel = (provider: AiAccountProvider, type?: AiAccountSummary["typ
 /** ADR 0005: the Owner shares a personal subscription knowingly. */
 const TOS_WARNING =
   "Sharing a personal subscription with your team may break the provider's terms; the provider may suspend the account. API keys and per-seat plans are the compliant choice.";
+/** A User's own subscription is used only in their Personal space: nothing is shared. */
+const PERSONAL_TOS_NOTE =
+  "Only your own Threads in your Personal space use it. The Hub signs in from its own address, which the provider may see as a datacenter's; check its terms allow that.";
+/** The warning a subscription gets: shared with others (the Owner's, an Organization's) or not. */
+const tosOf = (shared: boolean) => (shared ? TOS_WARNING : PERSONAL_TOS_NOTE);
 const ANTIGRAVITY_NOTE =
   "CLIProxyAPI disguises its Antigravity traffic (hardened in v8.0.65), a sign that Google detects and may suspend this use.";
 
@@ -142,9 +149,9 @@ function useAccountCommands() {
 type AccountCommands = ReturnType<typeof useAccountCommands>;
 
 /**
- * Settings → AI accounts: the Owner adds API keys, orders them and allows each to Spaces and
- * Users; everyone else sees the names, providers and status of the accounts they may use. A key
- * is never shown again once saved, only replaced.
+ * Settings → AI accounts: each User's own («Mine») and their Organizations', to add, order, change
+ * and delete; the Owner also allows theirs. Others' only by name, provider and status. A key is
+ * never shown again once saved, only replaced.
  */
 export function AiAccountsSettingsPanel() {
   const environmentId = usePrimaryEnvironmentId();
@@ -167,12 +174,13 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
   const mayWrite = useAtomValue(aiGatewayEnvironment.createAccount.permissionAtom(environmentId));
   const [accounts, setAccounts] = useState<ReadonlyArray<AiAccountSummary> | null>(null);
   const [canManage, setCanManage] = useState(false);
+  const [owners, setOwners] = useState<ReadonlyArray<AiAccountOwnerOption>>([]);
   const [users, setUsers] = useState<ReadonlyArray<InstallationUser>>([]);
   const [error, setError] = useState<string | null>(null);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const [tab, setTab] = useState<AiAccountsTab>("accounts");
-  const manage = canManage && mayWrite;
+  const manage = mayWrite;
 
   const loadAccounts = useEffectEvent((target: EnvironmentId) =>
     settle(commands.list({ environmentId: target, input: {} })),
@@ -186,6 +194,7 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
         if (cancelled) return;
         setAccounts(listed.accounts);
         setCanManage(listed.canManage);
+        setOwners(listed.owners ?? []);
         if (!listed.canManage) return;
         // The accounts show even when the Users cannot be read.
         void fetchUsers().then(
@@ -218,6 +227,7 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
       const listed = await settle(commands.list({ environmentId, input: {} }));
       setAccounts(listed.accounts);
       setCanManage(listed.canManage);
+      setOwners(listed.owners ?? []);
       setError(null);
     } catch (cause) {
       setError(errorMessageOf(cause, "Could not read the AI accounts."));
@@ -234,12 +244,23 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
     .filter((user) => user.status !== "removed")
     .map((user) => ({ id: user.id, name: user.displayName }));
 
-  /** One move at a time, from the order the Hub last answered. */
-  const move = async (accountId: AiAccountSummary["id"], by: -1 | 1) => {
-    if (accounts === null || reordering) return;
-    const order = accounts
-      .filter((account) => account.status !== "removing")
-      .map((account) => account.id);
+  /** Whether the account is this owner's. */
+  const ownedBy = (account: AiAccountSummary, owner: ResourceOwner) =>
+    account.owner !== undefined && sameResourceOwner(account.owner, owner);
+  /** An owner's accounts the viewer manages, by their order. */
+  const accountsOf = (owner: ResourceOwner) =>
+    (accounts ?? []).filter((account) => account.canManage === true && ownedBy(account, owner));
+  // The viewer's own subscriptions are theirs alone, unless they are the Owner (who allows them).
+  const sharedFor = (owner: ResourceOwner) => owner.kind === "organization" || canManage;
+
+  /** One move at a time, within one owner's order, from what the Hub last answered. */
+  const move = async (account: AiAccountSummary, by: -1 | 1) => {
+    if (accounts === null || reordering || account.owner === undefined) return;
+    const owner = account.owner;
+    const accountId = account.id;
+    const order = accountsOf(owner)
+      .filter((entry) => entry.status !== "removing")
+      .map((entry) => entry.id);
     const index = order.indexOf(accountId);
     if (index < 0 || index + by < 0 || index + by >= order.length) return;
     order.splice(index, 1);
@@ -247,7 +268,7 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
     setReordering(true);
     try {
       const listed = await settle(
-        commands.reorder({ environmentId, input: { accountIds: order } }),
+        commands.reorder({ environmentId, input: { accountIds: order, owner } }),
       );
       setAccounts(listed.accounts);
     } catch (cause) {
@@ -282,17 +303,51 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
       </>
     );
   }
+  // The viewer themselves, first among the owners they may add accounts for.
+  const self = owners[0]?.owner.kind === "user" ? owners[0].owner : undefined;
+  // Accounts the viewer may use but not manage, and (for the Owner) everyone else's.
+  const usable = (accounts ?? []).filter(
+    (account) => account.canManage !== true && account.usableIn.length > 0,
+  );
+  const others = (accounts ?? []).filter(
+    (account) => account.canManage !== true && account.usableIn.length === 0,
+  );
+  const accountItem = (account: AiAccountSummary, ownerOrder: ReadonlyArray<AiAccountSummary>) => {
+    const live = ownerOrder.filter((entry) => entry.status !== "removing");
+    return (
+      <li key={account.id}>
+        <AccountSection
+          environmentId={environmentId}
+          commands={commands}
+          account={account}
+          canManage={manage && account.canManage === true}
+          // Allowances: the Owner's, on the Owner's own accounts only.
+          canAllow={
+            canManage &&
+            account.owner !== undefined &&
+            self !== undefined &&
+            sameResourceOwner(account.owner, self)
+          }
+          shared={account.owner === undefined ? true : sharedFor(account.owner)}
+          spaces={spaces}
+          people={people}
+          spaceName={spaceName}
+          first={live[0]?.id === account.id}
+          last={live.at(-1)?.id === account.id}
+          reordering={reordering}
+          onMove={(by) => move(account, by)}
+          onChanged={refresh}
+        />
+      </li>
+    );
+  };
   return (
     <>
       <AiAccountsTabs tab={tab} onTab={setTab} usage={canManage} />
       <SettingsSection id="ai-accounts" title="AI accounts">
         <SettingsRow
-          title={canManage ? "Your AI accounts" : "AI accounts you may use"}
-          description={
-            canManage
-              ? "API keys and subscriptions the Hub's AI gateway uses for your team's agents, tried first to last. A credential never leaves the Hub and is never shown again: replace it, or sign in again, to change it. Allow each account to Spaces (everyone who works there) or to Users."
-              : "The AI accounts your agents may use in your Spaces. Only the Owner adds or changes them."
-          }
+          title="AI accounts"
+          description="API keys and subscriptions the Hub's AI gateway uses for your agents, tried first to last. Yours are used only in your Personal space; an Organization's by whoever works there. A credential never leaves the Hub and is never shown again: replace it, or sign in again, to change it."
           status={
             error === null && usersError === null ? null : (
               <span className="text-destructive" role="alert">
@@ -301,49 +356,106 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
             )
           }
         />
-        {manage ? (
-          <NewAccountForm environmentId={environmentId} commands={commands} onAdded={refresh} />
-        ) : null}
-        {manage ? (
-          <NewSubscriptionForm
-            environmentId={environmentId}
-            commands={commands}
-            onAdded={refresh}
-          />
-        ) : null}
-        {manage ? (
-          <ImportVertexForm environmentId={environmentId} commands={commands} onAdded={refresh} />
-        ) : null}
-        {manage ? (
+        {manage && canManage ? (
           <ImportCliproxyForm environmentId={environmentId} commands={commands} onAdded={refresh} />
         ) : null}
       </SettingsSection>
-      {accounts === null ? null : accounts.length === 0 ? (
-        <p className="px-4 text-sm text-muted-foreground">
-          {canManage ? "No AI account yet." : "No AI account is allowed to you."}
-        </p>
-      ) : (
-        <ul aria-label="AI accounts" className="flex flex-col gap-4">
-          {accounts.map((account) => (
-            <li key={account.id}>
-              <AccountSection
-                environmentId={environmentId}
-                commands={commands}
-                account={account}
-                canManage={manage}
-                spaces={spaces}
-                people={people}
-                spaceName={spaceName}
-                first={ordered[0]?.id === account.id}
-                last={ordered.at(-1)?.id === account.id}
-                reordering={reordering}
-                onMove={(by) => move(account.id, by)}
-                onChanged={refresh}
-              />
-            </li>
-          ))}
-        </ul>
+      {owners.map((option) => (
+        <AiAccountOwnerSection
+          key={option.owner.kind === "user" ? option.owner.userId : option.owner.spaceId}
+          environmentId={environmentId}
+          commands={commands}
+          option={option}
+          mine={option === owners[0] && option.owner.kind === "user"}
+          manage={manage}
+          shared={sharedFor(option.owner)}
+          onAdded={refresh}
+        >
+          {accounts === null ? null : accountsOf(option.owner).length === 0 ? (
+            <p className="px-4 text-sm text-muted-foreground">No AI account yet.</p>
+          ) : (
+            <ul aria-label={`AI accounts of ${option.name}`} className="flex flex-col gap-4">
+              {accountsOf(option.owner).map((account) =>
+                accountItem(account, accountsOf(option.owner)),
+              )}
+            </ul>
+          )}
+        </AiAccountOwnerSection>
+      ))}
+      {usable.length === 0 ? null : (
+        <SettingsSection id="ai-accounts-usable" title="AI accounts you may use">
+          <ul aria-label="AI accounts you may use" className="flex flex-col gap-4">
+            {usable.map((account) => accountItem(account, usable))}
+          </ul>
+        </SettingsSection>
       )}
+      {others.length === 0 ? null : (
+        <SettingsSection id="ai-accounts-others" title="Other people's AI accounts">
+          <SettingsRow
+            title="Name, provider, owner and status only"
+            description="Each person and Organization manages their own; you see that they exist."
+          />
+          <ul aria-label="Other people's AI accounts" className="flex flex-col gap-4">
+            {others.map((account) => accountItem(account, others))}
+          </ul>
+        </SettingsSection>
+      )}
+    </>
+  );
+}
+
+/**
+ * One owner's AI accounts (owned-resources 08, 09): «Mine», or an Organization the viewer runs,
+ * with what adds one for that owner. Takes the owner, so the settings modals can move it whole.
+ */
+function AiAccountOwnerSection(props: {
+  readonly environmentId: EnvironmentId;
+  readonly commands: AccountCommands;
+  readonly option: AiAccountOwnerOption;
+  readonly mine: boolean;
+  readonly manage: boolean;
+  readonly shared: boolean;
+  readonly onAdded: () => Promise<void>;
+  readonly children: ReactNode;
+}) {
+  const { option } = props;
+  const id = option.owner.kind === "user" ? "mine" : option.owner.spaceId;
+  return (
+    <>
+      <SettingsSection id={`ai-accounts-owner-${id}`} title={props.mine ? "Mine" : option.name}>
+        <SettingsRow
+          title={props.mine ? "Your own AI accounts" : `${option.name}'s AI accounts`}
+          description={
+            props.mine
+              ? "Used only by your own Threads in your Personal space; nobody else sees or uses them without a loan."
+              : `Used by everyone who works in ${option.name}. Its Admins add and change them.`
+          }
+        />
+        {props.manage ? (
+          <>
+            <NewAccountForm
+              environmentId={props.environmentId}
+              commands={props.commands}
+              owner={option.owner}
+              onAdded={props.onAdded}
+            />
+            <NewSubscriptionForm
+              environmentId={props.environmentId}
+              commands={props.commands}
+              owner={option.owner}
+              shared={props.shared}
+              onAdded={props.onAdded}
+            />
+            <ImportVertexForm
+              environmentId={props.environmentId}
+              commands={props.commands}
+              owner={option.owner}
+              onAdded={props.onAdded}
+            />
+          </>
+        ) : null}
+      </SettingsSection>
+      {props.children}
     </>
   );
 }
@@ -377,6 +489,7 @@ function AiAccountsTabs(props: {
 function NewAccountForm(props: {
   readonly environmentId: EnvironmentId;
   readonly commands: AccountCommands;
+  readonly owner: ResourceOwner;
   readonly onAdded: () => Promise<void>;
 }) {
   const [name, setName] = useState("");
@@ -419,6 +532,7 @@ function NewAccountForm(props: {
               provider,
               apiKey: Redacted.make(apiKey.trim()),
               ...(compatible ? { baseUrl: baseUrl.trim(), models: modelList } : {}),
+              owner: props.owner,
             },
           }),
         )
@@ -558,7 +672,9 @@ function SignInFlow(props: {
   readonly commands: AccountCommands;
   readonly label: string;
   readonly provider: AiSubscriptionProvider;
-  readonly target: { readonly name: string } | { readonly accountId: AiAccountSummary["id"] };
+  readonly target:
+    | { readonly name: string; readonly owner: ResourceOwner }
+    | { readonly accountId: AiAccountSummary["id"] };
   readonly disabled: boolean;
   readonly onDone: () => Promise<void>;
 }) {
@@ -713,6 +829,9 @@ function SignInFlow(props: {
 function NewSubscriptionForm(props: {
   readonly environmentId: EnvironmentId;
   readonly commands: AccountCommands;
+  readonly owner: ResourceOwner;
+  /** Others use it (the Owner's, an Organization's): the sharing warning; else a User's own. */
+  readonly shared: boolean;
   readonly onAdded: () => Promise<void>;
 }) {
   const [name, setName] = useState("");
@@ -759,7 +878,7 @@ function NewSubscriptionForm(props: {
         aria-label="Terms of service warning"
         className="text-xs text-warning-foreground"
       >
-        {TOS_WARNING}
+        {tosOf(props.shared)}
         {provider === "antigravity" ? ` ${ANTIGRAVITY_NOTE}` : ""}
       </p>
       <SignInFlow
@@ -768,7 +887,7 @@ function NewSubscriptionForm(props: {
         commands={props.commands}
         label="Start sign-in"
         provider={provider}
-        target={{ name: name.trim() }}
+        target={{ name: name.trim(), owner: props.owner }}
         disabled={name.trim().length === 0}
         onDone={async () => {
           setName("");
@@ -783,6 +902,7 @@ function NewSubscriptionForm(props: {
 function ImportVertexForm(props: {
   readonly environmentId: EnvironmentId;
   readonly commands: AccountCommands;
+  readonly owner: ResourceOwner;
   readonly onAdded: () => Promise<void>;
 }) {
   const [name, setName] = useState("");
@@ -800,7 +920,11 @@ function ImportVertexForm(props: {
         void settle(
           props.commands.importVertex({
             environmentId: props.environmentId,
-            input: { name: name.trim(), serviceAccount: Redacted.make(key.trim()) },
+            input: {
+              name: name.trim(),
+              serviceAccount: Redacted.make(key.trim()),
+              owner: props.owner,
+            },
           }),
         )
           .then(async () => {
@@ -960,6 +1084,10 @@ function AccountSection(props: {
   readonly commands: AccountCommands;
   readonly account: AiAccountSummary;
   readonly canManage: boolean;
+  /** The Owner's own account: allowances to Spaces and Users. */
+  readonly canAllow: boolean;
+  /** A subscription others use: the sharing warning. */
+  readonly shared: boolean;
   readonly spaces: ReadonlyArray<Subject>;
   readonly people: ReadonlyArray<Subject>;
   readonly spaceName: (spaceId: SpaceId) => string;
@@ -1007,7 +1135,11 @@ function AccountSection(props: {
         title={providerLabel(account.provider, account.type)}
         description={
           details === null
-            ? `Usable in ${account.usableIn.map(props.spaceName).join(", ")}.`
+            ? account.usableIn.length > 0
+              ? `Usable in ${account.usableIn.map(props.spaceName).join(", ")}.`
+              : account.owner?.kind === "organization"
+                ? `${props.spaceName(account.owner.spaceId)}'s.`
+                : "Another User's own."
             : [
                 removing ? null : `Priority ${account.priority}.`,
                 details.keyHint === null ? null : `Key ending in …${details.keyHint}.`,
@@ -1015,7 +1147,7 @@ function AccountSection(props: {
                   ? null
                   : `Signed in as ${details.signedInAs}.`,
                 quotaText(details),
-                account.type === "subscription" ? TOS_WARNING : null,
+                account.type === "subscription" ? tosOf(props.shared) : null,
                 details.baseUrl === null
                   ? null
                   : `${details.baseUrl} (${details.models.join(", ")}).`,
@@ -1162,25 +1294,27 @@ function AccountSection(props: {
                   </Button>
                 </form>
               )}
-              <AllowancesForm
-                // Read again from the Hub after each change; a key replaced leaves them as they are.
-                key={JSON.stringify(details.allowances)}
-                account={account}
-                allowances={details.allowances}
-                spaces={props.spaces}
-                people={props.people}
-                pending={pending}
-                onSave={(allowances) =>
-                  act(() =>
-                    settle(
-                      commands.allow({
-                        environmentId,
-                        input: { accountId: account.id, ...allowances },
-                      }),
-                    ).then(() => null),
-                  )
-                }
-              />
+              {props.canAllow ? (
+                <AllowancesForm
+                  // Read again from the Hub after each change; a key replaced leaves them as they are.
+                  key={JSON.stringify(details.allowances)}
+                  account={account}
+                  allowances={details.allowances}
+                  spaces={props.spaces}
+                  people={props.people}
+                  pending={pending}
+                  onSave={(allowances) =>
+                    act(() =>
+                      settle(
+                        commands.allow({
+                          environmentId,
+                          input: { accountId: account.id, ...allowances },
+                        }),
+                      ).then(() => null),
+                    )
+                  }
+                />
+              ) : null}
             </>
           )}
         </div>

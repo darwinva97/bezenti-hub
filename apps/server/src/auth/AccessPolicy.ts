@@ -91,6 +91,18 @@ export interface EnvironmentMoveResource {
   readonly to: SpaceResource | null;
 }
 
+/**
+ * An AI account (owned-resources 08, 09): a User's, used in their Personal space, or an
+ * Organization's (`space` null once the Organization is gone). Creating one is decided on a
+ * resource naming the owner it would have.
+ */
+export interface AiAccountResource {
+  readonly kind: "ai-account";
+  readonly owner:
+    | { readonly kind: "user"; readonly userId: UserId }
+    | { readonly kind: "organization"; readonly space: SpaceResource | null };
+}
+
 /** A Vault of secrets: the Owner's Main vault, another of the Owner's, or an Organization's. */
 export interface VaultResource {
   readonly kind: "vault";
@@ -130,7 +142,8 @@ export type Resource =
   | UserResource
   | MoveResource
   | EnvironmentResource
-  | EnvironmentMoveResource;
+  | EnvironmentMoveResource
+  | AiAccountResource;
 
 export type Action =
   | "space.view"
@@ -245,10 +258,15 @@ export type Action =
    */
   | "vault.choose"
   /**
-   * Register, change, allow, order and delete the Installation's AI accounts: the Owner alone,
-   * decided on the Installation.
+   * On an `AiAccountResource` (owned-resources 08): create, rename, disable, replace, order and
+   * delete it: a User's own, nobody else (the Owner included). On the Installation: run its AI
+   * gateway as a whole (everyone's usage, imports, the Hub's subscription limits): the Owner.
    */
   | "aiAccount.manage"
+  /** See an AI account's name, provider, owner and status: whoever manages it, and the Owner. */
+  | "aiAccount.view"
+  /** Allow an AI account to Spaces and Users (the allowances before Grants): the Owner, own only. */
+  | "aiAccount.allow"
   /**
    * Use the AI accounts allowed to a Space or to oneself in that Space (AllowedAiAccounts): whoever
    * may start a Thread there, Guests included; decided on the Space.
@@ -739,6 +757,44 @@ const decideVaultChoice = (principal: Principal, space: SpaceResource): Decision
   return inOrganization(principal, space, ADMIN_ONLY);
 };
 
+const AI_ACCOUNT_ACTIONS: ReadonlySet<Action> = new Set([
+  "aiAccount.manage",
+  "aiAccount.view",
+  "aiAccount.allow",
+]);
+
+/**
+ * AI accounts by their owner (owned-resources 08). A User's are theirs alone to manage; the Owner
+ * sees them (name, provider, owner, status) and changes nothing. An Organization's are the
+ * Owner's to manage. Allowances are the Owner's, on the Owner's own accounts only: anything else
+ * is lent with a Grant.
+ */
+const decideAiAccount = (
+  principal: Principal,
+  action: Action,
+  { owner }: AiAccountResource,
+): Decision => {
+  if (action === "aiAccount.allow") {
+    if (!principal.isOwner) return deny("owner-only");
+    return owner.kind === "user" && owner.userId === principal.userId ? allow : deny("not-yours");
+  }
+  const manages = (): Decision => {
+    if (owner.kind === "user") {
+      return owner.userId === principal.userId ? allow : deny("not-yours");
+    }
+    const space = owner.space;
+    if (space === null || space.kind !== "organization") return deny("wrong-resource");
+    if (space.archived) return deny("space-archived");
+    if (space.frozen) return deny("space-frozen");
+    return principal.isOwner ? allow : deny("owner-only");
+  };
+  const managed = manages();
+  if (action === "aiAccount.view") {
+    return managed._tag === "Allow" || principal.isOwner ? allow : managed;
+  }
+  return managed;
+};
+
 const GRANT_ACTIONS: ReadonlySet<Action> = new Set([
   "grant.give",
   "grant.cancel",
@@ -829,6 +885,12 @@ export function decide(principal: Principal, action: Action, resource: Resource)
   if (action === "environment.register") {
     return resource.kind === "installation" ? allow : deny("wrong-resource");
   }
+  if (resource.kind === "ai-account") {
+    return AI_ACCOUNT_ACTIONS.has(action)
+      ? decideAiAccount(principal, action, resource)
+      : deny("wrong-resource");
+  }
+  if (action === "aiAccount.view" || action === "aiAccount.allow") return deny("wrong-resource");
   if (action === "aiAccount.manage") {
     if (resource.kind !== "installation") return deny("wrong-resource");
     return principal.isOwner ? allow : deny("owner-only");

@@ -1,7 +1,8 @@
 /**
  * Spec 4 ticket 08: the one chooser of a Thread's AI account among those `AllowedAiAccounts`
  * gives its turn owner in its Space, shared by the session plan and the Thread doors: the
- * Thread's choice if allowed and compatible, else the first by priority. Never another.
+ * Thread's choice if allowed and compatible, else the first in AllowedAiAccounts' order. Never
+ * another.
  */
 import {
   AI_GATEWAY_DRIVERS,
@@ -43,7 +44,7 @@ export type AiAccountChoiceResult =
 
 export interface ChooseAiAccountInput {
   readonly driver: ProviderDriverKind;
-  /** `AllowedAiAccounts.for(turn owner, Space)`, first to last by global priority. */
+  /** `AllowedAiAccounts.for(turn owner, Space)`, in its order (the Space owner's first). */
   readonly allowed: ReadonlyArray<AllowedAiAccount>;
   readonly chosen: AiAccountId | undefined;
   /** The selection's model; empty means "any". */

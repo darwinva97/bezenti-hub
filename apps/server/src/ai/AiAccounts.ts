@@ -1,7 +1,7 @@
 /**
- * AI accounts of API key (spec 4 ticket 02): rows in the database, credentials sealed in
- * `AiAccountCredentialStore` and never returned; the Owner manages (`aiAccount.manage`), others
- * list what AllowedAiAccounts allows. CLIProxyAPI gets them by its Management API, `acct-<id>`.
+ * AI accounts: rows in the database, credentials sealed in `AiAccountCredentialStore` and never
+ * returned. Each is its owner's to manage (`aiAccount.manage`); others list what AllowedAiAccounts
+ * lets them use. CLIProxyAPI gets them all by its Management API, `acct-<id>`.
  */
 import {
   type AiAccountAllowInput,
@@ -16,6 +16,7 @@ import {
   type AiAccountImportCliproxyFileResult,
   type AiAccountImportCliproxyResult,
   type AiAccountListResult,
+  type AiAccountOwnerOption,
   type AiAccountLoginCompleteInput,
   type AiAccountLoginStartInput,
   type AiAccountLoginStartResult,
@@ -32,9 +33,10 @@ import {
   type AiSubscriptionProvider,
   isAiApiKeyProvider,
   isAiDirectProvider,
+  type ResourceOwner,
   type ServerProviderUsageLimits,
-  type SpaceId,
-  type UserId,
+  SpaceId,
+  UserId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -214,6 +216,8 @@ const fail = (reason: AiAccountErrorReason, message: string) =>
 
 const NOT_FOUND = "That AI account does not exist.";
 const OWNER_ONLY = "Only the Owner manages AI accounts.";
+const NOT_YOURS = "Only its owner manages this AI account.";
+const NOT_YOURS_TO_ADD = "You add AI accounts for yourself, or for an Organization you run.";
 /** How long a gateway's model list stands for the picker and the gateway. */
 const CATALOG_TTL_MS = 5 * 60_000;
 /** After a write, how long the Hub waits for CLIProxyAPI's model list to show the accounts. */
@@ -249,7 +253,21 @@ interface AccountRow {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly deletedAt: string | null;
+  readonly ownerKind: "user" | "organization";
+  readonly ownerId: string;
 }
+
+/** An account's owner as the contract names it. */
+const ownerOfRow = (row: Pick<AccountRow, "ownerKind" | "ownerId">): ResourceOwner =>
+  row.ownerKind === "user"
+    ? { kind: "user", userId: UserId.make(row.ownerId) }
+    : { kind: "organization", spaceId: SpaceId.make(row.ownerId) };
+
+/** An owner as its columns hold it. */
+const columnsOf = (owner: ResourceOwner) =>
+  owner.kind === "user"
+    ? ({ ownerKind: "user", ownerId: owner.userId } as const)
+    : ({ ownerKind: "organization", ownerId: owner.spaceId } as const);
 
 interface AllowanceRow {
   readonly accountId: string;
@@ -262,7 +280,8 @@ const ACCOUNT_COLUMNS = `
   priority AS "priority", status AS "status", status_message AS "statusMessage",
   disabled AS "disabled", credential_id AS "credentialId", key_hint AS "keyHint",
   base_url AS "baseUrl", models_json AS "modelsJson", created_at AS "createdAt",
-  updated_at AS "updatedAt", deleted_at AS "deletedAt"
+  updated_at AS "updatedAt", deleted_at AS "deletedAt", owner_kind AS "ownerKind",
+  owner_id AS "ownerId"
 `;
 
 const encodeModels = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
@@ -387,8 +406,9 @@ const statusOf = (
 };
 
 /**
- * One account as a User sees it: the Owner with every detail but the credential (and only the
- * allowances to Spaces and Users that still exist), anyone else with where they may use it.
+ * One account as a User sees it: whoever manages it with every detail but the credential (the
+ * allowances only on the Owner's own, to Spaces and Users that still exist); the Owner, of anyone
+ * else's, its name, provider, owner and status (`seen`); anyone else with where they may use it.
  */
 const summaryOf = (
   row: AccountRow,
@@ -399,7 +419,8 @@ const summaryOf = (
         readonly allowances: ReadonlyArray<AllowanceRow>;
         readonly extras?: ReadonlyMap<string, SubscriptionExtras>;
       }
-    | { readonly _tag: "user"; readonly usableIn: ReadonlyArray<SpaceId> },
+    | { readonly _tag: "user"; readonly usableIn: ReadonlyArray<SpaceId> }
+    | { readonly _tag: "seen"; readonly usableIn: ReadonlyArray<SpaceId> },
 ): AiAccountSummary => {
   const extra = view._tag === "owner" ? view.extras?.get(row.accountId) : undefined;
   const mine =
@@ -414,9 +435,11 @@ const summaryOf = (
     priority: row.priority,
     ...statusOf(row, context),
     disabled: row.disabled === 1,
-    usableIn: view._tag === "user" ? view.usableIn : [],
+    usableIn: view._tag === "owner" ? [] : view.usableIn,
+    owner: ownerOfRow(row),
+    canManage: view._tag === "owner",
     details:
-      view._tag === "user"
+      view._tag !== "owner"
         ? null
         : {
             keyHint: row.keyHint,
@@ -540,7 +563,7 @@ interface TakenToken {
   readonly signedInAs: string | null;
 }
 
-/** A sign-in the Owner started and has not finished: one at a time on the Hub. */
+/** A sign-in a User started and has not finished: one at a time on the Hub. */
 interface PendingLogin {
   readonly loginId: string;
   readonly ownerId: UserId;
@@ -551,7 +574,12 @@ interface PendingLogin {
   readonly redirectUri: string | null;
   readonly expiresAt: number;
   readonly target:
-    | { readonly _tag: "new"; readonly name: string }
+    | {
+        readonly _tag: "new";
+        readonly name: string;
+        /** Whose the new account becomes (owned-resources 08). */
+        readonly owner: Pick<AccountRow, "ownerKind" | "ownerId">;
+      }
     | { readonly _tag: "again"; readonly accountId: string };
   /** The gateway it was started on: a restarted one forgot it. */
   readonly baseUrl: string;
@@ -619,6 +647,56 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     const { userId, manages } = yield* caller;
     if (!manages) return yield* fail("forbidden", OWNER_ONLY);
     return userId;
+  });
+
+  /** The policy's view of accounts of these owners, one read of their Organizations. */
+  const resourcesOf = Effect.fn("AiAccounts.resourcesOf")(function* (
+    owners: ReadonlyArray<Pick<AccountRow, "ownerKind" | "ownerId">>,
+  ) {
+    const organizations = [
+      ...new Set(
+        owners.flatMap((owner) =>
+          owner.ownerKind === "organization" ? [SpaceId.make(owner.ownerId)] : [],
+        ),
+      ),
+    ];
+    const known =
+      organizations.length === 0
+        ? new Map<SpaceId, { readonly resource: AccessPolicy.SpaceResource }>()
+        : yield* spaces
+            .spacesById(organizations)
+            .pipe(Effect.catch(storage("read the Organizations")));
+    return (owner: Pick<AccountRow, "ownerKind" | "ownerId">): AccessPolicy.AiAccountResource =>
+      owner.ownerKind === "user"
+        ? { kind: "ai-account", owner: { kind: "user", userId: UserId.make(owner.ownerId) } }
+        : {
+            kind: "ai-account",
+            owner: {
+              kind: "organization",
+              space: known.get(SpaceId.make(owner.ownerId))?.resource ?? null,
+            },
+          };
+  });
+
+  /** The caller, once AccessPolicy `aiAccount.manage` lets them manage this account. */
+  const managerOf = Effect.fn("AiAccounts.managerOf")(function* (row: AccountRow) {
+    const { userId, can } = yield* caller;
+    const resourceOf = yield* resourcesOf([row]);
+    if (!can("aiAccount.manage", resourceOf(row))) return yield* fail("forbidden", NOT_YOURS);
+    return userId;
+  });
+
+  /** The owner a new account gets (the caller's own when none is named), once they may. */
+  const ownerToAdd = Effect.fn("AiAccounts.ownerToAdd")(function* (
+    asked: ResourceOwner | undefined,
+  ) {
+    const { userId, can } = yield* caller;
+    const owner = columnsOf(asked ?? { kind: "user", userId });
+    const resourceOf = yield* resourcesOf([owner]);
+    if (!can("aiAccount.manage", resourceOf(owner))) {
+      return yield* fail("forbidden", NOT_YOURS_TO_ADD);
+    }
+    return { userId, ...owner };
   });
 
   /** One config change at a time: each reads the accounts afresh, so the last one is the latest. */
@@ -1348,7 +1426,10 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
   const existingSubjects = Effect.fn("AiAccounts.existingSubjects")(function* (
     ownerId: UserId,
     spaceIds: ReadonlyArray<SpaceId>,
+    /** False: no allowance to check, so no User list (the Owner's alone) is read. */
+    needed = true,
   ) {
+    if (!needed) return { spaces: new Set<string>(), users: new Set<string>() };
     const known = yield* spaces.spacesById(spaceIds).pipe(Effect.catch(storage("read the Spaces")));
     const users = yield* spaces.listUsers(ownerId).pipe(Effect.catch(storage("read the Users")));
     return {
@@ -1438,22 +1519,29 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     return extras;
   });
 
-  const ownerAccounts = Effect.fn("AiAccounts.ownerAccounts")(function* (
-    ownerId: UserId,
-    only?: string,
+  /**
+   * These accounts as the caller sees them: whoever manages one with its details (allowances on
+   * the Owner's own only, subscriptions' sign-in and quota only to them); the Owner, of anyone
+   * else's, name, provider, owner and status; anyone else, where they may use it (`usableIn`).
+   * Accounts the caller neither manages, sees nor uses are left out.
+   */
+  const summariesFor = Effect.fn("AiAccounts.summariesFor")(function* (
+    rows: ReadonlyArray<AccountRow>,
+    usableIn: ReadonlyMap<string, ReadonlyArray<SpaceId>> = new Map(),
   ) {
-    const rows =
-      only === undefined
-        ? yield* sql<AccountRow>`
-          SELECT ${sql.literal(ACCOUNT_COLUMNS)} FROM ai_accounts ORDER BY priority, account_id
-        `.pipe(Effect.catch(storage("read the AI accounts")))
-        : [yield* findRow(only)];
-    const allowances = yield* allowancesOf(rows.map((row) => row.accountId));
+    const { userId, can } = yield* caller;
+    const resourceOf = yield* resourcesOf(rows);
+    const managed = rows.filter((row) => can("aiAccount.manage", resourceOf(row)));
+    const managedIds = new Set(managed.map((row) => row.accountId));
+    // Allowances only where the caller may change them: the Owner's own accounts.
+    const allowable = managed.filter((row) => can("aiAccount.allow", resourceOf(row)));
+    const allowances = yield* allowancesOf(allowable.map((row) => row.accountId));
     const existing = yield* existingSubjects(
-      ownerId,
+      userId,
       allowances.flatMap((allowance) =>
         allowance.subjectKind === "space" ? [allowance.subjectId as SpaceId] : [],
       ),
+      allowances.length > 0,
     );
     const shown = allowances.filter((allowance) =>
       allowance.subjectKind === "space"
@@ -1461,62 +1549,138 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
         : existing.users.has(allowance.subjectId),
     );
     const context = yield* viewContext;
-    const extras = yield* subscriptionExtras(rows);
-    return rows.map((row) => summaryOf(row, context, { _tag: "owner", allowances: shown, extras }));
+    const extras = yield* subscriptionExtras(managed);
+    return rows.flatMap((row): ReadonlyArray<AiAccountSummary> => {
+      if (managedIds.has(row.accountId)) {
+        return [summaryOf(row, context, { _tag: "owner", allowances: shown, extras })];
+      }
+      const where = usableIn.get(row.accountId);
+      if (can("aiAccount.view", resourceOf(row))) {
+        return [summaryOf(row, context, { _tag: "seen", usableIn: where ?? [] })];
+      }
+      if (where !== undefined && row.deletedAt === null) {
+        return [summaryOf(row, context, { _tag: "user", usableIn: where })];
+      }
+      return [];
+    });
   });
 
-  const ownerSummaryOf = Effect.fn("AiAccounts.ownerSummaryOf")(function* (
-    ownerId: UserId,
-    accountId: string,
-  ) {
-    const [summary] = yield* ownerAccounts(ownerId, accountId);
+  /** One account as the caller manages it, after a change of theirs. */
+  const managedSummaryOf = Effect.fn("AiAccounts.managedSummaryOf")(function* (accountId: string) {
+    const [summary] = yield* summariesFor([yield* findRow(accountId)]);
     if (summary === undefined) return yield* fail("not-found", NOT_FOUND);
     return summary;
   });
 
   /**
-   * Anyone else: the accounts AllowedAiAccounts lets them use in the Spaces they may act in now
-   * (a session limited to one Space: that one), with where; name, provider and status only.
+   * The accounts AllowedAiAccounts lets the caller use in the Spaces they may act in now (a
+   * session limited to one Space: that one), with where.
    */
-  const usableList = Effect.fn("AiAccounts.usableList")(function* (userId: UserId) {
+  const usableIn = Effect.fn("AiAccounts.usableIn")(function* (userId: UserId) {
     const limit = yield* CommandActor.spaceLimit;
     const viewable = yield* spaces
       .viewableSpaces(userId)
       .pipe(Effect.catch(storage("read your Spaces")));
-    const candidates = limit !== undefined ? [limit] : viewable === "all" ? [] : [...viewable];
+    // The Owner views every Space but works in their own and their Organizations'.
+    const candidates =
+      limit !== undefined
+        ? [limit]
+        : viewable === "all"
+          ? (yield* spaces.view(userId).pipe(Effect.catch(storage("read your Spaces")))).spaces
+              .filter((space) => space.kind === "organization" || space.isOwn)
+              .map((space) => space.id)
+          : [...viewable];
     // AllowedAiAccounts keeps to the Spaces the User works in (its one rule).
     const bySpace = yield* allowed
       .forSpaces(userId, candidates)
       .pipe(Effect.catch(storage("read the AI accounts you may use")));
-    const usableIn = new Map<string, Array<SpaceId>>();
+    const where = new Map<string, Array<SpaceId>>();
     for (const [spaceId, accounts] of bySpace) {
       for (const account of accounts) {
-        const where = usableIn.get(account.id) ?? [];
-        where.push(spaceId);
-        usableIn.set(account.id, where);
+        const spacesOf = where.get(account.id) ?? [];
+        spacesOf.push(spaceId);
+        where.set(account.id, spacesOf);
       }
     }
-    if (usableIn.size === 0) return [] as ReadonlyArray<AiAccountSummary>;
-    const rows = yield* sql<AccountRow>`
-      SELECT ${sql.literal(ACCOUNT_COLUMNS)} FROM ai_accounts
-      WHERE ${sql.in("account_id", [...usableIn.keys()])} AND deleted_at IS NULL
-      ORDER BY priority, account_id
-    `.pipe(Effect.catch(storage("read the AI accounts")));
-    const context = yield* viewContext;
-    return rows.map((row) =>
-      summaryOf(row, context, { _tag: "user", usableIn: usableIn.get(row.accountId) ?? [] }),
-    );
+    return where;
   });
+
+  /** Who the caller may add AI accounts for: themselves, then the Organizations they run. */
+  const ownerOptions = Effect.fn("AiAccounts.ownerOptions")(function* (userId: UserId) {
+    const { can } = yield* caller;
+    const viewed = (yield* spaces.view(userId).pipe(Effect.catch(storage("read your Spaces"))))
+      .spaces;
+    const options: Array<AiAccountOwnerOption> = [];
+    const self: ResourceOwner = { kind: "user", userId };
+    const selfResource = (yield* resourcesOf([columnsOf(self)]))(columnsOf(self));
+    if (can("aiAccount.manage", selfResource)) {
+      const me = yield* spaces
+        .installationUser(userId)
+        .pipe(Effect.catch(storage("read who you are")));
+      options.push({
+        owner: self,
+        name: Option.match(me, { onNone: () => "Personal", onSome: (user) => user.displayName }),
+      });
+    }
+    const organizations = viewed.filter(
+      (space) => space.kind === "organization" && space.archived !== true,
+    );
+    const resourceOf = yield* resourcesOf(
+      organizations.map((space) => ({ ownerKind: "organization" as const, ownerId: space.id })),
+    );
+    for (const space of organizations) {
+      if (can("aiAccount.manage", resourceOf({ ownerKind: "organization", ownerId: space.id }))) {
+        options.push({ owner: { kind: "organization", spaceId: space.id }, name: space.name });
+      }
+    }
+    return options;
+  });
+
+  /** The caller's own first, then their Organizations', then anyone else's; each by its order. */
+  const listOrder = (userId: UserId) => (left: AiAccountSummary, right: AiAccountSummary) => {
+    const rank = (summary: AiAccountSummary) =>
+      summary.owner?.kind === "user" && summary.owner.userId === userId
+        ? 0
+        : summary.canManage === true
+          ? 1
+          : 2;
+    const key = (summary: AiAccountSummary) =>
+      summary.owner === undefined
+        ? ""
+        : summary.owner.kind === "user"
+          ? `u:${summary.owner.userId}`
+          : `o:${summary.owner.spaceId}`;
+    return (
+      rank(left) - rank(right) ||
+      key(left).localeCompare(key(right)) ||
+      left.priority - right.priority ||
+      left.id.localeCompare(right.id)
+    );
+  };
 
   const list = Effect.gen(function* () {
     const { userId, manages } = yield* caller;
-    const accounts = manages ? yield* ownerAccounts(userId) : yield* usableList(userId);
-    return { accounts, canManage: manages } satisfies AiAccountListResult;
+    const rows = yield* sql<AccountRow>`
+      SELECT ${sql.literal(ACCOUNT_COLUMNS)} FROM ai_accounts ORDER BY priority, account_id
+    `.pipe(Effect.catch(storage("read the AI accounts")));
+    const accounts = yield* summariesFor(rows, yield* usableIn(userId));
+    return {
+      accounts: accounts.toSorted(listOrder(userId)),
+      canManage: manages,
+      owners: yield* ownerOptions(userId),
+    } satisfies AiAccountListResult;
   }).pipe(Effect.withSpan("AiAccounts.list"));
 
-  const nameTaken = Effect.fn("AiAccounts.nameTaken")(function* (name: string, except?: string) {
+  /** A name is unique among one owner's accounts only (owned-resources 08). */
+  const nameTaken = Effect.fn("AiAccounts.nameTaken")(function* (
+    owner: Pick<AccountRow, "ownerKind" | "ownerId">,
+    name: string,
+    except?: string,
+  ) {
     const rows = yield* sql<{ readonly accountId: string }>`
-      SELECT account_id AS "accountId" FROM ai_accounts WHERE name = ${name} COLLATE NOCASE
+      SELECT account_id AS "accountId" FROM ai_accounts
+      WHERE name = ${name} COLLATE NOCASE
+        AND owner_kind = ${owner.ownerKind} AND owner_id = ${owner.ownerId}
     `.pipe(Effect.catch(storage("read the AI accounts")));
     if (rows.some((row) => row.accountId !== except)) {
       return yield* fail("duplicate-name", `There is already an AI account named ${name}.`);
@@ -1594,8 +1758,22 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     return (rows[0]?.n ?? 0) > 0;
   });
 
+  /** The last place in one owner's order (0 with none): a new account of theirs comes after. */
+  const topPriorityOf = (owner: Pick<AccountRow, "ownerKind" | "ownerId">) =>
+    sql<{ readonly top: number | null }>`
+      SELECT MAX(priority) AS top FROM ai_accounts
+      WHERE owner_kind = ${owner.ownerKind} AND owner_id = ${owner.ownerId}
+    `.pipe(Effect.map((rows) => rows[0]?.top ?? 0));
+
+  /** An audit entry's owner: who the account is of. */
+  const ownerDetail = (owner: Pick<AccountRow, "ownerKind" | "ownerId">) => ({
+    ownerKind: owner.ownerKind,
+    ownerId: owner.ownerId,
+  });
+
   const create = Effect.fn("AiAccounts.create")(function* (input: AiAccountCreateInput) {
-    const userId = yield* manager;
+    const owner = yield* ownerToAdd(input.owner);
+    const userId = owner.userId;
     const key = Redacted.value(input.apiKey).trim();
     const problem = credentialProblem(key);
     if (problem !== undefined) return yield* fail("invalid", problem);
@@ -1629,37 +1807,37 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     ) {
       return yield* fail("invalid", "An OpenAI-compatible account needs its base URL and models.");
     }
-    yield* nameTaken(input.name);
+    yield* nameTaken(owner, input.name);
     const accountId = yield* newId(8);
     const at = yield* now;
     const models = [...new Set(input.models ?? [])];
     yield* withNewCredential(key, "add the AI account", (credentialId) =>
       Effect.gen(function* () {
-        const last = yield* sql<{ readonly top: number | null }>`
-          SELECT MAX(priority) AS top FROM ai_accounts
-        `;
+        const top = yield* topPriorityOf(owner);
         yield* sql`
           INSERT INTO ai_accounts (account_id, name, type, provider, priority, status, disabled,
-            credential_id, key_hint, base_url, models_json, created_at, updated_at, created_by)
-          VALUES (${accountId}, ${input.name}, ${type}, ${input.provider}, ${(last[0]?.top ?? 0) + 1},
+            credential_id, key_hint, base_url, models_json, created_at, updated_at, created_by,
+            owner_kind, owner_id)
+          VALUES (${accountId}, ${input.name}, ${type}, ${input.provider}, ${top + 1},
             ${type === "direct" ? "working" : "pending"}, 0, ${credentialId}, ${hintOf(key)},
-            ${input.baseUrl ?? null}, ${encodeModels(models)}, ${at}, ${at}, ${userId})
+            ${input.baseUrl ?? null}, ${encodeModels(models)}, ${at}, ${at}, ${userId},
+            ${owner.ownerKind}, ${owner.ownerId})
         `;
         yield* audit.record({
           actor: AuditLog.userActor(userId),
           action: "ai_account.create",
           target: { kind: "ai_account", id: accountId, name: input.name },
-          detail: { provider: input.provider, type },
+          detail: { provider: input.provider, type, ...ownerDetail(owner) },
         });
       }),
     ).pipe(
       Effect.catch((error) =>
         // A name taken meanwhile says so; anything else stays as it was.
-        nameTaken(input.name).pipe(Effect.andThen(Effect.fail(error))),
+        nameTaken(owner, input.name).pipe(Effect.andThen(Effect.fail(error))),
       ),
     );
     yield* syncNow;
-    return yield* ownerSummaryOf(userId, accountId);
+    return yield* managedSummaryOf(accountId);
   });
 
   /**
@@ -1668,8 +1846,8 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
    * retired until the gateway confirms it dropped it; until then the call says it is still live.
    */
   const update = Effect.fn("AiAccounts.update")(function* (input: AiAccountUpdateInput) {
-    const userId = yield* manager;
     const row = yield* findAccount(input.accountId);
+    const userId = yield* managerOf(row);
     const key = input.apiKey === undefined ? undefined : Redacted.value(input.apiKey).trim();
     if (key !== undefined && row.type === "subscription") {
       return yield* fail("invalid", "A subscription takes no API key: use «Sign in again».");
@@ -1683,7 +1861,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     }
     yield* checkEndpoint(row.provider, input.baseUrl, input.models);
     const renamed = input.name !== undefined && input.name !== row.name;
-    if (renamed) yield* nameTaken(input.name ?? "", row.accountId);
+    if (renamed) yield* nameTaken(row, input.name ?? "", row.accountId);
     const disabledNow = input.disabled === undefined ? row.disabled === 1 : input.disabled;
     const toggled = disabledNow !== (row.disabled === 1);
     const models = input.models === undefined ? undefined : [...new Set(input.models)];
@@ -1691,7 +1869,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
       (input.baseUrl !== undefined && input.baseUrl !== row.baseUrl) ||
       (models !== undefined && encodeModels(models) !== row.modelsJson);
     if (!renamed && !toggled && key === undefined && !endpointChanged) {
-      return yield* ownerSummaryOf(userId, row.accountId);
+      return yield* managedSummaryOf(row.accountId);
     }
     const gatewayChanges = toggled || key !== undefined || endpointChanged;
     const at = yield* now;
@@ -1732,6 +1910,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
             ...(toggled ? { disabled: disabledNow } : {}),
             ...(key === undefined ? {} : { credential: "replaced" }),
             ...(endpointChanged ? { endpoint: true } : {}),
+            ...ownerDetail(row),
           },
         });
       }),
@@ -1743,7 +1922,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
         "The new key is saved, but the AI gateway has not taken it yet and the old key is still live there. The Hub keeps trying.",
       );
     }
-    return yield* ownerSummaryOf(userId, row.accountId);
+    return yield* managedSummaryOf(row.accountId);
   });
 
   /**
@@ -1752,8 +1931,8 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
    * the key is still live; with no gateway running it is live nowhere, and goes at once.
    */
   const remove = Effect.fn("AiAccounts.remove")(function* (input: AiAccountDeleteInput) {
-    const userId = yield* manager;
     const row = yield* findRow(input.accountId);
+    const userId = yield* managerOf(row);
     if (row.deletedAt === null) {
       const at = yield* now;
       yield* sql
@@ -1777,7 +1956,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
               actor: AuditLog.userActor(userId),
               action: "ai_account.delete",
               target: { kind: "ai_account", id: row.accountId, name: row.name },
-              detail: { provider: row.provider },
+              detail: { provider: row.provider, ...ownerDetail(row) },
             });
           }),
         )
@@ -1796,10 +1975,17 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     } satisfies AiAccountDeleteResult;
   });
 
-  /** Replaces who may use it; Spaces and Users that no longer exist are dropped. */
+  /**
+   * Replaces who may use it; Spaces and Users that no longer exist are dropped. The Owner's, on
+   * the Owner's own accounts only (AccessPolicy `aiAccount.allow`): anyone else's lends by Grant.
+   */
   const allow = Effect.fn("AiAccounts.allow")(function* (input: AiAccountAllowInput) {
     const userId = yield* manager;
     const row = yield* findAccount(input.accountId);
+    const { can } = yield* caller;
+    if (!can("aiAccount.allow", (yield* resourcesOf([row]))(row))) {
+      return yield* fail("forbidden", "Only the Owner allows the Owner's own AI accounts.");
+    }
     const existing = yield* existingSubjects(userId, [...new Set(input.spaceIds)]);
     const spaceIds = [...new Set(input.spaceIds)].filter((id) => existing.spaces.has(id));
     const userIds = [...new Set(input.userIds)].filter((id) => existing.users.has(id));
@@ -1844,12 +2030,18 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
         }),
       )
       .pipe(Effect.catch(orStorage("change who may use the AI account")));
-    return yield* ownerSummaryOf(userId, row.accountId);
+    return yield* managedSummaryOf(row.accountId);
   });
 
-  /** The Installation's one order; the gateway does not hold it, so it is not touched. */
+  /** One owner's order (owned-resources 08); the gateway does not hold it, so it is not touched. */
   const reorder = Effect.fn("AiAccounts.reorder")(function* (input: AiAccountReorderInput) {
-    const userId = yield* manager;
+    const owner = yield* ownerToAdd(input.owner).pipe(
+      Effect.catchIf(
+        (error) => error.reason === "forbidden",
+        () => fail("forbidden", NOT_YOURS),
+      ),
+    );
+    const userId = owner.userId;
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
@@ -1860,14 +2052,19 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
             readonly provider: string;
           }>`
             SELECT account_id AS "accountId", name AS "name", priority AS "priority", provider AS "provider"
-            FROM ai_accounts WHERE deleted_at IS NULL
+            FROM ai_accounts
+            WHERE deleted_at IS NULL
+              AND owner_kind = ${owner.ownerKind} AND owner_id = ${owner.ownerId}
           `;
           const ordered = [...new Set(input.accountIds)];
           if (
             ordered.length !== rows.length ||
             !rows.every((row) => ordered.includes(row.accountId as AiAccountId))
           ) {
-            return yield* fail("invalid", "List every AI account once, first to last.");
+            return yield* fail(
+              "invalid",
+              "List every AI account of its owner once, first to last.",
+            );
           }
           for (const [index, accountId] of ordered.entries()) {
             const row = rows.find((candidate) => candidate.accountId === accountId);
@@ -1877,16 +2074,13 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
               actor: AuditLog.userActor(userId),
               action: "ai_account.update",
               target: { kind: "ai_account", id: accountId, name: row.name },
-              detail: { provider: row.provider, priority: index + 1 },
+              detail: { provider: row.provider, priority: index + 1, ...ownerDetail(owner) },
             });
           }
         }),
       )
       .pipe(Effect.catch(orStorage("change the order of the AI accounts")));
-    return {
-      accounts: yield* ownerAccounts(userId),
-      canManage: true,
-    } satisfies AiAccountListResult;
+    return yield* list;
   });
 
   const modelsOf = Effect.fn("AiAccounts.modelsOf")(function* (accountId: AiAccountId) {
@@ -1940,18 +2134,37 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     input: AiAccountLoginStartInput,
     sessionId: string,
   ) {
-    const userId = yield* manager;
+    let userId: UserId;
     let target: PendingLogin["target"];
     if (input.accountId !== undefined) {
       const row = yield* findAccount(input.accountId);
+      userId = yield* managerOf(row);
       if (row.type !== "subscription" || row.provider !== input.provider) {
         return yield* fail("invalid", "Only a subscription signs in again, to the same provider.");
       }
       target = { _tag: "again", accountId: row.accountId };
     } else {
+      const owner = yield* ownerToAdd(input.owner);
+      userId = owner.userId;
       if (input.name === undefined) return yield* fail("invalid", "Name the new AI account.");
-      yield* nameTaken(input.name);
-      target = { _tag: "new", name: input.name };
+      yield* nameTaken(owner, input.name);
+      target = {
+        _tag: "new",
+        name: input.name,
+        owner: { ownerKind: owner.ownerKind, ownerId: owner.ownerId },
+      };
+    }
+    // One sign-in at a time on the Hub: another User's open one is never replaced from here.
+    const open = pendingLogin;
+    if (
+      open !== undefined &&
+      open.ownerId !== userId &&
+      (yield* Clock.currentTimeMillis) < open.expiresAt
+    ) {
+      return yield* fail(
+        "pending",
+        "Someone else is signing in to a subscription on this Hub. Try again in a few minutes.",
+      );
     }
     const endpoint = yield* subscriptionGateway;
     const before = yield* management
@@ -2118,22 +2331,25 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
             return accountId;
           }
           const accountId = yield* newId(8);
-          const last = yield* sql<{ readonly top: number | null }>`
-            SELECT MAX(priority) AS top FROM ai_accounts
-          `;
+          const top = yield* topPriorityOf(target.owner);
           yield* sql`
             INSERT INTO ai_accounts (account_id, name, type, provider, priority, status, disabled,
               status_message, credential_id, key_hint, base_url, models_json, created_at,
-              updated_at, created_by)
+              updated_at, created_by, owner_kind, owner_id)
             VALUES (${accountId}, ${target.name}, 'subscription', ${input.provider},
-              ${(last[0]?.top ?? 0) + 1}, 'pending', 1, ${confirmMessageOf(signedInAs)}, ${tokenId},
-              NULL, NULL, '[]', ${at}, ${at}, ${input.userId})
+              ${top + 1}, 'pending', 1, ${confirmMessageOf(signedInAs)}, ${tokenId},
+              NULL, NULL, '[]', ${at}, ${at}, ${input.userId}, ${target.owner.ownerKind},
+              ${target.owner.ownerId})
           `;
           yield* audit.record({
             actor: AuditLog.userActor(input.userId),
             action: "ai_account.create",
             target: { kind: "ai_account", id: accountId, name: target.name },
-            detail: { provider: input.provider, type: "subscription" },
+            detail: {
+              provider: input.provider,
+              type: "subscription",
+              ...ownerDetail(target.owner),
+            },
           });
           yield* loginAudit(
             input.userId,
@@ -2177,7 +2393,8 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     input: AiAccountLoginCompleteInput,
     sessionId: string,
   ) {
-    const userId = yield* manager;
+    // Only who started it, from the same session; its account was theirs to sign in to then.
+    const { userId } = yield* caller;
     const login = pendingLogin;
     if (
       login === undefined ||
@@ -2236,9 +2453,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
               if (pendingLogin === login) pendingLogin = undefined;
             }),
           ),
-          Effect.flatMap((accountId) =>
-            syncNow.pipe(Effect.andThen(ownerSummaryOf(userId, accountId))),
-          ),
+          Effect.flatMap((accountId) => syncNow.pipe(Effect.andThen(managedSummaryOf(accountId)))),
         );
     // «Sign in again» as another account, held for the Owner's word.
     if (login.held !== undefined) {
@@ -2336,12 +2551,13 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
   const importVertex = Effect.fn("AiAccounts.importVertex")(function* (
     input: AiAccountImportVertexInput,
   ) {
-    const userId = yield* manager;
+    const owner = yield* ownerToAdd(input.owner);
+    const userId = owner.userId;
     const text = Redacted.value(input.serviceAccount).trim();
     if (!isVertexServiceAccount(text)) {
       return yield* fail("invalid", "That is not a Vertex service account key (its JSON file).");
     }
-    yield* nameTaken(input.name);
+    yield* nameTaken(owner, input.name);
     const endpoint = yield* subscriptionGateway;
     const accountId = yield* syncLock.withPermits(1)(
       Effect.gen(function* () {
@@ -2370,14 +2586,18 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
           endpoint,
           userId,
           provider: "vertex",
-          target: { _tag: "new", name: input.name },
+          target: {
+            _tag: "new",
+            name: input.name,
+            owner: { ownerKind: owner.ownerKind, ownerId: owner.ownerId },
+          },
           kind: "import",
           taken,
         });
       }),
     );
     yield* syncNow;
-    return yield* ownerSummaryOf(userId, accountId);
+    return yield* managedSummaryOf(accountId);
   });
 
   /**
@@ -2405,10 +2625,13 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
           if (sealed !== undefined)
             held.push({ identity: identityOf(row.provider, sealed), name: row.name });
         }
+        // The Owner's own names: the imported accounts are the Owner's (owned-resources 08).
         const names = new Set(
-          (yield* sql<{ readonly name: string }>`SELECT name FROM ai_accounts`.pipe(
-            Effect.catch(storage("read the AI accounts")),
-          )).map((row) => row.name.toLowerCase()),
+          (yield* sql<{ readonly name: string }>`
+            SELECT name FROM ai_accounts WHERE owner_kind = 'user' AND owner_id = ${userId}
+          `.pipe(Effect.catch(storage("read the AI accounts")))).map((row) =>
+            row.name.toLowerCase(),
+          ),
         );
         const results: Array<AiAccountImportCliproxyFileResult> = [];
         const skipped = (fileName: string, reason: string) =>
@@ -2449,16 +2672,14 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
           yield* sql
             .withTransaction(
               Effect.gen(function* () {
-                const last = yield* sql<{ readonly top: number | null }>`
-                  SELECT MAX(priority) AS top FROM ai_accounts
-                `;
+                const top = yield* topPriorityOf({ ownerKind: "user", ownerId: userId });
                 yield* sql`
                   INSERT INTO ai_accounts (account_id, name, type, provider, priority, status,
                     disabled, status_message, credential_id, key_hint, base_url, models_json,
-                    created_at, updated_at, created_by)
+                    created_at, updated_at, created_by, owner_kind, owner_id)
                   VALUES (${accountId}, ${name}, 'subscription', ${read.provider},
-                    ${(last[0]?.top ?? 0) + 1}, 'pending', 1, ${confirmMessageOf(read.signedInAs)},
-                    ${tokenId}, NULL, NULL, '[]', ${at}, ${at}, ${userId})
+                    ${top + 1}, 'pending', 1, ${confirmMessageOf(read.signedInAs)},
+                    ${tokenId}, NULL, NULL, '[]', ${at}, ${at}, ${userId}, 'user', ${userId})
                 `;
                 yield* sql`
                   INSERT INTO ai_account_allowances (account_id, subject_kind, subject_id, created_at)
@@ -2468,7 +2689,13 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
                   actor: AuditLog.userActor(userId),
                   action: "ai_account.create",
                   target: { kind: "ai_account", id: accountId, name },
-                  detail: { provider: read.provider, type: "subscription", via: "import" },
+                  detail: {
+                    provider: read.provider,
+                    type: "subscription",
+                    via: "import",
+                    ownerKind: "user",
+                    ownerId: userId,
+                  },
                 });
               }),
             )
@@ -2579,9 +2806,9 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
       return { accountId: twin, created: false };
     }
     const taken = new Set(
-      (yield* sql<{ readonly name: string }>`SELECT name FROM ai_accounts`.pipe(
-        Effect.catch(storage("read the AI accounts")),
-      )).map((row) => row.name.toLowerCase()),
+      (yield* sql<{ readonly name: string }>`
+        SELECT name FROM ai_accounts WHERE owner_kind = 'user' AND owner_id = ${input.ownerId}
+      `.pipe(Effect.catch(storage("read the AI accounts")))).map((row) => row.name.toLowerCase()),
     );
     const last = input.names.at(-1) ?? "Migrated key";
     const candidates = [
@@ -2594,15 +2821,14 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     const spaceId = SpaceDirectory.personalSpaceIdOf(input.ownerId);
     yield* withNewCredential(key, "move a provider key into an AI account", (credentialId) =>
       Effect.gen(function* () {
-        const top = yield* sql<{ readonly top: number | null }>`
-          SELECT MAX(priority) AS top FROM ai_accounts
-        `;
+        const top = yield* topPriorityOf({ ownerKind: "user", ownerId: input.ownerId });
         yield* sql`
           INSERT INTO ai_accounts (account_id, name, type, provider, priority, status, disabled,
-            credential_id, key_hint, base_url, models_json, created_at, updated_at, created_by)
-          VALUES (${accountId}, ${name}, ${input.type}, ${input.provider}, ${(top[0]?.top ?? 0) + 1},
+            credential_id, key_hint, base_url, models_json, created_at, updated_at, created_by,
+            owner_kind, owner_id)
+          VALUES (${accountId}, ${name}, ${input.type}, ${input.provider}, ${top + 1},
             ${input.type === "direct" ? "working" : "pending"}, 0, ${credentialId}, ${hintOf(key)},
-            NULL, ${encodeModels([])}, ${at}, ${at}, ${input.ownerId})
+            NULL, ${encodeModels([])}, ${at}, ${at}, ${input.ownerId}, 'user', ${input.ownerId})
         `;
         yield* sql`
           INSERT INTO ai_account_allowances (account_id, subject_kind, subject_id, created_at)
@@ -2613,7 +2839,13 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
           actor: { source: "system" },
           action: "ai_account.create",
           target: { kind: "ai_account", id: accountId, name },
-          detail: { provider: input.provider, type: input.type, via: "migration" },
+          detail: {
+            provider: input.provider,
+            type: input.type,
+            via: "migration",
+            ownerKind: "user",
+            ownerId: input.ownerId,
+          },
         });
       }),
     );
@@ -2640,7 +2872,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
   );
 
   const ownerSubscriptionLimits = Effect.gen(function* () {
-    const { manages } = yield* caller;
+    const { userId, manages } = yield* caller;
     if (!manages) return null;
     const rows = yield* sql<{
       readonly accountId: string;
@@ -2652,6 +2884,8 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
       FROM ai_accounts
       WHERE deleted_at IS NULL AND disabled = 0 AND type = 'subscription'
         AND provider IN ('claude', 'codex') AND credential_id IS NOT NULL
+        -- The Owner's own only (owned-resources 08): never another User's windows.
+        AND owner_kind = 'user' AND owner_id = ${userId}
       ORDER BY priority, account_id
     `;
     // No subscription with windows to read: nothing to say.

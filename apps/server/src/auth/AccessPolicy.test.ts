@@ -161,6 +161,18 @@ const archivedAcmeVps: AccessPolicy.EnvironmentResource = {
   space: archivedOrganization,
 };
 
+/** An AI account of a User (owned-resources 08) or of an Organization (09). */
+const usersAccount = (userId: string): AccessPolicy.AiAccountResource => ({
+  kind: "ai-account",
+  owner: { kind: "user", userId: UserId.make(userId) },
+});
+const organizationsAccount = (
+  space: AccessPolicy.SpaceResource | null = organization,
+): AccessPolicy.AiAccountResource => ({
+  kind: "ai-account",
+  owner: { kind: "organization", space },
+});
+
 /** A dedicated machine whose Organization was deleted under it. */
 const spacelessVps: AccessPolicy.EnvironmentResource = {
   kind: "environment",
@@ -1980,7 +1992,103 @@ const rows: ReadonlyArray<Row> = [
     spacelessVps,
     deny("wrong-resource"),
   ],
-  // AI accounts (spec 4): the Owner manages them; whoever works in a Space uses what it allows.
+  // AI accounts of a User (owned-resources 08): their own to manage, nobody else's, the Owner's
+  // included; the Owner sees them and allows only their own.
+  [
+    "a User manages their own AI account",
+    personalCreator,
+    "aiAccount.manage",
+    usersAccount("grace"),
+    allow,
+  ],
+  [
+    "a Member manages their own AI account",
+    member,
+    "aiAccount.manage",
+    usersAccount("grace"),
+    allow,
+  ],
+  ["a Guest manages their own AI account", guest, "aiAccount.manage", usersAccount("linus"), allow],
+  [
+    "an Admin does not manage a Member's AI account",
+    admin,
+    "aiAccount.manage",
+    usersAccount("grace"),
+    deny("not-yours"),
+  ],
+  [
+    "the Owner does not manage another User's AI account",
+    owner,
+    "aiAccount.manage",
+    usersAccount("grace"),
+    deny("not-yours"),
+  ],
+  [
+    "the Owner manages their own AI account",
+    owner,
+    "aiAccount.manage",
+    usersAccount("owner"),
+    allow,
+  ],
+  [
+    "a disabled User manages not even their own",
+    { ...personalCreator, inactive: true },
+    "aiAccount.manage",
+    usersAccount("grace"),
+    deny("user-inactive"),
+  ],
+  [
+    "the Owner sees another User's AI account",
+    owner,
+    "aiAccount.view",
+    usersAccount("grace"),
+    allow,
+  ],
+  ["a User sees their own AI account", member, "aiAccount.view", usersAccount("grace"), allow],
+  [
+    "an Admin does not see a Member's AI account",
+    admin,
+    "aiAccount.view",
+    usersAccount("grace"),
+    deny("not-yours"),
+  ],
+  ["the Owner allows their own AI account", owner, "aiAccount.allow", usersAccount("owner"), allow],
+  [
+    "the Owner allows nobody else's",
+    owner,
+    "aiAccount.allow",
+    usersAccount("grace"),
+    deny("not-yours"),
+  ],
+  [
+    "a User allows not even their own (Grants lend it)",
+    member,
+    "aiAccount.allow",
+    usersAccount("grace"),
+    deny("owner-only"),
+  ],
+  [
+    "an AI account action needs an AI account",
+    member,
+    "aiAccount.allow",
+    organization,
+    deny("wrong-resource"),
+  ],
+  [
+    "the Owner manages an Organization's AI account",
+    owner,
+    "aiAccount.manage",
+    organizationsAccount(),
+    allow,
+  ],
+  [
+    "an account of a deleted Organization is nobody's to manage",
+    owner,
+    "aiAccount.manage",
+    organizationsAccount(null),
+    deny("wrong-resource"),
+  ],
+  // The Installation's AI gateway as a whole (everyone's usage, the Hub's subscription limits).
   ["Owner manages AI accounts", owner, "aiAccount.manage", AccessPolicy.installation, allow],
   [
     "an Admin does not manage AI accounts",

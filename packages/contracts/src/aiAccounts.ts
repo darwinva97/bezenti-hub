@@ -1,8 +1,7 @@
 /**
- * AI accounts (spec 4 «AI accounts y AI gateway»): the Owner's subscriptions and API keys, kept on
- * the Hub, written into the CLIProxyAPI it runs, and allowed to Spaces and Users. A credential
- * enters only in `create`/`update` (Redacted) and never leaves the Hub: no RPC returns it, not to
- * the Owner either; the Owner sees its last four characters at most.
+ * AI accounts: subscriptions and API keys kept on the Hub, each a User's or an Organization's. A
+ * credential enters only in `create`/`update` (Redacted) and never leaves the Hub: no RPC returns
+ * it, not to its owner either, who sees its last four characters at most.
  */
 import * as Schema from "effect/Schema";
 
@@ -14,6 +13,7 @@ import {
   TrimmedNonEmptyString,
   UserId,
 } from "./baseSchemas.ts";
+import { ResourceOwner } from "./ownership.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 
@@ -117,7 +117,7 @@ export const AiAccountAllowances = Schema.Struct({
 });
 export type AiAccountAllowances = typeof AiAccountAllowances.Type;
 
-/** The Owner's view: everything about the account but the credential. */
+/** Its manager's view (its owner, or an Organization's Admins): everything but the credential. */
 export const AiAccountDetails = Schema.Struct({
   /** The last four characters of the key; null when it is too short to show any. */
   keyHint: Schema.NullOr(Schema.String),
@@ -137,14 +137,15 @@ export type AiAccountDetails = typeof AiAccountDetails.Type;
 
 /**
  * An AI account as a User sees it. Everyone sees the name, provider and status of the accounts
- * they may use in their Spaces (`usableIn`); only the Owner gets `details`.
+ * they may use in their Spaces (`usableIn`); whoever manages it also gets `details`; the Owner
+ * sees every other account's name, provider, owner and status, never its details.
  */
 export const AiAccountSummary = Schema.Struct({
   id: AiAccountId,
   name: Schema.String,
   type: AiAccountType,
   provider: AiAccountProvider,
-  /** 1 is tried first; one order for the whole Installation. */
+  /** 1 is tried first, among its owner's accounts (owned-resources 08). */
   priority: Schema.Number,
   status: AiAccountStatus,
   statusMessage: Schema.NullOr(Schema.String),
@@ -152,15 +153,32 @@ export const AiAccountSummary = Schema.Struct({
   /** The Spaces where this User may use it (not filled in for the Owner's full list). */
   usableIn: Schema.Array(SpaceId),
   details: Schema.NullOr(AiAccountDetails),
+  /** Whose it is: a User's or an Organization's. Absent from older Hubs (then the Owner's). */
+  owner: Schema.optionalKey(ResourceOwner),
+  /** Whether the viewer renames, disables, replaces, orders and deletes it. Absent from older Hubs. */
+  canManage: Schema.optionalKey(Schema.Boolean),
 });
 export type AiAccountSummary = typeof AiAccountSummary.Type;
+
+/** An owner the viewer may add AI accounts for: themselves, or an Organization they run. */
+export const AiAccountOwnerOption = Schema.Struct({
+  owner: ResourceOwner,
+  name: Schema.String,
+});
+export type AiAccountOwnerOption = typeof AiAccountOwnerOption.Type;
 
 export const AiAccountListInput = Schema.Struct({});
 export type AiAccountListInput = typeof AiAccountListInput.Type;
 export const AiAccountListResult = Schema.Struct({
   accounts: Schema.Array(AiAccountSummary),
-  /** Whether this session manages AI accounts (the Owner, not limited to one Space). */
+  /**
+   * Whether this session runs the Installation's AI gateway (the Owner, not limited to one Space):
+   * allowances, imports and the gateway itself. Each account says whether it is the viewer's to
+   * manage (`canManage`).
+   */
   canManage: Schema.Boolean,
+  /** Who the viewer may add AI accounts for, themselves first. Absent from older Hubs. */
+  owners: Schema.optionalKey(Schema.Array(AiAccountOwnerOption)),
 });
 export type AiAccountListResult = typeof AiAccountListResult.Type;
 
@@ -187,6 +205,8 @@ export const AiAccountCreateInput = Schema.Struct({
   baseUrl: Schema.optionalKey(AiBaseUrl),
   /** Required for `openai-compatible`: the models it serves. */
   models: Schema.optionalKey(Schema.Array(AiModelName).check(Schema.isMaxLength(200))),
+  /** Whose it becomes: the caller themselves when omitted, or an Organization they run. */
+  owner: Schema.optionalKey(ResourceOwner),
 });
 export type AiAccountCreateInput = typeof AiAccountCreateInput.Type;
 
@@ -221,9 +241,11 @@ export const AiAccountAllowInput = Schema.Struct({
 });
 export type AiAccountAllowInput = typeof AiAccountAllowInput.Type;
 
-/** Every AI account, first to last: the Installation's one priority. */
+/** Every AI account of one owner, first to last: that owner's order (owned-resources 08). */
 export const AiAccountReorderInput = Schema.Struct({
   accountIds: Schema.Array(AiAccountId).check(Schema.isMaxLength(1000)),
+  /** Whose accounts: the caller's own when omitted. */
+  owner: Schema.optionalKey(ResourceOwner),
 });
 export type AiAccountReorderInput = typeof AiAccountReorderInput.Type;
 
@@ -238,6 +260,8 @@ export const AiAccountLoginStartInput = Schema.Struct({
   name: Schema.optionalKey(AiAccountName),
   /** «Sign in again» on this account. */
   accountId: Schema.optionalKey(AiAccountId),
+  /** A new account's owner: the caller themselves when omitted, or an Organization they run. */
+  owner: Schema.optionalKey(ResourceOwner),
 });
 export type AiAccountLoginStartInput = typeof AiAccountLoginStartInput.Type;
 
@@ -273,6 +297,8 @@ export const AI_SERVICE_ACCOUNT_MAX_LENGTH = 16 * 1024;
 export const AiAccountImportVertexInput = Schema.Struct({
   name: AiAccountName,
   serviceAccount: AiCredentialInput,
+  /** Whose it becomes: the caller themselves when omitted, or an Organization they run. */
+  owner: Schema.optionalKey(ResourceOwner),
 });
 export type AiAccountImportVertexInput = typeof AiAccountImportVertexInput.Type;
 

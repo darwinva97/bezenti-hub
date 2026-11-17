@@ -905,6 +905,15 @@ until you update again. Both are recorded in the audit log. In the desktop app, 
 run from source (`vp run dev`), the gateway is off until you choose **Turn on** there;
 `T3CODE_AI_GATEWAY=managed` or `off` decides instead, on any Hub.
 
+Everyone can add AI accounts of their own in **Settings → AI accounts**, under **Mine**: an API
+key, a direct credential, or a subscription you sign in to (one sign-in at a time on the Hub; a
+new subscription stays off until you check who it signed in as). Your own accounts serve only
+your Threads in your Personal space, first, before anything the Owner allowed you there; nobody
+else sees or uses them, and the Owner sees only their name, provider and status. You order,
+rename, disable, replace and delete them there; the phone shows them read-only. The Owner's
+accounts work as before: allowed to Spaces and Users, and used in the Owner's own Personal space
+without an allowance.
+
 ### Dedicate a machine to an organization
 
 A server of your own, such as a VPS, can serve a whole organization instead of

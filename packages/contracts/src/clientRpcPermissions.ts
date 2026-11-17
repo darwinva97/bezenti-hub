@@ -48,16 +48,18 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.aiGatewayUpdate]: AuthSettingsWriteScope,
   [WS_METHODS.aiGatewayRollback]: AuthSettingsWriteScope,
   [WS_METHODS.aiGatewaySetEnabled]: AuthSettingsWriteScope,
-  // The Owner's AI accounts, as saving the Hub's settings changes what agents may use.
-  [WS_METHODS.aiAccountsCreate]: AuthSettingsWriteScope,
-  [WS_METHODS.aiAccountsUpdate]: AuthSettingsWriteScope,
-  [WS_METHODS.aiAccountsDelete]: AuthSettingsWriteScope,
+  // Owned-resources 08: AI accounts are their owners' (AccessPolicy `aiAccount.manage` decides
+  // who), as Vaults are; the session needs access:write, which a standard session holds.
+  [WS_METHODS.aiAccountsCreate]: AuthAccessWriteScope,
+  [WS_METHODS.aiAccountsUpdate]: AuthAccessWriteScope,
+  [WS_METHODS.aiAccountsDelete]: AuthAccessWriteScope,
+  [WS_METHODS.aiAccountsReorder]: AuthAccessWriteScope,
+  [WS_METHODS.aiAccountsLoginStart]: AuthAccessWriteScope,
+  [WS_METHODS.aiAccountsLoginComplete]: AuthAccessWriteScope,
+  [WS_METHODS.aiAccountsImportVertex]: AuthAccessWriteScope,
+  [WS_METHODS.aiAccountsImportCliproxy]: AuthAccessWriteScope,
+  // Allowances widen the Owner's own accounts to others, as saving the Hub's settings does.
   [WS_METHODS.aiAccountsAllow]: AuthSettingsWriteScope,
-  [WS_METHODS.aiAccountsReorder]: AuthSettingsWriteScope,
-  [WS_METHODS.aiAccountsLoginStart]: AuthSettingsWriteScope,
-  [WS_METHODS.aiAccountsLoginComplete]: AuthSettingsWriteScope,
-  [WS_METHODS.aiAccountsImportVertex]: AuthSettingsWriteScope,
-  [WS_METHODS.aiAccountsImportCliproxy]: AuthSettingsWriteScope,
   // A User's local CLI keys (spec 4 ticket 10): a credential to the Hub, as a pairing link is.
   [WS_METHODS.aiGatewayKeysCreate]: AuthAccessWriteScope,
   // Switching a Thread's AI account changes the Thread, as any command on it does.

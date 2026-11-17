@@ -231,6 +231,13 @@ const spacesOf = (resource: AccessPolicy.Resource): ReadonlyArray<string> => {
     // The Owner's own Vaults (the Main vault among them) are no Space's.
     case "vault":
       return resource.space === null ? ["installation"] : [resource.space.id];
+    // An AI account is used in its owner's Space: a User's Personal space, an Organization.
+    case "ai-account":
+      return resource.owner.kind === "user"
+        ? [personalSpaceIdOf(resource.owner.userId)]
+        : resource.owner.space === null
+          ? ["installation"]
+          : [resource.owner.space.id];
     default:
       return ["installation"];
   }

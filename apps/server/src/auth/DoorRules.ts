@@ -384,11 +384,17 @@ export const AMBIENT_COOKIE_RULES: Readonly<Record<string, AmbientCookieRule>> =
  * pastes the address the browser landed on, checked against the sign-in and never fetched.
  */
 export const AI_ACCOUNT_SIGN_IN_RULES: Readonly<Record<string, DoorRule>> = {
-  [WS_METHODS.aiAccountsLoginStart]: OWNER,
-  [WS_METHODS.aiAccountsLoginComplete]: own(
-    "the Owner, from the session that started that sign-in, within 10 minutes, with its state; the pasted address must be its redirect",
+  // Owned-resources 08: for an account its caller may manage (their own, or an Organization they
+  // run); one open sign-in on the Hub at a time, never replaced by another User's.
+  [WS_METHODS.aiAccountsLoginStart]: own(
+    "AccessPolicy `aiAccount.manage` on the new account's owner (the caller's own, or an Organization they run) or on the account signed in again",
   ),
-  [WS_METHODS.aiAccountsImportVertex]: OWNER,
+  [WS_METHODS.aiAccountsLoginComplete]: own(
+    "the User who started that sign-in, from the same session, within 10 minutes, with its state; the pasted address must be its redirect",
+  ),
+  [WS_METHODS.aiAccountsImportVertex]: own(
+    "AccessPolicy `aiAccount.manage` on the new account's owner (the caller's own, or an Organization they run)",
+  ),
   // Ticket 15: CLIProxyAPI auth files, sealed as a sign-in; no gateway call.
   [WS_METHODS.aiAccountsImportCliproxy]: OWNER,
 };

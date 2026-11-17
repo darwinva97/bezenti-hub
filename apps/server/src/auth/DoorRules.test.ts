@@ -648,8 +648,9 @@ describe("every door of the Hub declares its rule", () => {
     expect(readers.toSorted()).toEqual(["ai/AiUsage.ts", "persistence/Migrations/114_AiUsage.ts"]);
   });
 
-  it("signs in to subscriptions over the Owner's WS RPCs only: no callback route, tokens read by AiAccounts alone", () => {
-    // Every sign-in door is the Owner's, on the Installation, whatever the session's scopes.
+  it("signs in to subscriptions over WS RPCs only: no callback route, tokens read by AiAccounts alone", () => {
+    // Owned-resources 08: every sign-in door is an account owner's, decided by AiAccounts (never
+    // a Thread's or Project's rule), with access:write; none is a route of its own.
     const signIn = [...WsRpcGroup.requests.keys()].filter((tag) =>
       /^aiAccounts\.(login\.|importVertex|importCliproxy)/u.test(tag),
     );
@@ -658,8 +659,8 @@ describe("every door of the Hub declares its rule", () => {
       expect([
         method,
         (INSTALLATION_RPC_METHODS as ReadonlyArray<string>).includes(method),
-      ]).toEqual([method, true]);
-      expect([method, spaceAccessForRpcMethod(method)]).toEqual([method, "installation"]);
+      ]).toEqual([method, false]);
+      expect([method, typeof spaceAccessForRpcMethod(method)]).toEqual([method, "object"]);
     }
     // No door on the Hub takes a provider's redirect: no route or endpoint for a callback.
     expect(

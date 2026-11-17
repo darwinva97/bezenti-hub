@@ -134,17 +134,33 @@ in `RpcSpaceAccess`: the Owner's alone, whatever the scopes; the changes also ne
   accepted without it. Until then the call answers `still-live` and the Hub keeps retrying. With
   no gateway running the key is live nowhere and goes at once (`gateway: "not-running"`). The
   Hub's start, before any CLIProxyAPI holds keys, removes every retired key and orphan.
-- **Who:** only the Owner, unlimited, manages (`aiAccount.manage` on the Installation, through
-  `SpaceDirectory.authorizer`, so an agent limited to one Space manages nothing; the writes are
-  also `INSTALLATION_RPC_METHODS`). `aiAccounts.list` gives anyone else name, provider and status
-  of what they may use, and where.
-- **AllowedAiAccounts** (`ai/AllowedAiAccounts.ts`) is the one rule: enabled accounts allowed to
-  the Space or to the User, and none unless the User may work in that Space (`aiAccount.use`:
-  whoever may start a Thread there, Guests included). Evaluated on every call. The gateway layer,
-  the picker and the move plan ask it; nothing else decides.
+- **Whose (owned-resources 08):** each account is a User's or an Organization's
+  (`ai_accounts.owner_kind`/`owner_id`, migration 140, which made every existing one the Owner's).
+  A name is unique per owner, and `priority` orders one owner's accounts only; a new one goes last
+  among its owner's.
+- **Who:** `aiAccount.manage` on an `AiAccountResource` (through `SpaceDirectory.authorizer`, so
+  an agent limited to one Space manages nothing outside it): a User creates, renames, disables,
+  replaces, orders and deletes their own, and nobody else does, the Owner included; creating is
+  decided on the owner named (`owner`, the caller's own by default). Allowances stay the Owner's,
+  on the Owner's own accounts only (`aiAccount.allow`; `aiAccounts.allow` is still an
+  `INSTALLATION_RPC_METHODS`). The writes need `access:write`, which a standard session holds.
+  Importing CLIProxyAPI auth files stays the Owner's (`aiAccount.manage` on the Installation),
+  as the Owner's own. `aiAccounts.list` gives each User their own and their Organizations' with
+  details, the Owner every other account's name, provider, owner and status (`aiAccount.view`,
+  never details, sign-in or quota), and everyone name, provider and status of what they may use,
+  and where; `owners` says whom they may add accounts for.
+- **AllowedAiAccounts** (`ai/AllowedAiAccounts.ts`) is the one rule: the enabled accounts of the
+  Space's owner (a Personal space's User, an Organization) by their order, then the Owner's own
+  allowed to the Space or to the User by the Owner's order, and none unless the User may work in
+  that Space (`aiAccount.use`: whoever may start a Thread there, Guests included). So a User's own
+  account reaches their Personal space and nothing else, and the Owner's own serve the Owner's
+  Personal space without an allowance. Allowance rows on anyone else's account are never read.
+  Evaluated on every call. The gateway layer (failover included), the picker, a new Thread's
+  default, local CLI keys and the move plan ask it and keep its order; nothing else decides.
 - **Models:** `modelsOf(accountId)` reads the gateway's `/v1/models` for the account's prefix,
   cached five minutes.
-- Audit: `ai_account.create|update|delete|allow` with provider, type and counts, never a key.
+- Audit: `ai_account.create|update|delete|allow` with provider, type, counts and the owner
+  (`ownerKind`, `ownerId`), never a key.
 
 ## Subscription AI accounts (OAuth)
 
@@ -583,8 +599,9 @@ Decisions; the rule is `ai/chooseAiAccount.ts` (one chooser, also the session pl
   still `commandAccess` (`thread.continue`).
 - **The default.** No account named: the Thread's own, while its provider instance stays (old
   clients and agents never drop it; if it is no longer allowed the session plan refuses with
-  «Switch AI account»); else the first allowed by global priority that the driver takes and that
-  serves the model, written into the Thread. None: the selection goes on without one and the plan
+  «Switch AI account»); else the first in AllowedAiAccounts' order (the Space owner's first, then
+  the Owner's allowed ones) that the driver takes and that serves the model, written into the
+  Thread. None: the selection goes on without one and the plan
   says why when a turn starts; the composer says it before sending.
 - **`thread.setAiAccount`** (WS, `RPC_SPACE_ACCESS` `thread`, scope `orchestration:operate`) is
   only sugar: same provider instance → `thread.model-selection.set` (the gateway reads the
@@ -603,7 +620,7 @@ Decisions; the rule is `ai/chooseAiAccount.ts` (one chooser, also the session pl
   OpenCode and Pi list all; image, embedding and audio models nowhere). Picker order only: the
   Hub serves any allowed model to any gateway agent.
   None: «No AI account is allowed for you in <Space>». The composer has an «AI account» select
-  (the accounts that fit the provider and model, first by priority); mid-Thread it calls
+  (the accounts that fit the provider and model, in AllowedAiAccounts' order); mid-Thread it calls
   `thread.setAiAccount`.
 - **The header** shows the account in use: `ProviderSessionManager` follows
   `AiGatewayActivity.subscribeAccountsInUse` and re-emits `provider-session.updated` for the live

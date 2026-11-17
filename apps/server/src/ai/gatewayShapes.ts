@@ -242,7 +242,7 @@ export const upstreamModelOf = (accountId: AiAccountId, model: string) =>
 export const CHOSEN_NOT_ALLOWED =
   "This Thread's AI account is no longer allowed here. Switch AI account.";
 
-/** An AI account a request may go to, first to last by the Installation's priority. */
+/** An AI account a request may go to, first to last in AllowedAiAccounts' order. */
 export interface RoutableAccount {
   readonly id: AiAccountId;
   readonly name: string;
@@ -260,8 +260,9 @@ export type RoutePlan =
 
 /**
  * The allowed accounts for this request, in order: the pinned one, else the Thread's, else the
- * first allowed that serves the model; then failovers of that provider serving the same model, by
- * global priority. Never another provider, never an account outside `allowed` (decisions 5, 7, 8).
+ * first allowed that serves the model; then failovers of that provider serving the same model, in
+ * `allowed`'s order (the Space owner's first). Never another provider, never an account outside
+ * `allowed` (decisions 5, 7, 8).
  */
 export const planRoute = (input: {
   readonly allowed: ReadonlyArray<RoutableAccount>;

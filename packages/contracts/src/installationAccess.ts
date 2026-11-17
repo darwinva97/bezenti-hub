@@ -93,19 +93,9 @@ export const INSTALLATION_RPC_METHODS = [
   WS_METHODS.aiGatewayUpdate,
   WS_METHODS.aiGatewayRollback,
   WS_METHODS.aiGatewaySetEnabled,
-  // The Installation's AI accounts: only the Owner registers, changes, allows and orders them
-  // (`aiAccounts.list` is everyone's, filtered by AllowedAiAccounts).
-  WS_METHODS.aiAccountsCreate,
-  WS_METHODS.aiAccountsUpdate,
-  WS_METHODS.aiAccountsDelete,
+  // Allowing the Owner's own AI accounts to Spaces and Users (owned-resources 08: every other
+  // `aiAccounts.*` write is its account owner's, decided by AiAccounts).
   WS_METHODS.aiAccountsAllow,
-  WS_METHODS.aiAccountsReorder,
-  // Subscription AI accounts (spec 4 ticket 03): signing in and importing are the Owner's alone;
-  // the Hub has no callback route (the Owner pastes the address the browser landed on).
-  WS_METHODS.aiAccountsLoginStart,
-  WS_METHODS.aiAccountsLoginComplete,
-  WS_METHODS.aiAccountsImportVertex,
-  WS_METHODS.aiAccountsImportCliproxy,
   // Secret providers' scopes, «Test connection» and what deleting one breaks (Vaults ticket 03):
   // the Owner's, as the providers themselves (`server.updateSettings`).
   WS_METHODS.secretProvidersTest,

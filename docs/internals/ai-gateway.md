@@ -140,8 +140,9 @@ in `RpcSpaceAccess`: the Owner's alone, whatever the scopes; the changes also ne
   among its owner's.
 - **Who:** `aiAccount.manage` on an `AiAccountResource` (through `SpaceDirectory.authorizer`, so
   an agent limited to one Space manages nothing outside it): a User creates, renames, disables,
-  replaces, orders and deletes their own, and nobody else does, the Owner included; creating is
-  decided on the owner named (`owner`, the caller's own by default). Allowances stay the Owner's,
+  replaces, orders and deletes their own, and nobody else does, the Owner included; an
+  Organization's are its Admins' and the Owner's while it is open (owned-resources 09); creating
+  is decided on the owner named (`owner`, the caller's own by default). Allowances stay the Owner's,
   on the Owner's own accounts only (`aiAccount.allow`; `aiAccounts.allow` is still an
   `INSTALLATION_RPC_METHODS`). The writes need `access:write`, which a standard session holds.
   Importing CLIProxyAPI auth files stays the Owner's (`aiAccount.manage` on the Installation),

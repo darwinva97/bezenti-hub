@@ -258,9 +258,9 @@ export type Action =
    */
   | "vault.choose"
   /**
-   * On an `AiAccountResource` (owned-resources 08): create, rename, disable, replace, order and
-   * delete it: a User's own, nobody else (the Owner included). On the Installation: run its AI
-   * gateway as a whole (everyone's usage, imports, the Hub's subscription limits): the Owner.
+   * On an `AiAccountResource`: create, rename, disable, replace, order and delete it: a User's
+   * own, nobody else (the Owner included); an Organization's, its Admins and the Owner. On the
+   * Installation: run its AI gateway (everyone's usage, imports, subscription limits): the Owner.
    */
   | "aiAccount.manage"
   /** See an AI account's name, provider, owner and status: whoever manages it, and the Owner. */
@@ -765,9 +765,9 @@ const AI_ACCOUNT_ACTIONS: ReadonlySet<Action> = new Set([
 
 /**
  * AI accounts by their owner (owned-resources 08). A User's are theirs alone to manage; the Owner
- * sees them (name, provider, owner, status) and changes nothing. An Organization's are the
- * Owner's to manage. Allowances are the Owner's, on the Owner's own accounts only: anything else
- * is lent with a Grant.
+ * sees them (name, provider, owner, status) and changes nothing. An Organization's are its
+ * Admins' and the Owner's, while it is open. Allowances are the Owner's, on the Owner's own
+ * accounts only: anything else is lent with a Grant.
  */
 const decideAiAccount = (
   principal: Principal,
@@ -786,7 +786,8 @@ const decideAiAccount = (
     if (space === null || space.kind !== "organization") return deny("wrong-resource");
     if (space.archived) return deny("space-archived");
     if (space.frozen) return deny("space-frozen");
-    return principal.isOwner ? allow : deny("owner-only");
+    // Owned-resources 09: an Organization's are its Admins' (and the Owner's) to manage.
+    return principal.isOwner ? allow : inOrganization(principal, space, ADMIN_ONLY);
   };
   const managed = manages();
   if (action === "aiAccount.view") {

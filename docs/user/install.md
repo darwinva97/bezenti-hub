@@ -912,7 +912,10 @@ your Threads in your Personal space, first, before anything the Owner allowed yo
 else sees or uses them, and the Owner sees only their name, provider and status. You order,
 rename, disable, replace and delete them there; the phone shows them read-only. The Owner's
 accounts work as before: allowed to Spaces and Users, and used in the Owner's own Personal space
-without an allowance.
+without an allowance. An organization has its own AI accounts too: its Admins add and manage
+them in a section of their own on the same page, and everyone who works in the organization
+(Guests included) uses them there, before anything the Owner allowed; Members see their name,
+provider and status. Nothing of an organization's reaches another Space or a Personal space.
 
 ### Dedicate a machine to an organization
 

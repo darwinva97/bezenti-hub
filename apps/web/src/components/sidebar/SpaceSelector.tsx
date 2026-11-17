@@ -12,9 +12,10 @@ import {
   UserPlusIcon,
   UsersIcon,
 } from "lucide-react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useId, useState } from "react";
 
+import { useThreadRouteTarget } from "../../hooks/useThreadRouteTarget";
 import { errorMessageOf } from "../../lib/errorMessage";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import {
@@ -58,6 +59,14 @@ export function SpaceSelector() {
   const view = useCurrentSpace((state) => state.view);
   const currentSpaceId = useCurrentSpace((state) => state.currentSpaceId);
   const loadFailed = useCurrentSpace((state) => state.loadFailed);
+  const navigate = useNavigate();
+  const openThreadRoute = useThreadRouteTarget() !== null;
+  // An explicit pick wins: a Thread or draft stays open only in the Space it belongs to, so leave it
+  // for the home view instead of letting it pull the Space back.
+  const pickSpace = (spaceId: SpaceId) => {
+    selectSpace(spaceId);
+    if (openThreadRoute) void navigate({ to: "/" });
+  };
   const [creating, setCreating] = useState(false);
   const [managingUsers, setManagingUsers] = useState(false);
   const [readingAudit, setReadingAudit] = useState(false);
@@ -135,7 +144,7 @@ export function SpaceSelector() {
               <MenuGroupLabel>Spaces</MenuGroupLabel>
               <MenuRadioGroup
                 value={current?.id}
-                onValueChange={(value) => selectSpace(value as SpaceId)}
+                onValueChange={(value) => pickSpace(value as SpaceId)}
               >
                 {ownSpaces.map((space) => (
                   <MenuRadioItem key={space.id} value={space.id} closeOnClick>
@@ -151,7 +160,7 @@ export function SpaceSelector() {
                   <MenuGroupLabel>Archived</MenuGroupLabel>
                   <MenuRadioGroup
                     value={current?.id}
-                    onValueChange={(value) => selectSpace(value as SpaceId)}
+                    onValueChange={(value) => pickSpace(value as SpaceId)}
                   >
                     {archivedOrganizations.map((space) => (
                       <MenuRadioItem key={space.id} value={space.id} closeOnClick>
@@ -169,7 +178,7 @@ export function SpaceSelector() {
                   <MenuGroupLabel>Personal spaces (read only)</MenuGroupLabel>
                   <MenuRadioGroup
                     value={current?.id}
-                    onValueChange={(value) => selectSpace(value as SpaceId)}
+                    onValueChange={(value) => pickSpace(value as SpaceId)}
                   >
                     {othersPersonal.map((space) => (
                       <MenuRadioItem key={space.id} value={space.id} closeOnClick>

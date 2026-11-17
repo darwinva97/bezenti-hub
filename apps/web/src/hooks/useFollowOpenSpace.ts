@@ -17,7 +17,6 @@ export function useFollowOpenSpace(input: {
 }) {
   const environmentId = useCurrentSpace((state) => state.environmentId);
   const view = useCurrentSpace((state) => state.view);
-  const currentSpaceId = useCurrentSpace((state) => state.currentSpaceId);
   const thread = useQuietThreadShell(
     input.threadRef !== null && input.threadRef.environmentId === environmentId
       ? input.threadRef
@@ -32,9 +31,18 @@ export function useFollowOpenSpace(input: {
   const project = useProject(projectRef);
   // Thread shells carry no Space of their own here: a Thread is in its Project's.
   const openSpaceId = project === null ? null : (project.spaceId ?? legacySpaceIdOf(view));
-  const next = spaceToFollow({ view, currentSpaceId, openSpaceId });
+  // Keyed on the open item's Space, not the current one: an explicit pick in the Space selector
+  // wins over a Thread that stays open, and only what the route opens is followed. `viewLoaded`
+  // lets a late Space load follow once; later reloads of the directory never re-run this.
+  const viewLoaded = view !== null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the current Space follows what the route opened, a store outside React
   useEffect(() => {
+    const state = useCurrentSpace.getState();
+    const next = spaceToFollow({
+      view: state.view,
+      currentSpaceId: state.currentSpaceId,
+      openSpaceId,
+    });
     if (next !== null) selectSpace(next);
-  }, [next]);
+  }, [openSpaceId, viewLoaded]);
 }

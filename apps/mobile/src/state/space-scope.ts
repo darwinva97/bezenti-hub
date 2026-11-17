@@ -124,10 +124,14 @@ export function useFollowOpenSpace(input: {
     currentSpaceId: selection?.currentSpaceId ?? null,
     openSpaceId,
   });
+  // Runs when what the route opens changes, not when the current Space does: an explicit pick in
+  // the Space selector wins over a Thread that stays open. `viewLoaded` lets a late load follow once.
+  const viewLoaded = view !== null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the Hub's current Space follows what the route opened, a store outside React
   useEffect(() => {
     if (environmentId !== null && next !== null) selectSpace(environmentId, next);
-  }, [environmentId, next]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `next` is read as of the render that changed the open Space
+  }, [environmentId, openSpaceId, viewLoaded]);
 }
 
 /** `spaceProjectIdsByEnvironment` for render, stable while Projects and Spaces stay put. */

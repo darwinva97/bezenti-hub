@@ -356,7 +356,7 @@ it.live.skipIf(!posix || platform === undefined)(
         member.accounts.map((account) => [account.name, account.usableIn]),
         [
           ["Acme OpenRouter", [acmeId]],
-          ["Grace Gemini", [acmeId, `personal:${people.member}`]],
+          ["Grace Gemini", [acmeId, SpaceId.make(`personal:${people.member}`)]],
         ],
       );
       // Same rule for an Admin and a Guest of Acme: Acme's, not Globex's, not grace's own.

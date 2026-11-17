@@ -160,8 +160,8 @@ it("warm up", async () => {
   await quiet();
   await toggleDiff("close")();
   await quiet();
-  await openSettings(router, "/settings/general")();
-  await openSettings(router, "/settings/appearance")();
+  await openSettings(router, "general")();
+  await openSettings(router, "appearance")();
   await quiet();
 });
 
@@ -294,37 +294,34 @@ it("app-toggle-diff-panel", async () => {
   await report("app-toggle-diff-panel", [open, close]);
 });
 
-const openSettings =
-  (router: AppRouter, to: "/settings/general" | "/settings/appearance") => async () => {
-    await act(() => router.navigate({ to }));
-    // A section title from each page, since neither page has a heading that names it.
-    const name = to === "/settings/general" ? "Time format" : "Interface";
-    await expect.element(page.getByRole("heading", { name, exact: true })).toBeVisible();
-    // Appearance highlights its code font preview off-thread, then attaches it in a shadow root.
-    if (to === "/settings/appearance") {
-      await vi.waitFor(
-        () =>
-          expect([...document.querySelectorAll("div")].some((node) => node.shadowRoot)).toBe(true),
-        { interval: 100, timeout: 15_000 },
-      );
-    }
-  };
+const openSettings = (router: AppRouter, section: "general" | "appearance") => async () => {
+  await act(() => router.navigate({ to: "/settings/user/$section", params: { section } }));
+  // A section title from each page, since neither page has a heading that names it.
+  const name = section === "general" ? "Time format" : "Interface";
+  await expect.element(page.getByRole("heading", { name, exact: true })).toBeVisible();
+  // Appearance highlights its code font preview off-thread, then attaches it in a shadow root.
+  if (section === "appearance") {
+    await vi.waitFor(
+      () =>
+        expect([...document.querySelectorAll("div")].some((node) => node.shadowRoot)).toBe(true),
+      { interval: 100, timeout: 15_000 },
+    );
+  }
+};
 
 it("app-open-settings", async () => {
   using _clock = frozenClock();
   const { screen, router } = await openThread(A);
   await using _app = screen;
-  await report("app-open-settings", [await measure(openSettings(router, "/settings/general"))]);
+  await report("app-open-settings", [await measure(openSettings(router, "general"))]);
 });
 
 it("app-switch-settings-section", async () => {
   using _clock = frozenClock();
   const { screen, router } = await openThread(A);
   await using _app = screen;
-  await openSettings(router, "/settings/general")();
-  await report("app-switch-settings-section", [
-    await measure(openSettings(router, "/settings/appearance")),
-  ]);
+  await openSettings(router, "general")();
+  await report("app-switch-settings-section", [await measure(openSettings(router, "appearance"))]);
 });
 
 // ChatView re-renders when the tree goes dirty or clean; the composer and side chat timeline should not.

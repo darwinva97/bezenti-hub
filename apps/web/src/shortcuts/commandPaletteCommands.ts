@@ -115,7 +115,7 @@ export function installCommandPaletteCommands(
         consume(event);
         dispatchCommandPalette({ _tag: "SetOpen", open: false });
         // The settings route finds the Project of the page this was pressed on.
-        void router.navigate({ to: "/settings/projects" });
+        void router.navigate({ to: "/settings/$", params: { _splat: "projects" } });
       },
       "commandPalette.toggle": toggleOverlay("commandPalette.toggle"),
       "filePicker.toggle": toggleOverlay("filePicker.toggle"),

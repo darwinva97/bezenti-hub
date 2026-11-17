@@ -1,6 +1,9 @@
-import { Navigate, createFileRoute } from "@tanstack/react-router";
+import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
+import { Navigate, createFileRoute, useLocation } from "@tanstack/react-router";
 import { useEffect } from "react";
 
+import { LegacyMachineRedirect } from "../components/settings/LegacyMachineRedirect";
+import { LEGACY_MACHINE_PAGES } from "../components/settings/machineSettings";
 import { useSettingsProjectGroups } from "../components/settings/useSettingsProjectGroups";
 import { readAppModalReturnParams, useCloseAppModal } from "../components/sidebar/mainAppLocation";
 import { useThreadShell } from "../state/entities";
@@ -40,6 +43,28 @@ function ContextProjectSettingsRoute() {
   );
 }
 
-export const Route = createFileRoute("/_chat/settings/projects")({
-  component: ContextProjectSettingsRoute,
+/**
+ * Every `/settings/<old page>` that is not a modal. The settings route redirects the ones the
+ * old-URL table (`OLD_SETTINGS_PATHS`) knows; what reaches here is a page of a machine, a Project
+ * from nowhere in particular, or a URL nobody knows, which goes to User settings.
+ */
+function OldSettingsUrl() {
+  const pathname = useLocation({ select: (location) => location.pathname });
+  if (LEGACY_MACHINE_PAGES[pathname] !== undefined)
+    return <LegacyMachineRedirect path={pathname} />;
+  if (pathname === "/settings/projects") return <ContextProjectSettingsRoute />;
+  return <Navigate to="/settings/user/$section" params={{ section: "general" }} replace />;
+}
+
+export const Route = createFileRoute("/_chat/settings/$")({
+  // Old links to a provider name the machine and the provider instance in the query.
+  validateSearch: (raw: Record<string, unknown>) => ({
+    ...(typeof raw.environmentId === "string" && raw.environmentId.trim()
+      ? { environmentId: EnvironmentId.make(raw.environmentId) }
+      : {}),
+    ...(typeof raw.instanceId === "string" && raw.instanceId.trim()
+      ? { instanceId: ProviderInstanceId.make(raw.instanceId) }
+      : {}),
+  }),
+  component: OldSettingsUrl,
 });

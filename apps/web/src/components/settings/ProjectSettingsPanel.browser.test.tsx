@@ -297,7 +297,12 @@ async function mountSettings(search: SettingsScopeSearch) {
     component: () => (
       <SettingsScopeProvider
         search={route.useSearch()}
-        onChange={(next) => void router.navigate({ to: "/settings/projects", search: () => next })}
+        onChange={(next) =>
+          void (router.navigate as (options: unknown) => Promise<void>).call(router, {
+            to: "/settings/projects",
+            search: () => next,
+          })
+        }
       >
         <ProjectModalContent section="general" />
       </SettingsScopeProvider>

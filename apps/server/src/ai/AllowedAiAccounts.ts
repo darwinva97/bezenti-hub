@@ -1,19 +1,23 @@
 /**
  * The one rule of which AI accounts a User may use in a Space: the Space owner's enabled accounts,
- * then the Owner's own allowed to the Space or the User; none unless the User may work there
- * (`aiAccount.use`). Never cached; the gateway, picker, default, failover and move plan ask here.
+ * then those lent to the Space by an active Grant (grants ticket 01), then the Owner's own allowed
+ * to the Space or the User; none unless the User may work there (`aiAccount.use`). Never cached;
+ * the gateway, picker, default, failover and move plan ask here.
  */
-import type {
-  AiAccountId,
-  AiAccountProvider,
-  AiAccountType,
-  ResourceOwner,
-  SpaceId,
-  UserId,
+import {
+  type AiAccountId,
+  AiAccountGrantLimits,
+  type AiAccountProvider,
+  type AiAccountType,
+  type GrantId,
+  type ResourceOwner,
+  type SpaceId,
+  type UserId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -32,7 +36,22 @@ export interface AllowedAiAccount {
   /** Among its owner's accounts only. */
   readonly priority: number;
   readonly owner: ResourceOwner;
+  /** Why it is usable here: the Space's own, or lent to it by a Grant (with its caps). */
+  readonly via: AllowedVia;
 }
+
+export type AllowedVia =
+  | { readonly kind: "own" }
+  | {
+      readonly kind: "grant";
+      readonly grantId: GrantId;
+      /** The lending User's display name, or the lending Organization's name. */
+      readonly lenderName: string;
+      readonly limits: AiAccountGrantLimits;
+    };
+
+const OWN: AllowedVia = { kind: "own" };
+const decodeCaps = Schema.decodeUnknownOption(Schema.fromJsonString(AiAccountGrantLimits));
 
 export class AllowedAiAccountsError extends Schema.TaggedError<AllowedAiAccountsError>()(
   "AllowedAiAccountsError",
@@ -92,6 +111,13 @@ interface AllowedRow extends AccountRow {
   readonly subjectId: string;
 }
 
+interface LentRow extends AccountRow {
+  readonly grantId: string;
+  readonly targetId: string;
+  readonly lenderName: string | null;
+  readonly limitsJson: string;
+}
+
 /** Whose a Space's own accounts are: its User's (a Personal space) or its Organization's. */
 const ownerOfSpace = (
   resource: AccessPolicy.SpaceResource,
@@ -102,7 +128,7 @@ const ownerOfSpace = (
       : { kind: "user", id: resource.personalOwnerUserId }
     : { kind: "organization", id: resource.id };
 
-const toAllowed = (row: AccountRow): AllowedAiAccount => ({
+const toAllowed = (row: AccountRow, via: AllowedVia = OWN): AllowedAiAccount => ({
   id: row.accountId as AiAccountId,
   name: row.name,
   type: row.type,
@@ -112,6 +138,7 @@ const toAllowed = (row: AccountRow): AllowedAiAccount => ({
     row.ownerKind === "user"
       ? { kind: "user", userId: row.ownerId as UserId }
       : { kind: "organization", spaceId: row.ownerId as SpaceId },
+  via,
 });
 
 const make = Effect.gen(function* () {
@@ -192,6 +219,30 @@ const make = Effect.gen(function* () {
             )}
             ORDER BY priority, account_id
           `.pipe(Effect.catch(failed("read the AI accounts")));
+    // Lent by an active Grant whose lender still owns the account and may still lend: a disabled
+    // or removed User, an archived, frozen or gone Organization lends nothing meanwhile.
+    const lentRows = yield* sql<LentRow>`
+      SELECT a.account_id AS "accountId", a.name AS "name", a.type AS "type",
+        a.provider AS "provider", a.priority AS "priority", a.owner_kind AS "ownerKind",
+        a.owner_id AS "ownerId", g.grant_id AS "grantId", g.target_id AS "targetId",
+        g.limits_json AS "limitsJson",
+        CASE g.lender_kind
+          WHEN 'user' THEN (SELECT display_name FROM users WHERE user_id = g.lender_id)
+          ELSE (SELECT name FROM spaces WHERE space_id = g.lender_id) END AS "lenderName"
+      FROM grants g
+      JOIN ai_accounts a ON a.account_id = g.resource_id
+      WHERE g.resource_kind = 'ai-account' AND g.state = 'active' AND g.target_kind = 'space'
+        AND ${sql.in("g.target_id", spaceIds)}
+        AND a.disabled = 0 AND a.deleted_at IS NULL
+        AND a.owner_kind = g.lender_kind AND a.owner_id = g.lender_id
+        AND (g.lender_kind <> 'user' OR EXISTS (
+          SELECT 1 FROM users u WHERE u.user_id = g.lender_id
+            AND u.disabled_at IS NULL AND u.removed_at IS NULL))
+        AND (g.lender_kind <> 'organization' OR EXISTS (
+          SELECT 1 FROM spaces s WHERE s.space_id = g.lender_id AND s.kind = 'organization'
+            AND s.archived_at IS NULL AND s.frozen_at IS NULL))
+      ORDER BY g.decided_at, a.priority, a.account_id
+    `.pipe(Effect.catch(failed("read the AI accounts lent")));
     const allowedRows = yield* sql<AllowedRow>`
       SELECT a.account_id AS "accountId", a.name AS "name", a.type AS "type",
         a.provider AS "provider", a.priority AS "priority", a.owner_kind AS "ownerKind",
@@ -217,6 +268,21 @@ const make = Effect.gen(function* () {
         }
         seen.add(row.accountId);
         accounts.push(toAllowed(row));
+      }
+      for (const row of lentRows) {
+        if (row.targetId !== spaceId || seen.has(row.accountId)) continue;
+        // Caps that cannot be read lend nothing: never an uncapped loan by mistake.
+        const limits = decodeCaps(row.limitsJson);
+        if (Option.isNone(limits)) continue;
+        seen.add(row.accountId);
+        accounts.push(
+          toAllowed(row, {
+            kind: "grant",
+            grantId: row.grantId as GrantId,
+            lenderName: row.lenderName ?? "",
+            limits: limits.value,
+          }),
+        );
       }
       for (const row of allowedRows) {
         const applies =

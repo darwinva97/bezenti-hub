@@ -385,6 +385,8 @@ export const AiAccountPickerAccount = Schema.Struct({
    * gateway catalog the Hub could not read now (unknown, never "serves nothing").
    */
   models: Schema.NullOr(Schema.Array(Schema.String)),
+  /** Lent to the Space by a Grant: its id and the lender's name («from <lender>»). */
+  lentBy: Schema.optionalKey(Schema.Struct({ grantId: Schema.String, name: Schema.String })),
 });
 export type AiAccountPickerAccount = typeof AiAccountPickerAccount.Type;
 

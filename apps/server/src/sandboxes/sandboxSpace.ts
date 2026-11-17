@@ -1,6 +1,6 @@
 import {
   type EnvironmentId,
-  GrantLimits,
+  EnvironmentGrantLimits,
   HUB_MACHINE_ENVIRONMENT_ID,
   SandboxHostReport,
   SpaceId,
@@ -165,7 +165,7 @@ export const LentSandboxDisk = Schema.Struct({
   measuredAt: Schema.String,
 });
 const decodeLentDisk = Schema.decodeUnknownOption(Schema.fromJsonString(LentSandboxDisk));
-const decodeLimits = Schema.decodeUnknownOption(Schema.fromJsonString(GrantLimits));
+const decodeLimits = Schema.decodeUnknownOption(Schema.fromJsonString(EnvironmentGrantLimits));
 const decodeHost = Schema.decodeUnknownOption(Schema.fromJsonString(SandboxHostReport));
 
 /**

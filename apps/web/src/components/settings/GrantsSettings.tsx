@@ -3,10 +3,12 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type {
+  AiAccountProvider,
   AuthAccount,
   EnvironmentGrantLimits,
   EnvironmentId,
   Grant,
+  GrantLimits,
   GrantSpaceRef,
   GrantTarget,
   HubEnvironmentSummary,
@@ -54,13 +56,42 @@ const LENDER_RISKS = [
  * A loan's Space as people tell them apart: every Personal space is called «Personal», so it is
  * named by its owner, «Ana (personal)».
  */
-const spaceLabel = (space: GrantSpaceRef) =>
+export const spaceLabel = (space: GrantSpaceRef) =>
   space.kind === "personal" ? `${space.ownerDisplayName ?? space.name} (personal)` : space.name;
 const targetLabel = (grant: Grant, fallback: string) =>
   grant.target === null ? fallback : spaceLabel(grant.target);
 
-const limitsText = (limits: EnvironmentGrantLimits) =>
+const PERIODS = { day: "day", week: "week", month: "month" } as const;
+const machineLimitsText = (limits: EnvironmentGrantLimits) =>
   `${limits.cpus} CPUs · ${gib(limits.memoryBytes)} memory · ${limits.pids} processes · ${gib(limits.diskBytes)} disk`;
+/** A loan's limits in words: a machine's sizes, or an AI account's caps («No cap»). */
+const limitsText = (limits: GrantLimits) => {
+  if (limits.kind === "environment") return machineLimitsText(limits);
+  const caps = [
+    ...(limits.tokens === null
+      ? []
+      : [`${limits.tokens.amount.toLocaleString()} tokens a ${PERIODS[limits.tokens.period]}`]),
+    ...(limits.requests === null
+      ? []
+      : [
+          `${limits.requests.amount.toLocaleString()} requests a ${PERIODS[limits.requests.period]}`,
+        ]),
+  ];
+  return caps.length === 0 ? "No cap" : caps.join(" · ");
+};
+
+/** The spec's warning for lending (and borrowing) a subscription. */
+export const subscriptionTermsWarning = (provider: AiAccountProvider | string) =>
+  `The terms of ${provider} forbid sharing this account; it may be suspended.`;
+
+/** What a loan lends, in words. */
+const nounOf = (grant: Grant) => (grant.resource.kind === "ai-account" ? "AI account" : "machine");
+
+/** What the borrower is told of what the lender sees, by kind. */
+const lenderSees = (grant: Grant) =>
+  grant.resource.kind === "ai-account"
+    ? `${grant.lender.name ?? "Its lender"} sees how much each person here uses it, never prompts or Threads.${grant.aiAccount?.type === "subscription" ? ` ${subscriptionTermsWarning(grant.aiAccount.provider)}` : ""}`
+    : lenderSeesEverything(grant.lender.name ?? "Its lender");
 
 /** Which limits the machine's cgroups do not enforce, in words; null when it enforces them all. */
 const unenforced = (host: SandboxHostReport) => {
@@ -309,10 +340,10 @@ const STATE_LABELS: Record<Grant["state"], string> = {
 const END_LABELS: Record<NonNullable<Grant["endReason"]>, string> = {
   revoked: "taken back",
   returned: "given back",
-  "resource-gone": "the machine was removed",
+  "resource-gone": "it was removed",
   "target-gone": "the Space was deleted",
   "lender-gone": "the lender left",
-  "owner-changed": "the machine changed owner",
+  "owner-changed": "it changed owner",
 };
 
 /** One loan's limits, Sandbox state and disk, as both sides see them. */
@@ -341,9 +372,9 @@ const loanDescription = (grant: Grant, side: "given" | "received") => {
 };
 
 /**
- * Settings → Environments → «Loans»: machines the User lent (take back, cancel), loans waiting for
- * a Space they decide for (accept with a strong factor, reject) and machines their Spaces borrow
- * (give back). Never another Space's Threads.
+ * Settings → Environments → «Loans»: machines and AI accounts the User (or an Organization they
+ * run) lent (take back, cancel), loans waiting for a Space they decide for (accept, a machine with
+ * a strong factor; reject) and what their Spaces borrow (give back). Never another Space's Threads.
  */
 export function GrantsSettings() {
   const environmentId = usePrimaryEnvironmentId();
@@ -413,8 +444,12 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
       setPending(false);
     }
   };
-  /** Accepting a machine asks for a strong factor: the account says which one. */
+  /** Accepting a machine asks for a strong factor (the account says which one); an AI account not. */
   const openAccept = async (grant: Grant) => {
+    if (grant.resource.kind !== "environment") {
+      await run(() => acceptGrant(grant.id, undefined));
+      return;
+    }
     setPending(true);
     setError(null);
     try {
@@ -441,21 +476,19 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
       {waiting.map((grant) => (
         <SettingsRow
           key={grant.id}
-          title={`${grant.resource.name ?? "A machine"} for ${targetLabel(grant, "your Space")}`}
+          title={`${grant.resource.name ?? `A ${nounOf(grant)}`} for ${targetLabel(grant, "your Space")}`}
           description={
             <>
               {`Waiting for you: lent by ${grant.lender.name ?? "another User"} · ${limitsText(grant.limits)}`}
               <br />
-              <span className="text-warning">
-                {lenderSeesEverything(grant.lender.name ?? "Its lender")}
-              </span>
+              <span className="text-warning">{lenderSees(grant)}</span>
             </>
           }
           control={
             mayChange ? (
               <div className="flex gap-1">
                 <Button disabled={pending} size="xs" onClick={() => void openAccept(grant)}>
-                  Accept…
+                  {grant.resource.kind === "environment" ? "Accept…" : "Accept"}
                 </Button>
                 <Button
                   disabled={pending}
@@ -477,14 +510,12 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
       {borrowed.map((grant) => (
         <SettingsRow
           key={grant.id}
-          title={`${grant.resource.name ?? "A machine"} in ${targetLabel(grant, "your Space")}`}
+          title={`${grant.resource.name ?? `A ${nounOf(grant)}`} in ${targetLabel(grant, "your Space")}`}
           description={
             <>
               {loanDescription(grant, "received")}
               <br />
-              <span className="text-muted-foreground">
-                {lenderSeesEverything(grant.lender.name ?? "Its lender")}
-              </span>
+              <span className="text-muted-foreground">{lenderSees(grant)}</span>
             </>
           }
           control={
@@ -504,7 +535,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
       {(given ?? []).map((grant) => (
         <SettingsRow
           key={grant.id}
-          title={`${grant.resource.name ?? "Your machine"}`}
+          title={`${grant.resource.name ?? `Your ${nounOf(grant)}`}`}
           description={loanDescription(grant, "given")}
           control={
             mayChange && (grant.can.revoke || grant.can.cancel) ? (
@@ -584,10 +615,12 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
             <DialogHeader>
               <DialogTitle>
                 {ending.can.revoke ? "Take back" : "Give back"}{" "}
-                {ending.resource.name ?? "this machine"}?
+                {ending.resource.name ?? `this ${nounOf(ending)}`}?
               </DialogTitle>
               <DialogDescription>
-                {`The Threads of ${targetLabel(ending, "the Space")} on it stop: running turns get up to two minutes to save a checkpoint, and changes made by hand since the last turn may be lost. Its Sandbox and files are then deleted from the machine.`}
+                {ending.resource.kind === "ai-account"
+                  ? `The Threads of ${targetLabel(ending, "the Space")} that use it are refused from their next request and need another AI account; requests already running finish.`
+                  : `The Threads of ${targetLabel(ending, "the Space")} on it stop: running turns get up to two minutes to save a checkpoint, and changes made by hand since the last turn may be lost. Its Sandbox and files are then deleted from the machine.`}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>

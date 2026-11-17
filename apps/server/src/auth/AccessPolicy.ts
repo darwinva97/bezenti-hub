@@ -121,13 +121,22 @@ export interface VaultResource {
 }
 
 /**
+ * Who lends a resource: its owner, a User or an Organization (`space` null once it is gone).
+ * Null when nobody may lend it.
+ */
+export type GrantLender =
+  | { readonly kind: "user"; readonly userId: UserId }
+  | { readonly kind: "organization"; readonly space: SpaceResource | null }
+  | null;
+
+/**
  * A Grant (a loan of a resource to a Space), as its lender or its destination acts on it. The
- * lender is the resource's owner: a User's personal machine today.
+ * lender is the resource's owner: a User (their personal machine, their AI account) or an
+ * Organization (its AI account), whose Admins act for it.
  */
 export interface GrantResource {
   readonly kind: "grant";
-  /** The User who owns the lent resource; null when no User does (nobody lends it). */
-  readonly lenderUserId: UserId | null;
+  readonly lender: GrantLender;
   readonly target: SpaceResource;
   /**
    * For `grant.give`: whether the lender may name this destination (a Space they work in, the
@@ -838,7 +847,38 @@ const GRANT_ACTIONS: ReadonlySet<Action> = new Set([
   "grant.viewReceived",
 ]);
 
-/** The lender's side of a Grant: only the resource's owner, the Owner included (no bypass). */
+/**
+ * The lender's side of a Grant: only the resource's owner, the Owner included (no bypass): the
+ * User, or an Organization's Admins. A gone Organization lends nothing; an archived or frozen one
+ * gives nothing new, yet its Admins still take back or cancel what it lent.
+ */
+const decideLender = (principal: Principal, action: Action, grant: GrantResource): Decision => {
+  const { lender, target } = grant;
+  if (lender === null) return deny("not-yours");
+  if (lender.kind === "user") {
+    if (lender.userId !== principal.userId) return deny("not-yours");
+    if (action !== "grant.give") return allow;
+    // What a User owns already serves them in their own Personal space.
+    if (target.kind === "personal" && target.personalOwnerUserId === principal.userId) {
+      return deny("wrong-resource");
+    }
+  } else {
+    const space = lender.space;
+    if (space === null || space.kind !== "organization") return deny("not-yours");
+    const runs = inOrganization(principal, space, ADMIN_ONLY);
+    if (runs._tag === "Deny") return runs.reason === "not-a-member" ? deny("not-yours") : runs;
+    if (action !== "grant.give") return allow;
+    if (space.archived) return deny("space-archived");
+    if (space.frozen) return deny("space-frozen");
+    // An Organization's own resources already serve it.
+    if (target.id === space.id) return deny("wrong-resource");
+  }
+  if (target.archived) return deny("space-archived");
+  if (target.frozen) return deny("space-frozen");
+  return grant.targetKnown === true ? allow : deny("not-a-member");
+};
+
+/** The lender's side of a Grant (`decideLender`). */
 const LENDER_ACTIONS: ReadonlySet<Action> = new Set([
   "grant.give",
   "grant.cancel",
@@ -855,19 +895,7 @@ const LENDER_ACTIONS: ReadonlySet<Action> = new Set([
  */
 const decideGrant = (principal: Principal, action: Action, grant: GrantResource): Decision => {
   const { target } = grant;
-  if (LENDER_ACTIONS.has(action)) {
-    if (grant.lenderUserId === null || grant.lenderUserId !== principal.userId) {
-      return deny("not-yours");
-    }
-    if (action !== "grant.give") return allow;
-    if (target.kind === "personal" && target.personalOwnerUserId === principal.userId) {
-      // A personal machine already serves its owner in their own Personal space.
-      return deny("wrong-resource");
-    }
-    if (target.archived) return deny("space-archived");
-    if (target.frozen) return deny("space-frozen");
-    return grant.targetKnown === true ? allow : deny("not-a-member");
-  }
+  if (LENDER_ACTIONS.has(action)) return decideLender(principal, action, grant);
   if (action === "grant.decide") {
     if (target.archived) return deny("space-archived");
     if (target.frozen) return deny("space-frozen");

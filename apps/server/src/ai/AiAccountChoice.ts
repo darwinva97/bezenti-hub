@@ -332,6 +332,9 @@ const make = Effect.gen(function* () {
           provider: account.provider,
           priority: account.priority,
           models,
+          ...(account.via.kind === "grant"
+            ? { lentBy: { grantId: account.via.grantId, name: account.via.lenderName } }
+            : {}),
         };
       }),
     );

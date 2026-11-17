@@ -16,7 +16,7 @@ import {
   isListedMachine,
   type EnvironmentSelfReport,
   type EnvironmentSelfResult,
-  GrantLimits,
+  EnvironmentGrantLimits,
   type LentSandboxAssignment,
   SandboxHostReport,
   type HubDedicatedSpaceLimits,
@@ -303,7 +303,7 @@ const decodeProviders = Schema.decodeUnknownOption(
 const encodeResources = Schema.encodeSync(Schema.fromJsonString(EnvironmentHostResources));
 const decodeSandboxHost = Schema.decodeUnknownOption(Schema.fromJsonString(SandboxHostReport));
 const encodeSandboxHost = Schema.encodeSync(Schema.fromJsonString(SandboxHostReport));
-const decodeGrantLimits = Schema.decodeUnknownOption(Schema.fromJsonString(GrantLimits));
+const decodeGrantLimits = Schema.decodeUnknownOption(Schema.fromJsonString(EnvironmentGrantLimits));
 
 /** A lent Sandbox's Environment id: one per Grant, never `sandbox:` (a Hub Sandbox's). */
 /** How long a lent Sandbox's running turns have to stop once its Grant ended. */

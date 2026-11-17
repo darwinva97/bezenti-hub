@@ -1,10 +1,11 @@
 /**
- * Grants: an owner lends one resource to a Space, with limits, and can take it back. Only machines
- * (`environment`) are lent today; AI accounts and Vault groups fit the same row later. See
+ * Grants: an owner lends one resource to a Space, with limits, and can take it back. Machines
+ * (`environment`) and AI accounts are lent today; Vault groups fit the same row later. See
  * docs/internals/grants.md.
  */
 import * as Schema from "effect/Schema";
 
+import { AiAccountId, AiAccountProvider, AiAccountType } from "./aiAccounts.ts";
 import { EnvironmentId, makeEntityId, SpaceId } from "./baseSchemas.ts";
 import { SandboxHostReport } from "./hubEnvironments.ts";
 import { AuthReauth } from "./userAccounts.ts";
@@ -55,14 +56,32 @@ export const EnvironmentGrantLimits = Schema.Struct({
 });
 export type EnvironmentGrantLimits = typeof EnvironmentGrantLimits.Type;
 
-/** By resource kind; the others join this union when they can be lent. */
-export const GrantLimits = Schema.Union([EnvironmentGrantLimits]);
+/** A cap's calendar period, in UTC: a day, an ISO week (from Monday) or a month. */
+export const GrantCapPeriod = Schema.Literals(["day", "week", "month"]);
+export type GrantCapPeriod = typeof GrantCapPeriod.Type;
+
+export const GrantCap = Schema.Struct({ amount: PositiveInt, period: GrantCapPeriod });
+export type GrantCap = typeof GrantCap.Type;
+
+/**
+ * A lent AI account's caps, enforced by the AI gateway on each request: tokens (input, output and
+ * cache writes) and requests per period. Null: no cap, an explicit choice.
+ */
+export const AiAccountGrantLimits = Schema.Struct({
+  kind: Schema.Literal("ai-account"),
+  tokens: Schema.NullOr(GrantCap),
+  requests: Schema.NullOr(GrantCap),
+});
+export type AiAccountGrantLimits = typeof AiAccountGrantLimits.Type;
+
+/** By resource kind; Vault groups join this union when they can be lent. */
+export const GrantLimits = Schema.Union([EnvironmentGrantLimits, AiAccountGrantLimits]);
 export type GrantLimits = typeof GrantLimits.Type;
 
-export const GrantResourceRef = Schema.Struct({
-  kind: Schema.Literal("environment"),
-  environmentId: EnvironmentId,
-});
+export const GrantResourceRef = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("environment"), environmentId: EnvironmentId }),
+  Schema.Struct({ kind: Schema.Literal("ai-account"), aiAccountId: AiAccountId }),
+]);
 export type GrantResourceRef = typeof GrantResourceRef.Type;
 
 export const GrantSpaceRef = Schema.Struct({
@@ -107,6 +126,10 @@ export const Grant = Schema.Struct({
       diskMeasureFailures: Schema.Int,
     }),
   ),
+  /** A lent AI account's provider and type (a subscription's terms forbid sharing it). */
+  aiAccount: Schema.optionalKey(
+    Schema.Struct({ provider: AiAccountProvider, type: AiAccountType }),
+  ),
   /** What the viewer may do with it now. */
   can: Schema.Struct({
     cancel: Schema.Boolean,
@@ -150,6 +173,8 @@ export const GrantGiveInput = Schema.Struct({
   resource: GrantResourceRef,
   spaceId: SpaceId,
   limits: GrantLimits,
+  /** A Plan as the destination: refused (`plan-target-unavailable`) until Plans exist. */
+  planId: Schema.optionalKey(Schema.String),
 });
 export type GrantGiveInput = typeof GrantGiveInput.Type;
 

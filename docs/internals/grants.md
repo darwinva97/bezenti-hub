@@ -1,16 +1,18 @@
 # Grants
 
-A **Grant** lends one resource to a Space, with limits, until either side ends it. Today only a
-User's personal machine is lent (to an Organization or someone's Personal space); AI accounts,
+A **Grant** lends one resource to a Space, with limits, until either side ends it. Today a User's
+personal machine and an AI account (a User's or an Organization's, for the AI gateway) are lent;
 Vault groups and a Plan as destination fit the same row later. Spec: `.scratch/grants/spec.md`;
-machines: `.scratch/grants/issues/machines-design.md`.
+machines: `.scratch/grants/issues/machines-design.md`; AI accounts:
+`.scratch/grants/issues/01-04-design.md`.
 
 ## The row
 
 `grants` (migration 135): the resource (`resource_kind`, `resource_id`), its lender (the owner when
 it was lent), the destination (`target_kind`, `target_id`), `state`, `end_reason` and
 `limits_json` (`GrantLimits` in `packages/contracts/src/grants.ts`; a machine's are CPUs, memory,
-processes and threads, and disk, each required and at least the Sandbox floors). A partial unique
+processes and threads, and disk, each required and at least the Sandbox floors; an AI account's are
+its caps, tokens and requests per day, ISO week or month, each `null` for no cap). A partial unique
 index keeps at most one `pending` or `active` Grant per resource and destination. Ended rows stay:
 they are the history.
 
@@ -48,15 +50,29 @@ stays `active` and unused: its Sandbox runs no turn and takes no Thread (`spaceR
 `decideGrant` in [AccessPolicy](../../apps/server/src/auth/AccessPolicy.ts):
 
 - The lender's side (`give`, `cancel`, `revoke`, `setLimits`, `viewGiven`) is the resource's owner
-  only. The Owner has no bypass: they lend their own machines and nobody else's.
+  only: a User, or an Organization's Admins (`GrantResource.lender`). The Owner has no bypass: they
+  lend their own resources and nobody else's. An archived or frozen Organization gives nothing new
+  but its Admins still take back what it lent; a gone one lends nothing.
 - A destination must be one the lender can name without a directory of Spaces: an Organization
   they are in, or the Personal space of an active User they share a Space with; the Owner may name
-  any (they see every User anyway). Not their own Personal space (their machine already serves
-  them there), nothing archived or frozen.
+  any (they see every User anyway). Not the owner's own Space (what they own already serves them
+  there: a User's Personal space, an Organization itself), nothing archived or frozen.
 - The destination's side (`decide`, `return`) is an Organization's Admins or a Personal space's
   User. `return` works in an archived Space too. Active Grants are seen by whoever works there (not
   Guests); waiting ones only by whoever decides.
 - A Grant someone sees from neither side answers like a missing one.
+
+## AI accounts
+
+Only an `api-key` or `subscription` account is lent (`direct` → `not-lendable`: its credential
+would go to the agent and its use is not counted). `AllowedAiAccounts` reads, on every call, the
+Space owner's own accounts, then the accounts an `active` Grant lends to that Space (oldest
+decision first, then the lender's priority), each with `via` (`own`, or `grant` with its id, the
+lender's name and caps); own wins over lent. A Grant lends nothing while its lender is disabled or
+removed, while the lending Organization is archived, frozen or gone, or once the account changed
+owner. Ending a Grant thus refuses the gateway's next request: a Thread still naming the account is
+told «Switch AI account», as when any account stops being usable there (nothing is rewritten). The
+picker names a lent account «<name> · from <lender>». Accepting one needs no strong factor.
 
 ## Doors
 
@@ -71,7 +87,9 @@ stays `active` and unused: its Sandbox runs no turn and takes no Thread (`spaceR
 
 ## Clients
 
-Web, Settings → Environments: **Lend…** on the User's own personal machines
+Web, Settings → AI accounts: **Lend…** on each non-direct account the User manages
+(`LendAiAccountDialog`; a subscription shows the provider-terms warning). Settings → Environments:
+**Lend…** on the User's own personal machines
 (`LendMachineDialog`: the Space from `grants.targets`, the limits, what the machine said of itself
 and the lender's risks; the strong factor when the loan starts active) and the **Loans** section
 (`GrantsSettings`: waiting loans to accept with a strong factor or reject, borrowed machines to give

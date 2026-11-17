@@ -1,3 +1,4 @@
+import { aiAccountPickerLabel } from "@t3tools/client-runtime/ai-account-picker";
 import type { AiAccountId, AiAccountPickerAccount } from "@t3tools/contracts";
 import { memo } from "react";
 
@@ -31,7 +32,7 @@ export const ComposerAiAccountSelect = memo(function ComposerAiAccountSelect(pro
         <SelectPopup side="top" alignItemWithTrigger={false}>
           {props.accounts.map((account) => (
             <SelectItem key={account.id} value={account.id}>
-              {account.name}
+              {aiAccountPickerLabel(account)}
             </SelectItem>
           ))}
         </SelectPopup>

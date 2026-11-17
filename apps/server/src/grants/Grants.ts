@@ -1,8 +1,8 @@
 /**
  * Grants: an owner lends one resource to a Space with limits, the Space decides, and either side
  * ends it. One row per loan (`grants`, migration 135), kept as history. Each change is a row of
- * `TRANSITIONS`, decided by AccessPolicy `grant.*` and audited in its transaction. Only personal
- * machines are lent today. See docs/internals/grants.md.
+ * `TRANSITIONS`, decided by AccessPolicy `grant.*` and audited in its transaction. Personal
+ * machines and AI accounts (for the gateway) are lent today. See docs/internals/grants.md.
  */
 import {
   type Grant,
@@ -21,6 +21,8 @@ import {
   type GrantState,
   type GrantTargets,
   type GrantTargetsInput,
+  type AiAccountProvider,
+  type AiAccountType,
   EnvironmentId,
   SandboxHostReport,
   SpaceId,
@@ -115,6 +117,19 @@ interface GrantRow {
   /** An active machine Grant's Sandbox on the Hub, and what its host last said of it. */
   readonly lentEnvironmentId: string | null;
   readonly lentDiskJson: string | null;
+  /** A lent AI account's provider and type. */
+  readonly aiProvider: AiAccountProvider | null;
+  readonly aiType: AiAccountType | null;
+}
+
+/** What is lent, as read when lending it: its owner is the lender. */
+interface Lendable {
+  readonly kind: GrantResourceKind;
+  readonly resourceId: string;
+  readonly name: string;
+  readonly lenderKind: "user" | "organization";
+  readonly lenderId: string;
+  readonly lender: AccessPolicy.GrantLender;
 }
 
 const fail = (reason: GrantErrorReason, message: string) =>
@@ -136,8 +151,12 @@ const UNBOUNDED_HOST = {
   diskBytes: null,
 };
 
-const limitsProblem = (limits: GrantLimits) =>
-  invalidLimitsReason(
+/** Why these limits do not fit a loan of `kind`; undefined when they do. */
+const limitsProblem = (kind: GrantResourceKind, limits: GrantLimits) => {
+  if (limits.kind !== kind) return "These limits are for another kind of resource.";
+  // An AI account's caps are whole positive amounts by their schema; none is a choice too.
+  if (limits.kind !== "environment") return undefined;
+  return invalidLimitsReason(
     {
       cpus: limits.cpus,
       memoryBytes: limits.memoryBytes,
@@ -146,6 +165,7 @@ const limitsProblem = (limits: GrantLimits) =>
     },
     UNBOUNDED_HOST,
   );
+};
 
 const decodeHost = Schema.decodeUnknownOption(Schema.fromJsonString(SandboxHostReport));
 const decodeDisk = Schema.decodeUnknownOption(Schema.fromJsonString(LentSandboxDisk));
@@ -165,23 +185,43 @@ const machineOf = (row: GrantRow) => {
   };
 };
 
-const limitsDetail = (limits: GrantLimits) => ({
-  cpus: limits.cpus,
-  memoryBytes: limits.memoryBytes,
-  pids: limits.pids,
-  diskBytes: limits.diskBytes,
-});
+const limitsDetail = (limits: GrantLimits) =>
+  limits.kind === "environment"
+    ? {
+        cpus: limits.cpus,
+        memoryBytes: limits.memoryBytes,
+        pids: limits.pids,
+        diskBytes: limits.diskBytes,
+      }
+    : {
+        tokensAmount: limits.tokens?.amount ?? null,
+        tokensPeriod: limits.tokens?.period ?? null,
+        requestsAmount: limits.requests?.amount ?? null,
+        requestsPeriod: limits.requests?.period ?? null,
+      };
 
 const DENIED: Partial<Record<AccessPolicy.DenyReason, string>> = {
-  "not-yours": "Only the owner of this machine lends it.",
+  "not-yours": "Only the owner of what is lent lends it (an Organization's, its Admins).",
   "not-a-member": "You can lend only to Spaces you work in or to people you share a Space with.",
   "role-not-allowed": "Only an Admin of this Organization decides on its loans.",
   "not-your-personal-space": "Only the owner of this Personal space decides on its loans.",
   "space-archived": "This Space is archived.",
   "space-frozen": "This Space is frozen.",
   "user-inactive": "Your account is turned off.",
-  "wrong-resource": "A machine already serves its owner in their own Personal space.",
+  "wrong-resource": "What you own already serves you in your own Space.",
 };
+
+/**
+ * A stand-in destination for asking only whether someone is on a resource's lending side (the
+ * policy reads the destination only to give).
+ */
+const principalSpace = (who: { readonly userId: UserId }): AccessPolicy.SpaceResource => ({
+  id: SpaceId.make(`personal:${who.userId}`),
+  kind: "personal",
+  personalOwnerUserId: who.userId,
+  archived: false,
+  frozen: false,
+});
 
 const denied = (decision: AccessPolicy.Decision) =>
   decision._tag === "Deny"
@@ -236,7 +276,14 @@ const make = Effect.gen(function* () {
       g.decided_at AS "decidedAt", g.ended_at AS "endedAt",
       CASE g.resource_kind
         WHEN 'environment' THEN (SELECT name FROM environments WHERE environment_id = g.resource_id)
+        WHEN 'ai-account' THEN (SELECT name FROM ai_accounts WHERE account_id = g.resource_id)
         ELSE NULL END AS "resourceName",
+      CASE g.resource_kind
+        WHEN 'ai-account' THEN (SELECT provider FROM ai_accounts WHERE account_id = g.resource_id)
+        ELSE NULL END AS "aiProvider",
+      CASE g.resource_kind
+        WHEN 'ai-account' THEN (SELECT type FROM ai_accounts WHERE account_id = g.resource_id)
+        ELSE NULL END AS "aiType",
       CASE g.lender_kind
         WHEN 'user' THEN (SELECT display_name FROM users WHERE user_id = g.lender_id)
         ELSE (SELECT name FROM spaces WHERE space_id = g.lender_id) END AS "lenderName",
@@ -257,10 +304,24 @@ const make = Effect.gen(function* () {
       Effect.catch(storage("read the loan")),
     );
 
+  /** The Spaces these loans name: their destinations and their lending Organizations. */
   const targetsOf = Effect.fn("Grants.targetsOf")(function* (
-    rows: ReadonlyArray<{ readonly targetId: string | null }>,
+    rows: ReadonlyArray<{
+      readonly targetId: string | null;
+      readonly lenderKind?: "user" | "organization";
+      readonly lenderId?: string;
+    }>,
   ) {
-    const ids = [...new Set(rows.flatMap((row) => (row.targetId === null ? [] : [row.targetId])))];
+    const ids = [
+      ...new Set(
+        rows.flatMap((row) => [
+          ...(row.targetId === null ? [] : [row.targetId]),
+          ...(row.lenderKind === "organization" && row.lenderId !== undefined
+            ? [row.lenderId]
+            : []),
+        ]),
+      ),
+    ];
     return yield* spaces
       .spacesById(ids.map((id) => SpaceId.make(id)))
       .pipe(Effect.catch(storage("read the loans' Spaces")));
@@ -283,10 +344,21 @@ const make = Effect.gen(function* () {
     return new Map(owners.map((owner) => [owner.spaceId, owner.name]));
   });
 
-  const resourceOf = (row: GrantRow, target: AccessPolicy.SpaceResource) =>
+  type KnownSpaces = Effect.Success<ReturnType<typeof targetsOf>>;
+
+  /** The lender as the policy reads it; an Organization's Space from `known` (null: gone). */
+  const lenderOf = (
+    row: Pick<GrantRow, "lenderKind" | "lenderId">,
+    known: KnownSpaces,
+  ): AccessPolicy.GrantLender =>
+    row.lenderKind === "user"
+      ? { kind: "user", userId: row.lenderId as UserId }
+      : { kind: "organization", space: known.get(row.lenderId as SpaceId)?.resource ?? null };
+
+  const resourceOf = (row: GrantRow, target: AccessPolicy.SpaceResource, known: KnownSpaces) =>
     ({
       kind: "grant",
-      lenderUserId: row.lenderKind === "user" ? (row.lenderId as UserId) : null,
+      lender: lenderOf(row, known),
       target,
     }) satisfies AccessPolicy.GrantResource;
 
@@ -303,7 +375,7 @@ const make = Effect.gen(function* () {
     const can = (action: AccessPolicy.Action) =>
       target !== undefined &&
       AccessPolicy.isAllowed(
-        AccessPolicy.decide(who.principal, action, resourceOf(row, target.resource)),
+        AccessPolicy.decide(who.principal, action, resourceOf(row, target.resource, known)),
       );
     return {
       id: GrantId.make(row.grantId),
@@ -325,6 +397,9 @@ const make = Effect.gen(function* () {
       decidedAt: row.decidedAt,
       endedAt: row.endedAt,
       ...(row.resourceKind === "environment" ? { machine: machineOf(row) } : {}),
+      ...(row.aiProvider !== null && row.aiType !== null
+        ? { aiAccount: { provider: row.aiProvider, type: row.aiType } }
+        : {}),
       can: {
         cancel: mayTransition("cancel", row.state) && can("grant.cancel"),
         revoke: mayTransition("end", row.state) && can("grant.revoke"),
@@ -347,8 +422,9 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Whether the lender may name `spaceId`: an Organization they are in (any, for the Owner), or
-   * the Personal space of an active User they share a Space with (any, for the Owner).
+   * Whether the lender may name `spaceId`: an Organization they are in (any, for the Owner), their
+   * own Personal space (the policy refuses it for what they own themselves), or the Personal space
+   * of an active User they share a Space with (any, for the Owner).
    */
   const knownTargets = (who: Caller, spaceId?: SpaceId) => sql<{ readonly spaceId: string }>`
     SELECT s.space_id AS "spaceId" FROM spaces s
@@ -358,6 +434,7 @@ const make = Effect.gen(function* () {
         (s.kind = 'organization' AND (${who.principal.isOwner ? 1 : 0} = 1 OR EXISTS (
           SELECT 1 FROM space_memberships m
           WHERE m.space_id = s.space_id AND m.user_id = ${who.userId})))
+        OR (s.kind = 'personal' AND s.personal_owner_user_id = ${who.userId})
         OR (s.kind = 'personal' AND s.personal_owner_user_id <> ${who.userId}
           AND EXISTS (SELECT 1 FROM users u WHERE u.user_id = s.personal_owner_user_id
             AND u.removed_at IS NULL AND u.disabled_at IS NULL)
@@ -390,26 +467,83 @@ const make = Effect.gen(function* () {
         "Only a personal machine joined with `t3 join` can be lent; a Sandbox or a dedicated machine cannot.",
       );
     }
-    return { lenderUserId: row.ownerUserId as UserId, name: row.name };
+    return {
+      kind: "environment",
+      resourceId: environmentId,
+      name: row.name,
+      lenderKind: "user",
+      lenderId: row.ownerUserId,
+      lender: { kind: "user", userId: row.ownerUserId as UserId },
+    } satisfies Lendable;
   });
 
-  const checkGive = Effect.fn("Grants.checkGive")(function* (input: GrantGiveInput, who: Caller) {
-    const machine = yield* lendableEnvironment(input.resource.environmentId);
-    if (input.limits.kind !== "environment") {
-      return yield* fail("invalid-limits", "A machine's loan takes machine limits.");
-    }
-    const problem = limitsProblem(input.limits);
-    if (problem !== undefined) return yield* fail("invalid-limits", problem);
-    // A machine that said it cannot host a Sandbox is refused with why; one that never said
-    // (an older one) is lent, and the lists say it cannot host one yet.
-    const host = yield* registry
-      .sandboxHostOf(input.resource.environmentId)
-      .pipe(Effect.catch(storage("read the machine")));
-    if (Option.isSome(host) && !host.value.ready) {
+  /**
+   * The AI account to lend: a live one its owner signs in or keys for the gateway. A direct one is
+   * never lent: its credential goes to the agent and its use is not counted.
+   */
+  const lendableAiAccount = Effect.fn("Grants.lendableAiAccount")(function* (accountId: string) {
+    const [row] = yield* sql<{
+      readonly name: string;
+      readonly type: AiAccountType;
+      readonly ownerKind: "user" | "organization";
+      readonly ownerId: string;
+    }>`
+      SELECT name, type, owner_kind AS "ownerKind", owner_id AS "ownerId" FROM ai_accounts
+      WHERE account_id = ${accountId} AND deleted_at IS NULL
+    `.pipe(Effect.catch(storage("read the AI account")));
+    if (row === undefined) return yield* fail("not-found", "That AI account does not exist.");
+    if (row.type === "direct") {
       return yield* fail(
-        "host-not-ready",
-        `This machine cannot run a Sandbox for another Space now: ${host.value.reason ?? "it did not say why."}`,
+        "not-lendable",
+        "A direct AI account cannot be lent: its credential would leave the Hub. Lend an API key or a subscription.",
       );
+    }
+    const lender: AccessPolicy.GrantLender =
+      row.ownerKind === "user"
+        ? { kind: "user", userId: row.ownerId as UserId }
+        : {
+            kind: "organization",
+            space:
+              (yield* targetsOf([{ targetId: row.ownerId }])).get(row.ownerId as SpaceId)
+                ?.resource ?? null,
+          };
+    return {
+      kind: "ai-account",
+      resourceId: accountId,
+      name: row.name,
+      lenderKind: row.ownerKind,
+      lenderId: row.ownerId,
+      lender,
+    } satisfies Lendable;
+  });
+
+  const lendable = (resource: GrantGiveInput["resource"]) =>
+    resource.kind === "environment"
+      ? lendableEnvironment(resource.environmentId)
+      : lendableAiAccount(resource.aiAccountId);
+
+  const checkGive = Effect.fn("Grants.checkGive")(function* (input: GrantGiveInput, who: Caller) {
+    if (input.planId !== undefined) {
+      return yield* fail(
+        "plan-target-unavailable",
+        "Lending to a Plan is not available yet: lend to a Space.",
+      );
+    }
+    const item = yield* lendable(input.resource);
+    const problem = limitsProblem(item.kind, input.limits);
+    if (problem !== undefined) return yield* fail("invalid-limits", problem);
+    if (input.resource.kind === "environment") {
+      // A machine that said it cannot host a Sandbox is refused with why; one that never said
+      // (an older one) is lent, and the lists say it cannot host one yet.
+      const host = yield* registry
+        .sandboxHostOf(input.resource.environmentId)
+        .pipe(Effect.catch(storage("read the machine")));
+      if (Option.isSome(host) && !host.value.ready) {
+        return yield* fail(
+          "host-not-ready",
+          `This machine cannot run a Sandbox for another Space now: ${host.value.reason ?? "it did not say why."}`,
+        );
+      }
     }
     const known = yield* targetsOf([{ targetId: input.spaceId }]);
     const target = known.get(input.spaceId);
@@ -419,7 +553,7 @@ const make = Effect.gen(function* () {
     );
     const resource: AccessPolicy.GrantResource = {
       kind: "grant",
-      lenderUserId: machine.lenderUserId,
+      lender: item.lender,
       target: target.resource,
       targetKnown: named.length > 0,
     };
@@ -427,7 +561,7 @@ const make = Effect.gen(function* () {
     const startsActive = AccessPolicy.isAllowed(
       AccessPolicy.decide(who.principal, "grant.decide", resource),
     );
-    return { machine, target, startsActive };
+    return { item, target, startsActive };
   });
 
   const auditOf = (
@@ -465,7 +599,7 @@ const make = Effect.gen(function* () {
     const known = yield* targetsOf([row]);
     const target = known.get(row.targetId as SpaceId);
     if (target === undefined) return yield* fail("not-found", NOT_FOUND);
-    const resource = resourceOf(row, target.resource);
+    const resource = resourceOf(row, target.resource, known);
     const can = (action: AccessPolicy.Action) =>
       AccessPolicy.isAllowed(AccessPolicy.decide(who.principal, action, resource));
     if (
@@ -524,10 +658,28 @@ const make = Effect.gen(function* () {
 
   const listGiven = Effect.gen(function* () {
     const who = yield* caller;
-    const rows = yield* selectGrants(
-      sql`g.lender_kind = 'user' AND g.lender_id = ${who.userId}`,
-    ).pipe(Effect.catch(storage("read your loans")));
-    return yield* summaries(rows, who);
+    // Theirs, and their Organizations' when they run them (the policy decides each one).
+    const rows = yield* selectGrants(sql`
+      (g.lender_kind = 'user' AND g.lender_id = ${who.userId})
+      OR (g.lender_kind = 'organization' AND g.lender_id IN (
+        SELECT space_id FROM space_memberships WHERE user_id = ${who.userId} AND role = 'admin'
+      ))
+    `).pipe(Effect.catch(storage("read your loans")));
+    const known = yield* targetsOf(rows);
+    const seen = rows.filter((row) => {
+      const target = row.targetId === null ? undefined : known.get(row.targetId as SpaceId);
+      return (
+        target !== undefined &&
+        AccessPolicy.isAllowed(
+          AccessPolicy.decide(
+            who.principal,
+            "grant.viewGiven",
+            resourceOf(row, target.resource, known),
+          ),
+        )
+      );
+    });
+    return yield* summaries(seen, who);
   });
 
   const listReceived = Effect.fn("Grants.listReceived")(function* (input: GrantListReceivedInput) {
@@ -550,7 +702,7 @@ const make = Effect.gen(function* () {
         if (row === undefined || target === undefined) return false;
         const action = grant.state === "pending" ? "grant.decide" : "grant.viewReceived";
         return AccessPolicy.isAllowed(
-          AccessPolicy.decide(who.principal, action, resourceOf(row, target.resource)),
+          AccessPolicy.decide(who.principal, action, resourceOf(row, target.resource, known)),
         );
       }),
     };
@@ -558,16 +710,26 @@ const make = Effect.gen(function* () {
 
   const targets = Effect.fn("Grants.targets")(function* (input: GrantTargetsInput) {
     const who = yield* caller;
-    const machine = yield* lendableEnvironment(input.resource.environmentId);
-    if (machine.lenderUserId !== who.userId) {
-      return yield* fail("not-allowed", DENIED["not-yours"] ?? "");
-    }
+    const item = yield* lendable(input.resource);
     const ids = yield* knownTargets(who).pipe(Effect.catch(storage("read the Spaces")));
     const known = yield* targetsOf(ids.map((row) => ({ targetId: row.spaceId })));
     const owners = yield* personalOwnersOf(ids.map((row) => ({ targetId: row.spaceId })));
-    const host = yield* registry
-      .sandboxHostOf(input.resource.environmentId)
-      .pipe(Effect.catch(storage("read the machine")));
+    const lends = (target: AccessPolicy.SpaceResource) =>
+      AccessPolicy.decide(who.principal, "grant.viewGiven", {
+        kind: "grant",
+        lender: item.lender,
+        target,
+      });
+    // Only the lender's side asks which Spaces it may lend to.
+    if (item.lender === null || !AccessPolicy.isAllowed(lends(principalSpace(who)))) {
+      return yield* fail("not-allowed", DENIED["not-yours"] ?? "");
+    }
+    const host =
+      input.resource.kind === "environment"
+        ? yield* registry
+            .sandboxHostOf(input.resource.environmentId)
+            .pipe(Effect.catch(storage("read the machine")))
+        : Option.none<SandboxHostReport>();
     return {
       host: Option.getOrNull(host),
       targets: ids.flatMap((row) => {
@@ -575,7 +737,7 @@ const make = Effect.gen(function* () {
         if (target === undefined) return [];
         const resource: AccessPolicy.GrantResource = {
           kind: "grant",
-          lenderUserId: machine.lenderUserId,
+          lender: item.lender,
           target: target.resource,
           targetKnown: true,
         };
@@ -600,7 +762,7 @@ const make = Effect.gen(function* () {
   const prepareGive = Effect.fn("Grants.prepareGive")(function* (input: GrantGiveInput) {
     const who = yield* caller;
     const checked = yield* checkGive(input, who);
-    return { needsStrongFactor: checked.startsActive };
+    return { needsStrongFactor: checked.startsActive && checked.item.kind === "environment" };
   });
 
   const give = Effect.fn("Grants.give")(function* (input: GrantGiveInput, proof: FactorProof) {
@@ -610,8 +772,8 @@ const make = Effect.gen(function* () {
       "lend it",
       Effect.gen(function* () {
         // Checked again in the transaction: a membership or the machine may have changed.
-        const { machine, startsActive } = yield* checkGive(input, who);
-        if (startsActive && !proof.strongFactor) {
+        const { item, startsActive } = yield* checkGive(input, who);
+        if (startsActive && item.kind === "environment" && !proof.strongFactor) {
           return yield* fail(
             "strong-factor-required",
             "Lending a machine where you also accept it needs a passkey or authenticator code.",
@@ -622,24 +784,29 @@ const make = Effect.gen(function* () {
         const limitsJson = yield* encodeLimits(input.limits);
         const live = yield* sql<{ readonly n: number }>`
           SELECT COUNT(*) AS n FROM grants
-          WHERE resource_kind = 'environment' AND resource_id = ${input.resource.environmentId}
+          WHERE resource_kind = ${item.kind} AND resource_id = ${item.resourceId}
             AND target_kind = 'space' AND target_id = ${input.spaceId}
             AND state IN ('pending', 'active')
         `;
         if ((live[0]?.n ?? 0) > 0) {
-          return yield* fail("already-granted", "This machine is already lent to that Space.");
+          return yield* fail(
+            "already-granted",
+            item.kind === "environment"
+              ? "This machine is already lent to that Space."
+              : "This AI account is already lent to that Space.",
+          );
         }
         yield* sql`
           INSERT INTO grants (
             grant_id, resource_kind, resource_id, lender_kind, lender_id, target_kind, target_id,
             state, limits_json, created_at, created_by, decided_at, decided_by
           ) VALUES (
-            ${grantId}, 'environment', ${input.resource.environmentId}, 'user',
-            ${machine.lenderUserId}, 'space', ${input.spaceId}, ${state}, ${limitsJson}, ${at},
+            ${grantId}, ${item.kind}, ${item.resourceId}, ${item.lenderKind},
+            ${item.lenderId}, 'space', ${input.spaceId}, ${state}, ${limitsJson}, ${at},
             ${who.userId}, ${startsActive ? at : null}, ${startsActive ? who.userId : null}
           )
         `;
-        if (startsActive) {
+        if (startsActive && input.resource.kind === "environment") {
           yield* registry.openLentSandbox({
             grantId,
             hostEnvironmentId: input.resource.environmentId,
@@ -649,12 +816,12 @@ const make = Effect.gen(function* () {
         const record = auditOf(
           {
             grantId,
-            resourceKind: "environment",
-            resourceId: input.resource.environmentId,
-            lenderId: machine.lenderUserId,
+            resourceKind: item.kind,
+            resourceId: item.resourceId,
+            lenderId: item.lenderId,
             targetId: input.spaceId,
           },
-          machine.name,
+          item.name,
         );
         yield* audit.record({
           actor: AuditLog.userActor(who.userId),
@@ -816,7 +983,7 @@ const make = Effect.gen(function* () {
 
   const setLimits = Effect.fn("Grants.setLimits")(function* (input: GrantSetLimitsInput) {
     const who = yield* caller;
-    const problem = limitsProblem(input.limits);
+    const problem = limitsProblem(input.limits.kind, input.limits);
     if (problem !== undefined) return yield* fail("invalid-limits", problem);
     yield* inTransaction(
       "change the loan's limits",
@@ -824,9 +991,8 @@ const make = Effect.gen(function* () {
         const { row, resource } = yield* visibleRow(input.grantId, who);
         if (!mayTransition("setLimits", row.state)) return yield* illegal("setLimits", row.state);
         yield* denied(AccessPolicy.decide(who.principal, "grant.setLimits", resource));
-        if (input.limits.kind !== row.resourceKind) {
-          return yield* fail("invalid-limits", "These limits are for another kind of resource.");
-        }
+        const mismatch = limitsProblem(row.resourceKind, input.limits);
+        if (mismatch !== undefined) return yield* fail("invalid-limits", mismatch);
         const limitsJson = yield* encodeLimits(input.limits);
         yield* move(row.grantId, row.state, sql`limits_json = ${limitsJson}`);
         const record = auditOf(row, row.resourceName);

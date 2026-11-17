@@ -431,13 +431,190 @@ describe("Grants", () => {
       const changed = yield* h.grants
         .setLimits({ grantId, limits })
         .pipe(CommandActor.actAs(h.ana.id));
-      assert.equal(changed.limits.memoryBytes, 1024 ** 3);
+      assert.equal(changed.limits.kind === "environment" && changed.limits.memoryBytes, 1024 ** 3);
       // Acme's Admin (the Owner) decides on it but does not set its limits.
       const byAdmin = yield* h.grants
         .setLimits({ grantId, limits })
         .pipe(CommandActor.actAs(h.ownerId), Effect.flip);
       assert.equal(byAdmin.reason, "not-allowed");
       assert.deepEqual(yield* h.audited(grantId), ["grant.give", "grant.limits.change"]);
+    }),
+  );
+});
+
+// Grants ticket 01: an AI account lent for the gateway, by its owner (a User, or an
+// Organization's Admins), decided by the destination without a strong factor.
+const NO_CAP = { kind: "ai-account", tokens: null, requests: null } as const;
+
+const aiAccount = Effect.fn(function* (
+  h: Effect.Success<typeof hub>,
+  id: string,
+  owner: { readonly kind: "user" | "organization"; readonly id: string },
+  type: "api-key" | "subscription" | "direct" = "api-key",
+) {
+  yield* h.server.sql`
+    INSERT INTO ai_accounts (account_id, name, type, provider, priority, status, created_at,
+      updated_at, owner_kind, owner_id)
+    VALUES (${id}, ${`${id} account`}, ${type}, 'claude', 1, 'ready', ${at}, ${at},
+      ${owner.kind}, ${owner.id})
+  `;
+  return id;
+});
+
+const lendAi = (
+  h: Effect.Success<typeof hub>,
+  cookie: string,
+  aiAccountId: string,
+  spaceId: string,
+  limits: unknown = NO_CAP,
+) =>
+  h.server.request(GIVE, {
+    cookie,
+    body: { resource: { kind: "ai-account", aiAccountId }, spaceId, limits },
+  });
+
+describe("Grants of AI accounts", () => {
+  it.effect("a User lends their AI account to their Organization; an Admin accepts it", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const key = yield* aiAccount(h, "ana-key", { kind: "user", id: h.ana.id });
+      const given = yield* lendAi(h, h.ana.cookie, key, h.acmeId);
+      assert.equal(given.status, 200, JSON.stringify(given.body));
+      assert.equal(given.body.state, "pending");
+      const grantId = GrantId.make(given.body.id as string);
+
+      // Ana, a Member, does not see it waiting nor accept it; a Guest neither.
+      const anaSees = yield* h.grants.listReceived({}).pipe(CommandActor.actAs(h.ana.id));
+      assert.notInclude(
+        anaSees.grants.map((grant) => grant.id as string),
+        grantId,
+      );
+      assert.equal((yield* h.accept(h.ana.cookie, grantId)).status, 403);
+      const linusSees = yield* h.grants.listReceived({}).pipe(CommandActor.actAs(h.linus.id));
+      assert.deepEqual(linusSees.grants, []);
+
+      // Acme's Admin accepts it with no strong factor: it lends an AI account, not a machine.
+      const accepted = yield* h.accept(h.owner, grantId);
+      assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+      assert.equal(accepted.body.state, "active");
+      assert.deepEqual(accepted.body.aiAccount, { provider: "claude", type: "api-key" });
+      assert.equal((accepted.body.resource as { name: string }).name, "ana-key account");
+
+      // Now Ana, a Member, sees it received; and she sees it given.
+      const received = yield* h.grants.listReceived({}).pipe(CommandActor.actAs(h.ana.id));
+      assert.deepEqual(
+        received.grants.map((grant) => [grant.id, grant.state, grant.can.return]),
+        [[grantId, "active", false]],
+      );
+      const mine = yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ana.id));
+      assert.deepEqual(
+        mine.grants.map((grant) => [grant.id, grant.can.revoke]),
+        [[grantId, true]],
+      );
+
+      // The Admin gives it back; illegal changes after that are refused.
+      const returned = yield* h.grants.end({ grantId }).pipe(CommandActor.actAs(h.ownerId));
+      assert.deepEqual([returned.state, returned.endReason], ["ended", "returned"]);
+      for (const change of [
+        h.grants.accept({ grantId }, { strongFactor: false }),
+        h.grants.reject({ grantId }),
+        h.grants.end({ grantId }),
+      ]) {
+        const refused = yield* change.pipe(CommandActor.actAs(h.ownerId), Effect.flip);
+        assert.equal(refused.reason, "illegal-transition");
+      }
+      const cancelled = yield* h.grants
+        .cancel({ grantId })
+        .pipe(CommandActor.actAs(h.ana.id), Effect.flip);
+      assert.equal(cancelled.reason, "illegal-transition");
+      assert.deepEqual(yield* h.audited(grantId), ["grant.give", "grant.accept", "grant.end"]);
+    }),
+  );
+
+  it.effect("only its owner lends an AI account, never a direct one, never to a Plan", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const key = yield* aiAccount(h, "ana-key", { kind: "user", id: h.ana.id });
+      // Not the Owner, not an Admin of the Space it goes to, not to her own Personal space.
+      assert.equal((yield* lendAi(h, h.owner, key, `personal:${h.grecia.id}`)).status, 403);
+      assert.equal((yield* lendAi(h, h.adam.cookie, key, h.acmeId)).status, 403);
+      assert.equal((yield* lendAi(h, h.ana.cookie, key, `personal:${h.ana.id}`)).status, 403);
+      // Limits of another kind are refused.
+      const machineLimits = yield* lendAi(h, h.ana.cookie, key, h.acmeId, LIMITS);
+      assert.equal(machineLimits.status, 409);
+      // A direct account never leaves its owner.
+      const direct = yield* aiAccount(h, "ana-direct", { kind: "user", id: h.ana.id }, "direct");
+      const refusedDirect = yield* lendAi(h, h.ana.cookie, direct, h.acmeId);
+      assert.equal(refusedDirect.status, 409);
+      assert.include(refusedDirect.body.message as string, "direct");
+      // A Plan is not a destination yet.
+      const plan = yield* h.grants
+        .give(
+          {
+            resource: { kind: "ai-account", aiAccountId: key as never },
+            spaceId: h.acmeId,
+            limits: NO_CAP,
+            planId: "pro",
+          },
+          { strongFactor: false },
+        )
+        .pipe(CommandActor.actAs(h.ana.id), Effect.flip);
+      assert.equal(plan.reason, "plan-target-unavailable");
+      // Twice to the same Space while one waits: refused.
+      assert.equal((yield* lendAi(h, h.ana.cookie, key, h.acmeId)).status, 200);
+      assert.equal((yield* lendAi(h, h.ana.cookie, key, h.acmeId)).status, 409);
+      // Her targets: where she works and the Personal spaces of those she works with.
+      const targets = yield* h.grants
+        .targets({ resource: { kind: "ai-account", aiAccountId: key as never } })
+        .pipe(CommandActor.actAs(h.ana.id));
+      assert.notInclude(
+        targets.targets.map((target) => target.spaceId as string),
+        `personal:${h.ana.id}`,
+      );
+      assert.include(
+        targets.targets.map((target) => target.spaceId as string),
+        h.acmeId,
+      );
+      assert.isNull(targets.host);
+      // Someone else asking for her account's targets is refused.
+      const theirs = yield* h.grants
+        .targets({ resource: { kind: "ai-account", aiAccountId: key as never } })
+        .pipe(CommandActor.actAs(h.linus.id), Effect.flip);
+      assert.equal(theirs.reason, "not-allowed");
+    }),
+  );
+
+  it.effect("an Organization's AI account is lent by its Admins, never by its Members", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const acmes = yield* aiAccount(h, "acme-key", { kind: "organization", id: h.acmeId });
+      // Ana, a Member, may not; nor to Acme itself, which owns it.
+      assert.equal((yield* lendAi(h, h.ana.cookie, acmes, `personal:${h.ownerId}`)).status, 403);
+      assert.equal((yield* lendAi(h, h.owner, acmes, h.acmeId)).status, 403);
+      // Acme's Admin lends it to Ana's Personal space; she decides there.
+      const given = yield* lendAi(h, h.owner, acmes, `personal:${h.ana.id}`);
+      assert.equal(given.status, 200, JSON.stringify(given.body));
+      assert.equal(given.body.state, "pending");
+      assert.deepEqual(given.body.lender, { kind: "organization", id: h.acmeId, name: "Acme" });
+      const grantId = GrantId.make(given.body.id as string);
+      // An Admin of Acme sees it given; Ana as Acme's Member does not, only as its receiver.
+      const adminGiven = yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ownerId));
+      assert.include(
+        adminGiven.grants.map((grant) => grant.id as string),
+        grantId,
+      );
+      const anaGiven = yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ana.id));
+      assert.deepEqual(anaGiven.grants, []);
+      const accepted = yield* h.accept(h.ana.cookie, grantId);
+      assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+      assert.equal(accepted.body.state, "active");
+      // A Member of Acme does not take it back; its Admin does.
+      const byMember = yield* h.grants
+        .end({ grantId })
+        .pipe(CommandActor.actAs(h.linus.id), Effect.flip);
+      assert.equal(byMember.reason, "not-found");
+      const revoked = yield* h.grants.end({ grantId }).pipe(CommandActor.actAs(h.ownerId));
+      assert.deepEqual([revoked.state, revoked.endReason], ["ended", "revoked"]);
     }),
   );
 });

@@ -139,6 +139,13 @@ export function aiAccountFallbackName(provider: AiAccountProvider): string {
   return `${AI_PROVIDER_LABEL[provider]} account`;
 }
 
+/** An account as the picker lists it: its name, and «from <lender>» when a Grant lends it. */
+export function aiAccountPickerLabel(account: AiAccountPickerAccount): string {
+  return account.lentBy === undefined
+    ? account.name
+    : `${account.name} · from ${account.lentBy.name}`;
+}
+
 /** The models a gateway provider offers here: its allowed accounts' that `isModelListedFor` it. */
 function gatewayModelsOf(
   provider: ServerProvider,

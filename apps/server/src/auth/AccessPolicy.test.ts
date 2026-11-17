@@ -234,11 +234,18 @@ const allowedToArchivedAcme = vault(null, { allowedSpaces: [archivedOrganization
 // Grants: Grace's machine lent to Acme, or to Linus's Personal space.
 const toAcme: AccessPolicy.GrantResource = {
   kind: "grant",
-  lenderUserId: UserId.make("grace"),
+  lender: { kind: "user", userId: UserId.make("grace") },
   target: organization,
   targetKnown: true,
 };
 const toLinus: AccessPolicy.GrantResource = { ...toAcme, target: personalOf("linus") };
+// Grants ticket 01: Acme's AI account lent to Linus's Personal space (Ada runs Acme).
+const fromAcme: AccessPolicy.GrantResource = {
+  kind: "grant",
+  lender: { kind: "organization", space: organization },
+  target: personalOf("linus"),
+  targetKnown: true,
+};
 
 const allow = AccessPolicy.allow;
 const deny = AccessPolicy.deny;
@@ -2530,6 +2537,74 @@ const rows: ReadonlyArray<Row> = [
     "grant.viewReceived",
     toAcme,
     deny("not-a-member"),
+  ],
+  // Grants ticket 01: an Organization lends what it owns through its Admins.
+  ["an Admin lends their Organization's AI account", admin, "grant.give", fromAcme, allow],
+  ["an Admin revokes what their Organization lent", admin, "grant.revoke", fromAcme, allow],
+  ["an Admin sees what their Organization lent", admin, "grant.viewGiven", fromAcme, allow],
+  [
+    "a Member does not lend their Organization's AI account",
+    member,
+    "grant.give",
+    fromAcme,
+    deny("role-not-allowed"),
+  ],
+  [
+    "a Member does not see what their Organization lent",
+    member,
+    "grant.viewGiven",
+    fromAcme,
+    deny("role-not-allowed"),
+  ],
+  [
+    "an Admin of another Organization lends nothing of Acme's",
+    outsider,
+    "grant.give",
+    fromAcme,
+    deny("not-yours"),
+  ],
+  [
+    "the Owner does not lend an Organization's AI account they do not run",
+    owner,
+    "grant.give",
+    fromAcme,
+    deny("not-yours"),
+  ],
+  ["the Owner does not lend Grace's AI account", owner, "grant.give", toLinus, deny("not-yours")],
+  [
+    "an Organization does not lend to itself",
+    admin,
+    "grant.give",
+    { ...fromAcme, target: organization },
+    deny("wrong-resource"),
+  ],
+  [
+    "an archived Organization lends nothing new",
+    admin,
+    "grant.give",
+    { ...fromAcme, lender: { kind: "organization", space: archivedOrganization } },
+    deny("space-archived"),
+  ],
+  [
+    "an archived Organization's Admin still takes back its loans",
+    admin,
+    "grant.revoke",
+    { ...fromAcme, lender: { kind: "organization", space: archivedOrganization } },
+    allow,
+  ],
+  [
+    "a gone Organization's loans have no lender",
+    admin,
+    "grant.revoke",
+    { ...fromAcme, lender: { kind: "organization", space: null } },
+    deny("not-yours"),
+  ],
+  [
+    "a Member does not see the loans waiting for their Organization",
+    member,
+    "grant.decide",
+    toAcme,
+    deny("role-not-allowed"),
   ],
   [
     "Grant actions are decided on a Grant",

@@ -3,8 +3,8 @@ import type { Grant, GrantGiveInput, GrantId } from "@t3tools/contracts";
 import { request, type StepUp, toReauth } from "./userAccounts";
 
 /**
- * Lends a machine: a loan the lender also decides on starts active and needs the strong factor
- * (`stepUp`); any other waits for its Space and needs none.
+ * Lends a machine or an AI account: a machine's loan the lender also decides on starts active and
+ * needs the strong factor (`stepUp`); any other needs none.
  */
 export async function giveGrant(input: GrantGiveInput, stepUp: StepUp | undefined): Promise<Grant> {
   const reauth = stepUp === undefined ? undefined : await toReauth(stepUp);
@@ -18,9 +18,12 @@ export async function giveGrant(input: GrantGiveInput, stepUp: StepUp | undefine
   );
 }
 
-/** Accepts a loan of a machine to a Space the User decides for, with the strong factor. */
-export async function acceptGrant(grantId: GrantId, stepUp: StepUp): Promise<Grant> {
-  const reauth = await toReauth(stepUp);
+/**
+ * Accepts a loan to a Space the User decides for: a machine's with the strong factor, an AI
+ * account's without one (`stepUp` undefined).
+ */
+export async function acceptGrant(grantId: GrantId, stepUp: StepUp | undefined): Promise<Grant> {
+  const reauth = stepUp === undefined ? undefined : await toReauth(stepUp);
   return request(
     (client) =>
       client.grants.accept({

@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  aiAccountPickerLabel,
   applyAiAccountsToProviders,
   modelFamilyOf,
   nameThreadAiAccount,
@@ -187,6 +188,23 @@ describe("applyAiAccountsToProviders", () => {
     const off = { ...picker, applies: false };
     expect(applyAiAccountsToProviders([claude], off)).toEqual([claude]);
     expect(applyAiAccountsToProviders([claude], null)).toEqual([claude]);
+  });
+});
+
+describe("aiAccountPickerLabel", () => {
+  it("names a lent account with its lender (Grants 01)", () => {
+    const account = {
+      id: "acct-1" as AiAccountId,
+      name: "Ana Claude",
+      type: "api-key",
+      provider: "claude",
+      priority: 1,
+      models: null,
+    } as const;
+    expect(aiAccountPickerLabel(account)).toBe("Ana Claude");
+    expect(aiAccountPickerLabel({ ...account, lentBy: { grantId: "grant-1", name: "Ana" } })).toBe(
+      "Ana Claude · from Ana",
+    );
   });
 });
 

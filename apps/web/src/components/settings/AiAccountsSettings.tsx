@@ -41,6 +41,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { AiUsageTab } from "./AiUsageSettings";
+import { LendAiAccountDialog } from "./LendAiAccountDialog";
 import { LocalCliKeysSection } from "./LocalCliKeysSettings";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -1105,6 +1106,7 @@ function AccountSection(props: {
   const [pending, setPending] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [lending, setLending] = useState(false);
 
   /** Runs a change; whatever it answered, the list is read again (a key may be still live). */
   const act = async (work: () => Promise<string | null>) => {
@@ -1213,6 +1215,18 @@ function AccountSection(props: {
                 >
                   {account.disabled ? "Enable" : "Disable"}
                 </Button>
+                {/* Grants 01: lent for the gateway only; a direct one's credential never leaves. */}
+                {account.type === "direct" ? null : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={pending}
+                    aria-label={`Lend ${account.name}`}
+                    onClick={() => setLending(true)}
+                  >
+                    Lend…
+                  </Button>
+                )}
               </>
             )}
             {confirmDelete || removing ? (
@@ -1319,6 +1333,7 @@ function AccountSection(props: {
           )}
         </div>
       ) : null}
+      {lending ? <LendAiAccountDialog account={account} onClose={() => setLending(false)} /> : null}
     </SettingsSection>
   );
 }

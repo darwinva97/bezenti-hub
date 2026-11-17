@@ -291,7 +291,8 @@ export const AUDIT_DETAIL_KEYS = {
   "identity.issue": ["aud", "sub", "jti", "exp", "thread"],
   /**
    * The resource's kind, id and name, the lender, the destination Space and the limits (by field);
-   * `state` it started in. Never a token or a credential.
+   * `state` it started in; `via` `migration` for a loan an allowance became. Never a token or a
+   * credential.
    */
   "grant.give": [
     "resourceKind",
@@ -304,6 +305,11 @@ export const AUDIT_DETAIL_KEYS = {
     "memoryBytes",
     "pids",
     "diskBytes",
+    "tokensAmount",
+    "tokensPeriod",
+    "requestsAmount",
+    "requestsPeriod",
+    "via",
   ],
   "grant.accept": ["resourceKind", "resourceId", "resourceName", "lenderId", "targetSpaceId"],
   "grant.reject": ["resourceKind", "resourceId", "resourceName", "lenderId", "targetSpaceId"],
@@ -329,7 +335,18 @@ export const AUDIT_DETAIL_KEYS = {
     "side",
     "via",
   ],
-  "grant.limits.change": ["resourceKind", "resourceId", "cpus", "memoryBytes", "pids", "diskBytes"],
+  "grant.limits.change": [
+    "resourceKind",
+    "resourceId",
+    "cpus",
+    "memoryBytes",
+    "pids",
+    "diskBytes",
+    "tokensAmount",
+    "tokensPeriod",
+    "requestsAmount",
+    "requestsPeriod",
+  ],
 } as const satisfies Record<AuditAction, ReadonlyArray<string>>;
 
 export type AuditDetailOf<A extends AuditAction> = {

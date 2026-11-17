@@ -34,7 +34,7 @@ function Frame() {
 }
 
 function SectionPage() {
-  const { section } = useParams({ from: "/settings/user/$section" });
+  const { section } = useParams({ strict: false });
   return <p>Page {section}</p>;
 }
 

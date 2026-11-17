@@ -139,12 +139,14 @@ function legacyNavGroups(actsForInstallation: boolean): ReadonlyArray<SettingsNa
 }
 
 function modalNavGroups(
-  modal: "user" | "project",
+  modal: "user" | "space" | "project",
   visibility: ReturnType<typeof useSettingsVisibility>,
-  projectKey: string | undefined,
+  objectKey: { readonly projectKey: string | undefined; readonly spaceId: string | undefined },
 ): ReadonlyArray<SettingsNavGroup> {
-  // A Project's sections are its own: without one in the URL there is nothing to open.
+  const { projectKey, spaceId } = objectKey;
+  // A Project's or a Space's sections are its own: without one in the URL there is nothing to open.
   if (modal === "project" && projectKey === undefined) return [];
+  if (modal === "space" && spaceId === undefined) return [];
   const groups: SettingsNavEntry[][] = [];
   let previousGroup: number | null = null;
   for (const section of visibleSettingsSections(modal, visibility)) {
@@ -157,10 +159,15 @@ function modalNavGroups(
       target:
         modal === "user"
           ? userSectionTarget(section.id)
-          : {
-              to: "/settings/project/$projectKey/$section",
-              params: { projectKey: projectKey ?? "", section: section.id },
-            },
+          : modal === "space"
+            ? {
+                to: "/settings/space/$spaceId/$section",
+                params: { spaceId: spaceId ?? "", section: section.id },
+              }
+            : {
+                to: "/settings/project/$projectKey/$section",
+                params: { projectKey: projectKey ?? "", section: section.id },
+              },
       replace: true,
     });
   }
@@ -171,10 +178,16 @@ function modalNavGroups(
 }
 
 const MODAL_SECTION_ICONS: Readonly<
-  Record<"user" | "project", Readonly<Record<string, ComponentType<{ className?: string }>>>>
+  Record<
+    "user" | "space" | "project",
+    Readonly<Record<string, ComponentType<{ className?: string }>>>
+  >
 > = {
   user: Object.fromEntries(
     SETTINGS_MODAL_SECTIONS.user.map((section) => [section.id, section.icon]),
+  ),
+  space: Object.fromEntries(
+    SETTINGS_MODAL_SECTIONS.space.map((section) => [section.id, section.icon]),
   ),
   project: Object.fromEntries(
     SETTINGS_MODAL_SECTIONS.project.map((section) => [section.id, section.icon]),
@@ -182,8 +195,8 @@ const MODAL_SECTION_ICONS: Readonly<
 };
 
 /** The modals whose sections are built; the rest still show the old pages. */
-function navModalFor(modal: SettingsModalId | null): "user" | "project" | null {
-  return modal === "user" || modal === "project" ? modal : null;
+function navModalFor(modal: SettingsModalId | null): "user" | "space" | "project" | null {
+  return modal === "user" || modal === "space" || modal === "project" ? modal : null;
 }
 
 // Attached only to the highlighted result, so it runs whenever the highlight lands on a row.
@@ -207,19 +220,19 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const currentSearch = useLocation({ select: (location) => location.search });
   const scopeSearch = validateSettingsScopeSearch(currentSearch);
   const modal = navModalFor(settingsModalForPathname(pathname));
-  const { projectKey } = useParams({ strict: false });
+  const { projectKey, spaceId } = useParams({ strict: false });
   // A section's subpages keep it open: its key is the modal and the section segment of the path.
   const activePath =
     modal === null
       ? (SETTINGS_DETAIL_PAGE_PARENTS[pathname] ?? pathname)
-      : `${modal}/${pathname.split("/")[modal === "project" ? 4 : 3] ?? ""}`;
+      : `${modal}/${pathname.split("/")[modal === "user" ? 3 : 4] ?? ""}`;
   const visibility = useSettingsVisibility();
   // A Member of a Hub does not see the pages only its Owner changes.
   const actsForInstallation = usePrimaryActsForInstallation();
   const navGroups =
     modal === null
       ? legacyNavGroups(actsForInstallation)
-      : modalNavGroups(modal, visibility, projectKey);
+      : modalNavGroups(modal, visibility, { projectKey, spaceId });
   const navEntries = navGroups.flatMap((group) => group.entries);
   const sectionNavigation = useSettingsSectionNavigation(
     navEntries.find((entry) => activePath === entry.key || activePath.startsWith(`${entry.key}/`))
@@ -308,7 +321,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       scrollToSettingsTarget(targetId);
       return;
     }
-    const destination = settingsItemDestination(item, { projectKey });
+    const destination = settingsItemDestination(item, { projectKey, spaceId });
     if (destination === null) return;
     void navigate({
       ...destination,

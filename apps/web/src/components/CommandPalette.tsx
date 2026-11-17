@@ -68,6 +68,7 @@ import {
   MessageSquareIcon,
   PaletteIcon,
   RotateCcwIcon,
+  BuildingIcon,
   SettingsIcon,
   MonitorIcon,
   PinIcon,
@@ -138,7 +139,11 @@ import {
   useVisibleThreadShells,
   waitForProject,
 } from "../state/entities";
-import { useProjectsInCurrentSpace, useThreadsInCurrentSpace } from "../state/currentSpace";
+import {
+  useCurrentSpace,
+  useProjectsInCurrentSpace,
+  useThreadsInCurrentSpace,
+} from "../state/currentSpace";
 import { visibleLinkedThreads } from "@t3tools/client-runtime/state/threads";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -538,6 +543,10 @@ function OpenCommandPaletteDialog(props: {
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
   const { environmentLabelById, projectEnvironmentLocationById } = useEnvironmentLookups();
   const projectGroups = useSortedProjectGroups(environmentLabelById);
+  const currentSpaceId = useCurrentSpace((state) => state.currentSpaceId);
+  const currentSpaceName = useCurrentSpace(
+    (state) => state.view?.spaces.find((space) => space.id === state.currentSpaceId)?.name ?? null,
+  );
   const contextualProjectRef = resolveThreadActionProjectRef({
     activeDraftThread,
     activeThread: activeThread ?? undefined,
@@ -1623,6 +1632,32 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
+  if (currentSpaceId !== null) {
+    actionItems.push({
+      kind: "action",
+      value: "action:space-settings",
+      searchTerms: [
+        "space",
+        "settings",
+        "organization",
+        "members",
+        "invitations",
+        "invite",
+        "personal",
+      ],
+      title: "Space settings",
+      ...(currentSpaceName === null ? {} : { description: currentSpaceName }),
+      icon: <BuildingIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "settings.space",
+      run: async () => {
+        await navigate({
+          to: "/settings/space/$spaceId/$section",
+          params: { spaceId: currentSpaceId, section: "general" },
+        });
+      },
+    });
+  }
+
   // Every group, so an archived project's thread still opens its own settings.
   const currentProjectGroup =
     (contextualProjectRef
@@ -1689,6 +1724,7 @@ function OpenCommandPaletteDialog(props: {
     // A Project's setting needs a Project to open it for.
     const destination = settingsItemDestination(item, {
       projectKey: contextualProjectGroup?.projectKey,
+      spaceId: currentSpaceId ?? undefined,
     });
     if (destination === null) return [];
     return [

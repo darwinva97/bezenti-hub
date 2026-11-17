@@ -10,10 +10,12 @@ import { useEnvironmentScope } from "~/state/session";
 import { isWslSettingsRowVisible } from "./ConnectionsSettings.logic";
 import { isProviderSettingsEnvironmentAvailable } from "./ProviderSettingsPanel.logic";
 import type { SettingsScopeSearch } from "./settingsScope";
+import { findSettingsSection, isSettingsSectionVisible } from "./settingsModals";
 import {
   filterAvailableSettingsSearchItems,
   getThreadAutoSettlementSearchAvailability,
 } from "./settingsSearch";
+import { useSettingsVisibility } from "./useSettingsVisibility";
 
 export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch = {}) {
   const { environments } = useEnvironments();
@@ -50,8 +52,9 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
     isWslSettingsRowVisible({ state: desktopWsl.data, error: desktopWsl.error }) === true;
 
   const actsForInstallation = usePrimaryActsForInstallation();
+  const visibility = useSettingsVisibility();
 
-  return filterAvailableSettingsSearchItems({
+  const available = filterAvailableSettingsSearchItems({
     actsForInstallation,
     localEnvironmentDisabled,
     hasEnvironment,
@@ -60,5 +63,12 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
     canManageLocalBackend,
     isWslSettingsRowVisible: wslSettingsRowVisible,
     hasThreadAutoSettlement,
+  });
+  // A setting of a section this User does not see is not offered: Members for a Guest,
+  // Invitations for who cannot invite.
+  return available.filter((item) => {
+    if (item.modal === undefined) return true;
+    const section = findSettingsSection(item.modal, item.section);
+    return section === undefined || isSettingsSectionVisible(item.modal, section, visibility);
   });
 }

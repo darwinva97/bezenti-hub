@@ -1,3 +1,7 @@
+import {
+  isSettingsSectionAllowed,
+  type SpaceSettingsSubject,
+} from "@t3tools/client-runtime/settings/modal-visibility";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -219,5 +223,62 @@ describe("settings modal sections", () => {
       "snap-shot",
       "about",
     ]);
+  });
+});
+
+describe("Space settings sections", () => {
+  const ORGANIZATION_ADMIN: SpaceSettingsSubject = {
+    kind: "organization",
+    isOwn: false,
+    canInvite: true,
+  };
+  const ORGANIZATION_MEMBER: SpaceSettingsSubject = {
+    kind: "organization",
+    isOwn: false,
+    canInvite: false,
+  };
+  const OWN_PERSONAL: SpaceSettingsSubject = { kind: "personal", isOwn: true, canInvite: false };
+  const OTHERS_PERSONAL: SpaceSettingsSubject = {
+    kind: "personal",
+    isOwn: false,
+    canInvite: false,
+  };
+  const ids = (space: SpaceSettingsSubject | null, principal = MEMBER_IN_BROWSER) =>
+    visibleSettingsSections("space", { ...principal, space }).map((section) => section.id);
+
+  it("gives an Organization its Members, and its Invitations to who may invite", () => {
+    // The Owner and an Admin may invite; a Member and a Guest read the list and leave.
+    expect(ids(ORGANIZATION_ADMIN, OWNER_IN_BROWSER)).toEqual([
+      "general",
+      "members",
+      "invitations",
+    ]);
+    expect(ids(ORGANIZATION_ADMIN)).toEqual(["general", "members", "invitations"]);
+    expect(ids(ORGANIZATION_MEMBER)).toEqual(["general", "members"]);
+  });
+
+  it("gives a Personal space no Members or Invitations, to its User and to the Owner reading it", () => {
+    expect(ids(OWN_PERSONAL)).toEqual(["general"]);
+    expect(ids(OTHERS_PERSONAL, OWNER_IN_BROWSER)).toEqual(["general"]);
+  });
+
+  it("shows nothing before the Space is known", () => {
+    expect(ids(null)).toEqual([]);
+  });
+
+  it.each([
+    ["scheduled-tasks", ORGANIZATION_MEMBER, true],
+    ["archive", ORGANIZATION_MEMBER, true],
+    ["scheduled-tasks", OWN_PERSONAL, true],
+    ["archive", OWN_PERSONAL, true],
+    // The Owner reads only General and the resource sections of another User's Personal space.
+    ["scheduled-tasks", OTHERS_PERSONAL, false],
+    ["archive", OTHERS_PERSONAL, false],
+    ["vault", OTHERS_PERSONAL, true],
+    ["members", OWN_PERSONAL, false],
+    ["invitations", ORGANIZATION_MEMBER, false],
+    ["invitations", ORGANIZATION_ADMIN, true],
+  ] as const)("%s in %j is shown: %s", (sectionId, space, shown) => {
+    expect(isSettingsSectionAllowed("space", sectionId, MEMBER_IN_BROWSER, space)).toBe(shown);
   });
 });

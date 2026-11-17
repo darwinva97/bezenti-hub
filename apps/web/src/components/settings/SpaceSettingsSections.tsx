@@ -36,19 +36,14 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { readHubLinkOrigin } from "../../hubLinks";
 import { errorMessageOf as messageOf } from "../../lib/errorMessage";
 import { runPrimaryHttp } from "../../lib/runtime";
+import { loadSpaces, useCurrentSpace } from "../../state/currentSpace";
+import { useCloseAppModal } from "../sidebar/mainAppLocation";
 import { Button } from "../ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { SettingsPageContainer } from "./settingsLayout";
+import { useSettingsSpace } from "./useSettingsSpace";
 
 type Client = Effect.Success<typeof PrimaryEnvironmentHttpClient>;
 const withClient = <A, E>(use: (client: Client) => Effect.Effect<A, E>) =>
@@ -93,27 +88,155 @@ function OneTimeLink({ label, link, note }: { label: string; link: string; note:
   );
 }
 
+/** The Organization's Members, loaded when its section opens. */
+function useMemberList(spaceId: SpaceSummary["id"] | null) {
+  const [members, setMembers] = useState<MemberList | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads this Organization's Members from the server when its section opens
+  useEffect(() => {
+    if (spaceId === null) return;
+    let cancelled = false;
+    void withClient((client) => listMembers(client, spaceId)).then(
+      (list) => {
+        if (!cancelled) setMembers(list);
+      },
+      (cause: unknown) => {
+        if (!cancelled) setError(messageOf(cause, "Could not load the members."));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [spaceId]);
+  return { members, setMembers, error, setError };
+}
+
+/** Reloads the Spaces, as after the Organization was archived, restored, deleted or left. */
+function useReloadSpaces() {
+  const environmentId = useCurrentSpace((state) => state.environmentId);
+  return () => {
+    if (environmentId !== null) void loadSpaces(environmentId);
+  };
+}
+
+/** The Space is still loading, or this URL names one the viewer cannot open. */
+function SpaceUnavailable() {
+  return (
+    <SettingsPageContainer>
+      <p className="text-sm text-muted-foreground">Loading...</p>
+    </SettingsPageContainer>
+  );
+}
+
 /**
- * An Organization's Members, Roles and Invitations. What each viewer may change comes from the
+ * General: what the Space is and, for an Organization, the ways out of it. Only the Owner
+ * archives, restores and deletes; a Member leaves. What each viewer may change comes from the
  * server's answers; the server refuses the rest anyway.
  */
-export function OrganizationSettingsDialog({
-  space,
-  isOwner,
-  onChanged,
-  onClose,
-  onLeft,
-}: {
-  readonly space: SpaceSummary;
-  /** Only the Owner archives, restores and deletes an Organization. */
-  readonly isOwner: boolean;
-  /** After the Organization was archived, restored or deleted, so the Spaces reload. */
-  readonly onChanged: () => void;
-  readonly onClose: () => void;
-  /** After the viewer left the Organization. */
-  readonly onLeft: () => void;
-}) {
-  const [members, setMembers] = useState<MemberList | null>(null);
+export function SpaceGeneralSection() {
+  const space = useSettingsSpace();
+  if (space === null) return <SpaceUnavailable />;
+  return <SpaceGeneral space={space} />;
+}
+
+function SpaceGeneral({ space }: { readonly space: SpaceSummary }) {
+  const isOwner = useCurrentSpace((state) => state.view?.isOwner === true);
+  const closeAppModal = useCloseAppModal();
+  const reload = useReloadSpaces();
+  const isOrganization = space.kind === "organization";
+  const { members, error: loadError } = useMemberList(isOrganization ? space.id : null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const leave = async () => {
+    const confirmed = await confirmDestructive(
+      `Leave ${space.name}?\nWhat you created stays in the Organization. To come back you need a new invitation.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await withClient((client) => leaveOrganization(client, space.id));
+      // The Organization is gone from the viewer's Spaces: leave the modal, then reload them.
+      await closeAppModal();
+      reload();
+    } catch (cause) {
+      setError(messageOf(cause, "Could not leave the Organization."));
+    }
+    setBusy(false);
+  };
+
+  const notice = isOrganization
+    ? null
+    : space.isOwn
+      ? "The Owner can see everything in your Personal space."
+      : `Reading ${space.name}'s Personal space. New Threads can't start here.`;
+
+  return (
+    <SettingsPageContainer>
+      <div className="flex flex-col gap-6">
+        <section className="flex flex-col gap-1" aria-labelledby="space-general">
+          <h3 id="space-general" className="text-sm font-medium">
+            {space.name}
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            {isOrganization
+              ? `Organization${space.role === null ? "" : ` · You are ${SPACE_ROLE_LABELS[space.role]}`}`
+              : "Personal space"}
+          </p>
+          {notice !== null ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+        </section>
+
+        {isOrganization && isOwner ? (
+          <LifecycleSection
+            space={space}
+            onChanged={reload}
+            onDeleted={() => {
+              reload();
+              void closeAppModal();
+            }}
+          />
+        ) : null}
+
+        {members?.canLeave ? (
+          <section className="flex flex-col gap-2" aria-labelledby="space-leave">
+            <h3 id="space-leave" className="text-sm font-medium">
+              Leave
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              What you created stays in the Organization. To come back you need a new invitation.
+            </p>
+            <div>
+              <Button
+                type="button"
+                variant="destructive-outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => void leave()}
+              >
+                Leave organization
+              </Button>
+            </div>
+          </section>
+        ) : null}
+
+        {(error ?? loadError) ? (
+          <p className="text-destructive text-sm">{error ?? loadError}</p>
+        ) : null}
+      </div>
+    </SettingsPageContainer>
+  );
+}
+
+/** Members, their Roles and what the viewer may do to each. */
+export function SpaceMembersSection() {
+  const space = useSettingsSpace();
+  if (space === null || space.kind !== "organization") return <SpaceUnavailable />;
+  return <SpaceMembers space={space} />;
+}
+
+function SpaceMembers({ space }: { readonly space: SpaceSummary }) {
+  const { members, setMembers, error: loadError } = useMemberList(space.id);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [link, setLink] = useState<{ readonly name: string; readonly url: string } | null>(null);
@@ -130,22 +253,6 @@ export function OrganizationSettingsDialog({
     }
     setBusy(false);
   };
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads this Organization's Members from the server when the dialog opens
-  useEffect(() => {
-    let cancelled = false;
-    void withClient((client) => listMembers(client, space.id)).then(
-      (list) => {
-        if (!cancelled) setMembers(list);
-      },
-      (cause: unknown) => {
-        if (!cancelled) setError(messageOf(cause, "Could not load the members."));
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [space.id]);
 
   const reload = async () =>
     setMembers(await withClient((client) => listMembers(client, space.id)));
@@ -185,102 +292,63 @@ export function OrganizationSettingsDialog({
       setLink({ name: member.displayName, url: resetLink(linkOrigin(), issued.token) });
     }, "Could not create the reset link.");
 
-  const leave = async () => {
-    const confirmed = await confirmDestructive(
-      `Leave ${space.name}?\nWhat you created stays in the Organization. To come back you need a new invitation.`,
-    );
-    if (!confirmed) return;
-    await run(async () => {
-      await withClient((client) => leaveOrganization(client, space.id));
-      onLeft();
-    }, "Could not leave the Organization.");
-  };
-
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogPopup className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Organization settings</DialogTitle>
-          <DialogDescription>Members, Roles and Invitations of {space.name}.</DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          <div className="flex flex-col gap-6">
-            <section className="flex flex-col gap-2" aria-labelledby="organization-members">
-              <h3 id="organization-members" className="text-sm font-medium">
-                Members
-              </h3>
-              {members === null ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
-              ) : members.members.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Nobody has joined yet.</p>
-              ) : (
-                <ul className="flex flex-col gap-1" aria-label="Members">
-                  {members.members.map((member) => (
-                    <MemberRow
-                      key={member.userId}
-                      member={member}
-                      assignableRoles={members.assignableRoles}
-                      busy={busy}
-                      onChangeRole={(role) => void changeRole(member, role)}
-                      onRemove={() => void remove(member)}
-                      onResetLink={() => void issueResetLink(member)}
-                    />
-                  ))}
-                </ul>
-              )}
-              {link !== null ? (
-                <OneTimeLink
-                  label={`Reset link for ${link.name}`}
-                  link={link.url}
-                  note="Works once and expires in an hour. It lets them set a new password or passkey, ends their old ones and signs out their devices. Shown only now."
+    <SettingsPageContainer>
+      <div className="flex flex-col gap-6">
+        <section className="flex flex-col gap-2" aria-labelledby="organization-members">
+          <h3 id="organization-members" className="text-sm font-medium">
+            Members
+          </h3>
+          {members === null ? (
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          ) : members.members.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nobody has joined yet.</p>
+          ) : (
+            <ul className="flex flex-col gap-1" aria-label="Members">
+              {members.members.map((member) => (
+                <MemberRow
+                  key={member.userId}
+                  member={member}
+                  assignableRoles={members.assignableRoles}
+                  busy={busy}
+                  onChangeRole={(role) => void changeRole(member, role)}
+                  onRemove={() => void remove(member)}
+                  onResetLink={() => void issueResetLink(member)}
                 />
-              ) : null}
-              {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
-            </section>
-
-            {space.canInvite ? (
-              <InvitationsSection
-                space={space}
-                assignableRoles={members?.assignableRoles ?? ["member", "guest"]}
-              />
-            ) : null}
-
-            {isOwner ? (
-              <LifecycleSection
-                space={space}
-                onChanged={onChanged}
-                onDeleted={() => {
-                  onChanged();
-                  onClose();
-                }}
-              />
-            ) : null}
-
-            {error ? <p className="text-destructive text-sm">{error}</p> : null}
-          </div>
-        </DialogPanel>
-        <DialogFooter>
-          {members?.canLeave ? (
-            <Button
-              type="button"
-              variant="destructive-outline"
-              disabled={busy}
-              onClick={() => void leave()}
-            >
-              Leave organization
-            </Button>
+              ))}
+            </ul>
+          )}
+          {link !== null ? (
+            <OneTimeLink
+              label={`Reset link for ${link.name}`}
+              link={link.url}
+              note="Works once and expires in an hour. It lets them set a new password or passkey, ends their old ones and signs out their devices. Shown only now."
+            />
           ) : null}
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Close
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+          {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+        </section>
+        {(error ?? loadError) ? (
+          <p className="text-destructive text-sm">{error ?? loadError}</p>
+        ) : null}
+      </div>
+    </SettingsPageContainer>
+  );
+}
+
+/** Create a link, copy it, see and revoke the Invitations. Only who may invite sees it. */
+export function SpaceInvitationsSection() {
+  const space = useSettingsSpace();
+  const { members } = useMemberList(space?.kind === "organization" ? space.id : null);
+  if (space === null || space.kind !== "organization" || !space.canInvite) {
+    return <SpaceUnavailable />;
+  }
+  return (
+    <SettingsPageContainer>
+      <InvitationsSection
+        space={space}
+        assignableRoles={members?.assignableRoles ?? ["member", "guest"]}
+      />
+    </SettingsPageContainer>
   );
 }
 
@@ -524,7 +592,7 @@ function InvitationsSection({
     }
   };
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads this Organization's Invitations from the server when the dialog opens
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads this Organization's Invitations from the server when its section opens
   useEffect(() => {
     let cancelled = false;
     void fetchInvitations(space.id).then(

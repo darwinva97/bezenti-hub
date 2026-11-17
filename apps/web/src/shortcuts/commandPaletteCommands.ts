@@ -99,6 +99,12 @@ export function installCommandPaletteCommands(
         if (settingsModalForPathname(router.state.location.pathname) === "user") return;
         void router.navigate({ to: "/settings/user/$section", params: { section: "general" } });
       },
+      "settings.space": (event) => {
+        consume(event);
+        dispatchCommandPalette({ _tag: "SetOpen", open: false });
+        // The settings route opens the Space that is current.
+        void router.navigate({ to: "/settings/space" });
+      },
       "settings.project": (event) => {
         consume(event);
         dispatchCommandPalette({ _tag: "SetOpen", open: false });

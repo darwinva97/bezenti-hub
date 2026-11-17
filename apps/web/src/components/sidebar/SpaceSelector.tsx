@@ -39,7 +39,6 @@ import { Input } from "../ui/input";
 import { UsersDialog } from "./UsersDialog";
 import { AuditLogDialog } from "./AuditLogDialog";
 import { Label } from "../ui/label";
-import { OrganizationSettingsDialog } from "./OrganizationSettingsDialog";
 import {
   Menu,
   MenuGroup,
@@ -70,7 +69,6 @@ export function SpaceSelector() {
   const [creating, setCreating] = useState(false);
   const [managingUsers, setManagingUsers] = useState(false);
   const [readingAudit, setReadingAudit] = useState(false);
-  const [managing, setManaging] = useState(false);
   // A fresh shell snapshot follows a reconnect, as after the User's Memberships changed.
   const shellGeneration = useShellGeneration(environmentId);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the signed-in User's Spaces from the server, again after each fresh shell snapshot
@@ -198,18 +196,32 @@ export function SpaceSelector() {
                 </MenuItem>
               </>
             ) : null}
-            {current?.kind === "organization" ? (
+            {current !== undefined ? (
               <>
                 <MenuSeparator />
-                {current.canInvite ? (
-                  <MenuItem onClick={() => setManaging(true)}>
+                {current.kind === "organization" && current.canInvite ? (
+                  <MenuItem
+                    onClick={() =>
+                      void navigate({
+                        to: "/settings/space/$spaceId/$section",
+                        params: { spaceId: current.id, section: "invitations" },
+                      })
+                    }
+                  >
                     <UserPlusIcon />
                     Invite people
                   </MenuItem>
                 ) : null}
-                <MenuItem onClick={() => setManaging(true)}>
+                <MenuItem
+                  onClick={() =>
+                    void navigate({
+                      to: "/settings/space/$spaceId/$section",
+                      params: { spaceId: current.id, section: "general" },
+                    })
+                  }
+                >
                   <SettingsIcon />
-                  Organization settings
+                  Space settings
                 </MenuItem>
               </>
             ) : null}
@@ -237,18 +249,6 @@ export function SpaceSelector() {
           </MenuPopup>
         </Menu>
         {creating ? <CreateOrganizationDialog onClose={() => setCreating(false)} /> : null}
-        {managing && current?.kind === "organization" ? (
-          <OrganizationSettingsDialog
-            space={current}
-            isOwner={view.isOwner === true}
-            onChanged={reload}
-            onClose={() => setManaging(false)}
-            onLeft={() => {
-              setManaging(false);
-              reload();
-            }}
-          />
-        ) : null}
         {managingUsers ? <UsersDialog onClose={() => setManagingUsers(false)} /> : null}
         {readingAudit ? <AuditLogDialog onClose={() => setReadingAudit(false)} /> : null}
         {notice !== null ? (

@@ -14,9 +14,17 @@ import {
   ShieldCheckIcon,
   SparklesIcon,
   UserIcon,
+  UserPlusIcon,
+  UsersIcon,
   VaultIcon,
   createLucideIcon,
 } from "lucide-react";
+import {
+  isSettingsSectionAllowed,
+  type SettingsModalId,
+  type SettingsPrincipal,
+  type SpaceSettingsSubject,
+} from "@t3tools/client-runtime/settings/modal-visibility";
 import { lazy, type ComponentType } from "react";
 
 /**
@@ -25,16 +33,16 @@ import { lazy, type ComponentType } from "react";
  * component is reserved for a later ticket or spec: it owns a place in the URL space and the
  * order, and is never visible.
  */
-export type SettingsModalId = "user" | "space" | "project" | "platform";
+export type { SettingsModalId };
 
 export type ProjectSectionId = "general" | "vaults" | "machine" | "defaults" | "actions";
 
-export interface SettingsVisibilityContext {
-  /** The session acts for the whole Installation: the Owner's. */
-  readonly isOwner: boolean;
-  readonly isDesktop: boolean;
-  /** The session belongs to a User with an account; a pairing-link session has none. */
-  readonly hasUser: boolean;
+/**
+ * Who is looking at Settings and, in a Space's modal, the Space. The rules that read it are shared
+ * with the mobile app (`@t3tools/client-runtime/settings/modal-visibility`).
+ */
+export interface SettingsVisibilityContext extends SettingsPrincipal {
+  readonly space?: SpaceSettingsSubject | null;
 }
 
 export interface SettingsModalSection {
@@ -43,7 +51,6 @@ export interface SettingsModalSection {
   readonly icon: ComponentType<{ className?: string }>;
   /** `null` reserves the section: it is never visible. */
   readonly component: ComponentType | null;
-  readonly visible?: (context: SettingsVisibilityContext) => boolean;
   /** The settings are the whole Hub's: anyone reads them, and only the Owner changes them. */
   readonly hubWide?: boolean;
   /** Sections with the same group number sit together; a new number leaves a gap in the nav. */
@@ -109,6 +116,18 @@ const ProjectActionsSection = lazy(() =>
   import("./ProjectModalSections").then((module) => ({ default: module.ProjectActionsSection })),
 );
 
+const SpaceGeneralSection = lazy(() =>
+  import("./SpaceSettingsSections").then((module) => ({ default: module.SpaceGeneralSection })),
+);
+const SpaceMembersSection = lazy(() =>
+  import("./SpaceSettingsSections").then((module) => ({ default: module.SpaceMembersSection })),
+);
+const SpaceInvitationsSection = lazy(() =>
+  import("./SpaceSettingsSections").then((module) => ({
+    default: module.SpaceInvitationsSection,
+  })),
+);
+
 const reserved = (
   id: string,
   label: string,
@@ -125,7 +144,6 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       label: "Account",
       icon: UserIcon,
       component: AccountSection,
-      visible: ({ hasUser }) => hasUser,
       group: 0,
     },
     {
@@ -158,7 +176,6 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       label: "SnapShots",
       icon: SnapShotIcon,
       component: SnapShotSection,
-      visible: ({ isDesktop }) => isDesktop,
       group: 1,
     },
     reserved("vault", "Vault", VaultIcon, 2),
@@ -169,9 +186,21 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
     { id: "about", label: "About", icon: InfoIcon, component: AboutSection, group: 3 },
   ],
   space: [
-    reserved("general", "General", Settings2Icon, 0),
-    reserved("members", "Members", UserIcon, 0),
-    reserved("invitations", "Invitations", UserIcon, 0),
+    {
+      id: "general",
+      label: "General",
+      icon: Settings2Icon,
+      component: SpaceGeneralSection,
+      group: 0,
+    },
+    { id: "members", label: "Members", icon: UsersIcon, component: SpaceMembersSection, group: 0 },
+    {
+      id: "invitations",
+      label: "Invitations",
+      icon: UserPlusIcon,
+      component: SpaceInvitationsSection,
+      group: 0,
+    },
     reserved("vault", "Vault", VaultIcon, 1),
     reserved("ai-accounts", "AI accounts", BotIcon, 1),
     reserved("machines", "Machines", ServerIcon, 1),
@@ -235,8 +264,7 @@ export function isSettingsSectionVisible(
   context: SettingsVisibilityContext,
 ): boolean {
   if (section.component === null) return false;
-  if (modal === "platform" && !context.isOwner) return false;
-  return section.visible?.(context) ?? true;
+  return isSettingsSectionAllowed(modal, section.id, context, context.space ?? null);
 }
 
 export function visibleSettingsSections(

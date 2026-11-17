@@ -6,6 +6,7 @@ import {
   WorkspaceBreadcrumbSeparator,
 } from "../WorkspaceBreadcrumb";
 import { useOptionalSettingsScope } from "./SettingsScopeContext";
+import { useSettingsSpace } from "./useSettingsSpace";
 import { SETTINGS_SECTION_LABELS } from "./settingsSearch";
 import {
   SETTINGS_MODAL_LABELS,
@@ -28,8 +29,9 @@ function settingsBreadcrumbTrail(
   if (modal !== null) {
     // The path is /settings/<modal>/<section>, with the modal's object before the section.
     const segments = normalizedPathname.split("/");
-    const sectionId = segments[modal === "project" ? 4 : 3];
-    const subpage = segments[modal === "project" ? 5 : 4];
+    const objectFirst = modal === "project" || modal === "space";
+    const sectionId = segments[objectFirst ? 4 : 3];
+    const subpage = segments[objectFirst ? 5 : 4];
     const section = sectionId === undefined ? undefined : findSettingsSection(modal, sectionId);
     return [
       `${SETTINGS_MODAL_LABELS[modal]} settings${objectName ? ` · ${objectName}` : ""}`,
@@ -43,14 +45,16 @@ function settingsBreadcrumbTrail(
 
 export function SettingsBreadcrumb({ pathname }: { pathname: string }) {
   const scope = useOptionalSettingsScope();
-  // Only a Project's modal names its object, and it reads it from the scope.
+  // A Project's modal names its Project, read from the scope; a Space's names its Space.
   const objectName =
     scope !== null && (scope.scope.kind === "project" || scope.scope.kind === "checkout")
       ? scope.scope.group.displayName
       : null;
+  const spaceName = useSettingsSpace()?.name ?? null;
+  const modal = settingsModalForPathname(pathname);
   const trail = settingsBreadcrumbTrail(
     pathname,
-    settingsModalForPathname(pathname) === "project" ? objectName : null,
+    modal === "project" ? objectName : modal === "space" ? spaceName : null,
   );
   const current = trail.at(-1) ?? "Settings";
 

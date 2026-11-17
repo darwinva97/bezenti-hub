@@ -554,6 +554,10 @@
     "./spaces/invitations": {
       "types": "./src/spaces/invitations.ts",
       "default": "./src/spaces/invitations.ts"
+    },
+    "./settings/modal-visibility": {
+      "types": "./src/settings/settingsModalVisibility.ts",
+      "default": "./src/settings/settingsModalVisibility.ts"
     }
   },
   "scripts": {

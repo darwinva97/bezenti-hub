@@ -53,7 +53,7 @@ export type SettingsSearchScope =
 export type SettingsSearchLocation =
   | { readonly to: SettingsPath; readonly modal?: undefined; readonly section?: undefined }
   | {
-      readonly modal: "user" | "project";
+      readonly modal: "user" | "space" | "project";
       readonly section: string;
       readonly to?: undefined;
     };
@@ -290,6 +290,27 @@ export const SETTINGS_SEARCH_ITEMS = [
     modal: "project",
     section: "general",
     searchTerms: ["name icon emoji image checkout remove delete"],
+  },
+  {
+    id: "space-members",
+    title: "Members",
+    modal: "space",
+    section: "members",
+    searchTerms: ["people team roles admin guest remove reset link organization"],
+  },
+  {
+    id: "space-invitations",
+    title: "Invitations",
+    modal: "space",
+    section: "invitations",
+    searchTerms: ["invite people link join organization revoke"],
+  },
+  {
+    id: "space-lifecycle",
+    title: "Archive, restore or delete organization",
+    modal: "space",
+    section: "general",
+    searchTerms: ["leave space lifecycle remove"],
   },
   {
     id: "default-model",
@@ -1266,6 +1287,8 @@ const SPLIT_LEGACY_PATHS: ReadonlySet<string> = new Set([
 export function settingsItemPath(item: SettingsSearchLocation): string {
   // A Project's own settings need its key; without one the old page finds the Project of the context.
   if (item.modal === "project") return "/settings/projects";
+  // A Space's own settings need its id; without one they are the current Space's.
+  if (item.modal === "space") return "/settings/space";
   return item.modal === undefined ? item.to : `/settings/${item.modal}/${item.section}`;
 }
 
@@ -1273,21 +1296,33 @@ export type SettingsDestination =
   | { readonly to: SettingsPath }
   | { readonly to: "/settings/user/$section"; readonly params: { readonly section: string } }
   | {
+      readonly to: "/settings/space/$spaceId/$section";
+      readonly params: { readonly spaceId: string; readonly section: string };
+    }
+  | {
       readonly to: "/settings/project/$projectKey/$section";
       readonly params: { readonly projectKey: string; readonly section: string };
     };
 
 /**
  * The router destination of the page or modal section a setting lives on. A Project's setting
- * goes to the Project of the context; with none, it has no destination.
+ * goes to the Project of the context and a Space's to the current Space; with none, it has no
+ * destination.
  */
 export function settingsItemDestination(
   item: SettingsSearchLocation,
-  { projectKey }: { readonly projectKey?: string | undefined } = {},
+  {
+    projectKey,
+    spaceId,
+  }: { readonly projectKey?: string | undefined; readonly spaceId?: string | undefined } = {},
 ): SettingsDestination | null {
   if (item.modal === undefined) return { to: item.to };
   if (item.modal === "user")
     return { to: "/settings/user/$section", params: { section: item.section } };
+  if (item.modal === "space") {
+    if (spaceId === undefined) return null;
+    return { to: "/settings/space/$spaceId/$section", params: { spaceId, section: item.section } };
+  }
   if (projectKey === undefined) return null;
   return {
     to: "/settings/project/$projectKey/$section",

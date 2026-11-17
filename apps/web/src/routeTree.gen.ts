@@ -59,9 +59,12 @@ import { Route as ChatSettingsAboutRouteImport } from './routes/_chat.settings.a
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 import { Route as ChatSettingsUserIndexRouteImport } from './routes/_chat.settings.user.index'
+import { Route as ChatSettingsSpaceIndexRouteImport } from './routes/_chat.settings.space.index'
 import { Route as ChatSettingsUserSectionRouteImport } from './routes/_chat.settings.user.$section'
+import { Route as ChatSettingsSpaceSpaceIdIndexRouteImport } from './routes/_chat.settings.space.$spaceId.index'
 import { Route as ChatSettingsProjectProjectKeyIndexRouteImport } from './routes/_chat.settings.project.$projectKey.index'
 import { Route as ChatSettingsUserAboutLicensesRouteImport } from './routes/_chat.settings.user.about.licenses'
+import { Route as ChatSettingsSpaceSpaceIdSectionRouteImport } from './routes/_chat.settings.space.$spaceId.$section'
 import { Route as ChatSettingsProjectProjectKeySectionRouteImport } from './routes/_chat.settings.project.$projectKey.$section'
 
 const WelcomeRoute = WelcomeRouteImport.update({
@@ -319,11 +322,22 @@ const ChatSettingsUserIndexRoute = ChatSettingsUserIndexRouteImport.update({
   path: '/user/',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
+const ChatSettingsSpaceIndexRoute = ChatSettingsSpaceIndexRouteImport.update({
+  id: '/space/',
+  path: '/space/',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
 const ChatSettingsUserSectionRoute = ChatSettingsUserSectionRouteImport.update({
   id: '/user/$section',
   path: '/user/$section',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
+const ChatSettingsSpaceSpaceIdIndexRoute =
+  ChatSettingsSpaceSpaceIdIndexRouteImport.update({
+    id: '/space/$spaceId/',
+    path: '/space/$spaceId/',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
 const ChatSettingsProjectProjectKeyIndexRoute =
   ChatSettingsProjectProjectKeyIndexRouteImport.update({
     id: '/project/$projectKey/',
@@ -334,6 +348,12 @@ const ChatSettingsUserAboutLicensesRoute =
   ChatSettingsUserAboutLicensesRouteImport.update({
     id: '/user/about/licenses',
     path: '/user/about/licenses',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
+const ChatSettingsSpaceSpaceIdSectionRoute =
+  ChatSettingsSpaceSpaceIdSectionRouteImport.update({
+    id: '/space/$spaceId/$section',
+    path: '/space/$spaceId/$section',
     getParentRoute: () => ChatSettingsRoute,
   } as any)
 const ChatSettingsProjectProjectKeySectionRoute =
@@ -393,10 +413,13 @@ export interface FileRoutesByFullPath {
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
   '/settings/user/$section': typeof ChatSettingsUserSectionRoute
+  '/settings/space/': typeof ChatSettingsSpaceIndexRoute
   '/settings/user/': typeof ChatSettingsUserIndexRoute
   '/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
+  '/settings/space/$spaceId/$section': typeof ChatSettingsSpaceSpaceIdSectionRoute
   '/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
   '/settings/project/$projectKey/': typeof ChatSettingsProjectProjectKeyIndexRoute
+  '/settings/space/$spaceId/': typeof ChatSettingsSpaceSpaceIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/app-sign-in': typeof AppSignInRoute
@@ -448,10 +471,13 @@ export interface FileRoutesByTo {
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
   '/settings/user/$section': typeof ChatSettingsUserSectionRoute
+  '/settings/space': typeof ChatSettingsSpaceIndexRoute
   '/settings/user': typeof ChatSettingsUserIndexRoute
   '/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
+  '/settings/space/$spaceId/$section': typeof ChatSettingsSpaceSpaceIdSectionRoute
   '/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
   '/settings/project/$projectKey': typeof ChatSettingsProjectProjectKeyIndexRoute
+  '/settings/space/$spaceId': typeof ChatSettingsSpaceSpaceIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -505,10 +531,13 @@ export interface FileRoutesById {
   '/_chat/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
   '/_chat/settings/user/$section': typeof ChatSettingsUserSectionRoute
+  '/_chat/settings/space/': typeof ChatSettingsSpaceIndexRoute
   '/_chat/settings/user/': typeof ChatSettingsUserIndexRoute
   '/_chat/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
+  '/_chat/settings/space/$spaceId/$section': typeof ChatSettingsSpaceSpaceIdSectionRoute
   '/_chat/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
   '/_chat/settings/project/$projectKey/': typeof ChatSettingsProjectProjectKeyIndexRoute
+  '/_chat/settings/space/$spaceId/': typeof ChatSettingsSpaceSpaceIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -562,10 +591,13 @@ export interface FileRouteTypes {
     | '/settings/worktrees'
     | '/threads/$environmentId/$threadId'
     | '/settings/user/$section'
+    | '/settings/space/'
     | '/settings/user/'
     | '/settings/project/$projectKey/$section'
+    | '/settings/space/$spaceId/$section'
     | '/settings/user/about/licenses'
     | '/settings/project/$projectKey/'
+    | '/settings/space/$spaceId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/app-sign-in'
@@ -617,10 +649,13 @@ export interface FileRouteTypes {
     | '/settings/worktrees'
     | '/threads/$environmentId/$threadId'
     | '/settings/user/$section'
+    | '/settings/space'
     | '/settings/user'
     | '/settings/project/$projectKey/$section'
+    | '/settings/space/$spaceId/$section'
     | '/settings/user/about/licenses'
     | '/settings/project/$projectKey'
+    | '/settings/space/$spaceId'
   id:
     | '__root__'
     | '/_chat'
@@ -673,10 +708,13 @@ export interface FileRouteTypes {
     | '/_chat/settings/worktrees'
     | '/threads/$environmentId/$threadId'
     | '/_chat/settings/user/$section'
+    | '/_chat/settings/space/'
     | '/_chat/settings/user/'
     | '/_chat/settings/project/$projectKey/$section'
+    | '/_chat/settings/space/$spaceId/$section'
     | '/_chat/settings/user/about/licenses'
     | '/_chat/settings/project/$projectKey/'
+    | '/_chat/settings/space/$spaceId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -1046,11 +1084,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsUserIndexRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/space/': {
+      id: '/_chat/settings/space/'
+      path: '/space'
+      fullPath: '/settings/space/'
+      preLoaderRoute: typeof ChatSettingsSpaceIndexRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
     '/_chat/settings/user/$section': {
       id: '/_chat/settings/user/$section'
       path: '/user/$section'
       fullPath: '/settings/user/$section'
       preLoaderRoute: typeof ChatSettingsUserSectionRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/space/$spaceId/': {
+      id: '/_chat/settings/space/$spaceId/'
+      path: '/space/$spaceId'
+      fullPath: '/settings/space/$spaceId/'
+      preLoaderRoute: typeof ChatSettingsSpaceSpaceIdIndexRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
     '/_chat/settings/project/$projectKey/': {
@@ -1065,6 +1117,13 @@ declare module '@tanstack/react-router' {
       path: '/user/about/licenses'
       fullPath: '/settings/user/about/licenses'
       preLoaderRoute: typeof ChatSettingsUserAboutLicensesRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/space/$spaceId/$section': {
+      id: '/_chat/settings/space/$spaceId/$section'
+      path: '/space/$spaceId/$section'
+      fullPath: '/settings/space/$spaceId/$section'
+      preLoaderRoute: typeof ChatSettingsSpaceSpaceIdSectionRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
     '/_chat/settings/project/$projectKey/$section': {
@@ -1108,10 +1167,13 @@ interface ChatSettingsRouteChildren {
   ChatSettingsVaultsRoute: typeof ChatSettingsVaultsRoute
   ChatSettingsWorktreesRoute: typeof ChatSettingsWorktreesRoute
   ChatSettingsUserSectionRoute: typeof ChatSettingsUserSectionRoute
+  ChatSettingsSpaceIndexRoute: typeof ChatSettingsSpaceIndexRoute
   ChatSettingsUserIndexRoute: typeof ChatSettingsUserIndexRoute
   ChatSettingsProjectProjectKeySectionRoute: typeof ChatSettingsProjectProjectKeySectionRoute
+  ChatSettingsSpaceSpaceIdSectionRoute: typeof ChatSettingsSpaceSpaceIdSectionRoute
   ChatSettingsUserAboutLicensesRoute: typeof ChatSettingsUserAboutLicensesRoute
   ChatSettingsProjectProjectKeyIndexRoute: typeof ChatSettingsProjectProjectKeyIndexRoute
+  ChatSettingsSpaceSpaceIdIndexRoute: typeof ChatSettingsSpaceSpaceIdIndexRoute
 }
 
 const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
@@ -1145,12 +1207,15 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsVaultsRoute: ChatSettingsVaultsRoute,
   ChatSettingsWorktreesRoute: ChatSettingsWorktreesRoute,
   ChatSettingsUserSectionRoute: ChatSettingsUserSectionRoute,
+  ChatSettingsSpaceIndexRoute: ChatSettingsSpaceIndexRoute,
   ChatSettingsUserIndexRoute: ChatSettingsUserIndexRoute,
   ChatSettingsProjectProjectKeySectionRoute:
     ChatSettingsProjectProjectKeySectionRoute,
+  ChatSettingsSpaceSpaceIdSectionRoute: ChatSettingsSpaceSpaceIdSectionRoute,
   ChatSettingsUserAboutLicensesRoute: ChatSettingsUserAboutLicensesRoute,
   ChatSettingsProjectProjectKeyIndexRoute:
     ChatSettingsProjectProjectKeyIndexRoute,
+  ChatSettingsSpaceSpaceIdIndexRoute: ChatSettingsSpaceSpaceIdIndexRoute,
 }
 
 const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(

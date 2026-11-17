@@ -53,6 +53,11 @@ export function selectSpace(environmentId: EnvironmentId, spaceId: SpaceId) {
   spaceSelections.select(environmentId, spaceId);
 }
 
+/** The Hub's Space selection as of now, for effects that must not re-run on a pick. */
+export function readSpaceSelection(environmentId: EnvironmentId): SpaceSelection | undefined {
+  return spaceSelections.snapshot().get(environmentId);
+}
+
 export function forgetSpaces(environmentId: EnvironmentId) {
   loading.delete(environmentId);
   spaceSelections.clear(environmentId);

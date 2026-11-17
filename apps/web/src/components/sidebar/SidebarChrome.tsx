@@ -229,8 +229,8 @@ export function SidebarUserSettingsItem({ onClick }: { onClick: () => void }) {
   return (
     <SidebarMenuItem className="min-w-0 flex-1">
       <SidebarMenuButton
-        aria-label={name ? `Settings — ${name}` : "Settings"}
-        className={name ? "h-auto py-1" : undefined}
+        aria-label={name ? `Settings (${name})` : "Settings"}
+        size={name ? "lg" : undefined}
         onClick={onClick}
       >
         <SettingsIcon />

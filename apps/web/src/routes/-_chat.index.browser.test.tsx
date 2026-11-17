@@ -45,7 +45,6 @@ async function startedIn(currentSpaceId: SpaceId | null, loaded = true) {
   vi.mocked(readProject).mockReturnValue({} as never);
   vi.mocked(useNewThreadHandler).mockReturnValue(start as never);
   await using _screen = await render(<IndexDraftLanding />);
-  await new Promise((resolve) => setTimeout(resolve, 50));
   return start.mock.calls.map((call) => call[0].projectId);
 }
 

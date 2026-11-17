@@ -35,6 +35,8 @@ const threadRef = (id: string): ScopedThreadRef => ({
 });
 
 function Probe(props: { readonly threadRef: ScopedThreadRef | null }) {
+  // Renders again on a pick, which calls the mocked `useProject` once more.
+  useCurrentSpace((state) => state.currentSpaceId);
   useFollowOpenSpace({ threadRef: props.threadRef, draft: null });
   return null;
 }
@@ -61,8 +63,9 @@ describe("useFollowOpenSpace", () => {
   it("keeps an explicit pick while a Thread of another Space stays open", async () => {
     setup(acme, acme);
     await using _screen = await render(<Probe threadRef={threadRef("t-acme")} />);
+    const before = vi.mocked(useProject).mock.calls.length;
     selectSpace(personal);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await vi.waitFor(() => expect(vi.mocked(useProject).mock.calls.length).toBeGreaterThan(before));
     expect(useCurrentSpace.getState().currentSpaceId).toBe(personal);
   });
 });

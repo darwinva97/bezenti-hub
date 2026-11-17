@@ -37,6 +37,7 @@ export function useFollowOpenSpace(input: {
   const viewLoaded = view !== null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the current Space follows what the route opened, a store outside React
   useEffect(() => {
+    if (!viewLoaded) return;
     const state = useCurrentSpace.getState();
     const next = spaceToFollow({
       view: state.view,

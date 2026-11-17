@@ -12,7 +12,7 @@ import { useEffect, useMemo } from "react";
 import type { SpaceSelection } from "@t3tools/client-runtime/spaces/space-selection";
 import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { useProject, useProjects, useQuietThreadShell } from "./entities";
-import { selectSpace, useSpaceSelections } from "./spaces";
+import { readSpaceSelection, selectSpace, useSpaceSelections } from "./spaces";
 
 // Ticket 19: lists, search, Settled and the Project pickers show each Hub's current Space only.
 // Mobile talks to several Hubs at once, each with its own current Space; Hubs without Spaces
@@ -119,18 +119,20 @@ export function useFollowOpenSpace(input: {
   const legacySpaceId = legacySpaceIdOf(view);
   // Thread shells carry no Space of their own here: a Thread is in its Project's.
   const openSpaceId = project === null ? null : (project.spaceId ?? legacySpaceId);
-  const next = spaceToFollow({
-    view,
-    currentSpaceId: selection?.currentSpaceId ?? null,
-    openSpaceId,
-  });
   // Runs when what the route opens changes, not when the current Space does: an explicit pick in
   // the Space selector wins over a Thread that stays open. `viewLoaded` lets a late load follow once.
   const viewLoaded = view !== null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the Hub's current Space follows what the route opened, a store outside React
   useEffect(() => {
-    if (environmentId !== null && next !== null) selectSpace(environmentId, next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `next` is read as of the render that changed the open Space
+    if (!viewLoaded) return;
+    if (environmentId === null) return;
+    const latest = readSpaceSelection(environmentId);
+    const next = spaceToFollow({
+      view: latest?.view ?? null,
+      currentSpaceId: latest?.currentSpaceId ?? null,
+      openSpaceId,
+    });
+    if (next !== null) selectSpace(environmentId, next);
   }, [environmentId, openSpaceId, viewLoaded]);
 }
 

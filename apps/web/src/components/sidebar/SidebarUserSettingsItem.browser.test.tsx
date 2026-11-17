@@ -21,7 +21,7 @@ async function mount(name: string | null) {
 describe("SidebarUserSettingsItem", () => {
   it("says Settings with the User's name as a second line", async () => {
     await using screen = await mount("Bezenti");
-    const button = screen.getByRole("button", { name: "Settings — Bezenti" });
+    const button = screen.getByRole("button", { name: "Settings (Bezenti)" });
     const text = button.element().textContent ?? "";
     expect(text).toContain("Settings");
     expect(text).toContain("Bezenti");

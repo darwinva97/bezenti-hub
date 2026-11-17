@@ -1,6 +1,9 @@
 import { NotificationSettings } from "./NotificationSettings";
 import { CheckIcon } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { MachineIdentitySection } from "./MachineIdentitySection";
+import { useMachineDiagnosticsPath } from "./MachineSettings";
+import { useOpenMachineSettings } from "./useOpenMachineSettings";
 import { useRef, useState } from "react";
 import {
   IDLE_COMPACTION_MODES,
@@ -1210,7 +1213,7 @@ function ScopedCompactIdleThreadsRow() {
 export function ThreadsSettingsPanel() {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
-  const navigate = useNavigate();
+  const { open: openMachineSettings } = useOpenMachineSettings();
   const { environment, connectedEnvironments, target, scope } = useSettingsScope();
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
   const environmentId = environment?.environmentId ?? null;
@@ -1486,10 +1489,7 @@ export function ThreadsSettingsPanel() {
                   {...(environmentId
                     ? {
                         onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
-                          void navigate({
-                            to: "/settings/providers",
-                            search: { environmentId, instanceId },
-                          });
+                          openMachineSettings({ section: "providers", environmentId, instanceId });
                         },
                       }
                     : {})}
@@ -1608,6 +1608,8 @@ export function ThreadsSettingsPanel() {
 }
 
 export function MaintenanceSettingsPanel() {
+  const navigate = useNavigate();
+  const diagnosticsPath = useMachineDiagnosticsPath();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const { scope, environment, connectedEnvironments } = useSettingsScope();
@@ -1617,6 +1619,7 @@ export function MaintenanceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <MachineIdentitySection />
       <SettingsSection id="updates" title="Updates">
         <SettingsRow
           serverScoped
@@ -1702,9 +1705,7 @@ export function MaintenanceSettingsPanel() {
           }
           control={
             <Button
-              render={
-                <Link to="/settings/diagnostics" search={{ machine: environmentId ?? undefined }} />
-              }
+              onClick={() => void navigate({ href: diagnosticsPath })}
               size="sm"
               variant="outline"
             >

@@ -51,6 +51,8 @@ export function isSettingsSectionAllowed(
     case "user":
       if (sectionId === "account") return principal.hasUser;
       if (sectionId === "snap-shot") return principal.isDesktop;
+      // Machines lists this computer on the desktop; lists of machines come with owned machines.
+      if (sectionId === "machines") return principal.isDesktop;
       return true;
     case "space":
       return isSpaceSectionAllowed(sectionId, space);
@@ -59,4 +61,30 @@ export function isSettingsSectionAllowed(
     case "platform":
       return principal.isOwner;
   }
+}
+
+/** The sections of a machine's page, in order: the URL segments of `.../<machine>/<section>`. */
+export const MACHINE_SECTION_IDS = [
+  "providers",
+  "source-control",
+  "devices",
+  "maintenance",
+  "network",
+] as const;
+
+export type MachineSectionId = (typeof MACHINE_SECTION_IDS)[number];
+
+/**
+ * Whether the principal sees a section of a machine's page. Whoever acts for the Installation
+ * (the Owner) edits it; the others do not see it. Network is how the desktop app's own backend is
+ * reached, so only that machine has it.
+ */
+export function isMachineSectionAllowed(
+  sectionId: string,
+  principal: SettingsPrincipal,
+  machine: { readonly isLocalBackend: boolean },
+): boolean {
+  if (!principal.isOwner) return false;
+  if (sectionId === "network") return principal.isDesktop && machine.isLocalBackend;
+  return (MACHINE_SECTION_IDS as ReadonlyArray<string>).includes(sectionId);
 }

@@ -4,12 +4,15 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { act, fakeTimers, render } from "../../../test/render";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 
-const state = vi.hoisted(() => ({ providers: [] as ServerProvider[] }));
+const state = vi.hoisted(() => ({ providers: [] as ServerProvider[], canOpen: true }));
 vi.mock("@effect/atom-react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@effect/atom-react")>()),
   useAtomValue: () => state.providers,
 }));
 vi.mock("../../state/server", () => ({ primaryServerProvidersAtom: {} }));
+vi.mock("../settings/useOpenMachineSettings", () => ({
+  useOpenMachineSettings: () => ({ canOpen: state.canOpen, open: vi.fn() }),
+}));
 
 const checkedAt = "2026-10-19T03:00:00.000Z";
 
@@ -38,6 +41,7 @@ function provider(status: "running" | "succeeded" | "failed"): ServerProvider {
 
 function setup(providers: ServerProvider[]) {
   state.providers = providers;
+  state.canOpen = true;
 }
 
 const advance = (ms: number) => act(() => vi.advanceTimersByTime(ms));
@@ -74,6 +78,15 @@ describe("SidebarProviderUpdatePill exit", () => {
         ?.click(),
     );
     await advance(180);
+    expect(screen.container.textContent).toBe("");
+  });
+});
+
+describe("SidebarProviderUpdatePill access", () => {
+  it("is not offered to who cannot open the provider settings it leads to", async () => {
+    setup([provider("failed")]);
+    state.canOpen = false;
+    await using screen = await render(<SidebarProviderUpdatePill />);
     expect(screen.container.textContent).toBe("");
   });
 });

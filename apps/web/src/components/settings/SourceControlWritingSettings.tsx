@@ -1,4 +1,4 @@
-import { useNavigate } from "@tanstack/react-router";
+import { useOpenMachineSettings } from "./useOpenMachineSettings";
 import { useRef, useState } from "react";
 import type {
   ProviderInstanceId,
@@ -64,7 +64,7 @@ export function SourceControlWritingSettingsSection() {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const mixedReviewGuidesEnabled = useScopedSettingsMixed(["reviewGuidesEnabled"]);
-  const navigate = useNavigate();
+  const { open: openMachineSettings } = useOpenMachineSettings();
   const { environment, connectedEnvironments, targets, target } = useSettingsScope();
   const environmentId = environment?.environmentId ?? null;
   const hasServerTargets = connectedEnvironments.length > 0;
@@ -525,9 +525,10 @@ export function SourceControlWritingSettingsSection() {
                     {...(environmentId
                       ? {
                           onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
-                            void navigate({
-                              to: "/settings/providers",
-                              search: { environmentId, instanceId },
+                            openMachineSettings({
+                              section: "providers",
+                              environmentId,
+                              instanceId,
                             });
                           },
                         }

@@ -1,38 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
+
+import { LegacyMachineRedirect } from "../components/settings/LegacyMachineRedirect";
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 
-import { ProviderSettingsPanel } from "../components/settings/ProviderSettingsPanel";
-import { useSettingsScope } from "../components/settings/SettingsScopeContext";
-
-function SettingsProvidersRoute() {
-  const target = Route.useSearch();
-  const { environment, scope } = useSettingsScope();
-  if (!environment) {
-    return (
-      <p className="p-8 text-sm text-muted-foreground">
-        {scope.kind === "environment"
-          ? `Reconnect ${scope.label} to set up its providers.`
-          : "Connect an environment to set up its providers."}
-      </p>
-    );
-  }
-  return (
-    <ProviderSettingsPanel
-      environmentId={environment.environmentId}
-      {...(target.instanceId ? { instanceId: target.instanceId } : {})}
-      projectIds={
-        scope.kind === "project" || scope.kind === "checkout"
-          ? scope.members
-              .filter((member) => member.environmentId === environment.environmentId)
-              .map((member) => member.id)
-          : []
-      }
-      scoped
-    />
-  );
-}
-
+// Moved to the page of a machine; this leads there.
 export const Route = createFileRoute("/_chat/settings/providers")({
+  // Old links name the machine and the provider instance in the query.
   validateSearch: (raw: Record<string, unknown>) => ({
     ...(typeof raw.environmentId === "string" && raw.environmentId.trim()
       ? { environmentId: EnvironmentId.make(raw.environmentId) }
@@ -41,5 +14,5 @@ export const Route = createFileRoute("/_chat/settings/providers")({
       ? { instanceId: ProviderInstanceId.make(raw.instanceId) }
       : {}),
   }),
-  component: SettingsProvidersRoute,
+  component: () => <LegacyMachineRedirect path="/settings/providers" />,
 });

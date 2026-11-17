@@ -6,7 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { useNavigate } from "@tanstack/react-router";
+import { useOpenMachineSettings } from "./useOpenMachineSettings";
 
 import { useClientSettings } from "../../hooks/useSettings";
 import {
@@ -57,7 +57,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const settings = useScopedSettings();
   const clientSettings = useClientSettings();
   const updateSettings = useUpdateScopedSettings();
-  const navigate = useNavigate();
+  const { open: openMachineSettings } = useOpenMachineSettings();
   const { environments } = useEnvironments();
   const providersByEnvironment = useEnvironmentProviders();
   const representative = target
@@ -170,9 +170,10 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
               getModelDisabledReason={modelDisabledReason}
               onOpenProviderSetup={(instanceId) => {
                 if (representative)
-                  void navigate({
-                    to: "/settings/providers",
-                    search: { environmentId: representative.environmentId, instanceId },
+                  openMachineSettings({
+                    section: "providers",
+                    environmentId: representative.environmentId,
+                    instanceId,
                   });
               }}
               onInstanceModelChange={(instanceId, model) =>

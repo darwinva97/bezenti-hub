@@ -7,6 +7,7 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { useOptionalSettingsScope } from "./SettingsScopeContext";
 import { useSettingsSpace } from "./useSettingsSpace";
+import { MACHINE_SECTION_LABELS } from "./machineSettings";
 import { SETTINGS_SECTION_LABELS } from "./settingsSearch";
 import {
   SETTINGS_MODAL_LABELS,
@@ -14,16 +15,28 @@ import {
   settingsModalForPathname,
 } from "./settingsModals";
 
-const SETTINGS_BREADCRUMB_LABELS: Readonly<Record<string, string>> = {
-  ...SETTINGS_SECTION_LABELS,
-  "/settings/diagnostics": "Diagnostics",
-};
+const SETTINGS_BREADCRUMB_LABELS: Readonly<Record<string, string>> = SETTINGS_SECTION_LABELS;
 
 const HUB_DEFAULTS_PAGE_LABELS: Readonly<Record<string, string>> = {
   threads: "Threads",
   browser: "Browser",
   worktrees: "Worktrees",
 };
+
+/** The part of a machine page trail after its modal section: the machine, its section, its subpage. */
+function machinePageTrail(rest: ReadonlyArray<string>, modal: string): ReadonlyArray<string> {
+  // Under Hub machine the machine is the Hub's, so the segments start at its section.
+  const [machine, section, subpage] = modal === "platform" ? [null, rest[0], rest[1]] : rest;
+  const isMachinePage = modal === "platform" ? section !== undefined : machine !== undefined;
+  if (!isMachinePage) return [];
+  const sectionLabel =
+    MACHINE_SECTION_LABELS[section as keyof typeof MACHINE_SECTION_LABELS] ?? undefined;
+  return [
+    ...(machine === null ? [] : [modal === "user" ? "This computer" : "Machine"]),
+    ...(sectionLabel === undefined ? [] : [sectionLabel]),
+    ...(subpage === "diagnostics" ? ["Diagnostics"] : []),
+  ];
+}
 
 /** The trail of a page: its parents, then its own label. Empty for an unknown page. */
 function settingsBreadcrumbTrail(
@@ -45,6 +58,10 @@ function settingsBreadcrumbTrail(
       ...(subpage === "licenses" ? ["Open source licenses"] : []),
       ...(modal === "platform" && sectionId === "hub-defaults"
         ? [HUB_DEFAULTS_PAGE_LABELS[subpage ?? "threads"] ?? "Threads"]
+        : []),
+      ...((modal === "platform" && sectionId === "hub-machine") ||
+      ((modal === "user" || modal === "space") && sectionId === "machines")
+        ? machinePageTrail(segments.slice(modal === "space" ? 5 : 4), modal)
         : []),
     ];
   }

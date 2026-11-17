@@ -1,5 +1,5 @@
 import { SessionPermissions } from "./SessionPermissions";
-import { ChevronRightIcon, EllipsisIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
 import { useState } from "react";
 import {
   AuthAccessReadScope,
@@ -12,7 +12,6 @@ import {
   type DesktopServerExposureState,
   type DesktopWslState,
   managedCapabilityDenial,
-  resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
@@ -25,14 +24,10 @@ import {
   resolveTailscaleServeBaseUrl,
 } from "./ConnectionsSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { ManagedByOrganization } from "../ManagedPolicy";
-import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
-import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { GrantsSettings } from "./GrantsSettings";
 import { HubEnvironmentsSettings } from "./HubEnvironmentsSettings";
-import { JoinedEnvironmentSetting } from "./JoinedEnvironmentSetting";
 import { PullRequestRoutingSettings } from "./PullRequestRoutingSettings";
 import { Input } from "../ui/input";
 import {
@@ -57,12 +52,10 @@ import {
 } from "../ui/alert-dialog";
 import { Spinner } from "../ui/spinner";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
   revokeOtherServerClientSessions,
   revokeServerClientSession,
@@ -72,7 +65,6 @@ import {
 } from "~/environments/primary";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { useUiStateStore } from "~/uiStateStore";
-import { resolveServerConfigVersionMismatch } from "~/versionSkew";
 import { authEnvironment } from "~/state/auth";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
@@ -108,13 +100,13 @@ const BACKEND_VALUE_DEFAULT_WSL = "backend:default-wsl";
 const BACKEND_VALUE_WSL_OFF = "backend:wsl-off";
 
 /**
- * Environments lists the machines this app connects to; access covers who may reach this one;
- * sessions covers the User's own sessions, pairing links and permissions.
+ * Environments lists the machines this app connects to; network covers how this computer is
+ * reached; sessions covers the User's own sessions, pairing links and permissions.
  */
 export function ConnectionsSettings({
   view,
 }: {
-  readonly view: "environments" | "access" | "sessions";
+  readonly view: "environments" | "network" | "sessions";
 }) {
   const desktopBridge = window.desktopBridge;
   const { environments } = useEnvironments();
@@ -177,7 +169,6 @@ export function ConnectionsSettings({
   const primaryManagedPolicy = primaryServerConfig?.managedPolicy;
   // Turning remote access off stays possible; only the way in is managed.
   const remoteClientsDenial = managedCapabilityDenial(primaryManagedPolicy, "remoteClients");
-  const primaryVersionMismatch = resolveServerConfigVersionMismatch(primaryServerConfig);
   const [isAdvertisedEndpointListExpanded, setIsAdvertisedEndpointListExpanded] = useState(false);
   const defaultAdvertisedEndpointKey = useUiStateStore(
     (state) => state.defaultAdvertisedEndpointKey,
@@ -189,8 +180,8 @@ export function ConnectionsSettings({
   const canWriteAccess = useEnvironmentScope(primaryEnvironmentId, AuthAccessWriteScope);
   const canMaintain = useEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope);
   const canManageLocalBackend = !isLocalEnvironmentDisabled() && canMaintain;
-  const showsAccess = view === "access";
-  const showsAccessManagement = showsAccess || view === "sessions";
+  const showsNetwork = view === "network";
+  const showsAccessManagement = view === "sessions";
   const authAccessChanges = useEnvironmentQuery(
     showsAccessManagement && canReadAccess && primaryEnvironmentId !== null
       ? authEnvironment.accessChanges({
@@ -200,10 +191,10 @@ export function ConnectionsSettings({
       : null,
   );
   const desktopNetworkAccess = useEnvironmentQuery(
-    showsAccess && canManageLocalBackend && desktopBridge ? desktopNetworkAccessStateAtom : null,
+    showsNetwork && canManageLocalBackend && desktopBridge ? desktopNetworkAccessStateAtom : null,
   );
   const desktopWsl = useEnvironmentQuery(
-    showsAccess && canManageLocalBackend && desktopBridge ? desktopWslStateAtom : null,
+    showsNetwork && canManageLocalBackend && desktopBridge ? desktopWslStateAtom : null,
   );
   const desktopWslState = desktopWsl.data;
   const desktopWslError = desktopWslMutationError ?? desktopWsl.error;
@@ -940,72 +931,7 @@ export function ConnectionsSettings({
     <>
       {primaryEnvironmentId !== null ? (
         <>
-          <SettingsSection
-            {...searchableSetting("connections-environment")}
-            title={
-              primaryEnvironment?.label ?? (desktopBridge ? "This machine" : "Primary environment")
-            }
-            icon={
-              <EnvironmentMachineIcon
-                aria-hidden
-                kind={
-                  primaryServerConfig
-                    ? resolveEnvironmentMachineKind(primaryServerConfig)
-                    : "desktop"
-                }
-                className="size-4"
-              />
-            }
-            headerAction={
-              primaryEnvironmentId !== null ? (
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost-muted"
-                        size="icon-xs"
-                        aria-label="More actions for this machine"
-                      />
-                    }
-                  >
-                    <EllipsisIcon className="size-3.5" />
-                  </MenuTrigger>
-                  <MenuPopup align="end">
-                    <EnvironmentIconMenu
-                      environmentId={primaryEnvironmentId}
-                      serverConfig={primaryServerConfig}
-                    />
-                  </MenuPopup>
-                </Menu>
-              ) : null
-            }
-          >
-            {primaryManagedPolicy ? (
-              <div className="px-3 py-2 sm:px-4">
-                <ManagedByOrganization policy={primaryManagedPolicy} />
-              </div>
-            ) : null}
-            {canManageLocalBackend ? (
-              <SettingsRow
-                title="Version"
-                description={
-                  [
-                    primaryServerConfig?.environment.serverVersion ?? null,
-                    primaryEnvironment?.displayUrl ?? null,
-                  ]
-                    .filter((value): value is string => value !== null)
-                    .join(" · ") || "Loading…"
-                }
-                control={
-                  primaryVersionMismatch ? (
-                    <span className="text-xs text-muted-foreground">
-                      Older than this app ({primaryVersionMismatch.clientVersion})
-                    </span>
-                  ) : undefined
-                }
-              />
-            ) : null}
+          <SettingsSection id="network-access-section" title="Network access">
             {canManageLocalBackend && desktopBridge ? (
               <>
                 {renderNetworkAccessRow()}
@@ -1307,7 +1233,7 @@ export function ConnectionsSettings({
     );
   }
 
-  if (showsAccess) {
+  if (showsNetwork) {
     return <SettingsPageContainer>{primarySettings}</SettingsPageContainer>;
   }
 
@@ -1315,12 +1241,6 @@ export function ConnectionsSettings({
     <SettingsPageContainer>
       <HubEnvironmentsSettings />
       <GrantsSettings />
-      {desktopBridge ? (
-        <SettingsSection id="this-app" title="This app">
-          <LocalEnvironmentSetting />
-          <JoinedEnvironmentSetting />
-        </SettingsSection>
-      ) : null}
       <PullRequestRoutingSettings environments={pullRequestRoutingEnvironments} />
     </SettingsPageContainer>
   );

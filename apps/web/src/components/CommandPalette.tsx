@@ -141,6 +141,7 @@ import {
   waitForProject,
 } from "../state/entities";
 import { usePrimaryActsForInstallation } from "../environments/primary";
+import { useOpenMachineSettings } from "./settings/useOpenMachineSettings";
 import {
   useCurrentSpace,
   useProjectsInCurrentSpace,
@@ -546,6 +547,8 @@ function OpenCommandPaletteDialog(props: {
   const { environmentLabelById, projectEnvironmentLocationById } = useEnvironmentLookups();
   const projectGroups = useSortedProjectGroups(environmentLabelById);
   const isOwner = usePrimaryActsForInstallation();
+  const { canOpen: canOpenSourceControlSettings, open: openMachineSettings } =
+    useOpenMachineSettings();
   const currentSpaceId = useCurrentSpace((state) => state.currentSpaceId);
   const currentSpaceName = useCurrentSpace(
     (state) => state.view?.spaces.find((space) => space.id === state.currentSpaceId)?.name ?? null,
@@ -1008,7 +1011,10 @@ function OpenCommandPaletteDialog(props: {
 
   const openSourceControlSettings = () => {
     setOpen(false);
-    void navigate({ to: "/settings/source-control" });
+    openMachineSettings({
+      section: "source-control",
+      environmentId: contextualProjectRef?.environmentId,
+    });
   };
 
   const buildAddProjectSourceGroups = (
@@ -1060,28 +1066,29 @@ function OpenCommandPaletteDialog(props: {
       const readiness = readinessBySource(source);
       const disabledHint = readiness.hint;
 
-      const titleTrailingContent = readiness.ready ? undefined : (
-        <span className="ml-auto">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="warning-outline"
-                  size="micro"
-                  onClick={() => {
-                    openSourceControlSettings();
-                  }}
-                >
-                  Setup Required
-                </Button>
-              }
-            />
-            <TooltipPopup align="end" side="left">
-              {disabledHint ?? "Open Settings -> Source control to configure this provider."}
-            </TooltipPopup>
-          </Tooltip>
-        </span>
-      );
+      const titleTrailingContent =
+        readiness.ready || !canOpenSourceControlSettings ? undefined : (
+          <span className="ml-auto">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="warning-outline"
+                    size="micro"
+                    onClick={() => {
+                      openSourceControlSettings();
+                    }}
+                  >
+                    Setup Required
+                  </Button>
+                }
+              />
+              <TooltipPopup align="end" side="left">
+                {disabledHint ?? "Open Settings -> Source control to configure this provider."}
+              </TooltipPopup>
+            </Tooltip>
+          </span>
+        );
 
       if (!readiness.ready) {
         sourceItems.push({
@@ -1753,6 +1760,7 @@ function OpenCommandPaletteDialog(props: {
     const destination = settingsItemDestination(item, {
       projectKey: contextualProjectGroup?.projectKey,
       spaceId: currentSpaceId ?? undefined,
+      primaryEnvironmentId,
     });
     if (destination === null) return [];
     return [

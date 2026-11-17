@@ -39,13 +39,16 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
     id: "network-access",
     title: "Network access",
-    to: "/settings/access",
+    modal: "user",
+    section: "machines",
     searchTerms: ["remote pairing backend"],
   },
   {
     id: "providers",
     title: "Providers",
-    to: "/settings/providers",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "providers",
     searchTerms: ["claude codex agents"],
   },
   {
@@ -66,7 +69,7 @@ describe("searchSettings", () => {
   it("matches titles, sections, and remembered setting details", () => {
     expect(searchSettings("word", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     expect(searchSettings("network", ITEMS).map((item) => item.id)).toEqual(["network-access"]);
-    expect(searchSettings("sharing", ITEMS).map((item) => item.id)).toEqual(["network-access"]);
+    expect(searchSettings("machines", ITEMS).map((item) => item.id)).toEqual(["network-access"]);
     expect(searchSettings("claude", ITEMS).map((item) => item.id)).toEqual(["providers"]);
     expect(searchSettings("long lines", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     for (const query of ["fallback", "fallback agent", "fallback model"]) {
@@ -134,7 +137,7 @@ describe("searchSettings", () => {
       filterAvailableSettingsSearchItems({ ...availability, actsForInstallation: false }),
     );
     for (const path of SETTINGS_OWNER_ONLY_PATHS) expect(forMember.has(path)).toBe(false);
-    expect(forOwner.has("/settings/providers")).toBe(true);
+    expect(forOwner.has("/settings/platform/hub-machine/providers")).toBe(true);
     expect(forMember.has("/settings/user/appearance")).toBe(true);
     const memberNav = settingsNavGroupsFor(false).flatMap((group) => group.paths);
     expect(memberNav).not.toContain("/settings/providers");

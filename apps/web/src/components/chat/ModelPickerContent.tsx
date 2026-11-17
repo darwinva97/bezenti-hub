@@ -9,7 +9,7 @@ import {
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { useAtomValue } from "@effect/atom-react";
 import { formatProviderUpdateRequiredNotice } from "@t3tools/client-runtime/providerUpdateRequiredModels";
-import { useNavigate } from "@tanstack/react-router";
+import { useOpenMachineSettings } from "../settings/useOpenMachineSettings";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
@@ -205,7 +205,7 @@ function ModelPickerProviderNotices({
   onRequestClose: (() => void) | undefined;
   onOpenProviderSetup: ((instanceId: ProviderInstanceId) => void) | undefined;
 }) {
-  const navigate = useNavigate();
+  const { canOpen: canOpenProviderSettings, open: openMachineSettings } = useOpenMachineSettings();
   return (
     <>
       {setupEntries.length > 0 ? (
@@ -239,14 +239,16 @@ function ModelPickerProviderNotices({
           className="shrink-0 border-t border-border/70 px-3 py-2 text-xs leading-snug text-muted-foreground"
         >
           {notice}{" "}
-          <InlineButton
-            onClick={() => {
-              onRequestClose?.();
-              void navigate({ to: "/settings/providers" });
-            }}
-          >
-            Provider settings
-          </InlineButton>
+          {canOpenProviderSettings ? (
+            <InlineButton
+              onClick={() => {
+                onRequestClose?.();
+                openMachineSettings({ section: "providers" });
+              }}
+            >
+              Provider settings
+            </InlineButton>
+          ) : null}
         </p>
       ))}
     </>

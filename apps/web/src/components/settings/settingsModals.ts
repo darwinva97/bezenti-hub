@@ -166,6 +166,13 @@ const HubDefaultsSection = lazy(() =>
   import("./HubDefaultsSettings").then((module) => ({ default: module.HubDefaultsSettings })),
 );
 
+const HubMachineSection = lazy(() =>
+  import("./MachinePages").then((module) => ({ default: module.HubMachineSection })),
+);
+const UserMachinesSection = lazy(() =>
+  import("./MachinePages").then((module) => ({ default: module.UserMachinesSection })),
+);
+
 const reserved = (
   id: string,
   label: string,
@@ -217,7 +224,13 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       group: 1,
     },
     reserved("vault", "Vault", VaultIcon, 2),
-    reserved("machines", "Machines", ServerIcon, 2),
+    {
+      id: "machines",
+      label: "Machines",
+      icon: ServerIcon,
+      component: UserMachinesSection,
+      group: 2,
+    },
     reserved("ai-accounts", "AI accounts", BotIcon, 2),
     reserved("grants-given", "Grants given", KeyRoundIcon, 2),
     reserved("plan", "Plan & usage", SparklesIcon, 2),
@@ -319,7 +332,13 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       component: PlatformSandboxesSection,
       group: 1,
     },
-    reserved("hub-machine", "Hub machine", ServerIcon, 1),
+    {
+      id: "hub-machine",
+      label: "Hub machine",
+      icon: ServerIcon,
+      component: HubMachineSection,
+      group: 1,
+    },
     {
       id: "hub-defaults",
       label: "Hub defaults",
@@ -423,6 +442,7 @@ export const OLD_SETTINGS_PATHS: Readonly<Record<string, string>> = {
   "/settings/open-source-licenses": "/settings/user/about/licenses",
   "/settings/archived": `/settings/space/${CURRENT_SPACE_SEGMENT}/archive`,
   "/settings/scheduled-tasks": `/settings/space/${CURRENT_SPACE_SEGMENT}/scheduled-tasks`,
+  "/settings/access": "/settings/user/sessions",
   "/settings/ai-gateway": "/settings/platform/ai-gateway",
   "/settings/threads": "/settings/platform/hub-defaults/threads",
   "/settings/browser": "/settings/platform/hub-defaults/browser",

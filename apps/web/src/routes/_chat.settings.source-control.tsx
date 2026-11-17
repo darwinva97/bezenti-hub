@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { SourceControlSettingsPanel } from "../components/settings/SourceControlSettings";
+import { LegacyMachineRedirect } from "../components/settings/LegacyMachineRedirect";
 
+// Moved to the page of a machine; this leads there.
 export const Route = createFileRoute("/_chat/settings/source-control")({
-  component: SourceControlSettingsPanel,
+  component: () => <LegacyMachineRedirect path="/settings/source-control" />,
 });

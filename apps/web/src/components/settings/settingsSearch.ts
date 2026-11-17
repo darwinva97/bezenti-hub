@@ -24,16 +24,10 @@ import {
 
 /** The pages that still live in the old Settings nav; the rest moved into a modal. */
 export type SettingsPath =
-  | "/settings/diagnostics"
-  | "/settings/providers"
   | "/settings/ai-accounts"
-  | "/settings/devices"
-  | "/settings/source-control"
   | "/settings/connections"
-  | "/settings/access"
   | "/settings/secrets"
-  | "/settings/vaults"
-  | "/settings/maintenance";
+  | "/settings/vaults";
 
 export type SettingsSearchScope =
   | "environment"
@@ -89,16 +83,10 @@ export interface SettingsSearchAvailability {
 }
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
-  "/settings/diagnostics": "Diagnostics",
-  "/settings/providers": "Providers",
   "/settings/ai-accounts": "AI accounts",
-  "/settings/devices": "Devices",
-  "/settings/source-control": "Source control",
   "/settings/connections": "Environments",
-  "/settings/access": "Sharing & access",
   "/settings/secrets": "Secrets",
   "/settings/vaults": "Vaults",
-  "/settings/maintenance": "Maintenance",
 };
 
 /** Sidebar order. A group without a heading is set apart by space alone. */
@@ -108,38 +96,20 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
 }> = [
   {
     heading: "Agents",
-    paths: ["/settings/providers", "/settings/ai-accounts", "/settings/devices"],
-  },
-  {
-    heading: "Code",
-    paths: ["/settings/source-control"],
+    paths: ["/settings/ai-accounts"],
   },
   {
     heading: "Connections",
     paths: [
       "/settings/connections",
-      "/settings/access",
       "/settings/vaults",
       ...(isSecretsFeatureEnabled ? (["/settings/secrets"] as const) : []),
     ],
   },
-  {
-    heading: null,
-    paths: ["/settings/maintenance"],
-  },
 ];
 
-/**
- * Pages on the Installation as a whole (its providers, devices, maintenance and diagnostics,
- * source-control sign-in and secrets): only the Owner of a Hub changes them, so a Member's
- * Settings leave them out.
- */
+/** Pages on the Installation as a whole (secrets): only the Owner of a Hub changes them. */
 export const SETTINGS_OWNER_ONLY_PATHS: ReadonlySet<SettingsPath> = new Set<SettingsPath>([
-  "/settings/providers",
-  "/settings/devices",
-  "/settings/maintenance",
-  "/settings/diagnostics",
-  "/settings/source-control",
   "/settings/secrets",
 ]);
 
@@ -193,7 +163,9 @@ export function sourceControlHostSearchItems(
         title: credentials
           ? `${definition.label} accounts and token`
           : `${definition.label} credentials`,
-        to: "/settings/source-control" as const,
+        modal: "platform" as const,
+        section: "hub-machine",
+        subsection: "source-control",
         searchTerms: [
           credentials
             ? `${names} ${credentials.cliName} account login user host switch multiple accounts disable sign in token personal access token pat api key credential`
@@ -230,7 +202,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "storage-delete-now",
     title: "Delete now",
-    to: "/settings/maintenance",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "maintenance",
     scope: "environment-defaults",
     searchTerms: ["storage cleanup run now results report removed kept failed"],
   },
@@ -257,7 +231,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "storage-artifacts",
     title: "Artifacts and logs",
-    to: "/settings/maintenance",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "maintenance",
     scope: "environment-defaults",
     searchTerms: [
       "disk storage delete old browser artifacts screenshots captures rotated logs cleanup retention",
@@ -594,7 +570,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "compact-idle-threads",
     title: "Compact idle threads",
-    to: "/settings/providers",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "providers",
     scope: "environment-defaults",
     searchTerms: ["claude context compaction idle cache tokens usage summary resume"],
   },
@@ -719,7 +697,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "provider-update-checks",
     title: "Provider update checks",
-    to: "/settings/maintenance",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "maintenance",
     searchTerms: [
       "installed cli versions newer available codex claude cursor grok fx kiro opencode",
     ],
@@ -728,7 +708,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "continue-threads-after-server-update",
     title: "Continue threads after restarts",
-    to: "/settings/maintenance",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "maintenance",
     scope: "project-defaults",
     searchTerms: [
       "resume running active interrupted work restart reboot machine crash desktop update automatically",
@@ -737,7 +719,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "background-activity",
     title: "Background activity",
-    to: "/settings/maintenance",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "maintenance",
     scope: "environment-defaults",
     searchTerms: [
       "balanced performance battery saver advanced git fetch provider health refresh host power monitor idle policy",
@@ -851,7 +835,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "telemetry-export",
     title: "OpenTelemetry export",
-    to: "/settings/diagnostics",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "diagnostics",
     targetId: "telemetry-export",
     scope: "environment",
     searchTerms: ["OTel OTLP telemetry export endpoints logs traces metrics Grafana"],
@@ -859,7 +845,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "diagnostics",
     title: "Diagnostics",
-    to: "/settings/maintenance",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "maintenance",
     searchTerms: ["logs traces processes resource history failures spans cpu memory"],
   },
   {
@@ -938,7 +926,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "providers",
     title: "Providers",
-    to: "/settings/providers",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "providers",
     searchTerms: [
       "agents cli codex claude cursor grok fx kiro opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory codex_home shadow home endpoint arguments environment variables display name accent color custom favorite hidden auto compact native sessions import resume",
     ],
@@ -946,7 +936,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "usage-providers",
     title: "Usage providers",
-    to: "/settings/providers",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "providers",
     searchTerms: [
       "usage sources CLIProxyAPI CLI proxy hub quota subscription limits management key add remove",
     ],
@@ -955,7 +947,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "cursor-keychain-usage",
     title: "Cursor account usage",
-    to: "/settings/providers",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "providers",
     searchTerms: ["cursor macOS keychain usage tokens cost limits permission"],
     providerSettingsOnly: true,
     macProviderSettingsOnly: true,
@@ -963,7 +957,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "provider-health-check-interval",
     title: "Health check interval",
-    to: "/settings/providers",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "providers",
     searchTerms: ["refresh availability versions auth state models background probes seconds off"],
     providerSettingsOnly: true,
   },
@@ -979,7 +975,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "device-sources",
     title: "Device sources",
-    to: "/settings/devices",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "devices",
     searchTerms: [
       "device hosts ssh remote mac mini identity key connection eas expo cloud simlock pool gateway local simulators",
     ],
@@ -987,21 +985,27 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "agent-device-access",
     title: "Agents can use devices",
-    to: "/settings/devices",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "devices",
     targetId: "devices",
     searchTerms: ["allow simulator emulator ios android drive tools sessions"],
   },
   {
     id: "device-hub",
     title: "Use devices",
-    to: "/settings/devices",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "devices",
     targetId: "devices",
     searchTerms: ["device hub simulator emulator ios android install start version"],
   },
   {
     id: "device-platform-support",
     title: "Local simulators",
-    to: "/settings/devices",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "devices",
     targetId: "device-sources",
     searchTerms: ["simulator support xcode android studio sdk avd runtime"],
   },
@@ -1104,14 +1108,18 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "automatic-pull",
     title: "Automatically pull",
-    to: "/settings/source-control",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "source-control",
     scope: "project-defaults",
     searchTerms: ["auto pull default branch current checkout fast forward upstream"],
   },
   {
     id: "remove-agent-credits-on-merge",
     title: "Remove agent credits when merging",
-    to: "/settings/source-control",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "source-control",
     scope: "project-defaults",
     searchTerms: [
       `pull request ${SOURCE_CONTROL_HOST_LABELS} squash co-authored-by attribution claude codex generated`,
@@ -1120,14 +1128,18 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "pull-request-merge-method",
     title: "Default merge method",
-    to: "/settings/source-control",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "source-control",
     scope: "project-defaults",
     searchTerms: ["pull request merge squash rebase last selected"],
   },
   {
     id: "source-control",
     title: "Source control",
-    to: "/settings/source-control",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "source-control",
     scope: "environment-defaults",
     searchTerms: [
       `version control git ${SOURCE_CONTROL_HOST_TERMS} hosting integrations credentials scan server environment`,
@@ -1136,7 +1148,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "git-fetch-interval",
     title: "Git fetch interval",
-    to: "/settings/maintenance",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "maintenance",
     targetId: "background-activity",
     searchTerms: [
       "automatic remote branch refresh background credentials security keys seconds off",
@@ -1158,7 +1172,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "source-control-writing-style",
     title: "Source control writing style",
-    to: "/settings/source-control",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "source-control",
     searchTerms: [
       "repository conventions conventional commits custom instructions change descriptions request titles",
     ],
@@ -1167,14 +1183,18 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "follow-change-request-templates",
     title: "Follow change request templates",
-    to: "/settings/source-control",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "source-control",
     searchTerms: ["repository pr pull request description structure"],
     environmentOnly: true,
   },
   {
     id: "source-control-writer-model",
     title: "Source control writer model",
-    to: "/settings/source-control",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "source-control",
     searchTerms: [
       "override generated commit change request pr titles descriptions branch bookmark",
     ],
@@ -1184,14 +1204,18 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "review-guides",
     title: "Review guides (beta)",
-    to: "/settings/source-control",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "source-control",
     searchTerms: ["pull request pr guided review guide tour beta experimental"],
     environmentOnly: true,
   },
   {
     id: "review-guide-model",
     title: "Review guide model",
-    to: "/settings/source-control",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "source-control",
     // Hidden until review guides are on, so a search lands on the switch that shows it.
     targetId: "review-guides",
     searchTerms: ["pull request pr guided review guide brief maintainer"],
@@ -1201,7 +1225,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "review-guide-instructions",
     title: "Review guide instructions",
-    to: "/settings/source-control",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "source-control",
     targetId: "review-guides",
     searchTerms: ["pull request pr guided review guide preferences taste prompt custom"],
     environmentOnly: true,
@@ -1217,37 +1243,43 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "environment-icon",
     title: "Environment icon",
-    to: "/settings/access",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "maintenance",
     targetId: "connections-environment",
     searchTerms: ["machine glyph sidebar mac mini studio laptop desktop server cloud vm"],
   },
   {
     id: "local-environment",
     title: "Local environment",
-    to: "/settings/connections",
+    modal: "user",
+    section: "machines",
     searchTerms: ["turn off on disable enable local server agents remote only restart"],
     desktopOnly: true,
   },
   {
     id: "joined-environment",
     title: "Use this computer as an Environment",
-    to: "/settings/connections",
+    modal: "user",
+    section: "machines",
     searchTerms: ["join hub machine laptop pc run threads here leave t3 join background"],
     desktopOnly: true,
   },
   {
     id: "network-access",
     title: "Network access",
-    to: "/settings/access",
-    targetId: "connections-environment",
+    modal: "user",
+    section: "machines",
+    subsection: "network",
     searchTerms: ["expose backend remote pairing local machine interfaces host restart"],
     localBackendManagementOnly: true,
   },
   {
     id: "tailscale-https",
     title: "Tailscale HTTPS",
-    to: "/settings/access",
-    targetId: "connections-environment",
+    modal: "user",
+    section: "machines",
+    subsection: "network",
     searchTerms: ["serve magicdns endpoint remote secure network"],
     desktopOnly: true,
     localBackendManagementOnly: true,
@@ -1255,7 +1287,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "wsl-backend",
     title: "WSL backend",
-    to: "/settings/access",
+    modal: "user",
+    section: "machines",
+    subsection: "network",
     searchTerms: [
       "windows subsystem linux distro second server projects stop windows backend restart wsl only",
     ],
@@ -1267,7 +1301,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "connections-environment",
     title: "This machine",
-    to: "/settings/access",
+    modal: "platform",
+    section: "hub-machine",
+    subsection: "maintenance",
     searchTerms: [
       "connections server backend local remote access administrative permissions scope pairing links qr code authorized clients sessions revoke endpoint",
     ],
@@ -1355,16 +1391,10 @@ export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
 const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const));
 
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
-  "/settings/diagnostics": "environment",
-  "/settings/providers": null,
   "/settings/ai-accounts": null,
-  "/settings/devices": null,
-  "/settings/source-control": "environment-defaults",
   "/settings/connections": "connections",
-  "/settings/access": "connections",
   "/settings/secrets": null,
   "/settings/vaults": null,
-  "/settings/maintenance": null,
 };
 
 // Pages of the old nav whose rows moved elsewhere; a link to one follows its anchor.
@@ -1381,6 +1411,9 @@ export function settingsItemPath(item: SettingsSearchLocation): string {
   // A Space's own settings need its id; without one they are the current Space's.
   if (item.modal === "space") return `/settings/space/${CURRENT_SPACE_SEGMENT}/${item.section}`;
   if (item.modal === "platform") {
+    if (item.section === "hub-machine" && item.subsection === "diagnostics") {
+      return "/settings/platform/hub-machine/maintenance/diagnostics";
+    }
     return `/settings/platform/${item.section}${item.subsection === undefined ? "" : `/${item.subsection}`}`;
   }
   return item.modal === undefined ? item.to : `/settings/${item.modal}/${item.section}`;
@@ -1390,6 +1423,15 @@ export type SettingsDestination =
   | { readonly to: SettingsPath }
   | { readonly to: "/settings/user/$section"; readonly params: { readonly section: string } }
   | { readonly to: "/settings/platform/$section"; readonly params: { readonly section: string } }
+  | {
+      readonly to: "/settings/platform/hub-machine/$machineSection";
+      readonly params: { readonly machineSection: string };
+    }
+  | { readonly to: "/settings/platform/hub-machine/maintenance/diagnostics" }
+  | {
+      readonly to: "/settings/user/machines/$environmentId/$machineSection";
+      readonly params: { readonly environmentId: string; readonly machineSection: string };
+    }
   | {
       readonly to: "/settings/platform/hub-defaults/$subsection";
       readonly params: { readonly subsection: string };
@@ -1413,18 +1455,41 @@ export function settingsItemDestination(
   {
     projectKey,
     spaceId,
-  }: { readonly projectKey?: string | undefined; readonly spaceId?: string | undefined } = {},
+    primaryEnvironmentId,
+  }: {
+    readonly projectKey?: string | undefined;
+    readonly spaceId?: string | undefined;
+    /** This computer's backend on the desktop, whose machine page the Network rows live on. */
+    readonly primaryEnvironmentId?: string | null | undefined;
+  } = {},
 ): SettingsDestination | null {
   if (item.modal === undefined) return { to: item.to };
-  if (item.modal === "user")
+  if (item.modal === "user") {
+    if (item.section === "machines" && item.subsection !== undefined) {
+      if (primaryEnvironmentId === undefined || primaryEnvironmentId === null) return null;
+      return {
+        to: "/settings/user/machines/$environmentId/$machineSection",
+        params: { environmentId: primaryEnvironmentId, machineSection: item.subsection },
+      };
+    }
     return { to: "/settings/user/$section", params: { section: item.section } };
+  }
   if (item.modal === "platform") {
-    return item.subsection === undefined
-      ? { to: "/settings/platform/$section", params: { section: item.section } }
-      : {
-          to: "/settings/platform/hub-defaults/$subsection",
-          params: { subsection: item.subsection },
-        };
+    if (item.subsection === undefined) {
+      return { to: "/settings/platform/$section", params: { section: item.section } };
+    }
+    if (item.section === "hub-machine") {
+      return item.subsection === "diagnostics"
+        ? { to: "/settings/platform/hub-machine/maintenance/diagnostics" }
+        : {
+            to: "/settings/platform/hub-machine/$machineSection",
+            params: { machineSection: item.subsection },
+          };
+    }
+    return {
+      to: "/settings/platform/hub-defaults/$subsection",
+      params: { subsection: item.subsection },
+    };
   }
   if (item.modal === "space") {
     if (spaceId === undefined) return null;

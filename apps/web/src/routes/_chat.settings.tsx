@@ -13,7 +13,7 @@ import {
   SettingsScopeProvider,
   useSettingsScope,
 } from "../components/settings/SettingsScopeContext";
-import { useEnvironments } from "../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { SettingsScopeNotice } from "../components/settings/SettingsScopeNotice";
 import { SETTINGS_DEVICE_ONLY_PATHS } from "../components/settings/SettingsScopeSentence";
 import { SettingsPageContainer } from "../components/settings/settingsLayout";
@@ -163,18 +163,29 @@ function SettingsRouteLayout() {
   const pathname = useLocation({ select: (location) => location.pathname });
   // A Project's modal fixes its Project in the path, so the scope never leaves it; a Space's and
   // Platform's have no scope to choose: it is the Space, or the whole Hub.
-  const { projectKey } = useParams({ strict: false });
+  const { projectKey, environmentId } = useParams({ strict: false });
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  // A machine page fixes its machine in the path, or is the Hub's, so it has no machine selector.
+  const machineEnvironmentId =
+    environmentId ??
+    (pathname.startsWith("/settings/platform/hub-machine") ? primaryEnvironmentId : null);
   const search =
-    settingsModalForPathname(pathname) === "space" ||
-    settingsModalForPathname(pathname) === "platform"
-      ? {}
-      : projectKey === undefined
-        ? rawSearch
-        : { ...rawSearch, project: projectKey };
+    machineEnvironmentId !== null
+      ? { machine: machineEnvironmentId }
+      : settingsModalForPathname(pathname) === "space" ||
+          settingsModalForPathname(pathname) === "platform"
+        ? {}
+        : projectKey === undefined
+          ? rawSearch
+          : { ...rawSearch, project: projectKey };
   return (
     <SettingsScopeProvider
       search={search}
-      singleEnvironment={pathname === "/settings/providers" || pathname === "/settings/secrets"}
+      singleEnvironment={
+        machineEnvironmentId !== null ||
+        pathname === "/settings/providers" ||
+        pathname === "/settings/secrets"
+      }
       onChange={(next) => {
         // Send every axis so retain middleware recognizes "all" as an explicit target.
         void navigate({

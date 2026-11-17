@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { DevicesSettingsPanel } from "../components/settings/IntegrationsSettings";
 
+import { LegacyMachineRedirect } from "../components/settings/LegacyMachineRedirect";
+
+// Moved to the page of a machine; this leads there.
 export const Route = createFileRoute("/_chat/settings/devices")({
-  component: DevicesSettingsPanel,
+  component: () => <LegacyMachineRedirect path="/settings/devices" />,
 });

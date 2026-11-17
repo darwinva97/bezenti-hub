@@ -13,6 +13,7 @@ import {
   type SettingsModalId,
   type SettingsVisibilityContext,
 } from "./settingsModals";
+import { LEGACY_MACHINE_PAGES } from "./machineSettings";
 import {
   SETTINGS_SECTION_LABELS,
   projectSectionForAnchor,
@@ -50,7 +51,14 @@ const OLD_URLS: ReadonlyArray<readonly [pathname: string, hash: string, to: stri
   ["/settings/access", "authorized-clients", "/settings/user/sessions"],
   ["/settings/access", "account", "/settings/user/account"],
   ["/settings/connections", "remote-environments", "/settings/user/account"],
-  ["/settings/connections", "network-access", "/settings/access"],
+  ["/settings/connections", "network-access", "/settings/user/machines"],
+  ["/settings/connections", "local-environment", "/settings/user/machines"],
+  ["/settings/access", "", "/settings/user/sessions"],
+  ["/settings/access", "network-access", "/settings/user/machines"],
+  ["/settings/access", "tailscale-https", "/settings/user/machines"],
+  ["/settings/access", "wsl-backend", "/settings/user/machines"],
+  ["/settings/access", "connections-environment", "/settings/platform/hub-machine/maintenance"],
+  ["/settings/access", "environment-icon", "/settings/platform/hub-machine/maintenance"],
   [
     "/settings/source-control",
     "worktree-branch-naming",
@@ -58,7 +66,7 @@ const OLD_URLS: ReadonlyArray<readonly [pathname: string, hash: string, to: stri
   ],
   ["/settings/storage", "storage-worktrees", "/settings/platform/hub-defaults/worktrees"],
   ["/settings/storage", "", "/settings/maintenance"],
-  ["/settings/integrations", "devices", "/settings/devices"],
+  ["/settings/integrations", "devices", "/settings/platform/hub-machine/devices"],
   ["/settings/beta", "", "/settings/platform/labs"],
   ["/settings/labs", "", "/settings/platform/labs"],
   ["/settings/labs", "legacy-features", "/settings/platform/labs"],
@@ -95,8 +103,13 @@ const OLD_PROJECT_URLS: ReadonlyArray<
 const NOT_MOVED: ReadonlyArray<readonly [pathname: string, hash: string]> = [
   ["/settings/user/general", ""],
   ["/settings/projects", "project-defaults"],
-  ["/settings/access", ""],
-  ["/settings/access", "connections-environment"],
+  // The old pages of a machine lead to its page through `LegacyMachineRedirect`, which needs the
+  // machine the query names.
+  ["/settings/providers", ""],
+  ["/settings/source-control", ""],
+  ["/settings/devices", ""],
+  ["/settings/maintenance", ""],
+  ["/settings/diagnostics", ""],
 ];
 
 const OWNER_ON_DESKTOP: SettingsVisibilityContext = {
@@ -150,7 +163,7 @@ describe("old settings URLs", () => {
         expect(isSettingsSectionVisible(modal, section!, { ...OWNER_ON_DESKTOP, space }), to).toBe(
           true,
         );
-      } else {
+      } else if (!(to in LEGACY_MACHINE_PAGES)) {
         expect(SETTINGS_SECTION_LABELS, to).toHaveProperty([to]);
       }
     }
@@ -227,6 +240,7 @@ describe("settings modal sections", () => {
         "master-key",
         "ai-gateway",
         "sandboxes",
+        "hub-machine",
         "hub-defaults",
         "labs",
       ]);
@@ -237,7 +251,7 @@ describe("settings modal sections", () => {
     const reservedIds = SETTINGS_MODAL_SECTIONS.platform
       .filter((section) => section.component === null)
       .map((section) => section.id);
-    expect(reservedIds).toEqual(["hub-machine", "registration", "keycloak", "plans", "terms"]);
+    expect(reservedIds).toEqual(["registration", "keycloak", "plans", "terms"]);
   });
 
   it("shows User settings to everyone, and SnapShots on the desktop only", () => {
@@ -264,6 +278,7 @@ describe("settings modal sections", () => {
       "diffs",
       "keybindings",
       "snap-shot",
+      "machines",
       "about",
     ]);
   });

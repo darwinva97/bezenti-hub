@@ -15,7 +15,7 @@ import {
 import type { deriveThreadStructureRuntime } from "@t3tools/client-runtime/state/thread-execution";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type SetStateAction } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useOpenMachineSettings } from "../settings/useOpenMachineSettings";
 import { toastManager } from "../ui/toast";
 import { resolveAppModelSelectionForInstance } from "../../modelSelection";
 import { resolveNewDraftStartFromOrigin } from "../../lib/chatThreadActions";
@@ -79,7 +79,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     setPendingServerThreadStartFromOriginByThreadId,
     scheduleComposerFocus,
   } = input;
-  const navigate = useNavigate();
+  const { open: openMachineSettings } = useOpenMachineSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -116,10 +116,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
   };
   const toggleInteractionModeStable = useStableCallback(toggleInteractionMode);
   const openProviderSetup = (instanceId: ProviderInstanceId) => {
-    void navigate({
-      to: "/settings/providers",
-      search: { environmentId, instanceId },
-    });
+    openMachineSettings({ section: "providers", environmentId, instanceId });
   };
   const openProviderSetupStable = useStableCallback(openProviderSetup);
 

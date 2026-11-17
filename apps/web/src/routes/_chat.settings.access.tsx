@@ -1,10 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ConnectionsSettings } from "../components/settings/ConnectionsSettings";
 
-function SettingsAccessRoute() {
-  return <ConnectionsSettings view="access" />;
-}
-
-export const Route = createFileRoute("/_chat/settings/access")({
-  component: SettingsAccessRoute,
-});
+// Split into Sessions, Platform and the pages of a machine; the settings route redirects old links.
+export const Route = createFileRoute("/_chat/settings/access")({});

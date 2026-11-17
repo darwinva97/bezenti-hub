@@ -1,5 +1,5 @@
 import { Spinner } from "~/components/ui/spinner";
-import { useNavigate } from "@tanstack/react-router";
+import { useOpenMachineSettings } from "../settings/useOpenMachineSettings";
 import { useAtomValue } from "@effect/atom-react";
 import type { ServerProvider } from "@t3tools/contracts";
 import { CircleCheckIcon, DownloadIcon, TriangleAlertIcon, XIcon } from "lucide-react";
@@ -43,7 +43,7 @@ function latestProviderCheckedAt(
 }
 
 export function SidebarProviderUpdatePill() {
-  const navigate = useNavigate();
+  const { canOpen: canOpenProviderSettings, open: openMachineSettings } = useOpenMachineSettings();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [renderedView, setRenderedView] = useState<ProviderUpdateSidebarPillView | null>(null);
@@ -64,7 +64,7 @@ export function SidebarProviderUpdatePill() {
   }
 
   const openProviderSettings = () => {
-    void navigate({ to: "/settings/providers" });
+    openMachineSettings({ section: "providers" });
   };
   const displayedView = renderedView ?? view;
   const dismissAfterVisibleMs = displayedView?.dismissAfterVisibleMs;
@@ -134,7 +134,8 @@ export function SidebarProviderUpdatePill() {
     return () => window.clearTimeout(timeoutId);
   }, [dismissAfterVisibleMs, exitingKey, viewKey]);
 
-  if (!displayedView) {
+  // The pill leads to the provider settings of the Hub machine, which only its Owner opens.
+  if (!canOpenProviderSettings || !displayedView) {
     return null;
   }
 

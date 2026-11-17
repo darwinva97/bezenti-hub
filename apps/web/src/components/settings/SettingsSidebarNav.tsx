@@ -1,17 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent } from "react";
-import {
-  BotIcon,
-  GitBranchIcon,
-  KeyRoundIcon,
-  SearchIcon,
-  ServerIcon,
-  ShieldCheckIcon,
-  SmartphoneIcon,
-  UserIcon,
-  VaultIcon,
-  WrenchIcon,
-  XIcon,
-} from "lucide-react";
+import { KeyRoundIcon, SearchIcon, ServerIcon, UserIcon, VaultIcon, XIcon } from "lucide-react";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 
 import { cn } from "../../lib/utils";
@@ -50,25 +38,15 @@ import { validateSettingsScopeSearch } from "./settingsScope";
 import { useSettingsSectionNavigation } from "./useSettingsSectionNavigation";
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
 import { usePrimaryActsForInstallation } from "../../environments/primary";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 
 const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
 > = {
-  "/settings/diagnostics": WrenchIcon,
-  "/settings/providers": BotIcon,
   "/settings/ai-accounts": KeyRoundIcon,
-  "/settings/devices": SmartphoneIcon,
-  "/settings/source-control": GitBranchIcon,
   "/settings/connections": ServerIcon,
-  "/settings/access": ShieldCheckIcon,
   "/settings/secrets": KeyRoundIcon,
   "/settings/vaults": VaultIcon,
-  "/settings/maintenance": WrenchIcon,
-};
-
-// Detail pages without a nav entry highlight the page that links to them.
-const SETTINGS_DETAIL_PAGE_PARENTS: Readonly<Record<string, SettingsPath>> = {
-  "/settings/diagnostics": "/settings/maintenance",
 };
 
 interface SettingsNavEntry {
@@ -204,10 +182,11 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const scopeSearch = validateSettingsScopeSearch(currentSearch);
   const modal = settingsModalForPathname(pathname);
   const { projectKey, spaceId } = useParams({ strict: false });
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   // A section's subpages keep it open: its key is the modal and the section segment of the path.
   const activePath =
     modal === null
-      ? (SETTINGS_DETAIL_PAGE_PARENTS[pathname] ?? pathname)
+      ? pathname
       : `${modal}/${pathname.split("/")[modal === "user" || modal === "platform" ? 3 : 4] ?? ""}`;
   const visibility = useSettingsVisibility();
   // A Member of a Hub does not see the pages only its Owner changes.
@@ -304,7 +283,11 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       scrollToSettingsTarget(targetId);
       return;
     }
-    const destination = settingsItemDestination(item, { projectKey, spaceId });
+    const destination = settingsItemDestination(item, {
+      projectKey,
+      spaceId,
+      primaryEnvironmentId,
+    });
     if (destination === null) return;
     void navigate({
       ...destination,

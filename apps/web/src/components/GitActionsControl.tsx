@@ -19,7 +19,7 @@ import type {
   SourceControlRepositoryVisibility,
   VcsStatusResult,
 } from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
+import { useOpenMachineSettings } from "./settings/useOpenMachineSettings";
 import * as Option from "effect/Option";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useDeadlinePassed } from "../hooks/useDeadline";
@@ -430,7 +430,8 @@ interface PublishRepositoryDialogProps {
 
 function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const openLink = useOpenLink(props.threadRef);
-  const navigate = useNavigate();
+  const { canOpen: canOpenSourceControlSettings, open: openMachineSettings } =
+    useOpenMachineSettings();
   const sourceControlDiscovery = useEnvironmentQuery(
     props.environmentId === null
       ? null
@@ -573,7 +574,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
 
   const openSourceControlSettings = () => {
     handleOpenChange(false);
-    void navigate({ to: "/settings/source-control" });
+    openMachineSettings({ section: "source-control", environmentId: props.environmentId });
   };
 
   return (
@@ -624,27 +625,29 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                       <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
                         {option.label}
                       </span>
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <Button
-                              variant="warning-outline"
-                              size="micro"
-                              onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                openSourceControlSettings();
-                              }}
-                            >
-                              Setup Required
-                            </Button>
-                          }
-                        />
-                        <TooltipPopup side="top" align="end">
-                          {readiness.hint ??
-                            "Open Settings -> Source control to configure this provider."}
-                        </TooltipPopup>
-                      </Tooltip>
+                      {canOpenSourceControlSettings ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                variant="warning-outline"
+                                size="micro"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  openSourceControlSettings();
+                                }}
+                              >
+                                Setup Required
+                              </Button>
+                            }
+                          />
+                          <TooltipPopup side="top" align="end">
+                            {readiness.hint ??
+                              "Open Machine settings -> Source control to configure this provider."}
+                          </TooltipPopup>
+                        </Tooltip>
+                      ) : null}
                     </div>
                   );
                 }

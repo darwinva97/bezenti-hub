@@ -68,7 +68,15 @@ import { Route as ChatSettingsProjectProjectKeyIndexRouteImport } from './routes
 import { Route as ChatSettingsUserAboutLicensesRouteImport } from './routes/_chat.settings.user.about.licenses'
 import { Route as ChatSettingsSpaceSpaceIdSectionRouteImport } from './routes/_chat.settings.space.$spaceId.$section'
 import { Route as ChatSettingsProjectProjectKeySectionRouteImport } from './routes/_chat.settings.project.$projectKey.$section'
+import { Route as ChatSettingsPlatformHubMachineMachineSectionRouteImport } from './routes/_chat.settings.platform.hub-machine.$machineSection'
 import { Route as ChatSettingsPlatformHubDefaultsSubsectionRouteImport } from './routes/_chat.settings.platform.hub-defaults.$subsection'
+import { Route as ChatSettingsUserMachinesEnvironmentIdIndexRouteImport } from './routes/_chat.settings.user.machines.$environmentId.index'
+import { Route as ChatSettingsUserMachinesEnvironmentIdMachineSectionRouteImport } from './routes/_chat.settings.user.machines.$environmentId.$machineSection'
+import { Route as ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRouteImport } from './routes/_chat.settings.platform.hub-machine.maintenance.diagnostics'
+import { Route as ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRouteImport } from './routes/_chat.settings.space.$spaceId.machines.$environmentId.index'
+import { Route as ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRouteImport } from './routes/_chat.settings.user.machines.$environmentId.maintenance.diagnostics'
+import { Route as ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRouteImport } from './routes/_chat.settings.space.$spaceId.machines.$environmentId.$machineSection'
+import { Route as ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRouteImport } from './routes/_chat.settings.space.$spaceId.machines.$environmentId.maintenance.diagnostics'
 
 const WelcomeRoute = WelcomeRouteImport.update({
   id: '/welcome',
@@ -377,12 +385,66 @@ const ChatSettingsProjectProjectKeySectionRoute =
     path: '/project/$projectKey/$section',
     getParentRoute: () => ChatSettingsRoute,
   } as any)
+const ChatSettingsPlatformHubMachineMachineSectionRoute =
+  ChatSettingsPlatformHubMachineMachineSectionRouteImport.update({
+    id: '/platform/hub-machine/$machineSection',
+    path: '/platform/hub-machine/$machineSection',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
 const ChatSettingsPlatformHubDefaultsSubsectionRoute =
   ChatSettingsPlatformHubDefaultsSubsectionRouteImport.update({
     id: '/platform/hub-defaults/$subsection',
     path: '/platform/hub-defaults/$subsection',
     getParentRoute: () => ChatSettingsRoute,
   } as any)
+const ChatSettingsUserMachinesEnvironmentIdIndexRoute =
+  ChatSettingsUserMachinesEnvironmentIdIndexRouteImport.update({
+    id: '/user/machines/$environmentId/',
+    path: '/user/machines/$environmentId/',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
+const ChatSettingsUserMachinesEnvironmentIdMachineSectionRoute =
+  ChatSettingsUserMachinesEnvironmentIdMachineSectionRouteImport.update({
+    id: '/user/machines/$environmentId/$machineSection',
+    path: '/user/machines/$environmentId/$machineSection',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
+const ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRoute =
+  ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRouteImport.update({
+    id: '/platform/hub-machine/maintenance/diagnostics',
+    path: '/platform/hub-machine/maintenance/diagnostics',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
+const ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRoute =
+  ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRouteImport.update({
+    id: '/space/$spaceId/machines/$environmentId/',
+    path: '/space/$spaceId/machines/$environmentId/',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
+const ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRoute =
+  ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRouteImport.update(
+    {
+      id: '/user/machines/$environmentId/maintenance/diagnostics',
+      path: '/user/machines/$environmentId/maintenance/diagnostics',
+      getParentRoute: () => ChatSettingsRoute,
+    } as any,
+  )
+const ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRoute =
+  ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRouteImport.update(
+    {
+      id: '/space/$spaceId/machines/$environmentId/$machineSection',
+      path: '/space/$spaceId/machines/$environmentId/$machineSection',
+      getParentRoute: () => ChatSettingsRoute,
+    } as any,
+  )
+const ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRoute =
+  ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRouteImport.update(
+    {
+      id: '/space/$spaceId/machines/$environmentId/maintenance/diagnostics',
+      path: '/space/$spaceId/machines/$environmentId/maintenance/diagnostics',
+      getParentRoute: () => ChatSettingsRoute,
+    } as any,
+  )
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
@@ -439,11 +501,19 @@ export interface FileRoutesByFullPath {
   '/settings/space/': typeof ChatSettingsSpaceIndexRoute
   '/settings/user/': typeof ChatSettingsUserIndexRoute
   '/settings/platform/hub-defaults/$subsection': typeof ChatSettingsPlatformHubDefaultsSubsectionRoute
+  '/settings/platform/hub-machine/$machineSection': typeof ChatSettingsPlatformHubMachineMachineSectionRoute
   '/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
   '/settings/space/$spaceId/$section': typeof ChatSettingsSpaceSpaceIdSectionRoute
   '/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
   '/settings/project/$projectKey/': typeof ChatSettingsProjectProjectKeyIndexRoute
   '/settings/space/$spaceId/': typeof ChatSettingsSpaceSpaceIdIndexRoute
+  '/settings/platform/hub-machine/maintenance/diagnostics': typeof ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRoute
+  '/settings/user/machines/$environmentId/$machineSection': typeof ChatSettingsUserMachinesEnvironmentIdMachineSectionRoute
+  '/settings/user/machines/$environmentId/': typeof ChatSettingsUserMachinesEnvironmentIdIndexRoute
+  '/settings/space/$spaceId/machines/$environmentId/$machineSection': typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRoute
+  '/settings/user/machines/$environmentId/maintenance/diagnostics': typeof ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRoute
+  '/settings/space/$spaceId/machines/$environmentId/': typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRoute
+  '/settings/space/$spaceId/machines/$environmentId/maintenance/diagnostics': typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRoute
 }
 export interface FileRoutesByTo {
   '/app-sign-in': typeof AppSignInRoute
@@ -500,11 +570,19 @@ export interface FileRoutesByTo {
   '/settings/space': typeof ChatSettingsSpaceIndexRoute
   '/settings/user': typeof ChatSettingsUserIndexRoute
   '/settings/platform/hub-defaults/$subsection': typeof ChatSettingsPlatformHubDefaultsSubsectionRoute
+  '/settings/platform/hub-machine/$machineSection': typeof ChatSettingsPlatformHubMachineMachineSectionRoute
   '/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
   '/settings/space/$spaceId/$section': typeof ChatSettingsSpaceSpaceIdSectionRoute
   '/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
   '/settings/project/$projectKey': typeof ChatSettingsProjectProjectKeyIndexRoute
   '/settings/space/$spaceId': typeof ChatSettingsSpaceSpaceIdIndexRoute
+  '/settings/platform/hub-machine/maintenance/diagnostics': typeof ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRoute
+  '/settings/user/machines/$environmentId/$machineSection': typeof ChatSettingsUserMachinesEnvironmentIdMachineSectionRoute
+  '/settings/user/machines/$environmentId': typeof ChatSettingsUserMachinesEnvironmentIdIndexRoute
+  '/settings/space/$spaceId/machines/$environmentId/$machineSection': typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRoute
+  '/settings/user/machines/$environmentId/maintenance/diagnostics': typeof ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRoute
+  '/settings/space/$spaceId/machines/$environmentId': typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRoute
+  '/settings/space/$spaceId/machines/$environmentId/maintenance/diagnostics': typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -563,11 +641,19 @@ export interface FileRoutesById {
   '/_chat/settings/space/': typeof ChatSettingsSpaceIndexRoute
   '/_chat/settings/user/': typeof ChatSettingsUserIndexRoute
   '/_chat/settings/platform/hub-defaults/$subsection': typeof ChatSettingsPlatformHubDefaultsSubsectionRoute
+  '/_chat/settings/platform/hub-machine/$machineSection': typeof ChatSettingsPlatformHubMachineMachineSectionRoute
   '/_chat/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
   '/_chat/settings/space/$spaceId/$section': typeof ChatSettingsSpaceSpaceIdSectionRoute
   '/_chat/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
   '/_chat/settings/project/$projectKey/': typeof ChatSettingsProjectProjectKeyIndexRoute
   '/_chat/settings/space/$spaceId/': typeof ChatSettingsSpaceSpaceIdIndexRoute
+  '/_chat/settings/platform/hub-machine/maintenance/diagnostics': typeof ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRoute
+  '/_chat/settings/user/machines/$environmentId/$machineSection': typeof ChatSettingsUserMachinesEnvironmentIdMachineSectionRoute
+  '/_chat/settings/user/machines/$environmentId/': typeof ChatSettingsUserMachinesEnvironmentIdIndexRoute
+  '/_chat/settings/space/$spaceId/machines/$environmentId/$machineSection': typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRoute
+  '/_chat/settings/user/machines/$environmentId/maintenance/diagnostics': typeof ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRoute
+  '/_chat/settings/space/$spaceId/machines/$environmentId/': typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRoute
+  '/_chat/settings/space/$spaceId/machines/$environmentId/maintenance/diagnostics': typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -626,11 +712,19 @@ export interface FileRouteTypes {
     | '/settings/space/'
     | '/settings/user/'
     | '/settings/platform/hub-defaults/$subsection'
+    | '/settings/platform/hub-machine/$machineSection'
     | '/settings/project/$projectKey/$section'
     | '/settings/space/$spaceId/$section'
     | '/settings/user/about/licenses'
     | '/settings/project/$projectKey/'
     | '/settings/space/$spaceId/'
+    | '/settings/platform/hub-machine/maintenance/diagnostics'
+    | '/settings/user/machines/$environmentId/$machineSection'
+    | '/settings/user/machines/$environmentId/'
+    | '/settings/space/$spaceId/machines/$environmentId/$machineSection'
+    | '/settings/user/machines/$environmentId/maintenance/diagnostics'
+    | '/settings/space/$spaceId/machines/$environmentId/'
+    | '/settings/space/$spaceId/machines/$environmentId/maintenance/diagnostics'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/app-sign-in'
@@ -687,11 +781,19 @@ export interface FileRouteTypes {
     | '/settings/space'
     | '/settings/user'
     | '/settings/platform/hub-defaults/$subsection'
+    | '/settings/platform/hub-machine/$machineSection'
     | '/settings/project/$projectKey/$section'
     | '/settings/space/$spaceId/$section'
     | '/settings/user/about/licenses'
     | '/settings/project/$projectKey'
     | '/settings/space/$spaceId'
+    | '/settings/platform/hub-machine/maintenance/diagnostics'
+    | '/settings/user/machines/$environmentId/$machineSection'
+    | '/settings/user/machines/$environmentId'
+    | '/settings/space/$spaceId/machines/$environmentId/$machineSection'
+    | '/settings/user/machines/$environmentId/maintenance/diagnostics'
+    | '/settings/space/$spaceId/machines/$environmentId'
+    | '/settings/space/$spaceId/machines/$environmentId/maintenance/diagnostics'
   id:
     | '__root__'
     | '/_chat'
@@ -749,11 +851,19 @@ export interface FileRouteTypes {
     | '/_chat/settings/space/'
     | '/_chat/settings/user/'
     | '/_chat/settings/platform/hub-defaults/$subsection'
+    | '/_chat/settings/platform/hub-machine/$machineSection'
     | '/_chat/settings/project/$projectKey/$section'
     | '/_chat/settings/space/$spaceId/$section'
     | '/_chat/settings/user/about/licenses'
     | '/_chat/settings/project/$projectKey/'
     | '/_chat/settings/space/$spaceId/'
+    | '/_chat/settings/platform/hub-machine/maintenance/diagnostics'
+    | '/_chat/settings/user/machines/$environmentId/$machineSection'
+    | '/_chat/settings/user/machines/$environmentId/'
+    | '/_chat/settings/space/$spaceId/machines/$environmentId/$machineSection'
+    | '/_chat/settings/user/machines/$environmentId/maintenance/diagnostics'
+    | '/_chat/settings/space/$spaceId/machines/$environmentId/'
+    | '/_chat/settings/space/$spaceId/machines/$environmentId/maintenance/diagnostics'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -1186,11 +1296,67 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsProjectProjectKeySectionRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/platform/hub-machine/$machineSection': {
+      id: '/_chat/settings/platform/hub-machine/$machineSection'
+      path: '/platform/hub-machine/$machineSection'
+      fullPath: '/settings/platform/hub-machine/$machineSection'
+      preLoaderRoute: typeof ChatSettingsPlatformHubMachineMachineSectionRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
     '/_chat/settings/platform/hub-defaults/$subsection': {
       id: '/_chat/settings/platform/hub-defaults/$subsection'
       path: '/platform/hub-defaults/$subsection'
       fullPath: '/settings/platform/hub-defaults/$subsection'
       preLoaderRoute: typeof ChatSettingsPlatformHubDefaultsSubsectionRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/user/machines/$environmentId/': {
+      id: '/_chat/settings/user/machines/$environmentId/'
+      path: '/user/machines/$environmentId'
+      fullPath: '/settings/user/machines/$environmentId/'
+      preLoaderRoute: typeof ChatSettingsUserMachinesEnvironmentIdIndexRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/user/machines/$environmentId/$machineSection': {
+      id: '/_chat/settings/user/machines/$environmentId/$machineSection'
+      path: '/user/machines/$environmentId/$machineSection'
+      fullPath: '/settings/user/machines/$environmentId/$machineSection'
+      preLoaderRoute: typeof ChatSettingsUserMachinesEnvironmentIdMachineSectionRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/platform/hub-machine/maintenance/diagnostics': {
+      id: '/_chat/settings/platform/hub-machine/maintenance/diagnostics'
+      path: '/platform/hub-machine/maintenance/diagnostics'
+      fullPath: '/settings/platform/hub-machine/maintenance/diagnostics'
+      preLoaderRoute: typeof ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/space/$spaceId/machines/$environmentId/': {
+      id: '/_chat/settings/space/$spaceId/machines/$environmentId/'
+      path: '/space/$spaceId/machines/$environmentId'
+      fullPath: '/settings/space/$spaceId/machines/$environmentId/'
+      preLoaderRoute: typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/user/machines/$environmentId/maintenance/diagnostics': {
+      id: '/_chat/settings/user/machines/$environmentId/maintenance/diagnostics'
+      path: '/user/machines/$environmentId/maintenance/diagnostics'
+      fullPath: '/settings/user/machines/$environmentId/maintenance/diagnostics'
+      preLoaderRoute: typeof ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/space/$spaceId/machines/$environmentId/$machineSection': {
+      id: '/_chat/settings/space/$spaceId/machines/$environmentId/$machineSection'
+      path: '/space/$spaceId/machines/$environmentId/$machineSection'
+      fullPath: '/settings/space/$spaceId/machines/$environmentId/$machineSection'
+      preLoaderRoute: typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/space/$spaceId/machines/$environmentId/maintenance/diagnostics': {
+      id: '/_chat/settings/space/$spaceId/machines/$environmentId/maintenance/diagnostics'
+      path: '/space/$spaceId/machines/$environmentId/maintenance/diagnostics'
+      fullPath: '/settings/space/$spaceId/machines/$environmentId/maintenance/diagnostics'
+      preLoaderRoute: typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
   }
@@ -1232,11 +1398,19 @@ interface ChatSettingsRouteChildren {
   ChatSettingsSpaceIndexRoute: typeof ChatSettingsSpaceIndexRoute
   ChatSettingsUserIndexRoute: typeof ChatSettingsUserIndexRoute
   ChatSettingsPlatformHubDefaultsSubsectionRoute: typeof ChatSettingsPlatformHubDefaultsSubsectionRoute
+  ChatSettingsPlatformHubMachineMachineSectionRoute: typeof ChatSettingsPlatformHubMachineMachineSectionRoute
   ChatSettingsProjectProjectKeySectionRoute: typeof ChatSettingsProjectProjectKeySectionRoute
   ChatSettingsSpaceSpaceIdSectionRoute: typeof ChatSettingsSpaceSpaceIdSectionRoute
   ChatSettingsUserAboutLicensesRoute: typeof ChatSettingsUserAboutLicensesRoute
   ChatSettingsProjectProjectKeyIndexRoute: typeof ChatSettingsProjectProjectKeyIndexRoute
   ChatSettingsSpaceSpaceIdIndexRoute: typeof ChatSettingsSpaceSpaceIdIndexRoute
+  ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRoute: typeof ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRoute
+  ChatSettingsUserMachinesEnvironmentIdMachineSectionRoute: typeof ChatSettingsUserMachinesEnvironmentIdMachineSectionRoute
+  ChatSettingsUserMachinesEnvironmentIdIndexRoute: typeof ChatSettingsUserMachinesEnvironmentIdIndexRoute
+  ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRoute: typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRoute
+  ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRoute: typeof ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRoute
+  ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRoute: typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRoute
+  ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRoute: typeof ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRoute
 }
 
 const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
@@ -1276,6 +1450,8 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsUserIndexRoute: ChatSettingsUserIndexRoute,
   ChatSettingsPlatformHubDefaultsSubsectionRoute:
     ChatSettingsPlatformHubDefaultsSubsectionRoute,
+  ChatSettingsPlatformHubMachineMachineSectionRoute:
+    ChatSettingsPlatformHubMachineMachineSectionRoute,
   ChatSettingsProjectProjectKeySectionRoute:
     ChatSettingsProjectProjectKeySectionRoute,
   ChatSettingsSpaceSpaceIdSectionRoute: ChatSettingsSpaceSpaceIdSectionRoute,
@@ -1283,6 +1459,20 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsProjectProjectKeyIndexRoute:
     ChatSettingsProjectProjectKeyIndexRoute,
   ChatSettingsSpaceSpaceIdIndexRoute: ChatSettingsSpaceSpaceIdIndexRoute,
+  ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRoute:
+    ChatSettingsPlatformHubMachineMaintenanceDiagnosticsRoute,
+  ChatSettingsUserMachinesEnvironmentIdMachineSectionRoute:
+    ChatSettingsUserMachinesEnvironmentIdMachineSectionRoute,
+  ChatSettingsUserMachinesEnvironmentIdIndexRoute:
+    ChatSettingsUserMachinesEnvironmentIdIndexRoute,
+  ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRoute:
+    ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMachineSectionRoute,
+  ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRoute:
+    ChatSettingsUserMachinesEnvironmentIdMaintenanceDiagnosticsRoute,
+  ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRoute:
+    ChatSettingsSpaceSpaceIdMachinesEnvironmentIdIndexRoute,
+  ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRoute:
+    ChatSettingsSpaceSpaceIdMachinesEnvironmentIdMaintenanceDiagnosticsRoute,
 }
 
 const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(

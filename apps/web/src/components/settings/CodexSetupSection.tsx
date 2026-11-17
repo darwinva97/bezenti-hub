@@ -48,6 +48,7 @@ import { SettingsRow } from "./settingsLayout";
 import { AddCodexAccountDialog } from "./AddCodexAccountDialog";
 import { getOnboardingProviderState } from "../../onboarding/providerReadiness.logic";
 import { getProviderSummary } from "./providerStatus";
+import { isMachineProvidersPathname } from "./machineSettings";
 import {
   settleAuthorizationPage,
   settleHandoffAuthorizationPage,
@@ -301,7 +302,7 @@ function ManagedCodexSetup({
   const remoteWeb = clientCallback && !window.desktopBridge;
   const returnUrl = new URL(window.location.href);
   if (returnUrl.pathname === "/welcome") returnUrl.hash = `agents:${environmentId}`;
-  if (returnUrl.pathname === "/settings/providers")
+  if (isMachineProvidersPathname(returnUrl.pathname))
     returnUrl.searchParams.set("instanceId", instanceId);
   const needsManualCallback = remoteWeb;
   const callbackHelpId = useId();
@@ -482,7 +483,7 @@ function ManagedCodexSetup({
     setRequestedMethodId(methodId);
     const returnUrl = new URL(window.location.href);
     if (returnUrl.pathname === "/welcome") returnUrl.hash = `agents:${environmentId}`;
-    if (returnUrl.pathname === "/settings/providers")
+    if (isMachineProvidersPathname(returnUrl.pathname))
       returnUrl.searchParams.set("instanceId", instanceId);
     const { clientCallback, remoteWeb, primaryAuthEnvironmentId } =
       readSignInRouting(environmentId);

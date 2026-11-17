@@ -117,13 +117,14 @@ it("opens Platform for the Owner with its built sections", async () => {
       "Master key",
       "AI gateway",
       "Sandboxes",
+      "Hub machine",
       "Hub defaults",
       "Labs",
     ]) {
       await expect.element(page.getByRole("treeitem", { name })).toBeVisible();
     }
     // Sections other specs fill in stay out until they are built.
-    for (const name of ["Hub machine", "Registration", "Keycloak", "Plans", "Terms"]) {
+    for (const name of ["Registration", "Keycloak", "Plans", "Terms"]) {
       expect(page.getByRole("treeitem", { name }).elements()).toHaveLength(0);
     }
     await expect

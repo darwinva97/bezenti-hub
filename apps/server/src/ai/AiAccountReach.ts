@@ -40,7 +40,10 @@ export class AiAccountReachError extends Schema.TaggedError<AiAccountReachError>
 export interface AiAccountLost {
   readonly aiAccountId: AiAccountId;
   readonly provider: AiAccountProvider;
-  /** Only for an account allowed to the Space it leaves (shown to its viewers there). */
+  /**
+   * Only for an account its viewers see in the Space it leaves: allowed to it, or owned by its
+   * owner (owned-resources 10).
+   */
   readonly name: string | null;
   readonly threads: number;
 }
@@ -169,11 +172,12 @@ const make = Effect.gen(function* () {
     }>`
       SELECT a.account_id AS "accountId", a.name AS "name", a.provider AS "provider",
         a.priority AS "priority",
-        EXISTS (
+        (EXISTS (
           SELECT 1 FROM ai_account_allowances l
           WHERE l.account_id = a.account_id AND l.subject_kind = 'space'
             AND l.subject_id = ${input.from}
-        ) AS "shown"
+        ) OR (a.owner_kind = 'organization' AND a.owner_id = ${input.from})
+          OR (a.owner_kind = 'user' AND 'personal:' || a.owner_id = ${input.from})) AS "shown"
       FROM ai_accounts a WHERE ${sql.in("a.account_id", ids)}
       ORDER BY a.priority, a.account_id
     `.pipe(Effect.catch(failed("read the AI accounts")));

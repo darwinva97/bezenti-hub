@@ -180,7 +180,8 @@ export const AUDIT_DETAIL_KEYS = {
   /** The name `from` and `to`, whether it was described, and `archived` when that changed. */
   "vault_group.update": ["from", "to", "described", "archived"],
   /** How many entries it held. */
-  "vault_group.delete": ["entries"],
+  /** `via` the removal that took it (`user.remove`, `organization.delete`), if any. */
+  "vault_group.delete": ["entries", "via"],
   /** Allowed (`allowed`: true) or taken back, to a `space` or a `user` (`subjectKind`, `subjectId`). */
   "vault.allow": ["subjectKind", "subjectId", "subjectName", "allowed"],
   /**
@@ -266,7 +267,7 @@ export const AUDIT_DETAIL_KEYS = {
     "ownerKind",
     "ownerId",
   ],
-  "ai_account.delete": ["provider", "ownerKind", "ownerId"],
+  "ai_account.delete": ["provider", "ownerKind", "ownerId", "via"],
   /** How many Spaces and Users it is allowed to now, and the change. */
   "ai_account.allow": ["spaces", "users", "added", "removed"],
   /** Which provider, a new account or «Sign in again», and how it ended; never a token. */

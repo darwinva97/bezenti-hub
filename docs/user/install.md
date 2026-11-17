@@ -311,12 +311,19 @@ out everywhere at once (browsers, the desktop and mobile apps, outside agents an
 `t3` tokens), their pending reset links, pairing codes and invitations stop
 working, their running agent turns stop, their scheduled tasks pause (the Owner
 can delete them), and signing in tells them the Owner disabled the account.
-They stay in their organizations; **Turn back on** lets them sign in again and
-resumes the tasks that were paused.
+They stay in their organizations, and nothing of theirs is deleted: their vault
+and AI accounts stay, unused while they are off, and loans to their Personal
+space stay but nothing runs on a machine lent to it. Their own machines are
+removed from the Hub, and stay removed when they come back (they join them
+again). **Turn back on** lets them sign in again, resumes the tasks that were
+paused, and gives them back their vault and AI accounts as they were.
 
 **Remove** is for good and asks you to type their sign-in name. On top of
 disabling, it takes them out of every organization (what they made there stays),
-takes back every vault you allowed them, and freezes their Personal space: it is listed for the Owner as "name (removed)"
+takes back every vault you allowed them, deletes what they own (their vault
+with every group and secret, and their AI accounts, which also leave the AI
+gateway), ends every loan they gave and every loan to their Personal space, and
+freezes their Personal space: it is listed for the Owner as "name (removed)"
 under **Personal spaces (read only)**, nobody can add to or change it, and the
 Owner can only read it, move its projects to an organization, or delete what is
 in it. Their name stays on what they did. The Owner
@@ -685,9 +692,14 @@ running threads and keeps its scheduled tasks from running. Nothing new starts i
 it, not even from the Owner. The Owner still sees it in the Space selector under
 **Archived**, where **Restore organization** brings it back as it was. Only an
 archived organization can be deleted: **Delete organization** asks you to type its
-name, then deletes its projects, threads, members and invitations for good, and
-its own vault with every group and secret. Groups of the Owner's that it was allowed
-keep their secrets and only lose that organization.
+name, then deletes its projects, threads, members and invitations for good, its
+own vault with every group and secret, and its AI accounts (they also leave the AI
+gateway). Every loan to it ends, and a machine lent to it stops serving it at once;
+every loan it gave ends too. Groups of the Owner's that it was allowed keep their
+secrets and only lose that organization. Machines dedicated to it stay: the Owner
+sees them, with no Space, and removes them or dedicates them elsewhere. While an
+organization is archived, its vault, AI accounts and machines are kept but not
+used, and machines lent to it run nothing until it is restored.
 
 ### Move a project to another Space
 
@@ -699,10 +711,12 @@ space, which the Owner only reads; a removed user's frozen Personal space is the
 exception, and the Owner can move projects out of it. All its threads move with it,
 and who can see it changes at once. Stop its running threads first: the move is
 refused while any of them runs, and says which. In the new Space the project uses
-that Space's vaults and AI accounts. Before you confirm, the dialog lists the
-vaults its threads stop receiving; the project's own vault choices that the new
-Space is not allowed are dropped, so allowing such a vault there later does not
-bring it back by itself.
+that Space's vaults and AI accounts: nothing of the Space it leaves follows it,
+your own vault and AI accounts included when it leaves your Personal space.
+Before you confirm, the dialog lists the vault groups its threads stop receiving,
+each with whose vault it is, and the AI accounts they lose; the project's own
+group choices that do not reach the new Space are dropped, so allowing such a
+group there later does not bring it back by itself.
 
 ### Join a machine to your Hub
 

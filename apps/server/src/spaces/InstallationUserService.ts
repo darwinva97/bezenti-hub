@@ -2,7 +2,12 @@
  * The Owner disables, re-enables or removes a User. Every write commits in one transaction; once
  * it has, every session and pending link of theirs ends and their open connections close.
  */
-import type { InstallationUser, InstallationUserStatus, UserId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  InstallationUser,
+  InstallationUserStatus,
+  UserId,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -11,6 +16,9 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
+import * as AiAccountRetire from "../ai/AiAccountRetire.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as GrantEnding from "../grants/GrantEnding.ts";
 import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
 import * as PairingGrantStore from "../auth/PairingGrantStore.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
@@ -49,6 +57,8 @@ const make = Effect.gen(function* () {
   const environments = yield* EnvironmentRegistry.EnvironmentRegistry;
   // The orchestration's work, registered late; absent where nothing runs Threads.
   const moveHooks = yield* Effect.serviceOption(ProjectMoveHooks.ProjectMoveHooks);
+  // Absent where the Hub keeps no secrets: a value left behind is swept at the next start.
+  const vaultValues = yield* Effect.serviceOption(ServerSecretStore.VaultValueStore);
   const storageError = (cause: unknown) => new SpaceDirectory.SpaceDirectoryStorageError({ cause });
 
   const writeStatus = Effect.fn("InstallationUserService.writeStatus")(function* (
@@ -119,16 +129,53 @@ const make = Effect.gen(function* () {
           if (changed && current.status !== "removed") yield* writeStatus(userId, status);
           // A removed User's own Vault allowances go (spec 5 ticket 07); a disabled one keeps
           // them, unused while they cannot sign in.
+          const actor = AuditLog.userActor(actorUserId);
+          const gone = { valueIds: [] as Array<string>, lent: [] as Array<EnvironmentId> };
           if (status === "removed") {
-            yield* VaultReachLoss.forgetUser(sql, AuditLog.userActor(actorUserId), {
+            yield* VaultReachLoss.forgetUser(sql, actor, {
               userId,
               displayName: current.displayName,
             }).pipe(Effect.mapError(storageError));
             // Every gateway key of theirs, and every AI account allowed to them or to their
             // Personal space, go in the same commit (spec 4 ticket 11).
-            yield* AiAccountReachLoss.forgetUser(sql, AuditLog.userActor(actorUserId), userId).pipe(
+            yield* AiAccountReachLoss.forgetUser(sql, actor, userId).pipe(
               Effect.mapError(storageError),
             );
+            // What they own goes too (owned-resources 10): their Vault with its values (after
+            // the commit) and their AI accounts (the gateway's next tick takes them out). Their
+            // loans end (`lender-gone`), as do the loans to their Personal space (`target-gone`),
+            // before their machines are revoked: a lent machine's Sandbox closes here.
+            const vault = yield* VaultReachLoss.forgetUserVault(sql, actor, userId).pipe(
+              Effect.mapError(storageError),
+            );
+            gone.valueIds.push(...vault.valueIds);
+            yield* AiAccountRetire.retireOwned(
+              sql,
+              actor,
+              { kind: "user", id: userId },
+              "user.remove",
+            ).pipe(Effect.mapError(storageError));
+            const ended = [
+              ...(yield* GrantEnding.endGone(
+                sql,
+                actor,
+                { lender: { kind: "user", id: userId } },
+                "user.remove",
+              ).pipe(Effect.mapError(storageError))),
+              ...(yield* GrantEnding.endGone(
+                sql,
+                actor,
+                { target: `personal:${userId}` },
+                "user.remove",
+              ).pipe(Effect.mapError(storageError))),
+            ];
+            for (const grant of ended) {
+              if (grant.lentEnvironmentId === null) continue;
+              const closed = yield* environments
+                .closeLentSandbox(grant.grantId)
+                .pipe(Effect.mapError(storageError));
+              if (Option.isSome(closed)) gone.lent.push(closed.value);
+            }
           }
           // Their machines go with their sign-in, and stay revoked if they come back.
           const disconnect = yield* environments
@@ -146,6 +193,14 @@ const make = Effect.gen(function* () {
             changed,
             announce: Effect.andThen(announceSessions, announceLinks).pipe(
               Effect.andThen(disconnect),
+              Effect.andThen(
+                Effect.forEach(gone.lent, environments.lentSandboxClosed, { discard: true }),
+              ),
+              Effect.andThen(
+                Option.isSome(vaultValues)
+                  ? VaultReachLoss.removeValues(sql, vaultValues.value, gone.valueIds)
+                  : Effect.void,
+              ),
             ),
           };
         }),

@@ -65,6 +65,7 @@ import { heldByThread, pruneAndListHeld } from "../vaults/ThreadSecretValues.ts"
 import { AiGateway } from "./AiGateway.ts";
 import { aiCredentialValueId, credentialIdOfValueId } from "./aiCredentialValue.ts";
 import * as AiAccountChanges from "./AiAccountChanges.ts";
+import * as AiAccountRetire from "./AiAccountRetire.ts";
 import * as AllowedAiAccounts from "./AllowedAiAccounts.ts";
 import {
   type CliproxyIdentity,
@@ -1349,9 +1350,21 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     ),
     Effect.forkScoped,
   );
+  // Accounts another write retired (a User removed, an Organization deleted: AiAccountRetire)
+  // leave the gateway at the next tick.
+  const retiredElsewhere = sql<{ readonly n: number }>`
+    SELECT EXISTS (SELECT 1 FROM ai_accounts WHERE deleted_at IS NOT NULL) AS n
+  `.pipe(
+    Effect.map((rows) => rows[0]?.n === 1),
+    Effect.orElseSucceed(() => false),
+  );
   yield* Effect.gen(function* () {
     yield* Effect.sleep(RETRY_TICK);
-    if (dirty && (yield* Clock.currentTimeMillis) >= nextRetryAt) yield* syncNow;
+    if (dirty) {
+      if ((yield* Clock.currentTimeMillis) >= nextRetryAt) yield* syncNow;
+    } else if (yield* retiredElsewhere) {
+      yield* syncNow;
+    }
   }).pipe(Effect.forever, Effect.forkScoped);
   // CLIProxyAPI refreshes subscription tokens by itself: read them back and seal the newer ones.
   yield* Effect.gen(function* () {
@@ -1934,24 +1947,10 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     const row = yield* findRow(input.accountId);
     const userId = yield* managerOf(row);
     if (row.deletedAt === null) {
-      const at = yield* now;
       yield* sql
         .withTransaction(
           Effect.gen(function* () {
-            yield* sql`DELETE FROM ai_account_allowances WHERE account_id = ${row.accountId}`;
-            // Ticket 09: a key moved into it and saved again later is moved again, never lost.
-            yield* sql`DELETE FROM ai_account_migrated_keys WHERE account_id = ${row.accountId}`;
-            if (row.credentialId !== null) {
-              yield* sql`
-                INSERT INTO ai_account_retired_credentials (credential_id, account_id, retired_at)
-                VALUES (${row.credentialId}, ${row.accountId}, ${at})
-              `;
-            }
-            yield* sql`
-              UPDATE ai_accounts SET deleted_at = ${at}, credential_id = NULL, status = 'removing',
-                status_message = NULL, updated_at = ${at}
-              WHERE account_id = ${row.accountId}
-            `;
+            yield* AiAccountRetire.retireWithin(sql, row);
             yield* audit.record({
               actor: AuditLog.userActor(userId),
               action: "ai_account.delete",

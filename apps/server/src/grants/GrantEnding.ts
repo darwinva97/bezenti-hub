@@ -37,7 +37,8 @@ interface LiveRow {
 
 /**
  * Ends every live loan on the side that is gone: `pending` and `active` ones end with `reason`,
- * an `offered` one (never accepted) is cancelled. Answers each with its lent Sandbox.
+ * an `offered` one (never accepted) is cancelled, or its link expires when it has no
+ * destination yet. Answers each with its lent Sandbox.
  */
 export const endGone = Effect.fn("GrantEnding.endGone")(function* (
   sql: SqlClient.SqlClient,
@@ -50,6 +51,7 @@ export const endGone = Effect.fn("GrantEnding.endGone")(function* (
     "target" in side
       ? sql`g.target_kind = 'space' AND g.target_id = ${side.target}`
       : sql`g.lender_kind = ${side.lender.kind} AND g.lender_id = ${side.lender.id}`;
+  const now = DateTime.formatIso(yield* DateTime.now);
   const live = yield* sql<LiveRow>`
     SELECT g.grant_id AS "grantId", g.state AS state, g.resource_kind AS "resourceKind",
       g.resource_id AS "resourceId", g.lender_id AS "lenderId", g.target_id AS "targetId",
@@ -61,21 +63,28 @@ export const endGone = Effect.fn("GrantEnding.endGone")(function* (
       (SELECT e.environment_id FROM environments e
         WHERE e.grant_id = g.grant_id AND e.revoked_at IS NULL) AS "lentEnvironmentId"
     FROM grants g
-    WHERE ${where} AND g.state IN ('offered', 'pending', 'active')
+    WHERE ${where} AND (g.state IN ('pending', 'active')
+      OR (g.state = 'offered' AND (g.offer_expires_at IS NULL OR g.offer_expires_at > ${now})))
     ORDER BY g.created_at, g.grant_id
   `;
   if (live.length === 0) return [] as ReadonlyArray<EndedGrant>;
-  const at = DateTime.formatIso(yield* DateTime.now);
   const write = AuditLog.write(sql);
   for (const row of live) {
     const offered = row.state === "offered";
+    // An offer with no destination yet (a link) cannot be `cancelled` (the row needs one): its
+    // link expires now instead, so nobody takes it up.
     yield* offered
-      ? sql`
-          UPDATE grants SET state = 'cancelled', decided_at = ${at}, decided_by = NULL
-          WHERE grant_id = ${row.grantId} AND state = 'offered'
-        `
+      ? row.targetId === null
+        ? sql`
+            UPDATE grants SET offer_expires_at = ${now}
+            WHERE grant_id = ${row.grantId} AND state = 'offered'
+          `
+        : sql`
+            UPDATE grants SET state = 'cancelled', decided_at = ${now}, decided_by = NULL
+            WHERE grant_id = ${row.grantId} AND state = 'offered'
+          `
       : sql`
-          UPDATE grants SET state = 'ended', end_reason = ${reason}, ended_at = ${at},
+          UPDATE grants SET state = 'ended', end_reason = ${reason}, ended_at = ${now},
             ended_by = NULL
           WHERE grant_id = ${row.grantId} AND state = ${row.state}
         `;

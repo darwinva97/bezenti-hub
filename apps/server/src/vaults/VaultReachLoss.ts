@@ -151,6 +151,40 @@ export const forgetUser = Effect.fn("VaultReachLoss.forgetUser")(function* (
 });
 
 /**
+ * Owned-resources 10: a removed User's own Vault, its groups with their entries, `default`
+ * included (audited `vault_group.delete` with `via: user.remove`). Answers the values to remove.
+ */
+export const forgetUserVault = Effect.fn("VaultReachLoss.forgetUserVault")(function* (
+  sql: SqlClient.SqlClient,
+  actor: AuditLog.AuditActor,
+  userId: UserId,
+) {
+  const write = AuditLog.write(sql);
+  const own = yield* sql<{
+    readonly vaultId: string;
+    readonly name: string;
+    readonly isDefault: number;
+  }>`
+    SELECT group_id AS "vaultId", name, is_default AS "isDefault" FROM vault_groups
+    WHERE owner_kind = 'user' AND owner_id = ${userId} ORDER BY name
+  `;
+  const valueIds: Array<string> = [];
+  for (const vault of own) {
+    const gone = yield* forgetVault(sql, vault.vaultId);
+    valueIds.push(...gone.valueIds);
+    if (vault.isDefault === 1 && gone.entries === 0) continue;
+    yield* write({
+      actor,
+      action: "vault_group.delete",
+      spaceId: `personal:${userId}` as SpaceId,
+      target: { kind: "vault", id: vault.vaultId, name: vault.name },
+      detail: { entries: gone.entries, via: "user.remove" },
+    });
+  }
+  return { vaults: own.length, valueIds };
+});
+
+/**
  * An Organization deleted: its Vault's groups with their entries, `default` included (audited
  * `vault.delete`), the Owner's groups' allowances to it (audited as taken back), its defaults and
  * its Projects' choices. The Owner's groups themselves stay. Answers the values to remove.
@@ -181,7 +215,7 @@ export const forgetOrganization = Effect.fn("VaultReachLoss.forgetOrganization")
       action: "vault_group.delete",
       spaceId,
       target: { kind: "vault", id: vault.vaultId, name: vault.name },
-      detail: { entries: gone.entries },
+      detail: { entries: gone.entries, via: "organization.delete" },
     });
   }
   const allowed = yield* sql<{ readonly vaultId: string; readonly name: string }>`

@@ -6,11 +6,12 @@
 import {
   parseTemplate,
   ProjectId,
+  type ResourceOwner,
   secretNameRisk,
   templateNames,
-  type SpaceId,
+  SpaceId,
   ThreadId,
-  type UserId,
+  UserId,
   type VaultEntryClass,
   VaultEntryId,
   VaultError,
@@ -164,6 +165,9 @@ export interface SpaceSideVault {
   readonly vaultId: VaultGroupId;
   readonly name: string;
   readonly source: Exclude<VaultSource, "user">;
+  /** Whose Vault it is part of (owned-resources 10). */
+  readonly owner?: ResourceOwner;
+  readonly ownerName?: string | null;
 }
 
 const fail = (reason: VaultErrorReason, message: string) =>
@@ -626,9 +630,42 @@ const make = Effect.gen(function* () {
             WHERE group_id IN ${sql.in(defaults)}
           `.pipe(Effect.catch(storage("read the Project's Vaults")))).map((row) => row.vaultId),
     );
-    return lost
-      .filter((group) => !group.row.isDefault || holding.has(group.row.vaultId))
-      .map(({ row, source }) => ({ vaultId: row.vaultId, name: row.name, source }));
+    const named = lost.filter((group) => !group.row.isDefault || holding.has(group.row.vaultId));
+    // Owned-resources 10: whose Vault each is, so the plan names a group with its owner.
+    const owners =
+      named.length === 0
+        ? []
+        : yield* sql<{
+            readonly vaultId: string;
+            readonly ownerKind: "user" | "organization";
+            readonly ownerId: string;
+            readonly ownerName: string | null;
+          }>`
+            SELECT g.group_id AS "vaultId", g.owner_kind AS "ownerKind", g.owner_id AS "ownerId",
+              CASE g.owner_kind
+                WHEN 'organization' THEN (SELECT name FROM spaces WHERE space_id = g.owner_id)
+                ELSE (SELECT display_name FROM users WHERE user_id = g.owner_id)
+              END AS "ownerName"
+            FROM vault_groups g WHERE g.group_id IN ${sql.in(named.map((group) => group.row.vaultId))}
+          `.pipe(Effect.catch(storage("read whose the Project's Vaults are")));
+    const ownerOf = new Map(owners.map((row) => [row.vaultId, row]));
+    return named.map(({ row, source }): SpaceSideVault => {
+      const owner = ownerOf.get(row.vaultId);
+      return {
+        vaultId: row.vaultId,
+        name: row.name,
+        source,
+        ...(owner === undefined
+          ? {}
+          : {
+              owner:
+                owner.ownerKind === "organization"
+                  ? { kind: "organization", spaceId: SpaceId.make(owner.ownerId) }
+                  : { kind: "user", userId: UserId.make(owner.ownerId) },
+              ownerName: owner.ownerName,
+            }),
+      };
+    });
   });
 
   return EffectiveVaults.of({ forThread, forPlacement, threadEnvironment, projectMoveLoss });

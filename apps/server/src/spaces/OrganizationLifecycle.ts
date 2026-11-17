@@ -33,6 +33,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as AiAccountReachLoss from "../ai/AiAccountReachLoss.ts";
+import * as AiAccountRetire from "../ai/AiAccountRetire.ts";
 import * as VaultReachLoss from "../vaults/VaultReachLoss.ts";
 import * as SpaceDirectory from "./SpaceDirectory.ts";
 
@@ -208,6 +209,13 @@ const make = Effect.gen(function* () {
           });
           // Its AI account allowances, and the keys made for its Space (spec 4 ticket 11).
           yield* AiAccountReachLoss.forgetSpace(sql, AuditLog.userActor(actor), spaceId);
+          // Its own AI accounts (owned-resources 10): the gateway's next tick takes them out.
+          yield* AiAccountRetire.retireOwned(
+            sql,
+            AuditLog.userActor(actor),
+            { kind: "organization", id: spaceId },
+            "organization.delete",
+          );
           // Every loan to it ends (`target-gone`) and every loan it gave (`lender-gone`); a lent
           // machine's Sandbox for it is closed in this commit (owned-resources 10).
           const ended = [

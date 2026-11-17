@@ -4,6 +4,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { AiAccountId, AiAccountProvider } from "./aiAccounts.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { ResourceOwner } from "./ownership.ts";
 import { VaultGroupId } from "./vaults.ts";
 import {
   CommandId,
@@ -280,14 +281,17 @@ export type ProjectMovePlanThread = typeof ProjectMovePlanThread.Type;
 export const ProjectMovePlanVault = Schema.Struct({
   vaultId: VaultGroupId,
   name: Schema.String,
+  /** Whose Vault the group is part of (owned-resources 10); missing from an older Hub. */
+  owner: Schema.optionalKey(ResourceOwner),
+  ownerName: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type ProjectMovePlanVault = typeof ProjectMovePlanVault.Type;
 
 /**
  * An AI account the Project's Threads chose that their owners may not use in the destination
  * (spec 4 ticket 11): the move switches them to the destination's first allowed account, or to
- * none. `name` only for an account the Space it leaves is allowed (its viewers see it there);
- * otherwise null, and clients say «<Provider> account».
+ * none. `name` only for an account its viewers see in the Space it leaves (allowed to it, or its
+ * owner's); otherwise null, and clients say «<Provider> account».
  */
 export const ProjectMovePlanAiAccount = Schema.Struct({
   aiAccountId: AiAccountId,

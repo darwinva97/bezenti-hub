@@ -23,9 +23,10 @@ import {
   ProviderSessionId,
   sandboxEnvironmentIdOf,
   type SecretEnv,
-  type SpaceId,
+  SpaceId,
   ThreadId,
   UserId,
+  type VaultGroupId,
 } from "@t3tools/contracts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -43,6 +44,7 @@ import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
+import * as AiAccounts from "../ai/AiAccounts.ts";
 import * as AiGatewayKeys from "../ai/AiGatewayKeys.ts";
 import { addMember, joinOrganization } from "../auth/UserAuth.testkit.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
@@ -1692,6 +1694,112 @@ describe("Hub con Environments: a Project move's AI reach, its edges (spec 4 tic
         SELECT COUNT(*) AS n FROM ai_gateway_keys WHERE thread_id = ${threadId} AND revoked_at IS NULL
       `;
         assert.equal(live[0]?.n, 1, "its key is not revoked: its Space did not change");
+      }).pipe(Effect.scoped),
+  );
+});
+
+describe("Hub con Environments: moving a Project out of a Personal space (owned-resources 10)", () => {
+  it.live(
+    "the plan names Ana's groups with their owner and her own account; the move drops her choices",
+    () =>
+      Effect.gen(function* () {
+        const hub = yield* makeHub({ aiAccounts: true });
+        const acme = yield* createOrganization(hub, "Acme");
+        // An Admin of Acme (with a passkey, so she acts as one), with no other Organization.
+        const joined = yield* memberWithPasskey(hub.server, hub.owner, {
+          displayName: "Ana",
+          spaceId: acme,
+          role: "admin",
+        });
+        const anaCookie = joined.cookie;
+        const ana = UserId.make(joined.userId);
+        const asAna = CommandActor.actAs(ana);
+        const personal = SpaceId.make(`personal:${ana}`);
+        const vaults = hub.service(Vaults.Vaults);
+        const [own] = yield* hub.server.sql<{ readonly groupId: VaultGroupId }>`
+          SELECT group_id AS "groupId" FROM vault_groups
+          WHERE owner_kind = 'user' AND owner_id = ${ana} AND is_default = 1
+        `;
+        assert.isDefined(own);
+        yield* vaults
+          .putEntry({
+            vaultId: own.groupId,
+            name: "ANA_TOKEN",
+            value: Redacted.make("ana-move-secret-0101"),
+          })
+          .pipe(asAna, Effect.orDie);
+        const tools = yield* vaults
+          .create({ name: "Ana tools", owner: userOwner(ana) })
+          .pipe(asAna, Effect.orDie);
+        yield* vaults
+          .putEntry({
+            vaultId: tools.id,
+            name: "ANA_TOOLS",
+            value: Redacted.make("ana-move-tools-0202"),
+          })
+          .pipe(asAna, Effect.orDie);
+        const account = yield* hub
+          .service(AiAccounts.AiAccounts)
+          .create({
+            name: "Ana Claude",
+            provider: "openai-compatible",
+            apiKey: Redacted.make("sk-test-ana-move-0123456789abcdef"),
+            baseUrl: "http://127.0.0.1:9/v1",
+            models: [GATEWAY_MODEL],
+          } as never)
+          .pipe(asAna, Effect.orDie);
+        const projectId = ProjectId.make("project:ana-personal");
+        yield* seedProject(hub.server, {
+          projectId,
+          title: "Ana's side project",
+          defaultModelSelection: null,
+          spaceId: personal,
+        });
+        yield* vaults
+          .setProjectChoice({ projectId, vaultId: tools.id, choice: "add" })
+          .pipe(asAna, Effect.orDie);
+        const instanceId = ProviderInstanceId.make("claudeAgent");
+        yield* hub.service(Orchestrator.OrchestratorV2).dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:ana-personal"),
+          threadId: ThreadId.make("thread:ana-personal"),
+          projectId,
+          title: "Ana's Thread",
+          modelSelection: { instanceId, model: GATEWAY_MODEL, aiAccountId: account.id },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          spaceId: personal,
+          ownerUserId: ana,
+        });
+
+        const plan = yield* movePlan(hub, projectId, acme, anaCookie);
+        assert.equal(plan.status, 200, JSON.stringify(plan.body));
+        assert.sameDeepMembers(
+          (plan.body.vaultsLost ?? []).map(({ name, owner, ownerName }) => ({
+            name,
+            owner,
+            ownerName,
+          })),
+          [
+            { name: "default", owner: userOwner(ana), ownerName: "Ana" },
+            { name: "Ana tools", owner: userOwner(ana), ownerName: "Ana" },
+          ],
+        );
+        // Her own account, seen by her in the Space it leaves: named.
+        assert.deepEqual(
+          (plan.body.aiAccountsLost ?? []).map((lost) => [lost.aiAccountId, lost.name]),
+          [[account.id, "Ana Claude"]],
+        );
+        const moved = yield* moveProject(hub, projectId, acme, { cookie: anaCookie });
+        assert.equal(moved.status, 200, JSON.stringify(moved.body));
+        const choices = yield* hub.server.sql<{ readonly vaultId: string }>`
+          SELECT group_id AS "vaultId" FROM project_vault_choices WHERE project_id = ${projectId}
+        `;
+        assert.deepEqual(choices, []);
       }).pipe(Effect.scoped),
   );
 });

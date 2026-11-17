@@ -234,11 +234,16 @@ export function ProjectMoveDialog({
                 {plan.vaultsLost.length > 0 ? (
                   <section aria-label="Vaults it loses">
                     <p className="font-medium">
-                      {`Its Threads stop receiving the secrets of ${plan.vaultsLost.length === 1 ? "this Vault" : "these Vaults"}:`}
+                      {`Its Threads stop receiving the secrets of ${plan.vaultsLost.length === 1 ? "this group" : "these groups"}:`}
                     </p>
                     <ul className="mt-1 list-disc pl-5">
                       {plan.vaultsLost.map((vault) => (
-                        <li key={vault.vaultId}>{vault.name}</li>
+                        <li key={vault.vaultId}>
+                          {vault.name}
+                          {vault.ownerName ? (
+                            <span className="text-muted-foreground">{` (${vault.ownerName}'s vault)`}</span>
+                          ) : null}
+                        </li>
                       ))}
                     </ul>
                   </section>

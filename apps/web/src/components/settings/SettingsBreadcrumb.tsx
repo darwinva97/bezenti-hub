@@ -8,14 +8,11 @@ import {
 import { useOptionalSettingsScope } from "./SettingsScopeContext";
 import { useSettingsSpace } from "./useSettingsSpace";
 import { MACHINE_SECTION_LABELS } from "./machineSettings";
-import { SETTINGS_SECTION_LABELS } from "./settingsSearch";
 import {
   SETTINGS_MODAL_LABELS,
   findSettingsSection,
   settingsModalForPathname,
 } from "./settingsModals";
-
-const SETTINGS_BREADCRUMB_LABELS: Readonly<Record<string, string>> = SETTINGS_SECTION_LABELS;
 
 const HUB_DEFAULTS_PAGE_LABELS: Readonly<Record<string, string>> = {
   threads: "Threads",
@@ -65,8 +62,7 @@ function settingsBreadcrumbTrail(
         : []),
     ];
   }
-  const label = SETTINGS_BREADCRUMB_LABELS[normalizedPathname];
-  return label ? ["Settings", label] : [];
+  return [];
 }
 
 export function SettingsBreadcrumb({ pathname }: { pathname: string }) {

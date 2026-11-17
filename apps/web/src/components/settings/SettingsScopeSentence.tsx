@@ -6,7 +6,6 @@ import { Fragment, useState, type ReactNode } from "react";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useEnvironments, type EnvironmentPresentation } from "../../state/environments";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
-import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
 import {
   Combobox,
@@ -31,23 +30,12 @@ import { settingsModalForPathname } from "./settingsModals";
 import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope";
 import {
   ALL_ENVIRONMENTS_VALUE,
-  ALL_PROJECTS_VALUE,
   environmentAxisValue,
-  projectAxisValue,
-  projectScopeMenuGroups,
   selectEnvironmentAxis,
-  selectProjectAxis,
   settingsScopeEnvironmentAddress,
   settingsScopeEnvironmentLabel,
   settingsScopeEnvironmentLabels,
-  settingsScopeProjectMachines,
 } from "./settingsScopeAxis";
-
-export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
-  "/settings/connections",
-  // Network access and authorized clients belong to the environment serving this app.
-  "/settings/access",
-]);
 
 interface SettingsScopeMenuProps {
   readonly value: SettingsScopeSearch;
@@ -63,13 +51,7 @@ export function SettingsScopeSentence() {
   const { environments } = useEnvironments();
   const modal = settingsModalForPathname(pathname);
   // A modal fixes its own object, so it has no scope to choose, except a Project's machine.
-  if (
-    scope === null ||
-    SETTINGS_DEVICE_ONLY_PATHS.has(pathname) ||
-    (modal !== null && modal !== "project")
-  ) {
-    return null;
-  }
+  if (scope === null || modal !== "project") return null;
   const props: SettingsScopeMenuProps = {
     value: scope.search,
     singleEnvironment: scope.singleEnvironment,
@@ -79,20 +61,8 @@ export function SettingsScopeSentence() {
   };
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-3 text-sm text-muted-foreground sm:px-4">
-      {modal === "project" ? null : (
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="shrink-0">Applying settings for</span>
-          <ProjectScopeMenu {...props} />
-        </span>
-      )}
       <span className="flex min-w-0 items-center gap-1.5">
-        <span className="shrink-0">
-          {modal === "project"
-            ? "Applying settings on"
-            : scope.search.machine || scope.scope.kind === "checkout"
-              ? "on"
-              : "across"}
-        </span>
+        <span className="shrink-0">Applying settings on</span>
         <EnvironmentScopeMenu {...props} />
       </span>
     </p>
@@ -306,46 +276,6 @@ function EnvironmentScopeMenu({
             />
           ),
           offline: environment.connection.phase !== "connected",
-        };
-      })}
-    />
-  );
-}
-
-function ProjectScopeMenu({ value, groups, environments, onChange }: SettingsScopeMenuProps) {
-  const selected = groups.find((group) => group.projectKey === value.project);
-  const projects = projectScopeMenuGroups(groups, value).map((group) => ({
-    group,
-    machines: settingsScopeProjectMachines(group, environments, true).join(", "),
-  }));
-  return (
-    <ScopeMenu
-      ariaLabel="Project scope"
-      icon={selected ? <ProjectFavicon project={selected} className="size-3.5 shrink-0" /> : null}
-      label={selected?.displayName ?? (value.project ? "Unavailable project" : "All projects")}
-      value={projectAxisValue(value)}
-      onChange={(next) => onChange(selectProjectAxis(value, next))}
-      searchLabel="Search projects"
-      allOption={{ value: ALL_PROJECTS_VALUE, label: "All projects" }}
-      options={projects.map(({ group, machines }) => {
-        const sameName = projects.filter(
-          (other) =>
-            other.group.projectKey !== group.projectKey &&
-            other.group.displayName === group.displayName,
-        );
-        const location =
-          sameName.length === 0
-            ? environments.length > 1
-              ? group.workspaceRoot
-              : ""
-            : sameName.some((other) => other.machines === machines)
-              ? `${machines} · ${group.workspaceRoot}`
-              : machines;
-        return {
-          value: group.projectKey,
-          label: group.displayName,
-          secondary: group.archived ? ["Archived", location].filter(Boolean).join(" · ") : location,
-          icon: <ProjectFavicon project={group} className="size-3.5 shrink-0" />,
         };
       })}
     />

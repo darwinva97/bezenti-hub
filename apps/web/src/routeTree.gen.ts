@@ -27,7 +27,6 @@ import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-reques
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
 import { Route as ThreadsEnvironmentIdThreadIdRouteImport } from './routes/threads.$environmentId.$threadId'
-import { Route as ChatSettingsSecretsRouteImport } from './routes/_chat.settings.secrets'
 import { Route as ChatSettingsSplatRouteImport } from './routes/_chat.settings.$'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
@@ -141,11 +140,6 @@ const ThreadsEnvironmentIdThreadIdRoute =
     path: '/threads/$environmentId/$threadId',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ChatSettingsSecretsRoute = ChatSettingsSecretsRouteImport.update({
-  id: '/secrets',
-  path: '/secrets',
-  getParentRoute: () => ChatSettingsRoute,
-} as any)
 const ChatSettingsSplatRoute = ChatSettingsSplatRouteImport.update({
   id: '/$',
   path: '/$',
@@ -300,7 +294,6 @@ export interface FileRoutesByFullPath {
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/settings/$': typeof ChatSettingsSplatRoute
-  '/settings/secrets': typeof ChatSettingsSecretsRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
   '/settings/platform/$section': typeof ChatSettingsPlatformSectionRoute
   '/settings/user/$section': typeof ChatSettingsUserSectionRoute
@@ -342,7 +335,6 @@ export interface FileRoutesByTo {
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/settings/$': typeof ChatSettingsSplatRoute
-  '/settings/secrets': typeof ChatSettingsSecretsRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
   '/settings/platform/$section': typeof ChatSettingsPlatformSectionRoute
   '/settings/user/$section': typeof ChatSettingsUserSectionRoute
@@ -386,7 +378,6 @@ export interface FileRoutesById {
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/_chat/settings/$': typeof ChatSettingsSplatRoute
-  '/_chat/settings/secrets': typeof ChatSettingsSecretsRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
   '/_chat/settings/platform/$section': typeof ChatSettingsPlatformSectionRoute
   '/_chat/settings/user/$section': typeof ChatSettingsUserSectionRoute
@@ -430,7 +421,6 @@ export interface FileRouteTypes {
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
     | '/settings/$'
-    | '/settings/secrets'
     | '/threads/$environmentId/$threadId'
     | '/settings/platform/$section'
     | '/settings/user/$section'
@@ -472,7 +462,6 @@ export interface FileRouteTypes {
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
     | '/settings/$'
-    | '/settings/secrets'
     | '/threads/$environmentId/$threadId'
     | '/settings/platform/$section'
     | '/settings/user/$section'
@@ -515,7 +504,6 @@ export interface FileRouteTypes {
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
     | '/_chat/settings/$'
-    | '/_chat/settings/secrets'
     | '/threads/$environmentId/$threadId'
     | '/_chat/settings/platform/$section'
     | '/_chat/settings/user/$section'
@@ -681,13 +669,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ThreadsEnvironmentIdThreadIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_chat/settings/secrets': {
-      id: '/_chat/settings/secrets'
-      path: '/secrets'
-      fullPath: '/settings/secrets'
-      preLoaderRoute: typeof ChatSettingsSecretsRouteImport
-      parentRoute: typeof ChatSettingsRoute
-    }
     '/_chat/settings/$': {
       id: '/_chat/settings/$'
       path: '/$'
@@ -847,7 +828,6 @@ declare module '@tanstack/react-router' {
 
 interface ChatSettingsRouteChildren {
   ChatSettingsSplatRoute: typeof ChatSettingsSplatRoute
-  ChatSettingsSecretsRoute: typeof ChatSettingsSecretsRoute
   ChatSettingsPlatformSectionRoute: typeof ChatSettingsPlatformSectionRoute
   ChatSettingsUserSectionRoute: typeof ChatSettingsUserSectionRoute
   ChatSettingsPlatformIndexRoute: typeof ChatSettingsPlatformIndexRoute
@@ -871,7 +851,6 @@ interface ChatSettingsRouteChildren {
 
 const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsSplatRoute: ChatSettingsSplatRoute,
-  ChatSettingsSecretsRoute: ChatSettingsSecretsRoute,
   ChatSettingsPlatformSectionRoute: ChatSettingsPlatformSectionRoute,
   ChatSettingsUserSectionRoute: ChatSettingsUserSectionRoute,
   ChatSettingsPlatformIndexRoute: ChatSettingsPlatformIndexRoute,

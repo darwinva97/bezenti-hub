@@ -56,28 +56,12 @@ export function settingsScopeProjectMachines(
 }
 
 export const ALL_ENVIRONMENTS_VALUE = "all";
-export const ALL_PROJECTS_VALUE = "all";
 
 export function environmentAxisValue(
   search: SettingsScopeSearch,
   resolvedEnvironmentId?: string | null,
 ): string {
   return search.machine ?? resolvedEnvironmentId ?? ALL_ENVIRONMENTS_VALUE;
-}
-
-export function projectAxisValue(search: SettingsScopeSearch): string {
-  return search.project ?? ALL_PROJECTS_VALUE;
-}
-
-export function projectScopeMenuGroups(
-  groups: readonly SidebarProjectSnapshot[],
-  search: Pick<SettingsScopeSearch, "machine">,
-) {
-  const { machine } = search;
-  if (machine === undefined) return groups;
-  return groups.filter((group) =>
-    group.memberProjects.some((member) => member.environmentId === machine),
-  );
 }
 
 export function selectEnvironmentAxis(
@@ -87,13 +71,6 @@ export function selectEnvironmentAxis(
   const next: SettingsScopeSearch = {};
   if (search.project) next.project = search.project;
   if (value !== ALL_ENVIRONMENTS_VALUE) next.machine = value;
-  return next;
-}
-
-export function selectProjectAxis(search: SettingsScopeSearch, value: string): SettingsScopeSearch {
-  const next: SettingsScopeSearch = {};
-  if (value !== ALL_PROJECTS_VALUE) next.project = value;
-  if (search.machine) next.machine = search.machine;
   return next;
 }
 

@@ -15,11 +15,7 @@ import {
   type SettingsVisibilityContext,
 } from "./settingsModals";
 import { LEGACY_MACHINE_PAGES } from "./machineSettings";
-import {
-  SETTINGS_SECTION_LABELS,
-  projectSectionForAnchor,
-  resolveOldSettingsUrl,
-} from "./settingsSearch";
+import { projectSectionForAnchor, resolveOldSettingsUrl } from "./settingsSearch";
 
 vi.mock("~/env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/env")>()),
@@ -69,6 +65,8 @@ const OLD_URLS: ReadonlyArray<readonly [pathname: string, hash: string, to: stri
   ["/settings/storage", "", "/settings/maintenance"],
   ["/settings/integrations", "devices", "/settings/platform/hub-machine/devices"],
   ["/settings/beta", "", "/settings/platform/labs"],
+  ["/settings/secrets", "", "/settings/platform/secret-providers"],
+  ["/settings/secrets", "secret-providers-add", "/settings/platform/secret-providers"],
   ["/settings/labs", "", "/settings/platform/labs"],
   ["/settings/labs", "legacy-features", "/settings/platform/labs"],
   ["/settings/ai-gateway", "", "/settings/platform/ai-gateway"],
@@ -171,11 +169,13 @@ describe("old settings URLs", () => {
         const section = findSettingsSection(modal, sectionId ?? "");
         expect(section, `${to} (${hash})`).toBeDefined();
         const space = { kind: "organization", isOwn: false, canInvite: true } as const;
+        // Secret providers are behind a feature flag, off in tests: the section exists, hidden.
+        const behindFlag = to === "/settings/platform/secret-providers";
         expect(isSettingsSectionVisible(modal, section!, { ...OWNER_ON_DESKTOP, space }), to).toBe(
-          true,
+          !behindFlag,
         );
       } else if (!(to in LEGACY_MACHINE_PAGES)) {
-        expect(SETTINGS_SECTION_LABELS, to).toHaveProperty([to]);
+        expect(LEGACY_MACHINE_PAGES, to).toHaveProperty([to]);
       }
     }
   });
@@ -280,7 +280,8 @@ describe("settings modal sections", () => {
 
   it("reserves the Platform sections other specs fill in", () => {
     const reservedIds = SETTINGS_MODAL_SECTIONS.platform
-      .filter((section) => section.component === null)
+      // Secret providers are built, only hidden by a feature flag: not a reserved place.
+      .filter((section) => section.component === null && section.id !== "secret-providers")
       .map((section) => section.id);
     expect(reservedIds).toEqual(["registration", "keycloak", "plans", "terms"]);
   });

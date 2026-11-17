@@ -7,17 +7,14 @@ import {
 import { UNKNOWN_SOURCE_CONTROL_CLIENT } from "@t3tools/client-runtime/source-control-clients";
 import * as Schema from "effect/Schema";
 
+import { findSettingsSection, isSettingsSectionVisible } from "./settingsModals";
 import {
   filterAvailableSettingsSearchItems,
   getSettingsSearchTargetScope,
   getThreadAutoSettlementSearchAvailability,
   isSettingsSearchScopeAvailable,
   searchSettings,
-  SETTINGS_NAV_GROUPS,
-  SETTINGS_OWNER_ONLY_PATHS,
   SETTINGS_SEARCH_ITEMS,
-  settingsItemPath,
-  settingsNavGroupsFor,
   sourceControlHostSearchItems,
   sourceControlHostSettingsSearchId,
   type SettingsSearchItem,
@@ -83,9 +80,21 @@ describe("searchSettings", () => {
     }
   });
 
-  it("hides the Secrets page from nav and search while the secrets feature is disabled", () => {
-    expect(SETTINGS_NAV_GROUPS.flatMap((group) => group.paths)).not.toContain("/settings/secrets");
-    expect(searchSettings("1password").map((item) => item.to)).not.toContain("/settings/secrets");
+  it("puts secret providers in Platform, out of nav and search while the secrets feature is off", () => {
+    expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "secret-providers")).toMatchObject({
+      modal: "platform",
+      section: "secret-providers",
+    });
+    expect(searchSettings("1password").map((item) => item.id)).not.toContain("secret-providers");
+    const section = findSettingsSection("platform", "secret-providers");
+    expect(section).toBeDefined();
+    expect(
+      isSettingsSectionVisible("platform", section!, {
+        isOwner: true,
+        isDesktop: false,
+        hasUser: true,
+      }),
+    ).toBe(false);
   });
 
   it("matches normalized title substrings", () => {
@@ -119,36 +128,6 @@ describe("searchSettings", () => {
     expect(searchSettings("hold to quit")).toEqual([]);
     expect(searchSettings("wsl")).toEqual([]);
     expect(searchSettings("update track")).toEqual([]);
-  });
-
-  it("leaves the Owner's pages out of a Member's nav and search", () => {
-    const availability = {
-      hasEnvironment: true,
-      hasProviderSettingsEnvironment: true,
-      hasMacProviderSettingsEnvironment: true,
-      canManageLocalBackend: true,
-      isWslSettingsRowVisible: true,
-      hasThreadAutoSettlement: true,
-    };
-    const pages = (items: ReadonlyArray<SettingsSearchItem>) =>
-      new Set(items.map((item) => settingsItemPath(item)));
-    const forOwner = pages(filterAvailableSettingsSearchItems(availability));
-    const forMember = pages(
-      filterAvailableSettingsSearchItems({ ...availability, actsForInstallation: false }),
-    );
-    for (const path of SETTINGS_OWNER_ONLY_PATHS) expect(forMember.has(path)).toBe(false);
-    expect(forOwner.has("/settings/platform/hub-machine/providers")).toBe(true);
-    expect(forMember.has("/settings/user/appearance")).toBe(true);
-    const memberNav = settingsNavGroupsFor(false).flatMap((group) => group.paths);
-    expect(memberNav).not.toContain("/settings/providers");
-    expect(memberNav).not.toContain("/settings/maintenance");
-    expect(memberNav).not.toContain("/settings/ai-gateway");
-    // A Member sees the names of the AI accounts they may use.
-    expect(memberNav).not.toContain("/settings/ai-accounts");
-    expect(forMember.has("/settings/user/ai-accounts")).toBe(true);
-    // Hub defaults are the Owner's, in Platform; they are not in the old nav at all.
-    expect(memberNav).not.toContain("/settings/threads");
-    expect(settingsNavGroupsFor(true)).toBe(SETTINGS_NAV_GROUPS);
   });
 
   it("hides settings whose controls are unavailable", () => {

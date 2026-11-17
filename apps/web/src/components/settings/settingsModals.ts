@@ -12,6 +12,7 @@ import {
   InfoIcon,
   KeyRoundIcon,
   KeyboardIcon,
+  LockKeyholeIcon,
   MessageSquareTextIcon,
   PaletteIcon,
   ServerIcon,
@@ -31,6 +32,8 @@ import {
   type SpaceSettingsSubject,
 } from "@t3tools/client-runtime/settings/modal-visibility";
 import { lazy, type ComponentType } from "react";
+
+import { isSecretsFeatureEnabled } from "../../env";
 
 /**
  * The four settings modals. Each one is about one object and declares its sections here, in
@@ -152,6 +155,9 @@ const PlatformAuditLogSection = lazy(() =>
 );
 const PlatformMasterKeySection = lazy(() =>
   import("./PlatformSections").then((module) => ({ default: module.PlatformMasterKeySection })),
+);
+const PlatformSecretProvidersSection = lazy(() =>
+  import("./SecretsSettings").then((module) => ({ default: module.SecretsSettingsPanel })),
 );
 const PlatformSandboxesSection = lazy(() =>
   import("./PlatformSections").then((module) => ({ default: module.PlatformSandboxesSection })),
@@ -353,6 +359,14 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       group: 0,
     },
     {
+      id: "secret-providers",
+      label: "Secret providers",
+      icon: LockKeyholeIcon,
+      // Behind `T3CODE_FEATURE_SECRETS`: reserved (never visible) while the flag is off.
+      component: isSecretsFeatureEnabled ? PlatformSecretProvidersSection : null,
+      group: 0,
+    },
+    {
       id: "ai-gateway",
       label: "AI gateway",
       icon: NetworkIcon,
@@ -490,6 +504,7 @@ export const OLD_SETTINGS_PATHS: Readonly<Record<string, string>> = {
   "/settings/ai-accounts": "/settings/user/ai-accounts",
   "/settings/connections": "/settings/user/machines",
   "/settings/beta": "/settings/platform/labs",
+  "/settings/secrets": "/settings/platform/secret-providers",
 };
 
 /** Section anchors that moved but are not search results themselves. */

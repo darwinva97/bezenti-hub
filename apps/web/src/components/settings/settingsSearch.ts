@@ -23,9 +23,6 @@ import {
   type ProjectSectionId,
 } from "./settingsModals";
 
-/** The pages that still live in the old Settings nav; the rest moved into a modal. */
-export type SettingsPath = "/settings/secrets";
-
 export type SettingsSearchScope =
   | "environment"
   | "environment-defaults"
@@ -34,16 +31,13 @@ export type SettingsSearchScope =
   | "checkout"
   | "connections";
 
-/** Where a setting lives: a page of the old nav, or a section of a modal. */
-export type SettingsSearchLocation =
-  | { readonly to: SettingsPath; readonly modal?: undefined; readonly section?: undefined }
-  | {
-      readonly modal: "user" | "space" | "project" | "platform";
-      readonly section: string;
-      /** A page inside the section, such as Hub defaults → Threads. */
-      readonly subsection?: string;
-      readonly to?: undefined;
-    };
+/** Where a setting lives: a section of a modal. */
+export interface SettingsSearchLocation {
+  readonly modal: "user" | "space" | "project" | "platform";
+  readonly section: string;
+  /** A page inside the section, such as Hub defaults → Threads. */
+  readonly subsection?: string;
+}
 
 export type SettingsSearchItem = SettingsSearchItemBase & SettingsSearchLocation;
 
@@ -75,32 +69,6 @@ export interface SettingsSearchAvailability {
   readonly canManageLocalBackend: boolean;
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
-  /** False for a Member of a Hub: its Owner-only pages (`SETTINGS_OWNER_ONLY_PATHS`) are hidden. */
-  readonly actsForInstallation?: boolean;
-}
-
-export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
-  "/settings/secrets": "Secrets",
-};
-
-/** Sidebar order. A group without a heading is set apart by space alone. */
-export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
-  readonly heading: string | null;
-  readonly paths: ReadonlyArray<SettingsPath>;
-}> = isSecretsFeatureEnabled ? [{ heading: "Connections", paths: ["/settings/secrets"] }] : [];
-
-/** Pages on the Installation as a whole (secrets): only the Owner of a Hub changes them. */
-export const SETTINGS_OWNER_ONLY_PATHS: ReadonlySet<SettingsPath> = new Set<SettingsPath>([
-  "/settings/secrets",
-]);
-
-/** The Settings nav for this session: without the Owner-only pages for a Member. */
-export function settingsNavGroupsFor(actsForInstallation: boolean): typeof SETTINGS_NAV_GROUPS {
-  if (actsForInstallation) return SETTINGS_NAV_GROUPS;
-  return SETTINGS_NAV_GROUPS.map((group) => ({
-    ...group,
-    paths: group.paths.filter((path) => !SETTINGS_OWNER_ONLY_PATHS.has(path)),
-  })).filter((group) => group.paths.length > 0);
 }
 
 export function keybindingSearchAnchorId<Command extends KeybindingCommand>(command: Command) {
@@ -1327,14 +1295,16 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "secret-providers",
     title: "Secret providers",
-    to: "/settings/secrets",
+    modal: "platform",
+    section: "secret-providers",
     searchTerms: ["1password vault credentials api key"],
     secretsFeatureOnly: true,
   },
   {
     id: "secret-providers-add",
     title: "Add secret provider",
-    to: "/settings/secrets",
+    modal: "platform",
+    section: "secret-providers",
     targetId: "secret-providers",
     searchTerms: ["new 1password vault op cli account"],
     secretsFeatureOnly: true,
@@ -1373,10 +1343,6 @@ export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
 
 const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const));
 
-const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
-  "/settings/secrets": null,
-};
-
 // Pages of the old nav whose rows moved elsewhere; a link to one follows its anchor.
 const SPLIT_LEGACY_PATHS: ReadonlySet<string> = new Set([
   "/settings/source-control",
@@ -1396,11 +1362,10 @@ export function settingsItemPath(item: SettingsSearchLocation): string {
     }
     return `/settings/platform/${item.section}${item.subsection === undefined ? "" : `/${item.subsection}`}`;
   }
-  return item.modal === undefined ? item.to : `/settings/${item.modal}/${item.section}`;
+  return `/settings/${item.modal}/${item.section}`;
 }
 
 export type SettingsDestination =
-  | { readonly to: SettingsPath }
   | { readonly to: "/settings/user/$section"; readonly params: { readonly section: string } }
   | { readonly to: "/settings/platform/$section"; readonly params: { readonly section: string } }
   | {
@@ -1443,7 +1408,6 @@ export function settingsItemDestination(
     readonly primaryEnvironmentId?: string | null | undefined;
   } = {},
 ): SettingsDestination | null {
-  if (item.modal === undefined) return { to: item.to };
   if (item.modal === "user") {
     if (item.section === "machines" && item.subsection !== undefined) {
       if (primaryEnvironmentId === undefined || primaryEnvironmentId === null) return null;
@@ -1484,14 +1448,12 @@ export function settingsItemDestination(
 
 /** The label of the page or modal section a setting lives on. */
 export function settingsItemSectionLabel(item: SettingsSearchLocation): string {
-  if (item.modal === undefined) return SETTINGS_SECTION_LABELS[item.to];
   return findSettingsSection(item.modal, item.section)?.label ?? item.section;
 }
 
-/** «User · Appearance» for a setting in a modal, «Settings · Providers» for an old page. */
+/** «User · Appearance»: the modal and the section a setting lives in. */
 export function settingsItemBreadcrumb(item: SettingsSearchLocation): string {
-  const prefix = item.modal === undefined ? "Settings" : SETTINGS_MODAL_LABELS[item.modal];
-  return `${prefix} · ${settingsItemSectionLabel(item)}`;
+  return `${SETTINGS_MODAL_LABELS[item.modal]} · ${settingsItemSectionLabel(item)}`;
 }
 
 /** The section of the Project modal an old `/settings/projects` anchor lives in. */
@@ -1534,7 +1496,7 @@ export function getSettingsSearchTargetScope(targetId: string) {
   return item
     ? {
         title: item.title,
-        scope: item.scope ?? (item.modal === undefined ? SETTINGS_CATEGORY_SCOPES[item.to] : null),
+        scope: item.scope ?? null,
         ...(item.requiresThreadAutoSettlement ? { requiresThreadAutoSettlement: true } : {}),
       }
     : null;
@@ -1613,10 +1575,7 @@ export function filterAvailableSettingsSearchItems(
       (!item.localBackendManagementOnly || availability.canManageLocalBackend) &&
       (!item.localEnvironmentOnly || !availability.localEnvironmentDisabled) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
-      (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
-      (availability.actsForInstallation !== false ||
-        item.modal !== undefined ||
-        !SETTINGS_OWNER_ONLY_PATHS.has(item.to)),
+      (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement),
   );
 }
 

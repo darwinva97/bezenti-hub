@@ -299,7 +299,7 @@ async function mountSettings(search: SettingsScopeSearch) {
         search={route.useSearch()}
         onChange={(next) =>
           void (router.navigate as (options: unknown) => Promise<void>).call(router, {
-            to: "/settings/projects",
+            to: "/settings/project/test/general",
             search: () => next,
           })
         }
@@ -311,7 +311,7 @@ async function mountSettings(search: SettingsScopeSearch) {
   const router = createRouter({
     routeTree: route,
     history: createMemoryHistory({
-      initialEntries: [`/settings/projects?${searchParams.toString()}`],
+      initialEntries: [`/settings/project/test/general?${searchParams.toString()}`],
     }),
   });
   await router.load();
@@ -692,7 +692,6 @@ describe("project settings scope", () => {
     });
 
     await expect.element(page.getByText(message, { exact: true })).toBeVisible();
-    await expect.element(page.getByRole("button", { name: /^Project scope:/ })).toBeVisible();
     await expect
       .element(page.getByRole("button", { name: "Environment scope: remote" }))
       .toBeVisible();

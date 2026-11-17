@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent } from "react";
-import { KeyRoundIcon, SearchIcon, ServerIcon, UserIcon, XIcon } from "lucide-react";
+import { SearchIcon, XIcon } from "lucide-react";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 
 import { cn } from "../../lib/utils";
@@ -17,13 +17,10 @@ import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
   revealSettingsSearchTarget,
-  SETTINGS_SECTION_LABELS,
   settingsItemDestination,
   settingsItemPath,
   type SettingsDestination,
   settingsItemSectionLabel,
-  settingsNavGroupsFor,
-  type SettingsPath,
   type SettingsSearchItem,
 } from "./settingsSearch";
 import {
@@ -37,14 +34,7 @@ import { useAvailableSettingsSearchItems } from "./useAvailableSettingsSearchIte
 import { validateSettingsScopeSearch } from "./settingsScope";
 import { useSettingsSectionNavigation } from "./useSettingsSectionNavigation";
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
-import { usePrimaryActsForInstallation } from "../../environments/primary";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-
-const SETTINGS_SECTION_ICONS: Readonly<
-  Record<SettingsPath, ComponentType<{ className?: string }>>
-> = {
-  "/settings/secrets": KeyRoundIcon,
-};
 
 interface SettingsNavEntry {
   /** The path that makes it the open section. */
@@ -65,39 +55,6 @@ const userSectionTarget = (section: string): SettingsDestination => ({
   to: "/settings/user/$section",
   params: { section },
 });
-
-// The old pages not yet in a modal stay one click away from User settings, and the other way
-// round, until their tickets move them. The last ticket removes both entries.
-const USER_SETTINGS_ENTRY: SettingsNavEntry = {
-  key: "/settings/user",
-  label: "User settings",
-  icon: UserIcon,
-  target: userSectionTarget("general"),
-  replace: false,
-};
-const MORE_SETTINGS_ENTRY: SettingsNavEntry = {
-  key: "/settings/secrets",
-  label: "More settings",
-  icon: ServerIcon,
-  target: { to: "/settings/secrets" },
-  replace: false,
-};
-
-function legacyNavGroups(actsForInstallation: boolean): ReadonlyArray<SettingsNavGroup> {
-  return [
-    { heading: null, entries: [USER_SETTINGS_ENTRY] },
-    ...settingsNavGroupsFor(actsForInstallation).map((group) => ({
-      heading: group.heading,
-      entries: group.paths.map((to) => ({
-        key: to,
-        label: SETTINGS_SECTION_LABELS[to],
-        icon: SETTINGS_SECTION_ICONS[to],
-        target: { to },
-        replace: true,
-      })),
-    })),
-  ];
-}
 
 function modalNavGroups(
   modal: SettingsModalId,
@@ -134,13 +91,7 @@ function modalNavGroups(
       replace: true,
     });
   }
-  return [
-    ...groups.map((entries) => ({ heading: null, entries })),
-    // The old pages still outside a modal (Secrets, when enabled) stay one click away.
-    ...(modal === "user" && settingsNavGroupsFor(true).length > 0
-      ? [{ heading: null, entries: [MORE_SETTINGS_ENTRY] }]
-      : []),
-  ];
+  return groups.map((entries) => ({ heading: null, entries }));
 }
 
 const MODAL_SECTION_ICONS: Readonly<
@@ -166,10 +117,7 @@ function scrollResultIntoView(row: HTMLElement | null) {
 }
 
 function SettingsSectionIcon({ item }: { item: SettingsSearchItem }) {
-  const Icon =
-    item.modal === undefined
-      ? SETTINGS_SECTION_ICONS[item.to]
-      : MODAL_SECTION_ICONS[item.modal][item.section];
+  const Icon = MODAL_SECTION_ICONS[item.modal][item.section];
   if (Icon === undefined) return null;
   return <Icon className="size-4 shrink-0 text-(--sidebar-icon-color)" />;
 }
@@ -189,12 +137,8 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       ? pathname
       : `${modal}/${pathname.split("/")[modal === "user" || modal === "platform" ? 3 : 4] ?? ""}`;
   const visibility = useSettingsVisibility();
-  // A Member of a Hub does not see the pages only its Owner changes.
-  const actsForInstallation = usePrimaryActsForInstallation();
   const navGroups =
-    modal === null
-      ? legacyNavGroups(actsForInstallation)
-      : modalNavGroups(modal, visibility, { projectKey, spaceId });
+    modal === null ? [] : modalNavGroups(modal, visibility, { projectKey, spaceId });
   const navEntries = navGroups.flatMap((group) => group.entries);
   const sectionNavigation = useSettingsSectionNavigation(
     navEntries.find((entry) => activePath === entry.key || activePath.startsWith(`${entry.key}/`))

@@ -285,14 +285,14 @@ export function ConnectAgentSurface() {
             <p className="text-xs text-muted-foreground">
               {details.signedInAs === undefined ? (
                 <>
-                  Create one in Settings → Sharing & access, or run{" "}
+                  Create one in User settings → Sessions, or run{" "}
                   <code>t3 auth pairing create --user &lt;sign-in name&gt;</code> on the Hub. The
                   agent acts as the person the code was created for.
                 </>
               ) : (
                 <>
-                  Use a code you created in Settings → Sharing & access. This browser is signed in
-                  as {details.signedInAs}, so a code from another account is refused.
+                  Use a code you created in User settings → Sessions. This browser is signed in as{" "}
+                  {details.signedInAs}, so a code from another account is refused.
                 </>
               )}
             </p>

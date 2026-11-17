@@ -29,6 +29,8 @@ export interface SettingsVisibilityContext {
   /** The session acts for the whole Installation: the Owner's. */
   readonly isOwner: boolean;
   readonly isDesktop: boolean;
+  /** The session belongs to a User with an account; a pairing-link session has none. */
+  readonly hasUser: boolean;
 }
 
 export interface SettingsModalSection {
@@ -80,6 +82,13 @@ const SnapShotSection = lazy(() =>
   import("./SnapShotSettings").then((module) => ({ default: module.SnapShotSettings })),
 );
 
+const AccountSection = lazy(() =>
+  import("./UserAccountSettings").then((module) => ({ default: module.UserAccountSettings })),
+);
+const SessionsSection = lazy(() =>
+  import("./UserSessionsSettings").then((module) => ({ default: module.UserSessionsSettings })),
+);
+
 const reserved = (
   id: string,
   label: string,
@@ -91,8 +100,21 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
   Record<SettingsModalId, ReadonlyArray<SettingsModalSection>>
 > = {
   user: [
-    reserved("account", "Account", UserIcon, 0),
-    reserved("sessions", "Sessions", ShieldCheckIcon, 0),
+    {
+      id: "account",
+      label: "Account",
+      icon: UserIcon,
+      component: AccountSection,
+      visible: ({ hasUser }) => hasUser,
+      group: 0,
+    },
+    {
+      id: "sessions",
+      label: "Sessions",
+      icon: ShieldCheckIcon,
+      component: SessionsSection,
+      group: 0,
+    },
     { id: "general", label: "General", icon: Settings2Icon, component: GeneralSection, group: 1 },
     {
       id: "appearance",
@@ -212,7 +234,6 @@ export const OLD_SETTINGS_PATHS: Readonly<Record<string, string>> = {
 
 /** Section anchors that moved but are not search results themselves. */
 export const MOVED_SECTION_ANCHORS: Readonly<Record<string, string>> = {
-  "authorized-clients": "/settings/access",
   "legacy-features": "/settings/labs",
   "text-generation": "/settings/threads",
   about: "/settings/user/about",

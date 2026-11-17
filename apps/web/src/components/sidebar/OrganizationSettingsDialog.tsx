@@ -158,7 +158,7 @@ export function OrganizationSettingsDialog({
       await reload();
       if (result.pendingAdmin) {
         setNotice(
-          `${member.displayName} becomes an Admin once they add an authenticator app in Settings → Access. Until then they act as a Member.`,
+          `${member.displayName} becomes an Admin once they add an authenticator app in User settings → Account. Until then they act as a Member.`,
         );
       } else if (result.signedOut) {
         setNotice(

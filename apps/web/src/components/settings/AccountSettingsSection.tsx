@@ -18,6 +18,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { QRCodeSvg } from "../ui/qr-code";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { searchableSetting } from "./settingsSearch";
 
 const isLoginName = Schema.is(AuthLoginName);
 
@@ -73,7 +74,7 @@ export function AccountSettingsSection() {
   const onChanged = (account: AuthAccount) => setLoad({ status: "loaded", account });
 
   return (
-    <SettingsSection title="Your account">
+    <SettingsSection {...searchableSetting("account")}>
       {load.status === "loaded" ? (
         <>
           <TotpRow account={load.account} onChanged={onChanged} />

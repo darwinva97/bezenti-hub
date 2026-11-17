@@ -11,15 +11,10 @@ import {
   type AdvertisedEndpoint,
   type DesktopServerExposureState,
   type DesktopWslState,
-  type EnvironmentId,
   managedCapabilityDenial,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
-import {
-  isAtomCommandInterrupted,
-  settlePromise,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
@@ -34,7 +29,6 @@ import { ManagedByOrganization } from "../ManagedPolicy";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
-import { AccountSettingsSection } from "./AccountSettingsSection";
 import { AuditLogSettingsSection } from "./AuditLogSettingsSection";
 import { MasterKeySettingsSection } from "./MasterKeySettingsSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
@@ -84,8 +78,6 @@ import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { useUiStateStore } from "~/uiStateStore";
 import { resolveServerConfigVersionMismatch } from "~/versionSkew";
 import { authEnvironment } from "~/state/auth";
-import { environmentCatalog } from "~/connection/catalog";
-import { signOutAndRemoveEnvironment } from "~/connection/onboarding";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
 import {
@@ -93,13 +85,7 @@ import {
   refreshDesktopNetworkAccessState,
 } from "~/state/desktopNetworkAccess";
 import { desktopWslStateAtom, refreshDesktopWslState } from "~/state/desktopWslState";
-import {
-  type EnvironmentPresentation,
-  useEnvironments,
-  usePrimaryEnvironment,
-} from "~/state/environments";
-import { requestConfirmDialog } from "~/confirmDialog";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
 import {
   sortDesktopPairingLinks,
   summarizeAuthorizedClients,
@@ -117,10 +103,6 @@ import {
   PairingClientsList,
 } from "./AuthorizedClientsSettings";
 import { ITEM_ROW_CLASSNAME } from "./itemRows";
-import { EmptyRemoteEnvironments, SavedBackendListRow } from "./SavedEnvironmentRows";
-import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
-import { savedConnectionSlots } from "~/connection/singleHub";
-import { KeptSavedConnectionsNotice } from "./KeptSavedConnectionsNotice";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
@@ -129,16 +111,18 @@ const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
 const BACKEND_VALUE_DEFAULT_WSL = "backend:default-wsl";
 const BACKEND_VALUE_WSL_OFF = "backend:wsl-off";
 
-/** Environments lists the machines this app connects to; access covers who may reach this one. */
-export function ConnectionsSettings({ view }: { readonly view: "environments" | "access" }) {
+/**
+ * Environments lists the machines this app connects to; access covers who may reach this one;
+ * sessions covers the User's own sessions, pairing links and permissions.
+ */
+export function ConnectionsSettings({
+  view,
+}: {
+  readonly view: "environments" | "access" | "sessions";
+}) {
   const desktopBridge = window.desktopBridge;
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
-  // Removing a saved environment also ends its session there (signing out of a Hub).
-  const removeEnvironment = useAtomCommand(signOutAndRemoveEnvironment, { reportFailure: false });
-  const setEnvironmentEnabled = useAtomCommand(environmentCatalog.setEnabled, {
-    reportFailure: false,
-  });
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const primarySessionState = usePrimarySessionState();
   const currentSessionScopes = primarySessionState.data?.authenticated
@@ -147,9 +131,6 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
   const currentAuthPolicy = desktopBridge ? null : (primarySessionState.data?.auth.policy ?? null);
   const savedEnvironments = environments.filter(
     (environment) => environment.entry.target._tag !== "PrimaryConnectionTarget",
-  );
-  const listedEnvironments = savedEnvironments.filter(
-    (environment) => !isDesktopLocalConnectionTarget(environment.entry.target),
   );
   const pullRequestRoutingEnvironments = [
     ...(primaryEnvironment ? [primaryEnvironment] : []),
@@ -176,19 +157,6 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
     string | null
   >(null);
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
-  const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
-  const [routeTarget, setRouteTarget] = useState<EnvironmentPresentation | null>(null);
-  const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
-  const handleAddBackendDialogOpenChange = (open: boolean) => {
-    setAddBackendDialogOpen(open);
-    if (open) {
-      setRouteTarget(null);
-    } else {
-      setSavedBackendError(null);
-    }
-  };
-  const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
-    useState<EnvironmentId | null>(null);
   const [isUpdatingDesktopServerExposure, setIsUpdatingDesktopServerExposure] = useState(false);
   const [isUpdatingTailscaleServe, setIsUpdatingTailscaleServe] = useState(false);
   const [isUpdatingWslBackend, setIsUpdatingWslBackend] = useState(false);
@@ -226,8 +194,9 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
   const canMaintain = useEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope);
   const canManageLocalBackend = !isLocalEnvironmentDisabled() && canMaintain;
   const showsAccess = view === "access";
+  const showsAccessManagement = showsAccess || view === "sessions";
   const authAccessChanges = useEnvironmentQuery(
-    showsAccess && canReadAccess && primaryEnvironmentId !== null
+    showsAccessManagement && canReadAccess && primaryEnvironmentId !== null
       ? authEnvironment.accessChanges({
           environmentId: primaryEnvironmentId,
           input: null,
@@ -482,54 +451,6 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
       );
     }
     setIsRevokingOtherDesktopClients(false);
-  };
-
-  const handleSetSavedBackendEnabled = async (environmentId: EnvironmentId, enabled: boolean) => {
-    setSavedBackendError(null);
-    const result = await setEnvironmentEnabled({ environmentId, enabled });
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      const error = squashAtomCommandFailure(result);
-      const message =
-        error instanceof Error
-          ? error.message
-          : `Failed to switch the backend ${enabled ? "on" : "off"}.`;
-      setSavedBackendError(message);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: `Could not switch backend ${enabled ? "on" : "off"}`,
-          description: message,
-        }),
-      );
-    }
-  };
-
-  const removeSavedBackend = async (environment: EnvironmentPresentation) => {
-    const environmentId = environment.environmentId;
-    setRemovingSavedEnvironmentId(environmentId);
-    setSavedBackendError(null);
-    const result = await removeEnvironment(environmentId);
-    setRemovingSavedEnvironmentId(null);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      const error = squashAtomCommandFailure(result);
-      const message = error instanceof Error ? error.message : "Failed to remove backend.";
-      setSavedBackendError(message);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not remove backend",
-          description: message,
-        }),
-      );
-    }
-  };
-
-  const handleRemoveSavedBackend = async (environment: EnvironmentPresentation) => {
-    const confirmed = await requestConfirmDialog(
-      `Remove ${environment.label} from this device?\nThis forgets its pairing, credentials, and cached threads here. Switch it off instead to keep it saved.`,
-      { variant: "destructive" },
-    );
-    if (confirmed === true) await removeSavedBackend(environment);
   };
 
   const visibleDesktopPairingLinks = desktopPairingLinks;
@@ -958,6 +879,67 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
     />
   );
 
+  const permissionsDetails = primaryEnvironment ? (
+    <details className="group px-3 sm:px-4">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-md text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        Permissions
+        <ChevronRightIcon
+          aria-hidden
+          className="size-3 text-muted-foreground group-open:rotate-90"
+        />
+      </summary>
+      <SessionPermissions
+        environmentId={primaryEnvironment.environmentId}
+        connected={primaryEnvironment.connection.phase === "connected"}
+      />
+    </details>
+  ) : null;
+  const sessionsSection =
+    canReadAccess || canWriteAccess ? (
+      <FoldedSettingsSection
+        id="authorized-clients"
+        title="Your sessions"
+        collapsedContent={
+          canReadAccess && newestPairingLink
+            ? renderPairingClientsList([newestPairingLink], [])
+            : undefined
+        }
+        summary={summarizeAuthorizedClients(desktopClientSessions, visibleDesktopPairingLinks)}
+        control={
+          canWriteAccess ? (
+            <AuthorizedClientsHeaderAction
+              delegatableScopes={currentSessionScopes ?? []}
+              onPairingLinkCreated={handlePairingLinkCreated}
+              clientSessions={
+                canReadAccess &&
+                authAccessChanges.error === null &&
+                authAccessChanges.data?.type === "snapshot"
+                  ? desktopClientSessions
+                  : null
+              }
+              isRevokingOtherClients={isRevokingOtherDesktopClients}
+              onRevokeOtherClients={handleRevokeOtherDesktopClients}
+            />
+          ) : undefined
+        }
+      >
+        <ScrollArea
+          scrollFade
+          chainVerticalScroll
+          className="max-h-[22.5rem]"
+          data-testid="authorized-clients-scroll-area"
+        >
+          {canReadAccess ? (
+            renderAuthorizedClients()
+          ) : (
+            <p className="px-4 py-3 text-xs text-muted-foreground">
+              This connection can create access links but cannot view authorized clients.
+            </p>
+          )}
+        </ScrollArea>
+      </FoldedSettingsSection>
+    ) : null;
+
   const primarySettings = (
     <>
       {primaryEnvironmentId !== null ? (
@@ -1038,70 +1020,8 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
             ) : canManageLocalBackend ? (
               <>{renderDisabledNetworkAccessRow()}</>
             ) : null}
-            {primaryEnvironment ? (
-              <details className="group px-3 sm:px-4">
-                <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-md text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-                  Permissions
-                  <ChevronRightIcon
-                    aria-hidden
-                    className="size-3 text-muted-foreground group-open:rotate-90"
-                  />
-                </summary>
-                <SessionPermissions
-                  environmentId={primaryEnvironment.environmentId}
-                  connected={primaryEnvironment.connection.phase === "connected"}
-                />
-              </details>
-            ) : null}
           </SettingsSection>
 
-          {canReadAccess || canWriteAccess ? (
-            <FoldedSettingsSection
-              id="authorized-clients"
-              title="Your sessions"
-              collapsedContent={
-                canReadAccess && newestPairingLink
-                  ? renderPairingClientsList([newestPairingLink], [])
-                  : undefined
-              }
-              summary={summarizeAuthorizedClients(
-                desktopClientSessions,
-                visibleDesktopPairingLinks,
-              )}
-              control={
-                canWriteAccess ? (
-                  <AuthorizedClientsHeaderAction
-                    delegatableScopes={currentSessionScopes ?? []}
-                    onPairingLinkCreated={handlePairingLinkCreated}
-                    clientSessions={
-                      canReadAccess &&
-                      authAccessChanges.error === null &&
-                      authAccessChanges.data?.type === "snapshot"
-                        ? desktopClientSessions
-                        : null
-                    }
-                    isRevokingOtherClients={isRevokingOtherDesktopClients}
-                    onRevokeOtherClients={handleRevokeOtherDesktopClients}
-                  />
-                ) : undefined
-              }
-            >
-              <ScrollArea
-                scrollFade
-                chainVerticalScroll
-                className="max-h-[22.5rem]"
-                data-testid="authorized-clients-scroll-area"
-              >
-                {canReadAccess ? (
-                  renderAuthorizedClients()
-                ) : (
-                  <p className="px-4 py-3 text-xs text-muted-foreground">
-                    This connection can create access links but cannot view authorized clients.
-                  </p>
-                )}
-              </ScrollArea>
-            </FoldedSettingsSection>
-          ) : null}
           <AlertDialog
             open={pendingDesktopServerExposureMode !== null && canManageLocalBackend}
             onOpenChange={(open) => {
@@ -1380,11 +1300,21 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
     </>
   );
 
+  if (view === "sessions") {
+    return (
+      <SettingsPageContainer>
+        {permissionsDetails ? (
+          <SettingsSection title="This session">{permissionsDetails}</SettingsSection>
+        ) : null}
+        {sessionsSection}
+      </SettingsPageContainer>
+    );
+  }
+
   if (showsAccess) {
     return (
       <SettingsPageContainer>
         <MasterKeySettingsSection />
-        <AccountSettingsSection />
         <AuditLogSettingsSection />
         {primarySettings}
       </SettingsPageContainer>
@@ -1401,43 +1331,6 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
         <SettingsSection id="this-app" title="This app">
           <LocalEnvironmentSetting />
           <JoinedEnvironmentSetting />
-        </SettingsSection>
-      ) : null}
-      <KeptSavedConnectionsNotice />
-      {/* One connection, the Hub's: only a desktop that is not the Hub itself saves one. */}
-      {savedConnectionSlots() > 0 ? (
-        <SettingsSection
-          {...searchableSetting("remote-environments")}
-          title="Hub"
-          headerAction={
-            savedEnvironments.length === 0 || routeTarget !== null ? (
-              <div className="flex items-center gap-1">
-                <AddEnvironmentDialog
-                  open={addBackendDialogOpen}
-                  routeTarget={routeTarget}
-                  error={savedBackendError}
-                  onOpenChange={handleAddBackendDialogOpenChange}
-                  onErrorChange={setSavedBackendError}
-                />
-              </div>
-            ) : null
-          }
-        >
-          {listedEnvironments.map((environment) => (
-            <SavedBackendListRow
-              key={environment.environmentId}
-              environment={environment}
-              removingEnvironmentId={removingSavedEnvironmentId}
-              onSetEnabled={handleSetSavedBackendEnabled}
-              onRemove={handleRemoveSavedBackend}
-              onAddRoute={(target) => {
-                setRouteTarget(target);
-                setSavedBackendError(null);
-                setAddBackendDialogOpen(true);
-              }}
-            />
-          ))}
-          {savedEnvironments.length === 0 ? <EmptyRemoteEnvironments /> : null}
         </SettingsSection>
       ) : null}
       <PullRequestRoutingSettings environments={pullRequestRoutingEnvironments} />

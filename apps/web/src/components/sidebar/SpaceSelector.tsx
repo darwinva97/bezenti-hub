@@ -109,7 +109,9 @@ export function SpaceSelector() {
     <SidebarMenu>
       {current?.pendingAdmin === true ? (
         <SidebarMenuItem>
-          <SidebarMenuButton render={<Link to="/settings/access" />}>
+          <SidebarMenuButton
+            render={<Link to="/settings/user/$section" params={{ section: "account" }} />}
+          >
             <ShieldIcon />
             <span className="min-w-0 flex-1 truncate">
               Set up an authenticator app to become Admin

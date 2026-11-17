@@ -1158,10 +1158,30 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "account",
+    title: "Your account",
+    modal: "user",
+    section: "account",
+    searchTerms: [
+      "sign in methods passkey password authenticator app totp two factor login sign out",
+    ],
+  },
+  {
+    id: "authorized-clients",
+    title: "Your sessions",
+    modal: "user",
+    section: "sessions",
+    searchTerms: [
+      "authorized clients pairing links qr code revoke devices sign out other sessions permissions scopes",
+    ],
+  },
+  {
     id: "remote-environments",
-    title: "Environments",
-    to: "/settings/connections",
+    title: "Hub of this app",
+    modal: "user",
+    section: "account",
     searchTerms: ["add pair backend host code ssh config agent tunnel saved tailscale"],
+    desktopOnly: true,
   },
   {
     id: "pull-request-routing",
@@ -1235,6 +1255,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
 const SPLIT_LEGACY_PATHS: ReadonlySet<string> = new Set([
   "/settings/source-control",
   "/settings/connections",
+  "/settings/access",
 ]);
 
 /** The URL path of the page or modal section a setting lives on. */

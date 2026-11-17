@@ -33,7 +33,10 @@ const OLD_URLS: ReadonlyArray<readonly [pathname: string, hash: string, to: stri
   ["/settings/about", "", "/settings/user/about"],
   ["/settings/open-source-licenses", "", "/settings/user/about/licenses"],
   ["/settings/connections", "about", "/settings/user/about"],
-  ["/settings/connections", "authorized-clients", "/settings/access"],
+  ["/settings/connections", "authorized-clients", "/settings/user/sessions"],
+  ["/settings/access", "authorized-clients", "/settings/user/sessions"],
+  ["/settings/access", "account", "/settings/user/account"],
+  ["/settings/connections", "remote-environments", "/settings/user/account"],
   ["/settings/connections", "network-access", "/settings/access"],
   ["/settings/source-control", "worktree-branch-naming", "/settings/worktrees"],
   ["/settings/storage", "storage-worktrees", "/settings/worktrees"],
@@ -45,14 +48,42 @@ const OLD_URLS: ReadonlyArray<readonly [pathname: string, hash: string, to: stri
 const NOT_MOVED: ReadonlyArray<readonly [pathname: string, hash: string]> = [
   ["/settings/user/general", ""],
   ["/settings/projects", "project-defaults"],
-  ["/settings/connections", "remote-environments"],
+  ["/settings/access", ""],
+  ["/settings/access", "connections-environment"],
 ];
 
-const OWNER_ON_DESKTOP: SettingsVisibilityContext = { isOwner: true, isDesktop: true };
-const MEMBER_ON_DESKTOP: SettingsVisibilityContext = { isOwner: false, isDesktop: true };
-const OWNER_IN_BROWSER: SettingsVisibilityContext = { isOwner: true, isDesktop: false };
-const MEMBER_IN_BROWSER: SettingsVisibilityContext = { isOwner: false, isDesktop: false };
-const PRINCIPALS = [OWNER_ON_DESKTOP, MEMBER_ON_DESKTOP, OWNER_IN_BROWSER, MEMBER_IN_BROWSER];
+const OWNER_ON_DESKTOP: SettingsVisibilityContext = {
+  isOwner: true,
+  isDesktop: true,
+  hasUser: true,
+};
+const MEMBER_ON_DESKTOP: SettingsVisibilityContext = {
+  isOwner: false,
+  isDesktop: true,
+  hasUser: true,
+};
+const OWNER_IN_BROWSER: SettingsVisibilityContext = {
+  isOwner: true,
+  isDesktop: false,
+  hasUser: true,
+};
+const MEMBER_IN_BROWSER: SettingsVisibilityContext = {
+  isOwner: false,
+  isDesktop: false,
+  hasUser: true,
+};
+const PAIRED_IN_BROWSER: SettingsVisibilityContext = {
+  isOwner: false,
+  isDesktop: false,
+  hasUser: false,
+};
+const PRINCIPALS = [
+  OWNER_ON_DESKTOP,
+  MEMBER_ON_DESKTOP,
+  OWNER_IN_BROWSER,
+  MEMBER_IN_BROWSER,
+  PAIRED_IN_BROWSER,
+];
 const MODALS = Object.keys(SETTINGS_MODAL_SECTIONS) as SettingsModalId[];
 
 describe("old settings URLs", () => {
@@ -100,6 +131,15 @@ describe("settings modal sections", () => {
     }
   });
 
+  it("leaves the account out of a pairing-link session, which has none", () => {
+    expect(visibleSettingsSections("user", PAIRED_IN_BROWSER).map((section) => section.id)).toEqual(
+      expect.arrayContaining(["sessions", "general"]),
+    );
+    expect(
+      visibleSettingsSections("user", PAIRED_IN_BROWSER).map((section) => section.id),
+    ).not.toContain("account");
+  });
+
   it("shows Platform only to the Owner", () => {
     for (const principal of PRINCIPALS) {
       for (const section of SETTINGS_MODAL_SECTIONS.platform) {
@@ -111,10 +151,21 @@ describe("settings modal sections", () => {
   it("shows User settings to everyone, and SnapShots on the desktop only", () => {
     const ids = (context: SettingsVisibilityContext) =>
       visibleSettingsSections("user", context).map((section) => section.id);
-    const everywhere = ["general", "appearance", "chat", "diffs", "keybindings", "about"];
+    const everywhere = [
+      "account",
+      "sessions",
+      "general",
+      "appearance",
+      "chat",
+      "diffs",
+      "keybindings",
+      "about",
+    ];
     expect(ids(OWNER_IN_BROWSER)).toEqual(everywhere);
     expect(ids(MEMBER_IN_BROWSER)).toEqual(everywhere);
     expect(ids(MEMBER_ON_DESKTOP)).toEqual([
+      "account",
+      "sessions",
       "general",
       "appearance",
       "chat",

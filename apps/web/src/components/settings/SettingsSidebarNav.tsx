@@ -10,7 +10,6 @@ import {
   GlobeIcon,
   KeyRoundIcon,
   MessagesSquareIcon,
-  PanelsTopLeftIcon,
   SearchIcon,
   ServerIcon,
   ShieldCheckIcon,
@@ -20,7 +19,7 @@ import {
   WrenchIcon,
   XIcon,
 } from "lucide-react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -40,6 +39,7 @@ import {
   SETTINGS_SECTION_LABELS,
   settingsItemDestination,
   settingsItemPath,
+  type SettingsDestination,
   settingsItemSectionLabel,
   settingsNavGroupsFor,
   type SettingsPath,
@@ -49,6 +49,7 @@ import {
   SETTINGS_MODAL_SECTIONS,
   settingsModalForPathname,
   visibleSettingsSections,
+  type SettingsModalId,
 } from "./settingsModals";
 import { useSettingsVisibility } from "./useSettingsVisibility";
 import { useAvailableSettingsSearchItems } from "./useAvailableSettingsSearchItems";
@@ -61,7 +62,6 @@ const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
 > = {
   "/settings/diagnostics": WrenchIcon,
-  "/settings/projects": PanelsTopLeftIcon,
   "/settings/providers": BotIcon,
   "/settings/ai-gateway": NetworkIcon,
   "/settings/ai-accounts": KeyRoundIcon,
@@ -85,16 +85,12 @@ const SETTINGS_DETAIL_PAGE_PARENTS: Readonly<Record<string, SettingsPath>> = {
   "/settings/diagnostics": "/settings/maintenance",
 };
 
-type SettingsNavTarget =
-  | { readonly to: SettingsPath }
-  | { readonly to: "/settings/user/$section"; readonly params: { readonly section: string } };
-
 interface SettingsNavEntry {
   /** The path that makes it the open section. */
   readonly key: string;
   readonly label: string;
   readonly icon: ComponentType<{ className?: string }>;
-  readonly target: SettingsNavTarget;
+  readonly target: SettingsDestination;
   /** Moving to another modal adds a history entry; moving between sections replaces it. */
   readonly replace: boolean;
 }
@@ -104,7 +100,7 @@ interface SettingsNavGroup {
   readonly entries: ReadonlyArray<SettingsNavEntry>;
 }
 
-const userSectionTarget = (section: string): SettingsNavTarget => ({
+const userSectionTarget = (section: string): SettingsDestination => ({
   to: "/settings/user/$section",
   params: { section },
 });
@@ -142,30 +138,53 @@ function legacyNavGroups(actsForInstallation: boolean): ReadonlyArray<SettingsNa
   ];
 }
 
-function userNavGroups(
+function modalNavGroups(
+  modal: "user" | "project",
   visibility: ReturnType<typeof useSettingsVisibility>,
+  projectKey: string | undefined,
 ): ReadonlyArray<SettingsNavGroup> {
+  // A Project's sections are its own: without one in the URL there is nothing to open.
+  if (modal === "project" && projectKey === undefined) return [];
   const groups: SettingsNavEntry[][] = [];
   let previousGroup: number | null = null;
-  for (const section of visibleSettingsSections("user", visibility)) {
+  for (const section of visibleSettingsSections(modal, visibility)) {
     if (section.group !== previousGroup) groups.push([]);
     previousGroup = section.group;
     groups.at(-1)?.push({
-      key: `/settings/user/${section.id}`,
+      key: `${modal}/${section.id}`,
       label: section.label,
       icon: section.icon,
-      target: userSectionTarget(section.id),
+      target:
+        modal === "user"
+          ? userSectionTarget(section.id)
+          : {
+              to: "/settings/project/$projectKey/$section",
+              params: { projectKey: projectKey ?? "", section: section.id },
+            },
       replace: true,
     });
   }
   return [
     ...groups.map((entries) => ({ heading: null, entries })),
-    { heading: null, entries: [MORE_SETTINGS_ENTRY] },
+    ...(modal === "user" ? [{ heading: null, entries: [MORE_SETTINGS_ENTRY] }] : []),
   ];
 }
 
-const USER_SECTION_ICONS: Readonly<Record<string, ComponentType<{ className?: string }>>> =
-  Object.fromEntries(SETTINGS_MODAL_SECTIONS.user.map((section) => [section.id, section.icon]));
+const MODAL_SECTION_ICONS: Readonly<
+  Record<"user" | "project", Readonly<Record<string, ComponentType<{ className?: string }>>>>
+> = {
+  user: Object.fromEntries(
+    SETTINGS_MODAL_SECTIONS.user.map((section) => [section.id, section.icon]),
+  ),
+  project: Object.fromEntries(
+    SETTINGS_MODAL_SECTIONS.project.map((section) => [section.id, section.icon]),
+  ),
+};
+
+/** The modals whose sections are built; the rest still show the old pages. */
+function navModalFor(modal: SettingsModalId | null): "user" | "project" | null {
+  return modal === "user" || modal === "project" ? modal : null;
+}
 
 // Attached only to the highlighted result, so it runs whenever the highlight lands on a row.
 function scrollResultIntoView(row: HTMLElement | null) {
@@ -174,7 +193,9 @@ function scrollResultIntoView(row: HTMLElement | null) {
 
 function SettingsSectionIcon({ item }: { item: SettingsSearchItem }) {
   const Icon =
-    item.modal === undefined ? SETTINGS_SECTION_ICONS[item.to] : USER_SECTION_ICONS[item.section];
+    item.modal === undefined
+      ? SETTINGS_SECTION_ICONS[item.to]
+      : MODAL_SECTION_ICONS[item.modal][item.section];
   if (Icon === undefined) return null;
   return <Icon className="size-4 shrink-0 text-(--sidebar-icon-color)" />;
 }
@@ -185,17 +206,20 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const currentHash = useLocation({ select: (location) => location.hash });
   const currentSearch = useLocation({ select: (location) => location.search });
   const scopeSearch = validateSettingsScopeSearch(currentSearch);
-  const modal = settingsModalForPathname(pathname);
-  // A section's subpages keep it open: its key is the first segments of the path.
+  const modal = navModalFor(settingsModalForPathname(pathname));
+  const { projectKey } = useParams({ strict: false });
+  // A section's subpages keep it open: its key is the modal and the section segment of the path.
   const activePath =
     modal === null
       ? (SETTINGS_DETAIL_PAGE_PARENTS[pathname] ?? pathname)
-      : pathname.split("/").slice(0, 4).join("/");
+      : `${modal}/${pathname.split("/")[modal === "project" ? 4 : 3] ?? ""}`;
   const visibility = useSettingsVisibility();
   // A Member of a Hub does not see the pages only its Owner changes.
   const actsForInstallation = usePrimaryActsForInstallation();
   const navGroups =
-    modal === null ? legacyNavGroups(actsForInstallation) : userNavGroups(visibility);
+    modal === null
+      ? legacyNavGroups(actsForInstallation)
+      : modalNavGroups(modal, visibility, projectKey);
   const navEntries = navGroups.flatMap((group) => group.entries);
   const sectionNavigation = useSettingsSectionNavigation(
     navEntries.find((entry) => activePath === entry.key || activePath.startsWith(`${entry.key}/`))
@@ -210,7 +234,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const [activeResultIndex, setActiveResultIndex] = useState(0);
   // Each modal searches only its own sections.
   const searchableItems = useAvailableSettingsSearchItems(scopeSearch).filter(
-    (item) => (item.modal ?? null) === (modal === "user" ? "user" : null),
+    (item) => (item.modal ?? null) === modal,
   );
   const results = searchSettings(query, searchableItems);
   const isSearching = query.trim().length > 0;
@@ -284,8 +308,10 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       scrollToSettingsTarget(targetId);
       return;
     }
+    const destination = settingsItemDestination(item, { projectKey });
+    if (destination === null) return;
     void navigate({
-      ...settingsItemDestination(item),
+      ...destination,
       hash: targetId,
       replace: true,
       hashScrollIntoView: false,

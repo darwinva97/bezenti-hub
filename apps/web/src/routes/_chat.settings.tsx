@@ -1,5 +1,5 @@
 import { workspaceAreaProps } from "../lib/workspaceFocus";
-import { Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect, useLocation, useParams } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 import { RotateCcwIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
@@ -25,10 +25,12 @@ import {
   getSettingsSearchTargetScope,
   getThreadAutoSettlementSearchAvailability,
   isSettingsSearchScopeAvailable,
+  projectSectionForAnchor,
   resolveOldSettingsUrl,
 } from "../components/settings/settingsSearch";
 import {
   SETTINGS_MODAL_LABELS,
+  oldProjectSettingsUrl,
   settingsModalForPathname,
 } from "../components/settings/settingsModals";
 
@@ -90,7 +92,7 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
       </SettingsScopeNotice>
     );
   }
-  if (SETTINGS_DEVICE_ONLY_PATHS.has(pathname) || pathname === "/settings/projects") {
+  if (SETTINGS_DEVICE_ONLY_PATHS.has(pathname)) {
     return children;
   }
   if (scope.kind === "unavailable")
@@ -159,16 +161,19 @@ function SettingsRouteLayout() {
   const rawSearch = Route.useSearch();
   const navigate = Route.useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
+  // A Project's modal fixes its Project in the path, so the scope never leaves it.
+  const { projectKey } = useParams({ strict: false });
+  const search = projectKey === undefined ? rawSearch : { ...rawSearch, project: projectKey };
   return (
     <SettingsScopeProvider
-      search={rawSearch}
+      search={search}
       singleEnvironment={pathname === "/settings/providers" || pathname === "/settings/secrets"}
       onChange={(next) => {
         // Send every axis so retain middleware recognizes "all" as an explicit target.
         void navigate({
           to: pathname,
           search: () => ({
-            project: next.project,
+            ...(projectKey === undefined ? { project: next.project } : {}),
             machine: next.machine,
             checkout: next.checkout,
           }),
@@ -185,10 +190,12 @@ function SettingsRouteLayout() {
 export const Route = createFileRoute("/_chat/settings")({
   validateSearch: validateSettingsRouteSearch,
   search: { middlewares: [retainSettingsScope] },
-  beforeLoad: async ({ location }) => {
+  beforeLoad: async ({ location, search }) => {
+    const hash = location.hash.replace(/^#/, "");
+    const project = oldProjectSettingsUrl(location.pathname, search, projectSectionForAnchor(hash));
+    if (project) throw redirect({ href: `${project}${hash ? `#${hash}` : ""}`, replace: true });
     const moved = resolveOldSettingsUrl(location.pathname, location.hash);
     if (moved) {
-      const hash = location.hash.replace(/^#/, "");
       throw redirect({
         href: `${moved}${location.searchStr}${hash ? `#${hash}` : ""}`,
         replace: true,

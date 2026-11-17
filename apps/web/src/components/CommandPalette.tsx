@@ -1670,10 +1670,11 @@ function OpenCommandPaletteDialog(props: {
       title: "Project settings",
       description: contextualProjectGroup.displayName,
       icon: <FolderIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "settings.project",
       run: async () => {
         await navigate({
-          to: "/projects/$projectKey",
-          params: { projectKey: contextualProjectGroup.projectKey },
+          to: "/settings/project/$projectKey/$section",
+          params: { projectKey: contextualProjectGroup.projectKey, section: "general" },
         });
       },
     });
@@ -1684,23 +1685,32 @@ function OpenCommandPaletteDialog(props: {
   // word starts and typo tolerance as threads.
   const settingsSearchItems: CommandPaletteActionItem[] = settingsForThisPlatform(
     availableSettingsSearchItems,
-  ).map((item) => ({
-    kind: "action",
-    value: `setting:${item.id}`,
-    searchTerms: [item.title, settingsItemSectionLabel(item), ...(item.searchTerms ?? [])],
-    title: item.title,
-    description: settingsItemBreadcrumb(item),
-    ...(item.secondary ? { secondary: true } : {}),
-    icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
-    run: async () => {
-      await navigate({
-        ...settingsItemDestination(item),
-        hash: item.targetId ?? item.id,
-        replace: pathname === settingsItemPath(item),
-        hashScrollIntoView: false,
-      });
-    },
-  }));
+  ).flatMap((item): CommandPaletteActionItem[] => {
+    // A Project's setting needs a Project to open it for.
+    const destination = settingsItemDestination(item, {
+      projectKey: contextualProjectGroup?.projectKey,
+    });
+    if (destination === null) return [];
+    return [
+      {
+        kind: "action",
+        value: `setting:${item.id}`,
+        searchTerms: [item.title, settingsItemSectionLabel(item), ...(item.searchTerms ?? [])],
+        title: item.title,
+        description: settingsItemBreadcrumb(item),
+        ...(item.secondary ? { secondary: true } : {}),
+        icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({
+            ...destination,
+            hash: item.targetId ?? item.id,
+            replace: pathname === settingsItemPath(item),
+            hashScrollIntoView: false,
+          });
+        },
+      },
+    ];
+  });
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
   const activeGroups =

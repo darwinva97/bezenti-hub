@@ -99,6 +99,12 @@ export function installCommandPaletteCommands(
         if (settingsModalForPathname(router.state.location.pathname) === "user") return;
         void router.navigate({ to: "/settings/user/$section", params: { section: "general" } });
       },
+      "settings.project": (event) => {
+        consume(event);
+        dispatchCommandPalette({ _tag: "SetOpen", open: false });
+        // The settings route finds the Project of the page this was pressed on.
+        void router.navigate({ to: "/settings/projects" });
+      },
       "commandPalette.toggle": toggleOverlay("commandPalette.toggle"),
       "filePicker.toggle": toggleOverlay("filePicker.toggle"),
       "projectSearch.toggle": toggleOverlay("projectSearch.toggle"),

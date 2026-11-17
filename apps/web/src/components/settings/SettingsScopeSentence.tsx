@@ -61,11 +61,12 @@ export function SettingsScopeSentence() {
   const scope = useOptionalSettingsScope();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { environments } = useEnvironments();
-  // A modal fixes its own object, so it has no scope to choose.
+  const modal = settingsModalForPathname(pathname);
+  // A modal fixes its own object, so it has no scope to choose, except a Project's machine.
   if (
     scope === null ||
     SETTINGS_DEVICE_ONLY_PATHS.has(pathname) ||
-    settingsModalForPathname(pathname) !== null
+    (modal !== null && modal !== "project")
   ) {
     return null;
   }
@@ -78,13 +79,19 @@ export function SettingsScopeSentence() {
   };
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-3 text-sm text-muted-foreground sm:px-4">
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="shrink-0">Applying settings for</span>
-        <ProjectScopeMenu {...props} />
-      </span>
+      {modal === "project" ? null : (
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="shrink-0">Applying settings for</span>
+          <ProjectScopeMenu {...props} />
+        </span>
+      )}
       <span className="flex min-w-0 items-center gap-1.5">
         <span className="shrink-0">
-          {scope.search.machine || scope.scope.kind === "checkout" ? "on" : "across"}
+          {modal === "project"
+            ? "Applying settings on"
+            : scope.search.machine || scope.scope.kind === "checkout"
+              ? "on"
+              : "across"}
         </span>
         <EnvironmentScopeMenu {...props} />
       </span>

@@ -51,12 +51,13 @@ function StartFromRemoteRow() {
   );
 }
 
-export function WorktreesSettingsPanel() {
+/** The worktree settings of the selected scope: a Project's overrides, or the Hub's values. */
+export function WorktreeSettingsSections() {
   const { scope } = useSettingsScope();
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
 
   return (
-    <SettingsPageContainer>
+    <>
       <SettingsSection id="worktree-creation" title="Creation">
         {!isProjectScope && <WorktreesDirectoryRow />}
         <StartFromRemoteRow />
@@ -68,6 +69,14 @@ export function WorktreesSettingsPanel() {
         <BranchNamingSettings />
       </SettingsSection>
       <WorktreeCleanupSection />
+    </>
+  );
+}
+
+export function WorktreesSettingsPanel() {
+  return (
+    <SettingsPageContainer>
+      <WorktreeSettingsSections />
     </SettingsPageContainer>
   );
 }

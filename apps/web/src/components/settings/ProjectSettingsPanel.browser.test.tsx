@@ -10,6 +10,8 @@ import {
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
+  SpaceId,
+  UserId,
   type AuthEnvironmentScope,
   type AuthSessionState,
 } from "@t3tools/contracts";
@@ -77,6 +79,10 @@ vi.mock(import("~/state/environments"), async (original) => ({
 vi.mock(import("~/state/entities"), async (original) => ({
   ...(await original()),
   useProjects: (() => state.projects) as never,
+  useProject: ((ref: { environmentId: EnvironmentId; projectId: ProjectId } | null) =>
+    state.projects.find(
+      (project) => project.environmentId === ref?.environmentId && project.id === ref.projectId,
+    ) ?? null) as never,
   useThreadShells: () => [],
   useServerConfigs: (() =>
     new Map(
@@ -134,9 +140,11 @@ vi.mock(import("../files/projectFilesQueryState"), async (original) => ({
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { useCurrentSpace } from "../../state/currentSpace";
 import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
-import { ProjectsSettings } from "./ProjectsSettings";
+import { ProjectModalContent } from "./ProjectModalContent";
+import type { ProjectSectionId } from "./settingsModals";
 import { SettingsScopeProvider } from "./SettingsScopeContext";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { validateSettingsScopeSearch, type SettingsScopeSearch } from "./settingsScope";
@@ -225,7 +233,10 @@ function projectKey() {
   })[0]!.projectKey;
 }
 
-async function mountPanel(search: Omit<SettingsScopeSearch, "project"> = {}) {
+async function mountPanel(
+  search: Omit<SettingsScopeSearch, "project"> = {},
+  sections: ReadonlyArray<ProjectSectionId> = ["general"],
+) {
   const key = projectKey();
   const rootRoute = createRootRoute();
   const settingsRoute = createRoute({
@@ -237,13 +248,16 @@ async function mountPanel(search: Omit<SettingsScopeSearch, "project"> = {}) {
   const projectsRoute = createRoute({
     getParentRoute: () => settingsRoute,
     path: "projects",
-    component: () => (
-      <ProjectSettingsPanel
-        projectKey={key}
-        environmentId={search.machine ? EnvironmentId.make(search.machine) : null}
-        checkoutKey={search.checkout ?? null}
-      />
-    ),
+    component: () =>
+      sections.map((section) => (
+        <ProjectSettingsPanel
+          key={section}
+          projectKey={key}
+          section={section}
+          environmentId={search.machine ? EnvironmentId.make(search.machine) : null}
+          checkoutKey={search.checkout ?? null}
+        />
+      )),
   });
   const query = new URLSearchParams({ project: key });
   for (const [name, value] of Object.entries(search)) {
@@ -264,7 +278,12 @@ async function mountPanel(search: Omit<SettingsScopeSearch, "project"> = {}) {
       { router: false },
     ),
   );
-  await vi.waitFor(() => expect(nameInput(screen)).not.toBeNull());
+  // Each section shows its own first control.
+  await vi.waitFor(() =>
+    sections.includes("general")
+      ? expect(nameInput(screen)).not.toBeNull()
+      : expect(screen.container.textContent).toContain("Checkouts"),
+  );
   stack.move();
   return { ...screen, router };
 }
@@ -280,7 +299,7 @@ async function mountSettings(search: SettingsScopeSearch) {
         search={route.useSearch()}
         onChange={(next) => void router.navigate({ to: "/settings/projects", search: () => next })}
       >
-        <ProjectsSettings />
+        <ProjectModalContent section="general" />
       </SettingsScopeProvider>
     ),
   });
@@ -348,6 +367,48 @@ describe("project organization", () => {
   });
 });
 
+describe("project Space", () => {
+  const personal = SpaceId.make("personal:grace");
+  const acme = SpaceId.make("org-acme");
+
+  it("makes the Space of the opened Project the current one", async () => {
+    setup();
+    state.projects = state.projects.map((project) => ({ ...project, spaceId: acme }));
+    useCurrentSpace.setState({
+      environmentId: primaryId,
+      currentSpaceId: personal,
+      loadFailed: false,
+      view: {
+        userId: UserId.make("grace"),
+        personalSpaceId: personal,
+        canCreateOrganization: false,
+        spaces: [
+          {
+            id: personal,
+            kind: "personal",
+            name: "Personal",
+            role: null,
+            isOwn: true,
+            canCreateThreads: true,
+            canInvite: false,
+          },
+          {
+            id: acme,
+            kind: "organization",
+            name: "Acme",
+            role: "member",
+            isOwn: false,
+            canCreateThreads: true,
+            canInvite: false,
+          },
+        ],
+      },
+    });
+    await using _screen = await mountPanel();
+    await vi.waitFor(() => expect(useCurrentSpace.getState().currentSpaceId).toBe(acme));
+  });
+});
+
 describe("project settings permissions", () => {
   it("disables shared edits when any member lacks project access", async () => {
     setup();
@@ -394,7 +455,7 @@ describe("project settings permissions", () => {
   it("disables removal for a checkout whose project grant is missing", async () => {
     setup();
     await grant(remoteId, AsyncResult.success(session([])));
-    await using screen = await mountPanel();
+    await using screen = await mountPanel({}, ["machine"]);
     expect(removeCheckout(screen, "/work/remote").disabled).toBe(true);
     expect(removeCheckout(screen, "/work/primary").disabled).toBe(false);
   });
@@ -402,7 +463,7 @@ describe("project settings permissions", () => {
   it("removes a writable checkout while removal of the mixed group stays denied", async () => {
     setup();
     await grant(remoteId, AsyncResult.success(session([])));
-    await using screen = await mountPanel();
+    await using screen = await mountPanel({}, ["general", "machine"]);
     const initialHref = screen.router.state.location.href;
     expect(removeAll(screen).disabled).toBe(true);
 
@@ -581,16 +642,6 @@ describe("project settings scope", () => {
   const primaryOption = () => page.getByRole("menuitemradio", { name: /^primary/ });
   const remoteOption = () => page.getByRole("menuitemradio", { name: /^remote/ });
 
-  it("offers every environment while no project is selected", async () => {
-    setup();
-    state.projects = state.projects.filter((project) => project.environmentId === primaryId);
-    await using _screen = await mountSettings({});
-
-    await userEvent.click(environmentMenu());
-    await expect.element(primaryOption()).toBeVisible();
-    await expect.element(remoteOption()).toBeVisible();
-  });
-
   it("offers only the selected project's checkout environments", async () => {
     setup();
     state.projects = state.projects.filter((project) => project.environmentId === primaryId);
@@ -656,7 +707,7 @@ describe("project settings scope", () => {
   });
 });
 
-it("returns to the project overview after removal, clearing the selection but keeping the environment", async () => {
+it("closes the modal after the whole project is removed", async () => {
   setup();
   state.projects = [state.projects[1]!];
   await using screen = await mountPanel({ machine: remoteId, checkout: "remote:/work/remote" });
@@ -666,10 +717,8 @@ it("returns to the project overview after removal, clearing the selection but ke
 
   await userEvent.click(removeProject);
 
-  await vi.waitFor(() => {
-    expect(screen.router.state.location.pathname).toBe("/settings/projects");
-    expect(screen.router.state.location.search).toEqual({ machine: remoteId });
-  });
+  // Nothing opened Settings in this test, so closing it leads to the start page.
+  await vi.waitFor(() => expect(screen.router.state.location.pathname).toBe("/"));
 });
 
 describe("project name composition", () => {

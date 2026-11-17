@@ -18,11 +18,11 @@ import {
   OLD_SETTINGS_PATHS,
   SETTINGS_MODAL_LABELS,
   findSettingsSection,
+  type ProjectSectionId,
 } from "./settingsModals";
 
 /** The pages that still live in the old Settings nav; the rest moved into a modal. */
 export type SettingsPath =
-  | "/settings/projects"
   | "/settings/diagnostics"
   | "/settings/providers"
   | "/settings/ai-gateway"
@@ -52,7 +52,11 @@ export type SettingsSearchScope =
 /** Where a setting lives: a page of the old nav, or a section of a modal. */
 export type SettingsSearchLocation =
   | { readonly to: SettingsPath; readonly modal?: undefined; readonly section?: undefined }
-  | { readonly modal: "user"; readonly section: string; readonly to?: undefined };
+  | {
+      readonly modal: "user" | "project";
+      readonly section: string;
+      readonly to?: undefined;
+    };
 
 export type SettingsSearchItem = SettingsSearchItemBase & SettingsSearchLocation;
 
@@ -90,7 +94,6 @@ export interface SettingsSearchAvailability {
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/diagnostics": "Diagnostics",
-  "/settings/projects": "Projects",
   "/settings/providers": "Providers",
   "/settings/ai-gateway": "AI gateway",
   "/settings/ai-accounts": "AI accounts",
@@ -128,7 +131,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   },
   {
     heading: "Code",
-    paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
+    paths: ["/settings/source-control", "/settings/worktrees"],
   },
   {
     heading: "Connections",
@@ -284,7 +287,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "project-overview",
     title: "Project overview",
-    to: "/settings/projects",
+    modal: "project",
+    section: "general",
     searchTerms: ["name icon emoji image checkout remove delete"],
   },
   {
@@ -1096,7 +1100,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "project-actions",
     title: "Actions",
-    to: "/settings/projects",
+    modal: "project",
+    section: "actions",
     searchTerms: ["commands scripts setup run dev server checkout worktree t3.json import"],
   },
   {
@@ -1232,7 +1237,6 @@ const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id,
 
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
   "/settings/diagnostics": "environment",
-  "/settings/projects": "project",
   "/settings/providers": null,
   "/settings/ai-gateway": null,
   "/settings/ai-accounts": null,
@@ -1260,18 +1264,35 @@ const SPLIT_LEGACY_PATHS: ReadonlySet<string> = new Set([
 
 /** The URL path of the page or modal section a setting lives on. */
 export function settingsItemPath(item: SettingsSearchLocation): string {
+  // A Project's own settings need its key; without one the old page finds the Project of the context.
+  if (item.modal === "project") return "/settings/projects";
   return item.modal === undefined ? item.to : `/settings/${item.modal}/${item.section}`;
 }
 
-/** The router destination of the page or modal section a setting lives on. */
+export type SettingsDestination =
+  | { readonly to: SettingsPath }
+  | { readonly to: "/settings/user/$section"; readonly params: { readonly section: string } }
+  | {
+      readonly to: "/settings/project/$projectKey/$section";
+      readonly params: { readonly projectKey: string; readonly section: string };
+    };
+
+/**
+ * The router destination of the page or modal section a setting lives on. A Project's setting
+ * goes to the Project of the context; with none, it has no destination.
+ */
 export function settingsItemDestination(
   item: SettingsSearchLocation,
-):
-  | { readonly to: SettingsPath }
-  | { readonly to: "/settings/user/$section"; readonly params: { readonly section: string } } {
-  return item.modal === undefined
-    ? { to: item.to }
-    : { to: "/settings/user/$section", params: { section: item.section } };
+  { projectKey }: { readonly projectKey?: string | undefined } = {},
+): SettingsDestination | null {
+  if (item.modal === undefined) return { to: item.to };
+  if (item.modal === "user")
+    return { to: "/settings/user/$section", params: { section: item.section } };
+  if (projectKey === undefined) return null;
+  return {
+    to: "/settings/project/$projectKey/$section",
+    params: { projectKey, section: item.section },
+  };
 }
 
 /** The label of the page or modal section a setting lives on. */
@@ -1284,6 +1305,13 @@ export function settingsItemSectionLabel(item: SettingsSearchLocation): string {
 export function settingsItemBreadcrumb(item: SettingsSearchLocation): string {
   const prefix = item.modal === undefined ? "Settings" : SETTINGS_MODAL_LABELS[item.modal];
   return `${prefix} · ${settingsItemSectionLabel(item)}`;
+}
+
+/** The section of the Project modal an old `/settings/projects` anchor lives in. */
+export function projectSectionForAnchor(hash: string): ProjectSectionId {
+  const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;
+  const anchored = items.find((item) => item.id === hash || item.targetId === hash);
+  return anchored?.modal === "project" ? (anchored.section as ProjectSectionId) : "general";
 }
 
 /** Where an old settings link now lives. Its anchor finds the page its row moved to. */

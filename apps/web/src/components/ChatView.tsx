@@ -1120,8 +1120,8 @@ export default function ChatView(props: ChatViewProps) {
   const handleOpenDraftProjectSettings = () => {
     if (!activeDraftLogicalProjectKey) return;
     void navigate({
-      to: "/projects/$projectKey",
-      params: { projectKey: activeDraftLogicalProjectKey },
+      to: "/settings/project/$projectKey/$section",
+      params: { projectKey: activeDraftLogicalProjectKey, section: "general" },
     });
   };
   const handleOpenDraftProjectSettingsStable = useStableCallback(handleOpenDraftProjectSettings);

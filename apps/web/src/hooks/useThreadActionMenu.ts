@@ -214,8 +214,8 @@ export function useThreadActionMenu(input: {
             logicalProjectKeyByPhysicalKey.get(derivePhysicalProjectKey(project)) ??
             deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings);
           void router.navigate({
-            to: "/projects/$projectKey",
-            params: { projectKey },
+            to: "/settings/project/$projectKey/$section",
+            params: { projectKey, section: "general" },
           });
           return;
         }

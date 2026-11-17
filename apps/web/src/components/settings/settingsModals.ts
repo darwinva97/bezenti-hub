@@ -1,6 +1,8 @@
 import {
   BotIcon,
   CalendarClockIcon,
+  SlidersHorizontalIcon,
+  SquareTerminalIcon,
   FileDiffIcon,
   InfoIcon,
   KeyRoundIcon,
@@ -24,6 +26,8 @@ import { lazy, type ComponentType } from "react";
  * order, and is never visible.
  */
 export type SettingsModalId = "user" | "space" | "project" | "platform";
+
+export type ProjectSectionId = "general" | "vaults" | "machine" | "defaults" | "actions";
 
 export interface SettingsVisibilityContext {
   /** The session acts for the whole Installation: the Owner's. */
@@ -87,6 +91,22 @@ const AccountSection = lazy(() =>
 );
 const SessionsSection = lazy(() =>
   import("./UserSessionsSettings").then((module) => ({ default: module.UserSessionsSettings })),
+);
+
+const ProjectGeneralSection = lazy(() =>
+  import("./ProjectModalSections").then((module) => ({ default: module.ProjectGeneralSection })),
+);
+const ProjectVaultsSection = lazy(() =>
+  import("./ProjectModalSections").then((module) => ({ default: module.ProjectVaultsSection })),
+);
+const ProjectMachineSection = lazy(() =>
+  import("./ProjectModalSections").then((module) => ({ default: module.ProjectMachineSection })),
+);
+const ProjectDefaultsSection = lazy(() =>
+  import("./ProjectModalSections").then((module) => ({ default: module.ProjectDefaultsSection })),
+);
+const ProjectActionsSection = lazy(() =>
+  import("./ProjectModalSections").then((module) => ({ default: module.ProjectActionsSection })),
 );
 
 const reserved = (
@@ -159,7 +179,37 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
     reserved("scheduled-tasks", "Scheduled tasks", CalendarClockIcon, 2),
     reserved("archive", "Archive", InfoIcon, 2),
   ],
-  project: [],
+  project: [
+    {
+      id: "general",
+      label: "General",
+      icon: Settings2Icon,
+      component: ProjectGeneralSection,
+      group: 0,
+    },
+    { id: "vaults", label: "Vaults", icon: VaultIcon, component: ProjectVaultsSection, group: 0 },
+    {
+      id: "machine",
+      label: "Machine",
+      icon: ServerIcon,
+      component: ProjectMachineSection,
+      group: 0,
+    },
+    {
+      id: "defaults",
+      label: "Defaults",
+      icon: SlidersHorizontalIcon,
+      component: ProjectDefaultsSection,
+      group: 0,
+    },
+    {
+      id: "actions",
+      label: "Actions",
+      icon: SquareTerminalIcon,
+      component: ProjectActionsSection,
+      group: 0,
+    },
+  ],
   platform: [
     reserved("users", "Users", UserIcon, 0),
     reserved("audit-log", "Audit log", ShieldCheckIcon, 0),
@@ -212,6 +262,27 @@ export function settingsModalForPathname(pathname: string): SettingsModalId | nu
   return modal === "user" || modal === "space" || modal === "project" || modal === "platform"
     ? modal
     : null;
+}
+
+/**
+ * `/settings/projects?project=…&machine=…&checkout=…` and its anchor, as the Project modal. The
+ * Project moves from the query into the path; machine and checkout stay in the query.
+ */
+export function oldProjectSettingsUrl(
+  pathname: string,
+  search: {
+    readonly project?: string | undefined;
+    readonly machine?: string | undefined;
+    readonly checkout?: string | undefined;
+  },
+  section: ProjectSectionId = "general",
+): string | null {
+  if (pathname !== "/settings/projects" || !search.project) return null;
+  const query = new URLSearchParams();
+  if (search.machine) query.set("machine", search.machine);
+  if (search.checkout) query.set("checkout", search.checkout);
+  const queryString = query.size > 0 ? `?${query}` : "";
+  return `/settings/project/${encodeURIComponent(search.project)}/${section}${queryString}`;
 }
 
 /** The pages that moved into a modal, by their old path. A new old URL is a new row. */

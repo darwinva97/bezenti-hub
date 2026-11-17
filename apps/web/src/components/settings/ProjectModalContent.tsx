@@ -4,11 +4,15 @@ import { LayersIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { SettingsScopeNotice } from "./SettingsScopeNotice";
 import { SettingsPageContainer } from "./settingsLayout";
+import type { ProjectSectionId } from "./settingsModals";
 import { ALL_ENVIRONMENTS_VALUE, selectEnvironmentAxis } from "./settingsScopeAxis";
 
-export function ProjectsSettings() {
+/**
+ * One section of the Project modal. The Project comes from the URL path through the settings
+ * scope; the machine and checkout come from its query.
+ */
+export function ProjectModalContent({ section }: { section: ProjectSectionId }) {
   const { search: value, scope, selectScope } = useSettingsScope();
   const unavailable =
     scope.kind === "unavailable" ? (
@@ -39,16 +43,13 @@ export function ProjectsSettings() {
       {value.project && projectScope ? (
         <ProjectSettingsPanel
           projectKey={value.project}
+          section={section}
           environmentId={value.machine ? EnvironmentId.make(value.machine) : null}
           checkoutKey={value.checkout ?? null}
           unavailable={unavailable}
         />
-      ) : unavailable ? (
-        unavailable
       ) : (
-        <SettingsScopeNotice target="project">
-          Choose a project to manage its name, icon, checkouts and actions.
-        </SettingsScopeNotice>
+        unavailable
       )}
     </div>
   );

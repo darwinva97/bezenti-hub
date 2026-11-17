@@ -10,8 +10,8 @@ export const Route = createFileRoute("/projects/$projectKey")({
       throw redirect({ to: signedOutRoute(context.authGateState), replace: true });
     }
     throw redirect({
-      to: "/settings/projects",
-      search: { project: params.projectKey, machine: undefined },
+      to: "/settings/project/$projectKey/$section",
+      params: { projectKey: params.projectKey, section: "general" },
       replace: true,
     });
   },

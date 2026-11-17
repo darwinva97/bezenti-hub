@@ -60,7 +60,9 @@ import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draf
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 import { Route as ChatSettingsUserIndexRouteImport } from './routes/_chat.settings.user.index'
 import { Route as ChatSettingsUserSectionRouteImport } from './routes/_chat.settings.user.$section'
+import { Route as ChatSettingsProjectProjectKeyIndexRouteImport } from './routes/_chat.settings.project.$projectKey.index'
 import { Route as ChatSettingsUserAboutLicensesRouteImport } from './routes/_chat.settings.user.about.licenses'
+import { Route as ChatSettingsProjectProjectKeySectionRouteImport } from './routes/_chat.settings.project.$projectKey.$section'
 
 const WelcomeRoute = WelcomeRouteImport.update({
   id: '/welcome',
@@ -322,10 +324,22 @@ const ChatSettingsUserSectionRoute = ChatSettingsUserSectionRouteImport.update({
   path: '/user/$section',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
+const ChatSettingsProjectProjectKeyIndexRoute =
+  ChatSettingsProjectProjectKeyIndexRouteImport.update({
+    id: '/project/$projectKey/',
+    path: '/project/$projectKey/',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
 const ChatSettingsUserAboutLicensesRoute =
   ChatSettingsUserAboutLicensesRouteImport.update({
     id: '/user/about/licenses',
     path: '/user/about/licenses',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
+const ChatSettingsProjectProjectKeySectionRoute =
+  ChatSettingsProjectProjectKeySectionRouteImport.update({
+    id: '/project/$projectKey/$section',
+    path: '/project/$projectKey/$section',
     getParentRoute: () => ChatSettingsRoute,
   } as any)
 
@@ -380,7 +394,9 @@ export interface FileRoutesByFullPath {
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
   '/settings/user/$section': typeof ChatSettingsUserSectionRoute
   '/settings/user/': typeof ChatSettingsUserIndexRoute
+  '/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
   '/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
+  '/settings/project/$projectKey/': typeof ChatSettingsProjectProjectKeyIndexRoute
 }
 export interface FileRoutesByTo {
   '/app-sign-in': typeof AppSignInRoute
@@ -433,7 +449,9 @@ export interface FileRoutesByTo {
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
   '/settings/user/$section': typeof ChatSettingsUserSectionRoute
   '/settings/user': typeof ChatSettingsUserIndexRoute
+  '/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
   '/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
+  '/settings/project/$projectKey': typeof ChatSettingsProjectProjectKeyIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -488,7 +506,9 @@ export interface FileRoutesById {
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
   '/_chat/settings/user/$section': typeof ChatSettingsUserSectionRoute
   '/_chat/settings/user/': typeof ChatSettingsUserIndexRoute
+  '/_chat/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
   '/_chat/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
+  '/_chat/settings/project/$projectKey/': typeof ChatSettingsProjectProjectKeyIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -543,7 +563,9 @@ export interface FileRouteTypes {
     | '/threads/$environmentId/$threadId'
     | '/settings/user/$section'
     | '/settings/user/'
+    | '/settings/project/$projectKey/$section'
     | '/settings/user/about/licenses'
+    | '/settings/project/$projectKey/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/app-sign-in'
@@ -596,7 +618,9 @@ export interface FileRouteTypes {
     | '/threads/$environmentId/$threadId'
     | '/settings/user/$section'
     | '/settings/user'
+    | '/settings/project/$projectKey/$section'
     | '/settings/user/about/licenses'
+    | '/settings/project/$projectKey'
   id:
     | '__root__'
     | '/_chat'
@@ -650,7 +674,9 @@ export interface FileRouteTypes {
     | '/threads/$environmentId/$threadId'
     | '/_chat/settings/user/$section'
     | '/_chat/settings/user/'
+    | '/_chat/settings/project/$projectKey/$section'
     | '/_chat/settings/user/about/licenses'
+    | '/_chat/settings/project/$projectKey/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -1027,11 +1053,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsUserSectionRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/project/$projectKey/': {
+      id: '/_chat/settings/project/$projectKey/'
+      path: '/project/$projectKey'
+      fullPath: '/settings/project/$projectKey/'
+      preLoaderRoute: typeof ChatSettingsProjectProjectKeyIndexRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
     '/_chat/settings/user/about/licenses': {
       id: '/_chat/settings/user/about/licenses'
       path: '/user/about/licenses'
       fullPath: '/settings/user/about/licenses'
       preLoaderRoute: typeof ChatSettingsUserAboutLicensesRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/project/$projectKey/$section': {
+      id: '/_chat/settings/project/$projectKey/$section'
+      path: '/project/$projectKey/$section'
+      fullPath: '/settings/project/$projectKey/$section'
+      preLoaderRoute: typeof ChatSettingsProjectProjectKeySectionRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
   }
@@ -1069,7 +1109,9 @@ interface ChatSettingsRouteChildren {
   ChatSettingsWorktreesRoute: typeof ChatSettingsWorktreesRoute
   ChatSettingsUserSectionRoute: typeof ChatSettingsUserSectionRoute
   ChatSettingsUserIndexRoute: typeof ChatSettingsUserIndexRoute
+  ChatSettingsProjectProjectKeySectionRoute: typeof ChatSettingsProjectProjectKeySectionRoute
   ChatSettingsUserAboutLicensesRoute: typeof ChatSettingsUserAboutLicensesRoute
+  ChatSettingsProjectProjectKeyIndexRoute: typeof ChatSettingsProjectProjectKeyIndexRoute
 }
 
 const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
@@ -1104,7 +1146,11 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsWorktreesRoute: ChatSettingsWorktreesRoute,
   ChatSettingsUserSectionRoute: ChatSettingsUserSectionRoute,
   ChatSettingsUserIndexRoute: ChatSettingsUserIndexRoute,
+  ChatSettingsProjectProjectKeySectionRoute:
+    ChatSettingsProjectProjectKeySectionRoute,
   ChatSettingsUserAboutLicensesRoute: ChatSettingsUserAboutLicensesRoute,
+  ChatSettingsProjectProjectKeyIndexRoute:
+    ChatSettingsProjectProjectKeyIndexRoute,
 }
 
 const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(

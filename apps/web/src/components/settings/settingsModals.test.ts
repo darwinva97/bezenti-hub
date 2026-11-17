@@ -3,12 +3,17 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   SETTINGS_MODAL_SECTIONS,
   findSettingsSection,
+  oldProjectSettingsUrl,
   isSettingsSectionVisible,
   visibleSettingsSections,
   type SettingsModalId,
   type SettingsVisibilityContext,
 } from "./settingsModals";
-import { SETTINGS_SECTION_LABELS, resolveOldSettingsUrl } from "./settingsSearch";
+import {
+  SETTINGS_SECTION_LABELS,
+  projectSectionForAnchor,
+  resolveOldSettingsUrl,
+} from "./settingsSearch";
 
 vi.mock("~/env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/env")>()),
@@ -43,6 +48,24 @@ const OLD_URLS: ReadonlyArray<readonly [pathname: string, hash: string, to: stri
   ["/settings/storage", "", "/settings/maintenance"],
   ["/settings/integrations", "devices", "/settings/devices"],
   ["/settings/beta", "", "/settings/labs"],
+];
+
+/** `/settings/projects` moves the Project from the query into the path; machine and checkout stay. */
+const OLD_PROJECT_URLS: ReadonlyArray<
+  readonly [search: Parameters<typeof oldProjectSettingsUrl>[1], hash: string, to: string | null]
+> = [
+  [{ project: "repo" }, "", "/settings/project/repo/general"],
+  [
+    { project: "repo", machine: "hub", checkout: "hub:/work/repo" },
+    "",
+    "/settings/project/repo/general?machine=hub&checkout=hub%3A%2Fwork%2Frepo",
+  ],
+  [{ project: "local:/work/repo" }, "", "/settings/project/local%3A%2Fwork%2Frepo/general"],
+  [{ project: "repo" }, "project-actions", "/settings/project/repo/actions"],
+  [{ project: "repo" }, "project-overview", "/settings/project/repo/general"],
+  [{ project: "repo" }, "no-such-row", "/settings/project/repo/general"],
+  // Without a Project the route itself looks for the Project of the context.
+  [{ machine: "hub" }, "", null],
 ];
 
 const NOT_MOVED: ReadonlyArray<readonly [pathname: string, hash: string]> = [
@@ -104,6 +127,16 @@ describe("old settings URLs", () => {
     }
   });
 
+  it.each(OLD_PROJECT_URLS)("/settings/projects %j#%s leads to %s", (search, hash, to) => {
+    expect(oldProjectSettingsUrl("/settings/projects", search, projectSectionForAnchor(hash))).toBe(
+      to,
+    );
+  });
+
+  it("leaves other pages out of the Project redirect", () => {
+    expect(oldProjectSettingsUrl("/settings/threads", { project: "repo" })).toBeNull();
+  });
+
   it.each(NOT_MOVED)("leaves %s#%s alone", (pathname, hash) => {
     expect(resolveOldSettingsUrl(pathname, hash)).toBeNull();
   });
@@ -138,6 +171,18 @@ describe("settings modal sections", () => {
     expect(
       visibleSettingsSections("user", PAIRED_IN_BROWSER).map((section) => section.id),
     ).not.toContain("account");
+  });
+
+  it("shows a Project's sections to everyone who sees the Project", () => {
+    for (const principal of PRINCIPALS) {
+      expect(visibleSettingsSections("project", principal).map((section) => section.id)).toEqual([
+        "general",
+        "vaults",
+        "machine",
+        "defaults",
+        "actions",
+      ]);
+    }
   });
 
   it("shows Platform only to the Owner", () => {

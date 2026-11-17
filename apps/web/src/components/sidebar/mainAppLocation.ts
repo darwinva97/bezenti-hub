@@ -28,6 +28,7 @@ const SHELL_LESS_PATHS = new Set([
 
 let mainAppHref: string | null = null;
 let appModalReturnHref: string | null = null;
+let appModalReturnParams: Readonly<Record<string, string | undefined>> = {};
 
 /** Remembers where Settings, Usage, and the utility pages lead back to. */
 export function startMainAppLocationTracking(router: AnyRouter): () => void {
@@ -36,6 +37,7 @@ export function startMainAppLocationTracking(router: AnyRouter): () => void {
     if (isAppModalPage(pathname) || SHELL_LESS_PATHS.has(pathname)) return;
     const href = withoutAssistantCitationHash(router.state.location.href);
     appModalReturnHref = href;
+    appModalReturnParams = router.state.matches.at(-1)?.params ?? {};
     if (!isSidebarUtilityPage(pathname)) mainAppHref = href;
   };
   record();
@@ -45,6 +47,11 @@ export function startMainAppLocationTracking(router: AnyRouter): () => void {
 export function useNavigateToMainApp() {
   const navigate = useNavigate();
   return () => navigate({ href: mainAppHref ?? "/" });
+}
+
+/** The route params of the page Settings or Usage was opened from: the Thread it was showing. */
+export function readAppModalReturnParams(): Readonly<Record<string, string | undefined>> {
+  return appModalReturnParams;
 }
 
 /** Leaves Settings or Usage for the page that opened it. */

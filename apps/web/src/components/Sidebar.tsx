@@ -1256,7 +1256,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         setOpenMobile(false);
       }
       void router.navigate({
-        to: "/projects/$projectKey",
+        to: "/settings/project/$projectKey/$section",
         params: {
           projectKey: getSidebarProjectSettingsKey(
             projectGroup,
@@ -1264,6 +1264,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             projects,
             projectRef,
           ),
+          section: "general",
         },
       });
     },

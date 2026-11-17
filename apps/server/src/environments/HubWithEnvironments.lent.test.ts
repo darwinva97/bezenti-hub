@@ -1,8 +1,11 @@
+// @effect-diagnostics nodeBuiltinImport:off -- checks the host's homes on disk.
 /**
  * «Hub con Environments», Grants tickets 08 to 10: the Owner's personal machine lent to Acme and
  * Globex. Its host keeps serving the Owner natively and runs one Sandbox per Grant (process
  * runtime here), each the borrowing Space's Environment with a credential for that Space alone.
  */
+import * as NodeFS from "node:fs";
+
 import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
@@ -17,7 +20,9 @@ import {
   UserId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -27,9 +32,10 @@ import * as HubRepository from "../checkpointing/HubRepository.ts";
 import * as EnvironmentExecutor from "../environment/EnvironmentExecutor.ts";
 import * as Grants from "../grants/Grants.ts";
 import { ClaudeProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import { boundSpaceOf, lentSandboxRefusalOf } from "../sandboxes/sandboxSpace.ts";
+import { boundSpaceOf, lentSandboxRefusalOf, spaceRefusalOf } from "../sandboxes/sandboxSpace.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as EnvironmentRegistry from "./EnvironmentRegistry.ts";
 import { listEnvironments } from "./environments.testkit.ts";
@@ -298,6 +304,27 @@ const report = (
     Effect.orDie,
   );
 
+/** Completes once the Thread's Active environment is gone, as its next stored event says. */
+const threadReleased = Effect.fn(function* (hub: Hub, threadId: ThreadId) {
+  const orchestrator = hub.service(Orchestrator.OrchestratorV2);
+  const afterSequence = yield* hub
+    .service(EventSink.EventSinkV2)
+    .latestSequence({ threadId })
+    .pipe(Effect.orDie);
+  return yield* orchestrator.streamStoredEventsFrom({ threadId, afterSequence }).pipe(
+    Stream.filter(({ event }) => {
+      const payload = (event as { readonly payload?: { readonly activeEnvironmentId?: unknown } })
+        .payload;
+      return event.type === "thread.metadata-updated" && payload?.activeEnvironmentId === null;
+    }),
+    Stream.runHead,
+    Effect.timeout("60 seconds"),
+    Effect.orDie,
+    Effect.forkScoped,
+    Effect.map(Fiber.join),
+  );
+});
+
 describe("Hub con Environments: a machine lent to Spaces", () => {
   it.live(
     "runs one Sandbox per borrowing Space, each reaching its own Space alone, while its owner keeps it",
@@ -442,5 +469,71 @@ describe("Hub con Environments: a machine lent to Spaces", () => {
           "LentHostDiskLowError",
         );
       }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "taken back, no turn starts there from then on; once its turns stopped it is closed, its Threads need an environment and its home goes",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* lentToAcmeAndGlobex();
+        const { hub, host, acmeLaunch, globexLaunch } = t;
+        const sandbox = acmeLaunch.joined.environmentId;
+        const threadId = ThreadId.make("thread:acme-withdrawn");
+        yield* acmeThreadOn(t, threadId);
+        const released = yield* threadReleased(hub, threadId);
+        const grants = hub.service(Grants.Grants);
+        const ended = yield* grants
+          .end({ grantId: GrantId.make(t.acmeGrant) })
+          .pipe(CommandActor.actAs(t.owner));
+        assert.deepEqual([ended.state, ended.endReason], ["ended", "revoked"]);
+        // From the commit on, nothing new starts there, nor is placed there.
+        const refusal = yield* spaceRefusalOf(sandbox, t.acme, threadId).pipe(
+          Effect.provideService(SqlClient.SqlClient, hub.server.sql),
+          Effect.orDie,
+        );
+        assert.equal(refusal, "lent-ended");
+        assert.notInclude(yield* listedIds(hub, t.graceCookie), sandbox);
+        // Its turns stopped (it had none running), it is closed and its Thread released.
+        yield* released;
+        const thread = yield* hub
+          .service(Orchestrator.OrchestratorV2)
+          .getThreadProjection(threadId)
+          .pipe(Effect.orDie);
+        assert.isNull(thread.thread.activeEnvironmentId);
+        // What its container holds reaches nothing any more: neither socket nor git.
+        assert.equal(yield* checkOf(hub, acmeLaunch.credential), "credential-unknown");
+        assert.equal(yield* gitStatus(hub, t.acmeProject, acmeLaunch.credential), 401);
+        // Globex's loan goes on.
+        assert.equal(
+          yield* checkOf(hub, globexLaunch.credential),
+          globexLaunch.joined.environmentId,
+        );
+        // The host deletes its home on its next round, and keeps Globex's.
+        yield* host.round;
+        assert.isFalse(NodeFS.existsSync(acmeLaunch.homePath));
+        assert.isTrue(NodeFS.existsSync(globexLaunch.homePath));
+      }).pipe(Effect.scoped),
+  );
+
+  it.live("removing the machine ends its loans, which close their Sandboxes", () =>
+    Effect.gen(function* () {
+      const t = yield* lentToAcmeAndGlobex();
+      const { hub, host } = t;
+      const removed = yield* hub.server.request("/api/environments/remove", {
+        cookie: hub.owner,
+        body: { environmentId: host.native.environmentId },
+      });
+      assert.equal(removed.status, 200, JSON.stringify(removed.body));
+      const rows = yield* hub.server.sql<{ readonly state: string; readonly reason: string }>`
+        SELECT state, end_reason AS reason FROM grants ORDER BY grant_id
+      `;
+      assert.deepEqual(rows, [
+        { state: "ended", reason: "resource-gone" },
+        { state: "ended", reason: "resource-gone" },
+      ]);
+      for (const launch of [t.acmeLaunch, t.globexLaunch]) {
+        assert.equal(yield* checkOf(hub, launch.credential), "credential-unknown");
+      }
+    }).pipe(Effect.scoped),
   );
 });

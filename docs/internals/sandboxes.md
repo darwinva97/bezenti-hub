@@ -995,6 +995,19 @@ active Grant, with the runtime and container rules of a dedicated machine.
   (`LentHostDiskLowError`). Nothing is deleted and terminals and files keep working, so the Space
   can clean up; raising the limit lets the next turn start. Lender and borrower see the size on
   the Grant (`machine.diskUsedBytes`).
+- **Ending** (Grants ticket 10). Revoked or returned, the Grant is `ended` in its transaction, so
+  from the commit on no turn starts there (`lent-ended`) and nothing places a Thread there; its
+  credential still works for a while so running turns can finish uploading. After the commit
+  (`lentSandboxEnding`): a Sandbox not connected is closed at once; a connected one is stopped by
+  the orchestration (`EnvironmentReturnService`: `thread.stop` on each running Thread, as a
+  person's Stop, then waiting until no run is unfinished and no checkpoint is left to upload), and
+  closed then, or after `LENT_DRAIN_MS` (2 minutes) whatever is left. Closing revokes its row and
+  deletes its credentials, closes its socket and publishes its removal, which releases its Threads
+  («needs an environment», with «… is no longer lent to this Space» on any turn still open); they
+  continue elsewhere from their last uploaded checkpoint. The host deletes its home on its next
+  round. A Hub restarted mid-drain closes every lent Sandbox whose Grant is not active as it
+  starts. Removing the host machine (Settings, `t3 leave`, its owner turned off) ends its Grants
+  with `resource-gone` in the same transaction and closes their Sandboxes.
 
 **On the machine.**
 

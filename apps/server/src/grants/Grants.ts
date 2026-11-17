@@ -744,8 +744,11 @@ const make = Effect.gen(function* () {
         return yield* endRow(row, reason, side, AuditLog.userActor(who.userId), who.userId);
       }),
     );
-    // After the commit: a machine's Sandbox is cut off and its Threads need an environment.
-    if (Option.isSome(closed)) yield* registry.lentSandboxClosed(closed.value);
+    // After the commit: a machine's Sandbox stops its turns, is cut off and its Threads need an
+    // environment.
+    if (Option.isSome(closed)) {
+      yield* registry.lentSandboxEnding({ grantId: input.grantId, environmentId: closed.value });
+    }
     return yield* reread(input.grantId, who);
   });
 
@@ -763,10 +766,11 @@ const make = Effect.gen(function* () {
       row.state,
       sql`state = 'ended', end_reason = ${reason}, ended_at = ${at}, ended_by = ${by}`,
     );
-    // A machine's Sandbox and its credentials end in the same transaction.
+    // From the commit on no new turn starts on a machine's Sandbox; after it, its running turns
+    // get their time to stop before it is closed (`lentSandboxEnding`).
     const closed =
-      row.resourceKind === "environment"
-        ? yield* registry.closeLentSandbox(row.grantId)
+      row.resourceKind === "environment" && row.lentEnvironmentId !== null
+        ? Option.some(EnvironmentId.make(row.lentEnvironmentId))
         : Option.none<EnvironmentId>();
     const record = auditOf(row, row.resourceName);
     yield* audit.record({

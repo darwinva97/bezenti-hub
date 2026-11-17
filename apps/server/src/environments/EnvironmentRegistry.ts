@@ -249,8 +249,13 @@ interface EnvironmentRow {
   readonly hostEnvironmentId: string | null;
   /** A lent Sandbox's lender, as the borrowers see it named. */
   readonly lenderName: string | null;
-  /** A lent Sandbox works while its Grant is active and its host and lender are. */
+  /** A lent Sandbox takes work while its Grant is active and its host and lender are. */
   readonly lentLive: number;
+  /**
+   * Its credential works while its host and lender are, until it is closed: an ended Grant's
+   * Sandbox still uploads its checkpoints while its turns stop (`lentSandboxEnding`).
+   */
+  readonly lentHostLive: number;
   readonly ownerUserId: string | null;
   readonly spaceId: string | null;
   readonly registeredAt: string;
@@ -296,6 +301,9 @@ const encodeSandboxHost = Schema.encodeSync(Schema.fromJsonString(SandboxHostRep
 const decodeGrantLimits = Schema.decodeUnknownOption(Schema.fromJsonString(GrantLimits));
 
 /** A lent Sandbox's Environment id: one per Grant, never `sandbox:` (a Hub Sandbox's). */
+/** How long a lent Sandbox's running turns have to stop once its Grant ended. */
+export const LENT_DRAIN_MS = 2 * 60_000;
+
 const lentEnvironmentIdOf = (grantId: string) => EnvironmentId.make(`lent:${grantId}`);
 
 const encodeLentDisk = Schema.encodeSync(Schema.fromJsonString(LentSandboxDisk));
@@ -586,6 +594,22 @@ export class EnvironmentRegistry extends Context.Service<
     /** After the commit: its socket closes and its Threads need an environment. */
     readonly lentSandboxClosed: (environmentId: EnvironmentId) => Effect.Effect<void>;
     /**
+     * Grants ticket 10, after a machine Grant ended: no new turn starts there from the commit on.
+     * A connected Sandbox gets `LENT_DRAIN_MS` for its running turns to stop and upload their
+     * checkpoints (`lentEndings`, which the orchestration drains), then it is closed whatever is
+     * left; one not connected is closed at once.
+     */
+    readonly lentSandboxEnding: (input: {
+      readonly grantId: string;
+      readonly environmentId: EnvironmentId;
+    }) => Effect.Effect<void>;
+    readonly lentEndings: Stream.Stream<{
+      readonly grantId: string;
+      readonly environmentId: EnvironmentId;
+    }>;
+    /** Closes the Grant's Sandbox now (its own transaction), then `lentSandboxClosed`. */
+    readonly finishLentSandbox: (grantId: string) => Effect.Effect<void, EnvironmentStorageError>;
+    /**
      * «Try again» on a Sandbox that failed to start: a User who may run Threads in its Space starts
      * it. Answers at once with it `starting`; how the start ends shows in the list.
      */
@@ -678,6 +702,10 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
   const platform = yield* HostProcess.Platform;
   const removals = yield* PubSub.unbounded<EnvironmentId>();
   const releases = yield* PubSub.unbounded<ReleasedThreads>();
+  const lentEndings = yield* PubSub.unbounded<{
+    readonly grantId: string;
+    readonly environmentId: EnvironmentId;
+  }>();
 
   const sha256 = (value: string) =>
     digester.digest(Digest.sha256, new TextEncoder().encode(value)).pipe(
@@ -716,7 +744,14 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
         WHERE g.grant_id = environments.grant_id AND g.state = 'active'
           AND host.revoked_at IS NULL AND host.mode = 'personal'
           AND lender.disabled_at IS NULL AND lender.removed_at IS NULL
-      )) AS "lentLive"
+      )) AS "lentLive",
+      (environments.mode <> 'lent' OR EXISTS (
+        SELECT 1 FROM environments AS host
+        JOIN users AS lender ON lender.user_id = host.owner_user_id
+        WHERE host.environment_id = environments.host_environment_id
+          AND host.revoked_at IS NULL AND host.mode = 'personal'
+          AND lender.disabled_at IS NULL AND lender.removed_at IS NULL
+      )) AS "lentHostLive"
     FROM environments WHERE ${sql.and(conditions)}
     ORDER BY kind = 'hub' DESC, registered_at, environment_id
   `;
@@ -1064,21 +1099,69 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
         detail: { via: input.via },
       })
       .pipe(Effect.mapError(storageError));
+    return yield* endGrantsOf(input.row, input.actor);
+  });
+
+  /**
+   * Grants ticket 10: a machine removed ends its loans (`resource-gone`) and closes their
+   * Sandboxes in the caller's transaction; after the commit, `lentSandboxClosed` for each.
+   */
+  const endGrantsOf = Effect.fn("EnvironmentRegistry.endGrantsOf")(function* (
+    row: EnvironmentRow,
+    actor: AuditLog.AuditActor,
+  ) {
+    const at = yield* nowIso;
+    const ended = yield* sql<{
+      readonly grantId: string;
+      readonly lenderId: string;
+      readonly targetId: string | null;
+    }>`
+      UPDATE grants SET state = 'ended', end_reason = 'resource-gone', ended_at = ${at}
+      WHERE resource_kind = 'environment' AND resource_id = ${row.environmentId}
+        AND state IN ('pending', 'active')
+      RETURNING grant_id AS "grantId", lender_id AS "lenderId", target_id AS "targetId"
+    `;
+    for (const grant of ended) {
+      yield* audit
+        .record({
+          actor,
+          action: "grant.end",
+          spaceId: grant.targetId === null ? null : SpaceId.make(grant.targetId),
+          target: { kind: "grant", id: grant.grantId, name: row.name },
+          detail: {
+            resourceKind: "environment",
+            resourceId: row.environmentId,
+            resourceName: row.name,
+            lenderId: grant.lenderId,
+            targetSpaceId: grant.targetId,
+            reason: "resource-gone",
+            side: "system",
+          },
+        })
+        .pipe(Effect.mapError(storageError));
+    }
+    const closed: Array<EnvironmentId> = [];
+    for (const grant of ended) {
+      const lent = yield* closeLentSandbox(grant.grantId);
+      if (Option.isSome(lent)) closed.push(lent.value);
+    }
+    return closed;
   });
 
   const remove: EnvironmentRegistry["Service"]["remove"] = Effect.fn("EnvironmentRegistry.remove")(
     function* ({ actorUserId, environmentId, via = "settings" }) {
-      yield* sql
+      const lent = yield* sql
         .withTransaction(
           Effect.gen(function* () {
             const row = yield* authorize(actorUserId, environmentId, "environment.remove");
-            yield* revoke({ row, actor: AuditLog.userActor(actorUserId), via });
+            return yield* revoke({ row, actor: AuditLog.userActor(actorUserId), via });
           }),
         )
         .pipe(Effect.catchTags({ SqlError: (cause) => Effect.fail(storageError(cause)) }));
       // After the commit: a socket closed first could reconnect before the revocation lands.
       yield* connections.close(environmentId, "environment-removed");
       yield* PubSub.publish(removals, environmentId);
+      for (const closed of lent) yield* lentSandboxClosed(closed);
     },
   );
 
@@ -1292,7 +1375,8 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
         sql`owner_user_id = ${userId}`,
         sql`revoked_at IS NULL`,
       ]).pipe(Effect.mapError(storageError));
-      for (const row of rows) yield* revoke({ row, actor, via: "userTurnedOff" });
+      const lent: Array<EnvironmentId> = [];
+      for (const row of rows) lent.push(...(yield* revoke({ row, actor, via: "userTurnedOff" })));
       return Effect.forEach(
         rows,
         (row) =>
@@ -1300,7 +1384,7 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
             .close(EnvironmentId.make(row.environmentId), "owner-inactive")
             .pipe(Effect.andThen(PubSub.publish(removals, EnvironmentId.make(row.environmentId)))),
         { discard: true },
-      );
+      ).pipe(Effect.andThen(Effect.forEach(lent, lentSandboxClosed, { discard: true })));
     },
     Effect.catchTags({ SqlError: (cause) => Effect.fail(storageError(cause)) }),
   );
@@ -1379,8 +1463,9 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     }
     if (row.revokedAt !== null) return "credential-revoked" as const;
     if (row.ownerInactive === 1) return "owner-inactive" as const;
-    // A lent Sandbox ends with its Grant, its host or its lender.
-    if (row.mode === "lent" && row.lentLive !== 1) return "credential-revoked" as const;
+    // A lent Sandbox ends with its host or its lender, and once closed (`revoked_at`) after its
+    // Grant ended.
+    if (row.mode === "lent" && row.lentHostLive !== 1) return "credential-revoked" as const;
     // A dedicated machine whose Space was deleted works for nobody until the Owner acts.
     if (row.mode === "dedicated" && row.spaceId !== null) {
       const space = yield* spaces
@@ -1481,23 +1566,23 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
         .withTransaction(
           Effect.gen(function* () {
             const row = yield* liveRow(check.environmentId);
-            if (row === undefined) return false;
+            if (row === undefined) return undefined;
             // Run on the machine, with its own credential: by its owner, or by the machine itself
             // for a dedicated one, which nobody owns.
             const actor: AuditLog.AuditActor =
               row.ownerUserId === null
                 ? AuditLog.cliActor
                 : { source: "cli", userId: UserId.make(row.ownerUserId) };
-            yield* revoke({ row, actor, via: "leave" });
-            return true;
+            return yield* revoke({ row, actor, via: "leave" });
           }),
         )
         .pipe(Effect.catchTags({ SqlError: (cause) => Effect.fail(storageError(cause)) }));
-      if (left) {
+      if (left !== undefined) {
         yield* connections.close(check.environmentId, "environment-removed");
         yield* PubSub.publish(removals, check.environmentId);
+        for (const closed of left) yield* lentSandboxClosed(closed);
       }
-      return left;
+      return left !== undefined;
     },
   );
 
@@ -1709,6 +1794,29 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     connections
       .close(environmentId, "credential-revoked")
       .pipe(Effect.andThen(PubSub.publish(removals, environmentId)), Effect.asVoid);
+
+  const finishLentSandbox: EnvironmentRegistry["Service"]["finishLentSandbox"] = Effect.fn(
+    "EnvironmentRegistry.finishLentSandbox",
+  )(function* (grantId) {
+    const closed = yield* sql
+      .withTransaction(closeLentSandbox(grantId))
+      .pipe(Effect.catchTags({ SqlError: (cause) => Effect.fail(storageError(cause)) }));
+    if (Option.isSome(closed)) yield* lentSandboxClosed(closed.value);
+  });
+
+  const lentSandboxEnding: EnvironmentRegistry["Service"]["lentSandboxEnding"] = Effect.fn(
+    "EnvironmentRegistry.lentSandboxEnding",
+  )(function* (input) {
+    const finish = finishLentSandbox(input.grantId).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Could not close a lent Sandbox", { grantId: input.grantId, error }),
+      ),
+    );
+    if (!(yield* connections.isConnected(input.environmentId))) return yield* finish;
+    yield* PubSub.publish(lentEndings, input);
+    // Whatever its turns do, it is closed once its time is up.
+    yield* Effect.sleep(LENT_DRAIN_MS).pipe(Effect.andThen(finish), Effect.forkDetach);
+  });
 
   /** The Space a new or moving Thread works in: its own, else the claimed one, else its Project's. */
   const workSpaceOf = Effect.fn("EnvironmentRegistry.workSpaceOf")(function* (input: {
@@ -2238,6 +2346,23 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     return row?.reached === 1;
   });
 
+  // A lent Sandbox whose Grant ended while the Hub was down (its drain cut short) is closed now.
+  yield* sql`
+    UPDATE environments SET revoked_at = ${yield* nowIso}
+    WHERE mode = 'lent' AND revoked_at IS NULL AND NOT EXISTS (
+      SELECT 1 FROM grants g WHERE g.grant_id = environments.grant_id AND g.state = 'active'
+    )
+  `.pipe(
+    Effect.andThen(
+      sql`
+        DELETE FROM dedicated_sandbox_credentials WHERE environment_id IN (
+          SELECT environment_id FROM environments WHERE mode = 'lent' AND revoked_at IS NOT NULL
+        )
+      `,
+    ),
+    Effect.catch((cause) => Effect.logWarning("Could not close ended lent Sandboxes", { cause })),
+  );
+
   return EnvironmentRegistry.of({
     hubId,
     hasReachedHub,
@@ -2273,6 +2398,9 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     openLentSandbox,
     closeLentSandbox,
     lentSandboxClosed,
+    lentSandboxEnding,
+    lentEndings: Stream.fromPubSub(lentEndings),
+    finishLentSandbox,
     stopSandbox: Effect.fn("EnvironmentRegistry.stopSandbox")(function* (input) {
       if (Option.isNone(sandboxes)) return;
       yield* sandboxes.value.stop(input).pipe(Effect.mapError(storageError));

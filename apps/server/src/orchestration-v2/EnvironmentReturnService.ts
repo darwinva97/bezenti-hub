@@ -5,6 +5,7 @@
  */
 import {
   CheckpointRef,
+  CommandId,
   type EnvironmentId,
   HUB_MACHINE_ENVIRONMENT_ID,
   OrchestrationV2TurnItemJson,
@@ -31,6 +32,7 @@ import * as RemoteEnvironments from "../environment/RemoteEnvironments.ts";
 import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
 import * as EventSink from "./EventSink.ts";
 import { interruptRunsOnHub } from "./HubRunInterrupt.ts";
+import { drainLentSandbox } from "./LentSandboxDrain.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
@@ -125,10 +127,12 @@ export const layer: Layer.Layer<
         readonly threadId: string;
         readonly environmentId: string;
         readonly kind: string;
+        readonly mode: string;
         readonly revoked: number;
       }>`
         SELECT thread.thread_id AS "threadId", thread.active_environment_id AS "environmentId",
-          environments.kind AS kind, environments.revoked_at IS NOT NULL AS revoked
+          environments.kind AS kind, environments.mode AS mode,
+          environments.revoked_at IS NOT NULL AS revoked
         FROM orchestration_v2_projection_threads thread
         JOIN environments ON environments.environment_id = thread.active_environment_id
         WHERE thread.deleted_at IS NULL
@@ -141,12 +145,18 @@ export const layer: Layer.Layer<
       const released: Array<{
         readonly threadId: ThreadId;
         readonly name: string;
-        readonly why: "removed" | "hub-machine" | "no-sandboxes";
+        readonly why: "removed" | "lent-ended" | "hub-machine" | "no-sandboxes";
       }> = [];
       for (const row of rows) {
         const threadId = ThreadId.make(row.threadId);
         const why =
-          row.revoked === 1 ? "removed" : row.kind === "hub" ? "hub-machine" : "no-sandboxes";
+          row.revoked === 1
+            ? row.mode === "lent"
+              ? "lent-ended"
+              : "removed"
+            : row.kind === "hub"
+              ? "hub-machine"
+              : "no-sandboxes";
         const name = yield* nameOf(row.environmentId as EnvironmentId);
         yield* threadLocks.withLock(
           threadId,
@@ -201,11 +211,67 @@ export const layer: Layer.Layer<
               ? "The Hub machine no longer runs Threads, so this turn ended. Move the Thread to another Environment to continue."
               : why === "no-sandboxes"
                 ? `This Hub no longer runs Sandboxes, so ${name} cannot go on with this turn. Move the Thread to another Environment to continue.`
-                : `${name} was removed from the Hub while this turn ran there. Move the Thread to another Environment to continue.`,
+                : why === "lent-ended"
+                  ? `${name} is no longer lent to this Space, so this turn ended. Move the Thread to another Environment to continue.`
+                  : `${name} was removed from the Hub while this turn ran there. Move the Thread to another Environment to continue.`,
           key: "environment-removed",
         });
       }
     });
+
+    /** Threads on the Environment with a turn not finished. */
+    const runningThreadsOn = (environmentId: EnvironmentId) =>
+      sql<{ readonly threadId: string }>`
+        SELECT DISTINCT thread.thread_id AS "threadId"
+        FROM orchestration_v2_projection_threads thread
+        JOIN orchestration_v2_projection_runs run ON run.thread_id = thread.thread_id
+        WHERE thread.active_environment_id = ${environmentId} AND thread.deleted_at IS NULL
+          AND run.status IN ('preparing', 'queued', 'starting', 'running', 'waiting')
+      `.pipe(Effect.orElseSucceed(() => []));
+
+    /** Stop, as a person's Stop does: the machine ends each turn and uploads its checkpoint. */
+    const stopRunsOn = Effect.fn("EnvironmentReturns.stopRunsOn")(function* (
+      environmentId: EnvironmentId,
+    ) {
+      const at = yield* DateTime.now;
+      for (const row of yield* runningThreadsOn(environmentId)) {
+        const threadId = ThreadId.make(row.threadId);
+        yield* orchestrator
+          .dispatch({
+            type: "thread.stop",
+            commandId: CommandId.make(
+              `server:lent-ended:${threadId}:${DateTime.toEpochMillis(at)}`,
+            ),
+            threadId,
+            reason: "The machine's loan to this Space ended.",
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not stop a turn on a lent Sandbox", { threadId, cause }),
+            ),
+          );
+      }
+    });
+
+    /** No turn running there, and no checkpoint of its Threads left to upload. */
+    const idleOn = (environmentId: EnvironmentId) =>
+      sql<{ readonly busy: number }>`
+        SELECT EXISTS (
+          SELECT 1 FROM orchestration_v2_projection_threads thread
+          JOIN orchestration_v2_projection_runs run ON run.thread_id = thread.thread_id
+          WHERE thread.active_environment_id = ${environmentId} AND thread.deleted_at IS NULL
+            AND run.status IN ('preparing', 'queued', 'starting', 'running', 'waiting')
+        ) OR EXISTS (
+          SELECT 1 FROM orchestration_v2_projection_threads thread
+          JOIN orchestration_v2_projection_checkpoints checkpoint
+            ON checkpoint.thread_id = thread.thread_id
+          WHERE thread.active_environment_id = ${environmentId} AND thread.deleted_at IS NULL
+            AND checkpoint.status = 'ready' AND checkpoint.uploaded_to_hub = 0
+        ) AS busy
+      `.pipe(
+        Effect.map((rows) => rows[0]?.busy !== 1),
+        Effect.orElseSucceed(() => true),
+      );
 
     /**
      * Archived Threads left on a machine dedicated elsewhere (or made personal): they need an
@@ -555,6 +621,29 @@ export const layer: Layer.Layer<
           ).pipe(
             Effect.andThen(releaseRemoved(environmentId)),
             logged("Could not release a removed Environment's Threads", { environmentId }),
+          ),
+        ),
+        Effect.forkIn(scope),
+      );
+      // Grants ticket 10: a lent Sandbox whose loan ended stops its turns (each uploads its
+      // checkpoint as any stop does) for a while before it is closed and its Threads released.
+      const registry = environments.value;
+      yield* registry.lentEndings.pipe(
+        Stream.runForEach(({ grantId, environmentId }) =>
+          drainLentSandbox({
+            stopRunning: stopRunsOn(environmentId),
+            idle: idleOn(environmentId),
+            close: registry
+              .finishLentSandbox(grantId)
+              .pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("Could not close a lent Sandbox", { grantId, cause }),
+                ),
+              ),
+            drainMs: EnvironmentRegistry.LENT_DRAIN_MS,
+          }).pipe(
+            logged("Could not stop a lent Sandbox's turns", { environmentId }),
+            Effect.forkIn(scope),
           ),
         ),
         Effect.forkIn(scope),

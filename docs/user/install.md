@@ -1007,6 +1007,16 @@ raise the limit. If the machine itself runs almost out of disk, the lent
 Sandboxes stop and no new turn starts on them, while the owner's own work goes
 on.
 
+**Take it back, or give it back.** The lender's **Take back** (in **Settings →
+Loans → Lent**) or the Space's **Give back** ends the loan at once: no new turn
+starts on that machine for the Space. Turns already running are stopped and
+get up to two minutes to save their last checkpoint; changes made by hand
+since the last turn may be lost. Then the Sandbox and its files are deleted
+from the machine, and the Space's Threads that ran there show **needs an
+environment**: pick another Environment for each (for example the Space's own
+Sandbox) and it continues from its last saved checkpoint, with its history.
+Removing the machine from the Hub ends all its loans the same way.
+
 ### Add a machine over SSH
 
 Instead of running `t3 join` on a server yourself, the Owner can let the Hub do it. In

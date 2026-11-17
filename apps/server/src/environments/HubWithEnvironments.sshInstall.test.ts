@@ -36,7 +36,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as EnvironmentRegistry from "./EnvironmentRegistry.ts";
-import { listEnvironments } from "./environments.testkit.ts";
+import { listEnvironments, memberWithPasskey } from "./environments.testkit.ts";
 import { type Hub, makeHub } from "./HubWithEnvironments.testkit.ts";
 import * as SshInstall from "./sshInstall/SshInstall.ts";
 import { STEP_BUSY_MARKER } from "./sshInstall/sshInstallScripts.ts";
@@ -309,6 +309,8 @@ describe("Hub con Environments: add a machine over SSH", () => {
                 via: "ssh",
                 host: "127.0.0.1",
                 spaceId: acme,
+                ownerKind: "organization",
+                ownerId: acme,
               },
             ],
           ],
@@ -336,37 +338,126 @@ describe("Hub con Environments: add a machine over SSH", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.live("refuses Admin, Member and Guest on every door of it, the progress included", () =>
-    Effect.gen(function* () {
-      const hub = yield* makeHub({ sshInstallPolicy: POLICY });
-      const { acme, cookies } = yield* acmeWithPeople(hub);
-      const machine = yield* makeTestMachine();
-      const started = yield* hub.server.request("/api/environments/ssh/start", {
-        cookie: hub.owner,
-        body: startBody(machine, acme),
-      });
-      const run = runOf(started.body);
-      for (const role of ["admin", "member", "guest"] as const) {
-        const doors = [
-          ["/api/environments/ssh/start", startBody(machine, acme)],
-          ["/api/environments/ssh/confirm", { runId: run.runId, fingerprint: machine.fingerprint }],
-          ["/api/environments/ssh/status", { runId: run.runId }],
-          ["/api/environments/ssh/cancel", { runId: run.runId }],
-        ] as const;
-        for (const [path, body] of doors) {
-          const refused = yield* hub.server.request(path, { cookie: cookies[role], body });
-          assert.equal(refused.status, 403, `${role} ${path}: ${JSON.stringify(refused.body)}`);
-          assert.notInclude(JSON.stringify(refused.body), machine.fingerprint);
+  it.live(
+    "refuses a Member and a Guest on every door, and shows a run to nobody but who started it",
+    () =>
+      Effect.gen(function* () {
+        const hub = yield* makeHub({ sshInstallPolicy: POLICY });
+        const { acme, cookies } = yield* acmeWithPeople(hub);
+        const machine = yield* makeTestMachine();
+        const started = yield* hub.server.request("/api/environments/ssh/start", {
+          cookie: hub.owner,
+          body: startBody(machine, acme),
+        });
+        const run = runOf(started.body);
+        for (const role of ["member", "guest"] as const) {
+          const refused = yield* hub.server.request("/api/environments/ssh/start", {
+            cookie: cookies[role],
+            body: startBody(machine, acme),
+          });
+          assert.equal(refused.status, 403, `${role}: ${JSON.stringify(refused.body)}`);
         }
-      }
-      // Nothing they sent moved the Owner's run, or reached the machine.
-      const status = yield* hub.server.request("/api/environments/ssh/status", {
-        cookie: hub.owner,
-        body: { runId: run.runId },
-      });
-      assert.equal(runOf(status.body).state, "awaiting-host-key");
-      assert.deepEqual(machine.steps, []);
-    }).pipe(Effect.scoped),
+        // The Owner's run answers like a missing one to anyone else, an Admin included.
+        for (const role of ["admin", "member", "guest"] as const) {
+          const doors = [
+            [
+              "/api/environments/ssh/confirm",
+              { runId: run.runId, fingerprint: machine.fingerprint },
+            ],
+            ["/api/environments/ssh/status", { runId: run.runId }],
+            ["/api/environments/ssh/cancel", { runId: run.runId }],
+          ] as const;
+          for (const [path, body] of doors) {
+            const refused = yield* hub.server.request(path, { cookie: cookies[role], body });
+            assert.include([403, 404], refused.status, `${role} ${path}`);
+            assert.notInclude(JSON.stringify(refused.body), machine.fingerprint);
+          }
+        }
+        // Nothing they sent moved the Owner's run, or reached the machine.
+        const status = yield* hub.server.request("/api/environments/ssh/status", {
+          cookie: hub.owner,
+          body: { runId: run.runId },
+        });
+        assert.equal(runOf(status.body).state, "awaiting-host-key");
+        assert.deepEqual(machine.steps, []);
+      }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "an Admin installs a machine for the Organization they run, confirming its host key as the Owner does, never for another",
+    () =>
+      Effect.gen(function* () {
+        const hub = yield* makeHub({ sshInstallPolicy: POLICY });
+        const { acme } = yield* acmeWithPeople(hub);
+        const globex = (yield* hub
+          .service(SpaceDirectory.SpaceDirectory)
+          .createOrganization(yield* ownerIdOf(hub), "Globex")
+          .pipe(Effect.orDie)).id;
+        const ada = yield* memberWithPasskey(hub.server, hub.owner, {
+          displayName: "Ada Admin",
+          spaceId: acme,
+          role: "admin",
+        });
+        const machine = yield* makeTestMachine();
+        machine.setHandler(healthyMachine(hub).handler);
+
+        // Not for Globex, which she does not run: nothing is opened.
+        const toGlobex = yield* hub.server.request("/api/environments/ssh/start", {
+          cookie: ada.cookie,
+          body: startBody(machine, globex),
+        });
+        assert.equal(toGlobex.status, 403, JSON.stringify(toGlobex.body));
+        assert.deepEqual(machine.steps, []);
+
+        const started = yield* hub.server.request("/api/environments/ssh/start", {
+          cookie: ada.cookie,
+          body: startBody(machine, acme),
+        });
+        assert.equal(started.status, 200, JSON.stringify(started.body));
+        const run = runOf(started.body);
+        assert.equal(run.state, "awaiting-host-key");
+        assert.deepEqual(machine.steps, []);
+        // Another key than the one shown starts nothing, for her as for the Owner.
+        const wrong = yield* hub.server.request("/api/environments/ssh/confirm", {
+          cookie: ada.cookie,
+          body: { runId: run.runId, fingerprint: "SHA256:not-the-one-shown" },
+        });
+        assert.equal(wrong.status, 409);
+        assert.deepEqual(machine.steps, []);
+        // Her run is hers: the Owner does not see or move it.
+        const ownersLook = yield* hub.server.request("/api/environments/ssh/status", {
+          cookie: hub.owner,
+          body: { runId: run.runId },
+        });
+        assert.equal(ownersLook.status, 404);
+
+        const confirmed = yield* hub.server.request("/api/environments/ssh/confirm", {
+          cookie: ada.cookie,
+          body: { runId: run.runId, fingerprint: machine.fingerprint },
+        });
+        assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
+        const done = yield* hub.service(SshInstall.SshInstall).awaitFinished(run.runId);
+        assert.equal(done.state, "succeeded", JSON.stringify(done));
+        const environmentId = done.environmentId;
+        assert.isNotNull(environmentId);
+        const listed = (yield* listEnvironments(hub.server, ada.cookie)).find(
+          (environment) => environment.id === environmentId,
+        );
+        assert.deepInclude(listed, { mode: "dedicated", spaceId: acme, ownerUserId: null });
+        const [registered] = yield* hub.server.sql<{
+          readonly actor: string;
+          readonly detail: string;
+        }>`
+          SELECT actor_user_id AS actor, detail_json AS detail FROM audit_log
+          WHERE target_id = ${environmentId} AND action = 'environment.register'
+        `;
+        assert.equal(registered?.actor, ada.userId);
+        assert.deepInclude(JSON.parse(registered?.detail ?? "{}"), {
+          ownerKind: "organization",
+          ownerId: acme,
+          via: "ssh",
+        });
+      }).pipe(Effect.scoped),
   );
 
   it.live("stops at a failing step with its output, and leaves no machine registered", () =>

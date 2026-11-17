@@ -177,7 +177,10 @@ type OwnerOnlyError =
 export class SshInstall extends Context.Service<
   SshInstall,
   {
-    /** Reads the machine's host key; the run waits for the Owner to confirm it. */
+    /**
+     * Reads the machine's host key; the run waits for whoever started it (the Owner, or an Admin
+     * of the Organization it is for) to confirm it.
+     */
     readonly start: (
       actorUserId: UserId,
       input: SshInstallStartRequest,
@@ -185,7 +188,7 @@ export class SshInstall extends Context.Service<
       SshInstallRun,
       OwnerOnlyError | SshInstallRefusedError | SshInstallConflictError
     >;
-    /** The Owner confirms the host key shown: the steps start. */
+    /** Whoever started the run confirms the host key shown: the steps start. */
     readonly confirm: (
       actorUserId: UserId,
       input: SshInstallConfirmRequest,
@@ -372,8 +375,8 @@ const make = Effect.gen(function* () {
   const sha256 = (value: string) =>
     digest.digest(Digest.sha256, new TextEncoder().encode(value)).pipe(Effect.map(base64UrlEncode));
 
-  /** The Owner only: the rule a machine's dedication already has. */
-  const requireOwner = (actorUserId: UserId) => registry.authorizeDedicate(actorUserId);
+  /** An active User: whatever else they may, a User turned off reaches no run. */
+  const requireActive = (actorUserId: UserId) => registry.authorizeRegister(actorUserId);
 
   const isActive = (run: Run) =>
     run.starting || run.state === "awaiting-host-key" || run.state === "running";
@@ -470,7 +473,15 @@ const make = Effect.gen(function* () {
 
   const start: SshInstall["Service"]["start"] = Effect.fn("SshInstall.start")(
     function* (actorUserId, input) {
-      yield* requireOwner(actorUserId);
+      // The rule a machine's dedication has (owned-resources 07): the Owner, or an Admin of the
+      // Organization it is for, which must be there and open.
+      yield* registry.authorizeDedicate(actorUserId, input.spaceId).pipe(
+        Effect.catchIf(
+          (error) =>
+            error._tag === "EnvironmentAccessDeniedError" && error.reason === "not-an-organization",
+          () => refuse("A machine is dedicated to an Organization that is not archived."),
+        ),
+      );
       const space = (yield* registry.dedicatedSpaces(actorUserId)).find(
         (entry) => entry.id === input.spaceId,
       );
@@ -659,10 +670,14 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const find = (runId: string) =>
+  /**
+   * A run, to the User who started it only (`actorUserId`): anyone else's answers like a missing
+   * one. The Hub's own code asks without one.
+   */
+  const find = (runId: string, actorUserId?: UserId) =>
     Effect.suspend(() => {
       const run = runs.get(runId);
-      return run === undefined
+      return run === undefined || (actorUserId !== undefined && run.ownerUserId !== actorUserId)
         ? Effect.fail(new SshInstallRunNotFoundError({}))
         : Effect.succeed(run);
     });
@@ -925,8 +940,8 @@ const make = Effect.gen(function* () {
 
   const confirm: SshInstall["Service"]["confirm"] = Effect.fn("SshInstall.confirm")(
     function* (actorUserId, input) {
-      yield* requireOwner(actorUserId);
-      const run = yield* find(input.runId);
+      yield* requireActive(actorUserId);
+      const run = yield* find(input.runId, actorUserId);
       const fingerprint = run.hostKey?.fingerprint;
       if (run.state !== "awaiting-host-key" || fingerprint === undefined) {
         return yield* new SshInstallConflictError({
@@ -967,8 +982,8 @@ const make = Effect.gen(function* () {
 
   const cancel: SshInstall["Service"]["cancel"] = Effect.fn("SshInstall.cancel")(
     function* (actorUserId, runId) {
-      yield* requireOwner(actorUserId);
-      const run = yield* find(runId);
+      yield* requireActive(actorUserId);
+      const run = yield* find(runId, actorUserId);
       if (run.ended) return viewOf(run);
       // Recorded first: a run whose steps have not started yet stops before the first one.
       run.cancelRequested = true;
@@ -986,8 +1001,8 @@ const make = Effect.gen(function* () {
 
   const status: SshInstall["Service"]["status"] = Effect.fn("SshInstall.status")(
     function* (actorUserId, runId) {
-      yield* requireOwner(actorUserId);
-      return viewOf(yield* find(runId));
+      yield* requireActive(actorUserId);
+      return viewOf(yield* find(runId, actorUserId));
     },
   );
 

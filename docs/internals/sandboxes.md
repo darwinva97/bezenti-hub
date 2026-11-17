@@ -850,21 +850,22 @@ the machine its server runs no work itself but one Sandbox for the Space it serv
 **On the Hub.**
 
 - **Registering.** `t3 join --dedicated <Space>` sends the Space (name or id) as a suggestion only
-  (`dedicatedSpace`). «Register this machine» offers the Owner alone every Organization not
-  archived (`dedicatedSpaces`, the one asked for first) under **Used by**, preselected when it
-  matched. Approving with `dedicatedSpaceId` asks `environment.dedicate` (the Owner, on the
-  Installation) before the strong factor, and again with the Space (an Organization neither
-  archived nor frozen) in the transaction that writes the row. The awaiting-confirmation and
+  (`dedicatedSpace`). «Register this machine» offers the Organizations the viewer may dedicate to
+  (`dedicatedSpaces`: every one not archived for the Owner, those they run for an Admin, the one
+  asked for first) under **Used by**, preselected when it matched. Approving with
+  `dedicatedSpaceId` asks `environment.dedicate` on that Organization (the Owner or its Admins,
+  owned-resources 07) before the strong factor, and again (an Organization neither archived nor
+  frozen) in the transaction that writes the row. The machine becomes the Organization's. The awaiting-confirmation and
   approved answers carry `dedicatedSpace`, so `t3 join` asks `Approved by Ada (ada) as a machine
   dedicated to Acme. Register it for Acme? [y/N]`. A machine takes only the mode it asked for
   (`joinModeRefusal`): a `--dedicated` join approved as personal, or a plain join approved as
-  dedicated, registers nothing. The audit entry is `environment.register` with `mode`, `spaceId`
-  and `via: "join"` (or `"ssh"`, see [Installing over SSH](#installing-over-ssh)).
+  dedicated, registers nothing. The audit entry is `environment.register` with `mode`, `spaceId`,
+  its owner (`ownerKind`, `ownerId`: the Organization) and `via: "join"` (or `"ssh"`, see [Installing over SSH](#installing-over-ssh)).
 - **Who.** The policy decides on its Space, as for a Sandbox (`decideSpaceBound` in
   [AccessPolicy](../../apps/server/src/auth/AccessPolicy.ts)): seen by whoever sees the Space (the
   Owner sees every one), used by its Admins and Members (not Guests) for that Space's Threads only
-  (`workSpaceId`), renamed and removed by the Owner only. With its Space deleted it stays the
-  Installation's: the Owner still sees, renames and removes it, nothing runs there, and its
+  (`workSpaceId`), renamed and removed by the Owner and its Organization's Admins while it is open
+  (`summary.canManage` tells clients). With its Space deleted it stays the Installation's: the Owner still sees, renames and removes it, nothing runs there, and its
   credential is refused at connect (`space-missing`). Clients offer it only for that Space's
   Threads (`placeableEnvironments`) and as a preferred Environment only of its Space's Projects.
   Placement never picks it by default.
@@ -888,9 +889,12 @@ the machine its server runs no work itself but one Sandbox for the Space it serv
   tracked). The host keeps its own credential under another secret
   (`dedicated-environment-credential`), so its own server run as a personal one (an older one, or
   `joined-hub.json` edited) finds none to present.
-- **Changing mode or Space** (`POST /api/environments/mode`, **Change use** in Settings) is the
-  Owner's, for joined machines only, to `personal` (the Owner's own) or `dedicated` (owned by
-  nobody) to an Organization neither archived nor frozen. Active Threads on it refuse it with 409
+- **Changing mode or Space** (`POST /api/environments/mode`, **Change use** in Settings), for
+  joined machines only, is `environment.move`: power where it is (a personal machine's owner, the
+  Owner only for their own; a dedicated one's Admins or the Owner, the Owner alone once its Space
+  is gone) and where it goes (`personal`: the actor's own; `dedicated`: `environment.dedicate` on
+  an Organization neither archived nor frozen). A machine with a `pending` or `active` Grant is
+  refused (`machine-lent`) until its loans end. Active Threads on it refuse it with 409
   `EnvironmentModeChangeRefusedError`, naming them; archived ones do not block it and need an
   environment from then on (`released`), so unarchiving one never lands on a machine no longer
   its own. The dialog says the Space's work files on the machine will be deleted. It is audited as
@@ -1036,9 +1040,10 @@ runs it from the Hub's own process with [ssh2](https://github.com/mscdex/ssh2) (
 no `ssh` binary: the key is never written to a file or put in an argument), in
 [SshClient](../../apps/server/src/environments/sshInstall/SshClient.ts).
 
-- **Who.** Every door is the Owner's alone: `SshInstall` asks `authorizeDedicate`
-  (`environment.dedicate`, as dedicating a machine on «Register this machine») on start, confirm,
-  cancel and the progress (`POST /api/environments/ssh/{start,confirm,cancel,status}`). There is
+- **Who.** Starting asks `authorizeDedicate` on the run's Organization (`environment.dedicate`,
+  as dedicating a machine on «Register this machine»: the Owner or its Admins). Confirm, cancel
+  and the progress (`POST /api/environments/ssh/{confirm,cancel,status}`) answer only the User
+  who started the run (an active one); anyone else's run is not found, the Owner included. There is
   no WS or MCP door. The machine's own call, `POST /api/environments/join/grant`, takes no session:
   only the run's grant, over HTTPS or loopback.
 - **Input.** Host (a DNS name or an IP), port, user (a plain login name, never `root`: the work

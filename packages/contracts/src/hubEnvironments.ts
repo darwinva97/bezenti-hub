@@ -15,6 +15,7 @@ import {
   EnvironmentProviderSummary,
 } from "./environmentConnection.ts";
 import { HUB_MACHINE_ENVIRONMENT_ID } from "./environmentExecutor.ts";
+import { ResourceOwner } from "./ownership.ts";
 import { AuthReauth } from "./userAccounts.ts";
 
 /**
@@ -27,8 +28,8 @@ export type HubEnvironmentKind = typeof HubEnvironmentKind.Type;
 
 /**
  * `personal`: only its owner uses it, in any of their Spaces. `dedicated`: an external machine the
- * Owner gave to one Organization, used like its `sandbox` (which the Hub runs for its Space) by the
- * Users who work there, for that Space's Threads.
+ * Owner or one of its Admins gave to one Organization, now that Organization's, used like its
+ * `sandbox` (which the Hub runs for its Space) by the Users who work there, for that Space's Threads.
  */
 export const HubEnvironmentMode = Schema.Literals(["personal", "dedicated", "sandbox"]);
 export type HubEnvironmentMode = typeof HubEnvironmentMode.Type;
@@ -80,6 +81,16 @@ export const HubEnvironmentSummary = Schema.Struct({
   providers: Schema.Array(EnvironmentProviderSummary),
   resources: Schema.NullOr(EnvironmentHostResources),
   runningThreadCount: NonNegativeInt,
+  /**
+   * Whose the machine is (owned-resources 07): a personal machine's User, a dedicated machine's
+   * Organization. Absent for the Hub machine and Sandboxes (the Hub's), and from older Hubs.
+   */
+  owner: Schema.optionalKey(ResourceOwner),
+  /**
+   * Whether the viewer renames and removes it (its owner; a dedicated machine's Admins; the
+   * Owner). Absent from older Hubs.
+   */
+  canManage: Schema.optionalKey(Schema.Boolean),
   /**
    * A Sandbox on a machine lent to its Space (Grants): listed as that Space's dedicated machine,
    * with who lent it, who controls it and sees everything that runs on it. Absent otherwise.
@@ -436,8 +447,9 @@ export const EnvironmentJoinRequestView = Schema.Struct({
   /** What `t3 join --dedicated` asked for, as typed there; only for a viewer who may approve. */
   requestedDedicatedSpace: Schema.optionalKey(TrimmedNonEmptyString),
   /**
-   * The Organizations the viewer may dedicate the machine to: only the Owner gets them. The one
-   * `requestedDedicatedSpace` names, if any, comes first.
+   * The Organizations the viewer may dedicate the machine to: every one for the Owner, those they
+   * run for an Admin, absent for anyone else. The one `requestedDedicatedSpace` names, if any,
+   * comes first.
    */
   dedicatedSpaces: Schema.optionalKey(Schema.Array(HubEnvironmentDedicatedSpace)),
 });

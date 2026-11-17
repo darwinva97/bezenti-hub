@@ -983,8 +983,16 @@ export const makeHub = Effect.fn("HubWithEnvironments.makeHub")(function* (
     >;
     /** The machine runs its Sandbox with this runtime instead, such as Podman's. */
     readonly runtime?: SandboxRuntimeOverRoot;
+    /** Approved by this User (an Admin of the Space) instead of the Owner. */
+    readonly as?: { readonly cookie: string; readonly authenticator: Authenticator };
   }) {
-    const joined = yield* joinMachine(server, authenticator, owner, input.name, input.spaceId);
+    const joined = yield* joinMachine(
+      server,
+      input.as?.authenticator ?? authenticator,
+      input.as?.cookie ?? owner,
+      input.name,
+      input.spaceId,
+    );
     const rootDir = yield* FileSystem.FileSystem.pipe(
       Effect.flatMap((fs) => fs.makeTempDirectoryScoped({ prefix: "t3-dedicated-" })),
       Effect.provide(NodeServices.layer),

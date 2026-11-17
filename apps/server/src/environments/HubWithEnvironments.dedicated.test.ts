@@ -435,8 +435,9 @@ describe("Hub con Environments: a machine dedicated to a Space", () => {
             cookie,
             body: { environmentId: vps, ...body },
           });
-        // Only the Owner changes it, not even an Admin of its Space.
-        assert.equal((yield* changeMode(graceCookie, { mode: "personal" })).status, 403);
+        // Moving it takes running both ends: Acme's Admin does not run Globex.
+        const notGlobex = yield* changeMode(graceCookie, { mode: "dedicated", spaceId: globex });
+        assert.equal(notGlobex.status, 403);
         // Refused while a Thread is on it, naming it.
         const busy = yield* changeMode(hub.owner, { mode: "personal" });
         assert.equal(busy.status, 409);
@@ -541,6 +542,208 @@ describe("Hub con Environments: a machine dedicated to a Space", () => {
           { from: "dedicated", to: "dedicated", fromSpaceId: acme, toSpaceId: globex },
           { from: "dedicated", to: "personal", fromSpaceId: globex, toSpaceId: null },
         ]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "an Admin dedicates a machine to the Organization they run with `t3 join --dedicated`: its Members run Threads there, Globex never sees it",
+    () =>
+      Effect.gen(function* () {
+        const hub = yield* makeHub();
+        const acme = yield* createOrganization(hub, "Acme");
+        const globex = yield* createOrganization(hub, "Globex");
+        const ada = yield* memberWithPasskey(hub.server, hub.owner, {
+          displayName: "Ada",
+          spaceId: acme,
+          role: "admin",
+        });
+        const grace = yield* memberWithPasskey(hub.server, hub.owner, {
+          displayName: "Grace",
+          spaceId: acme,
+        });
+        const hedy = yield* memberWithPasskey(hub.server, hub.owner, {
+          displayName: "Hedy",
+          spaceId: globex,
+        });
+
+        // The page offers Ada only the Organization she runs, and refuses any other.
+        const { requestId } = yield* startJoin(hub.server, { dedicatedSpace: "acme" });
+        const adasView = yield* hub.server.request("/api/environments/join/request", {
+          cookie: ada.cookie,
+          body: { requestId },
+        });
+        assert.equal(adasView.body.viewerMayApprove, true);
+        assert.deepEqual(
+          (adasView.body.dedicatedSpaces as ReadonlyArray<{ name: string }>).map(
+            ({ name }) => name,
+          ),
+          ["Acme"],
+        );
+        const toGlobex = yield* approveJoin(hub.server, ada.cookie, requestId, {
+          name: "Globex VPS",
+          dedicatedSpaceId: globex,
+          reauth: yield* passkeyReauth(hub.server, ada.authenticator),
+        });
+        assert.equal(toGlobex.status, 403);
+        assert.equal((yield* joinStatus(hub.server, requestId)).body.status, "pending");
+        // A Member of Acme is offered nothing to dedicate to.
+        const gracesView = yield* hub.server.request("/api/environments/join/request", {
+          cookie: grace.cookie,
+          body: { requestId },
+        });
+        assert.isUndefined(gracesView.body.dedicatedSpaces);
+
+        const dedicated = yield* hub.joinDedicated({
+          name: "Acme VPS",
+          spaceId: acme,
+          adapters: idleAdapters,
+          as: { cookie: ada.cookie, authenticator: ada.authenticator },
+        });
+        const vps = dedicated.environmentId;
+        yield* assertOnline(hub, vps);
+        const listedForAda = (yield* listEnvironments(hub.server, ada.cookie)).find(
+          (entry) => entry.id === vps,
+        );
+        assert.equal(listedForAda?.mode, "dedicated");
+        assert.isNull(listedForAda?.ownerUserId);
+        assert.deepEqual(listedForAda?.owner, { kind: "organization", spaceId: acme });
+        assert.isTrue(listedForAda?.canManage);
+        const listedForGrace = (yield* listEnvironments(hub.server, grace.cookie)).find(
+          (entry) => entry.id === vps,
+        );
+        assert.isFalse(listedForGrace?.canManage);
+        assert.notInclude(yield* listedIds(hub, hedy.cookie), vps);
+
+        // Acme's Member runs a Thread on it.
+        const acmeProject = ProjectId.make("project:acme");
+        yield* seedProject(hub.server, {
+          projectId: acmeProject,
+          title: "Acme",
+          defaultModelSelection: null,
+          spaceId: acme,
+        });
+        yield* createThread(hub, UserId.make(grace.userId), {
+          threadId: "thread:grace-on-vps",
+          projectId: acmeProject,
+          spaceId: acme,
+          environmentId: vps,
+          title: "Grace on the VPS",
+        });
+        const placed = yield* hub
+          .service(Orchestrator.OrchestratorV2)
+          .getThreadProjection(ThreadId.make("thread:grace-on-vps"))
+          .pipe(Effect.orDie);
+        assert.equal(placed.thread.activeEnvironmentId, vps);
+
+        // Audited with its owner, the Organization.
+        const entries = yield* hub
+          .service(AuditLog.AuditLog)
+          .list({ viewer: yield* ownerIdOf(hub), query: { action: "environment.register" } })
+          .pipe(Effect.orDie);
+        assert.deepInclude(entries.entries[0]?.detail, {
+          mode: "dedicated",
+          spaceId: acme,
+          ownerKind: "organization",
+          ownerId: acme,
+        });
+        assert.equal(
+          (entries.entries[0]?.actor as { readonly userId?: string } | undefined)?.userId,
+          ada.userId,
+        );
+
+        // Ada renames it; Grace, a Member, does not.
+        const renamed = yield* hub.server.request("/api/environments/rename", {
+          cookie: ada.cookie,
+          body: { environmentId: vps, name: "Acme build box" },
+        });
+        assert.equal(renamed.status, 200);
+        const gracesRename = yield* hub.server.request("/api/environments/rename", {
+          cookie: grace.cookie,
+          body: { environmentId: vps, name: "Mine" },
+        });
+        assert.equal(gracesRename.status, 403);
+      }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "an Admin turns their personal machine into their Organization's and back, never someone else's, and a lent one not at all",
+    () =>
+      Effect.gen(function* () {
+        const hub = yield* makeHub();
+        const acme = yield* createOrganization(hub, "Acme");
+        const globex = yield* createOrganization(hub, "Globex");
+        const ada = yield* memberWithPasskey(hub.server, hub.owner, {
+          displayName: "Ada",
+          spaceId: acme,
+          role: "admin",
+        });
+        const grace = yield* memberWithPasskey(hub.server, hub.owner, {
+          displayName: "Grace",
+          spaceId: acme,
+        });
+        const changeMode = (cookie: string, environmentId: string, body: Record<string, unknown>) =>
+          hub.server.request("/api/environments/mode", {
+            cookie,
+            body: { environmentId, ...body },
+          });
+        const adasLaptop = yield* joinMachine(hub.server, ada.authenticator, ada.cookie, "Ada's");
+        const gracesLaptop = yield* joinMachine(
+          hub.server,
+          grace.authenticator,
+          grace.cookie,
+          "Grace's",
+        );
+
+        // Grace's machine is hers: neither Ada nor the Owner dedicates it.
+        for (const cookie of [ada.cookie, hub.owner]) {
+          const refused = yield* changeMode(cookie, gracesLaptop.environmentId, {
+            mode: "dedicated",
+            spaceId: acme,
+          });
+          assert.notEqual(refused.status, 200);
+        }
+        // Grace, a Member, does not dedicate her own to Acme.
+        const memberRefused = yield* changeMode(grace.cookie, gracesLaptop.environmentId, {
+          mode: "dedicated",
+          spaceId: acme,
+        });
+        assert.equal(memberRefused.status, 403);
+        // Ada does not dedicate hers to Globex, which she does not run.
+        assert.equal(
+          (yield* changeMode(ada.cookie, adasLaptop.environmentId, {
+            mode: "dedicated",
+            spaceId: globex,
+          })).status,
+          403,
+        );
+        // Ada dedicates hers to Acme, and it becomes Acme's.
+        const toAcme = yield* changeMode(ada.cookie, adasLaptop.environmentId, {
+          mode: "dedicated",
+          spaceId: acme,
+        });
+        assert.equal(toAcme.status, 200);
+        assert.equal(toAcme.body.spaceId, acme);
+        assert.isNull(toAcme.body.ownerUserId);
+        // And takes it back as her own.
+        const back = yield* changeMode(ada.cookie, adasLaptop.environmentId, {
+          mode: "personal",
+        });
+        assert.equal(back.status, 200);
+        assert.equal(back.body.ownerUserId, ada.userId);
+
+        // A machine with a waiting or active loan keeps its mode until the loan ends.
+        yield* hub.server.sql`
+          INSERT INTO grants (grant_id, resource_kind, resource_id, lender_kind, lender_id,
+            target_kind, target_id, state, limits_json, created_at, created_by)
+          VALUES ('grant-1', 'environment', ${adasLaptop.environmentId}, 'user', ${ada.userId},
+            'space', ${globex}, 'pending', '{}', '2026-11-17T00:00:00.000Z', ${ada.userId})
+        `;
+        const lent = yield* changeMode(ada.cookie, adasLaptop.environmentId, {
+          mode: "dedicated",
+          spaceId: acme,
+        });
+        assert.equal(lent.status, 403);
+        assert.include(String(lent.body.message), "loan");
       }).pipe(Effect.scoped),
   );
 });

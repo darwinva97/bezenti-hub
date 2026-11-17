@@ -185,7 +185,7 @@ export const AUDIT_DETAIL_KEYS = {
    * `mode` personal or dedicated (with its `spaceId`), `via` join or ssh (with the `host` the Hub
    * installed it on, never its key).
    */
-  "environment.register": ["kind", "os", "mode", "spaceId", "via", "host"],
+  "environment.register": ["kind", "os", "mode", "spaceId", "via", "host", "ownerKind", "ownerId"],
   "environment.rename": ["from", "to"],
   /**
    * `settings` from the Hub, `leave` from the machine, `userTurnedOff` with its owner, `ssh` when

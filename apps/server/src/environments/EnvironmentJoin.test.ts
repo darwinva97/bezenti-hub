@@ -70,11 +70,17 @@ it.effect("the Owner registers a machine with a passkey and it joins as their pe
       id: joined.environmentId,
       name: "Laptop",
     });
+    const [ownerRow] = yield* server.sql<{ readonly id: string }>`
+      SELECT user_id AS id FROM users WHERE is_owner = 1
+    `;
+    // The machine's owner is on record (owned-resources 07): here the Owner, as a User.
     assert.deepEqual(entry!.detail, {
       kind: "external",
       os: "linux",
       mode: "personal",
       via: "join",
+      ownerKind: "user",
+      ownerId: ownerRow!.id,
     });
   }),
 );
@@ -152,9 +158,11 @@ it.effect("a Member with no permission approves their own machine, theirs alone"
     const [entry] = audit.body.entries as ReadonlyArray<{
       actor: { userId: string };
       target: { id: string };
+      detail: Record<string, unknown>;
     }>;
     assert.equal(entry!.actor.userId, grace.userId);
     assert.equal(entry!.target.id, environmentId);
+    assert.deepInclude(entry!.detail, { ownerKind: "user", ownerId: grace.userId });
 
     // Their own to rename and remove; nobody else's.
     const renamed = yield* server.request("/api/environments/rename", {
@@ -502,7 +510,16 @@ it.effect("renaming and removing are audited, and the Hub machine stays", () =>
         { action: "environment.rename", detail: { from: "Laptop", to: "Work laptop" } },
         {
           action: "environment.register",
-          detail: { kind: "external", os: "linux", mode: "personal", via: "join" },
+          detail: {
+            kind: "external",
+            os: "linux",
+            mode: "personal",
+            via: "join",
+            ownerKind: "user",
+            ownerId: (yield* server.sql<{ readonly id: string }>`
+              SELECT user_id AS id FROM users WHERE is_owner = 1
+            `)[0]!.id,
+          },
         },
       ],
     );

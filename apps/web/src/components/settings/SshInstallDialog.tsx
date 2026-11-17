@@ -63,7 +63,8 @@ const isFinished = (run: SshInstallRun) =>
   run.state !== "awaiting-host-key" && run.state !== "running";
 
 /**
- * Settings → Environments, for the Owner: «Add a machine over SSH». The Hub connects from its own
+ * Settings → Environments, for the Owner and the Admins of an Organization (for the Organizations
+ * they run): «Add a machine over SSH». The Hub connects from its own
  * process, shows the host key to confirm, then runs each step with its output here. The key goes
  * only into the request that starts the run, and is forgotten here once the run starts.
  */

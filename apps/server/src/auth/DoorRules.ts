@@ -21,7 +21,7 @@ const INVITATIONS = own("an Invitation token, or an Admin of its Organization");
 const OWNER = own("the Installation's Owner only, plus the access scopes");
 /** Remote code execution on another host with the Hub's grant: never anyone but the Owner. */
 const SSH_INSTALL = own(
-  "SshInstall: EnvironmentRegistry.authorizeDedicate (the Owner only) on every call, the progress included; no WS or MCP door",
+  "SshInstall: start asks EnvironmentRegistry.authorizeDedicate on its Organization (the Owner or its Admins); confirm, status and cancel answer only the User who started the run (anyone else's is not found); no WS or MCP door",
 );
 /** Whoever holds the master key reads every secret from a copy of the disk. */
 const MASTER_KEY = own(
@@ -101,7 +101,6 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "environments.sshInstallStatus": SSH_INSTALL,
   "environments.startJoin": ENVIRONMENTS,
   "installationUsers.list": OWNER,
-  "installationUsers.setPermission": OWNER,
   "installationUsers.setStatus": OWNER,
   "invitations.accept": INVITATIONS,
   "invitations.create": INVITATIONS,

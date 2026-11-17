@@ -918,9 +918,11 @@ t3 join --dedicated Acme https://hub.example.com
 ```
 
 `t3 join` checks Podman and the image first, and says how to build the image
-if it is missing. Open the link as the Owner: under **Used by**,
-**Everyone in Acme (dedicated)** is already chosen (only the Owner is offered
-organizations; anyone else registers machines only as their own). Confirm, and
+if it is missing. Open the link as an Admin of Acme (or the Owner): under
+**Used by**, **Everyone in Acme (dedicated)** is already chosen (an Admin is
+offered only the organizations they run, the Owner every one; anyone else
+registers machines only as their own). The machine becomes the organization's,
+not yours. Confirm, and
 back on the machine answer `y` to `Approved by … as a machine dedicated to
 Acme. Register it for Acme? [y/N]`. Then start it with `t3 serve`: it runs the
 organization's work inside a Sandbox container, with the same isolation as the
@@ -938,8 +940,13 @@ picker for that organization's Threads, and can make it a Project's
 organizations never see it. New Threads never land on it unless someone picks
 it or the Project prefers it.
 
-In **Settings → Environments** the Owner's **Change use** makes a machine
-personal again, or dedicates it to another organization. It works only once no
+In **Settings → Environments** the organization's Admins (and the Owner)
+rename and remove its dedicated machines, and **Change use** makes one their
+own personal machine again, or dedicates it to another organization they also
+run. Your own personal machine's **Change use** dedicates it to an organization
+you run. The Owner no longer takes someone else's personal machine (they can
+still remove it), and a machine lent to another Space keeps its use until its
+loans end. It works only once no
 Thread is on the machine: otherwise it names the Threads to move (or delete)
 first; archived Threads there don't block it, and need another Environment
 when unarchived. The organization's work files on the machine are deleted
@@ -1029,14 +1036,16 @@ Removing the machine from the Hub ends all its loans the same way.
 
 ### Add a machine over SSH
 
-Instead of running `t3 join` on a server yourself, the Owner can let the Hub do it. In
+Instead of running `t3 join` on a server yourself, an organization's Admins (for the
+organizations they run) and the Owner can let the Hub do it. In
 **Settings → Environments**, **Add over SSH** asks for the machine's host, port and user (not
 `root`), a private key (with its passphrase, if it has one) or the Hub's own SSH agent, the
 organization to dedicate it to, its name, and the Hub's address as that machine reaches it.
 
 **Connect** shows the machine's host key: compare it with what
 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` prints on the machine, then **Trust this key
-and install**. Each step shows its output as it runs:
+and install**. Only whoever started the run sees it and confirms its key. Each step shows its
+output as it runs:
 
 1. **Check the system and Podman.** The machine must run Linux. With systemd, the user needs
    lingering (so the service runs while nobody is logged in): the Hub turns it on if it may,

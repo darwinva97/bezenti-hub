@@ -95,9 +95,10 @@ function describe(
 }
 
 /**
- * Settings → Environments: the machines joined to this Hub. The Owner sees and manages every one,
- * and dedicates machines to Organizations; each User sees the Hub machine, their own personal
- * machines (which they rename and remove) and the machines dedicated to their Spaces.
+ * Settings → Environments: the machines joined to this Hub. The Owner sees and manages every one;
+ * each User sees the Hub machine, their own personal machines (which they rename, remove and
+ * dedicate to an Organization they run) and the machines dedicated to their Spaces, which an
+ * Admin of that Organization renames, removes and moves to another they run (owned-resources 07).
  */
 export function HubEnvironmentsSettings() {
   const session = usePrimarySessionState();
@@ -106,12 +107,22 @@ export function HubEnvironmentsSettings() {
   // Optional in the session: a session from before the Installation had an Owner names no User.
   const userId = signedIn ? session.data?.userId : undefined;
   // A machine lent to a Space is its lender's: nobody here renames, removes or rededicates it.
+  // The Hub says what this viewer may do; an older Hub, the Owner or a machine's own User.
   const manages = (environment: HubEnvironmentSummary) =>
     environment.lent === undefined &&
-    (isOwner ||
-      (userId !== undefined &&
-        environment.kind === "external" &&
-        environment.ownerUserId === userId));
+    (environment.canManage ??
+      (isOwner ||
+        (userId !== undefined &&
+          environment.kind === "external" &&
+          environment.ownerUserId === userId)));
+  // Changing who uses it takes its owner (a personal machine), or someone who runs its
+  // Organization (a dedicated one); where it goes, the server checks again.
+  const changesUse = (environment: HubEnvironmentSummary) =>
+    environment.kind === "external" &&
+    environment.lent === undefined &&
+    (environment.mode === "dedicated"
+      ? manages(environment)
+      : userId !== undefined && environment.ownerUserId === userId);
   // Only its owner lends a personal machine (Grants).
   const lends = (environment: HubEnvironmentSummary) =>
     userId !== undefined &&
@@ -134,8 +145,13 @@ export function HubEnvironmentsSettings() {
   const [pending, setPending] = useState(false);
   const [addingOverSsh, setAddingOverSsh] = useState(false);
   const spaces = useCurrentSpace((state) => state.view?.spaces);
+  // The Organizations this viewer dedicates machines to: every one for the Owner, those they run
+  // (as a full Admin) for anyone else.
   const organizations = (spaces ?? []).filter(
-    (space) => space.kind === "organization" && space.archived !== true,
+    (space) =>
+      space.kind === "organization" &&
+      space.archived !== true &&
+      (isOwner || (space.role === "admin" && space.pendingAdmin !== true)),
   );
   // A Space by name, or null when this viewer has none for it; callers say what to show instead.
   const spaceName = (spaceId: string | null | undefined) =>
@@ -217,7 +233,7 @@ export function HubEnvironmentsSettings() {
                         Lend…
                       </Button>
                     ) : null}
-                    {isOwner && environment.kind === "external" ? (
+                    {changesUse(environment) ? (
                       <Button
                         aria-label={`Change who uses ${environment.name}`}
                         size="xs"
@@ -262,9 +278,9 @@ export function HubEnvironmentsSettings() {
         })}
       <SettingsRow
         title="Add a machine"
-        description="Run `t3 join <this Hub's address>` on it, then approve it here in the browser. For a machine all of an Organization uses, run `t3 join --dedicated <Organization> <this Hub's address>` and approve it as the Owner."
+        description="Run `t3 join <this Hub's address>` on it, then approve it here in the browser: it becomes your personal machine. For a machine all of an Organization uses, run `t3 join --dedicated <Organization> <this Hub's address>` and approve it as an Admin of that Organization (or the Owner)."
       />
-      {isOwner ? (
+      {organizations.length > 0 ? (
         <SettingsRow
           title="Add a machine over SSH"
           description="Give the Hub a Linux machine's SSH address and key: it installs T3 Code there and dedicates it to an Organization, showing each step."

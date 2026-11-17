@@ -81,6 +81,16 @@ export interface EnvironmentResource {
   readonly workSpaceId?: SpaceId;
 }
 
+/**
+ * An external machine changing its mode or Organization (owned-resources 07): to an Organization
+ * (`to`), or back to personal (`to` null), its actor's own. Decided on where it is and where it goes.
+ */
+export interface EnvironmentMoveResource {
+  readonly kind: "environment-move";
+  readonly environment: EnvironmentResource;
+  readonly to: SpaceResource | null;
+}
+
 /** A Vault of secrets: the Owner's Main vault, another of the Owner's, or an Organization's. */
 export interface VaultResource {
   readonly kind: "vault";
@@ -119,7 +129,8 @@ export type Resource =
   | MembershipResource
   | UserResource
   | MoveResource
-  | EnvironmentResource;
+  | EnvironmentResource
+  | EnvironmentMoveResource;
 
 export type Action =
   | "space.view"
@@ -178,10 +189,15 @@ export type Action =
   /** Approve one's own machine joining the Hub as a personal one (`t3 join`): every active User. */
   | "environment.register"
   /**
-   * Register a machine dedicated to an Organization, or change a machine's mode or Space: the
-   * Owner's alone, decided on the Installation.
+   * Dedicate a machine to an Organization, which becomes its owner (owned-resources 07): the Owner
+   * or its Admins, decided on that Organization.
    */
   | "environment.dedicate"
+  /**
+   * Change an external machine's mode or Organization (`EnvironmentMoveResource`): power where it
+   * is (its owner; a dedicated one's Admins or the Owner) and where it goes (`environment.dedicate`).
+   */
+  | "environment.move"
   /** See an Environment in Settings and where Threads may run. */
   | "environment.view"
   /** Run a Thread on the Environment. */
@@ -358,7 +374,8 @@ const isEnvironment = (resource: Resource): resource is EnvironmentResource =>
 /**
  * A Sandbox, and a machine dedicated to a Space, is for the Users who work in its Space (not its
  * Guests), and only for that Space's Threads. Everyone who sees the Space sees it; the Owner sees
- * every one, and renames and removes a dedicated machine (a Sandbox is the Hub's own).
+ * every one. The Owner and the Organization's Admins rename and remove a dedicated machine (a
+ * Sandbox is the Hub's own).
  */
 const decideSpaceBound = (
   principal: Principal,
@@ -389,8 +406,11 @@ const decideSpaceBound = (
       : inOrganization(principal, space, ADMIN_ONLY);
   }
   if (action !== "environment.use") {
-    if (!principal.isOwner) return deny("owner-only");
-    return environment.environmentKind === "sandbox" ? deny("sandbox") : allow;
+    if (environment.environmentKind === "sandbox") {
+      return principal.isOwner ? deny("sandbox") : deny("owner-only");
+    }
+    // A dedicated machine is its Organization's: the Owner, and its Admins while it is open.
+    return runsDedicatedMachine(principal, space);
   }
   if (environment.workSpaceId !== space.id) return deny("other-space");
   if (space.archived) return deny("space-archived");
@@ -401,6 +421,49 @@ const decideSpaceBound = (
   return space.kind === "personal"
     ? inPersonalSpace(principal, space)
     : inOrganization(principal, space, ROLES_THAT_CREATE_PROJECTS);
+};
+
+/** Renaming, removing or moving a machine dedicated to `space`: the Owner, or its open Admins. */
+const runsDedicatedMachine = (principal: Principal, space: SpaceResource): Decision => {
+  if (principal.isOwner) return allow;
+  if (space.archived) return deny("space-archived");
+  if (space.frozen) return deny("space-frozen");
+  return inOrganization(principal, space, ADMIN_ONLY);
+};
+
+/** Dedicating a machine to `space`: an open Organization's Admins, or the Owner. */
+const decideDedicate = (principal: Principal, space: SpaceResource): Decision => {
+  if (space.kind !== "organization") return deny("wrong-resource");
+  if (space.archived) return deny("space-archived");
+  if (space.frozen) return deny("space-frozen");
+  return principal.isOwner ? allow : inOrganization(principal, space, ADMIN_ONLY);
+};
+
+/**
+ * Changing an external machine's mode or Organization, as moving a Project does: power over where
+ * it is and where it goes. A personal machine is its owner's alone, the Owner's included only for
+ * their own; one dedicated to an Organization is the Owner's and its Admins' (the Owner's alone
+ * once its Organization is gone). Turned personal, it becomes its actor's.
+ */
+const decideEnvironmentMove = (
+  principal: Principal,
+  { environment, to }: EnvironmentMoveResource,
+): Decision => {
+  if (environment.environmentKind !== "external") return deny("wrong-resource");
+  if (environment.mode === "dedicated") {
+    const from = environment.space;
+    if (from === undefined) {
+      if (!principal.isOwner) return deny("owner-only");
+    } else {
+      const origin = runsDedicatedMachine(principal, from);
+      if (origin._tag === "Deny") return origin;
+    }
+  } else if (environment.mode === undefined || environment.mode === "personal") {
+    if (environment.ownerUserId !== principal.userId) return deny("not-yours");
+  } else {
+    return deny("wrong-resource");
+  }
+  return to === null ? allow : decideDedicate(principal, to);
 };
 
 /**
@@ -788,11 +851,15 @@ export function decide(principal: Principal, action: Action, resource: Resource)
       ? inOrganization(principal, resource, ADMIN_ONLY)
       : deny("owner-only");
   }
-  if (
-    action === "environment.dedicate" ||
-    action === "masterKey.backup" ||
-    action === "secretProvider.manage"
-  ) {
+  if (action === "environment.dedicate") {
+    return isSpace(resource) ? decideDedicate(principal, resource) : deny("wrong-resource");
+  }
+  if (action === "environment.move" || resource.kind === "environment-move") {
+    return action === "environment.move" && resource.kind === "environment-move"
+      ? decideEnvironmentMove(principal, resource)
+      : deny("wrong-resource");
+  }
+  if (action === "masterKey.backup" || action === "secretProvider.manage") {
     if (resource.kind !== "installation") return deny("wrong-resource");
     return principal.isOwner ? allow : deny("owner-only");
   }

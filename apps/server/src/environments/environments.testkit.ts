@@ -193,6 +193,8 @@ export const listEnvironments = Effect.fn(function* (server: Server, cookie: str
     ownerUserId: string | null;
     mode: string;
     spaceId?: string | null;
+    owner?: { kind: string; userId?: string; spaceId?: string };
+    canManage?: boolean;
     hostname: string | null;
     providers: ReadonlyArray<{ instanceId: string }>;
   }>;

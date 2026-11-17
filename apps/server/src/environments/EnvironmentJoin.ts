@@ -290,8 +290,8 @@ const make = Effect.gen(function* () {
           ...(viewer.denialMessage === undefined ? {} : { denialMessage: viewer.denialMessage }),
         };
       }
-      // Only the Owner dedicates machines: the Organizations come for them alone, the one
-      // `t3 join --dedicated` named first.
+      // The Organizations this User may dedicate the machine to (the Owner's every one, an Admin's
+      // own), the one `t3 join --dedicated` named first.
       const offered = Option.isNone(user)
         ? []
         : yield* registry

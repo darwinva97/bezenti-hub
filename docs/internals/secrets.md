@@ -416,9 +416,7 @@ on the Thread's behalf: [ADR 0008](../adr/0008-vault-entries-read-from-secret-pr
   - The Sandbox's server uses the container's private `/dev/shm` (tmpfs); `podman run` is
     unchanged. The Hub machine and a personal Linux machine use `$XDG_RUNTIME_DIR` or `/dev/shm`.
     All Users of one machine share its uid (ADR 0004).
-- **Masking of multiline values** (`secretForms`): the whole value, its CRLF form, and each line of
-  20 characters or more without spaces. The base64 and URL forms already cover every value of 6
-  characters or more.
+- **Masking of multiline values** (`secretForms`): see «Masking», «Multi-line values».
 
 ## Provider scopes («Variables, Secretos sellados y Secret providers», ticket 03)
 
@@ -811,6 +809,16 @@ wrapped across lines (MIME, PEM). Values shorter than 6 characters are never mas
 3). Overlapping values merge into one `[NAME]`, named after the first in precedence order. Matching
 indexes the forms by their first two characters: one map lookup per character of text, however
 many values there are (4096 values: about 10 µs for a 1 KB log line, 35 ms to build the index).
+
+**Multi-line values** (owned-resources 02). A value may hold `\n` or `\r\n` (stored and delivered as
+saved; a browser's text area gives LF), up to 64 KiB. Besides the whole value and its CRLF form,
+each of its lines is a form of its own when, trimmed, it is 16 characters or more, has no space
+inside and is not PEM armor (`-----BEGIN …-----`, `-----END …-----`): so `head -3 key.pem`, a line
+indented in YAML, or lines in another order still print `[NAME]`, and a line cut between two
+chunks of a stream is held like any other form (`pendingSuffix`). Not covered on their own: lines
+shorter than 16 (the last few characters of a base64 block), lines with spaces (`"type":
+"service_account",` is ordinary JSON), and the armor, which every PEM shares. A single-line value
+adds no line forms.
 
 **Whose values.** Never another User's: masking with them would let a User type a guess and see
 it become `[NAME]`. Two sets:

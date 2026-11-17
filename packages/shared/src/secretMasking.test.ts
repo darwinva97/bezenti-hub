@@ -253,6 +253,84 @@ describe("secretMasking", () => {
     assert.equal(patterns.mask(`a ${many[3999]!.value} b`), "a [S3999] b");
   });
 
+  // Owned-resources 02: a multi-line Secret's lines of 16+ characters, PEM armor excepted.
+  const KEY_LINES = [
+    "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj",
+    "MgEAAoIBAQC7VJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDu",
+    "ictGIoHzvB5lA8pr0HtNXXfC+v7Pw==",
+    "ZmFrZS1rZXktdGFpbA",
+  ];
+  const KEY = `-----BEGIN PRIVATE KEY-----\n${KEY_LINES.join("\n")}\nAB12==\n-----END PRIVATE KEY-----\n`;
+
+  it("masks each line of a multi-line Secret from 16 characters, printed alone, indented, in CRLF or another order", () => {
+    const patterns = makeSecretPatterns([{ name: "TLS_KEY", value: KEY }]);
+    // Compared as a boolean: a failure names the case, never prints the key.
+    const masksTo = (text: string, expected: string, what: string) =>
+      assert.isTrue(patterns.mask(text) === expected, what);
+    masksTo(
+      `$ head -3 key.pem\n${KEY.split("\n").slice(0, 3).join("\n")}\n`,
+      "$ head -3 key.pem\n-----BEGIN PRIVATE KEY-----\n[TLS_KEY]\n[TLS_KEY]\n",
+      "head -3: the armor stays, both body lines go",
+    );
+    masksTo(`tail: ${KEY_LINES[3]}`, "tail: [TLS_KEY]", "an 18-character line alone");
+    masksTo(
+      KEY_LINES.map((line) => `    ${line}`).join("\r\n"),
+      KEY_LINES.map(() => "    [TLS_KEY]").join("\r\n"),
+      "indented by four spaces, in CRLF",
+    );
+    masksTo(
+      [KEY_LINES[2], KEY_LINES[0], KEY_LINES[1]].join("\n"),
+      "[TLS_KEY]\n[TLS_KEY]\n[TLS_KEY]",
+      "lines in another order",
+    );
+  });
+
+  it("never masks a PEM armor line or a line shorter than 16 characters on its own", () => {
+    const forms = secretForms(KEY);
+    assert.notInclude(forms, "-----BEGIN PRIVATE KEY-----");
+    assert.notInclude(forms, "-----END PRIVATE KEY-----");
+    assert.notInclude(forms, "AB12==");
+    // Armor without spaces is still armor.
+    const armored =
+      "-----BEGIN-OPENSSH-KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU\n-----END-OPENSSH-KEY-----";
+    assert.notInclude(secretForms(armored), "-----BEGIN-OPENSSH-KEY-----");
+    assert.notInclude(secretForms(armored), "-----END-OPENSSH-KEY-----");
+    assert.include(secretForms(armored), "b3BlbnNzaC1rZXktdjEAAAAABG5vbmU");
+    // A single-line value adds no line forms.
+    assert.notInclude(secretForms(KEY_LINES[0]!), KEY_LINES[0]!.slice(0, 20));
+  });
+
+  it("keeps every form the earlier rule masked (no regression)", () => {
+    // The rule before owned-resources 02, frozen: whole values, and lines of 20+ without spaces.
+    const before = (value: string): ReadonlyArray<string> =>
+      value.includes("\n")
+        ? value
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.length >= 20 && !/\s/.test(line))
+        : [];
+    const corpus = [
+      TOKEN,
+      "abcdef",
+      "p@ss word/1&x",
+      "x".repeat(15),
+      "y".repeat(16),
+      "z".repeat(19),
+      "w".repeat(64),
+      KEY,
+      KEY.replace(/\n/g, "\r\n"),
+      "apiVersion: v1\r\nkind: Config\r\ncurrent-context: production-cluster\r\n",
+      `apiVersion: v1\nusers:\n- name: u\n  user:\n    token:\n      eyJhbGciOiJSUzI1NiJ9.cluster0.c2lnbmF0dXJlX29mX3RoZV90b2tlbg\n`,
+    ];
+    const lost = corpus.flatMap((value, index) => {
+      const now = new Set(secretForms(value));
+      const expected = value.length >= MIN_MASKED_SECRET_LENGTH ? [value, ...before(value)] : [];
+      // Index, never the value: a failure prints no secret.
+      return expected.filter((form) => !now.has(form)).map(() => index);
+    });
+    assert.deepEqual(lost, []);
+  });
+
   it("redacts the values this process was given, for logs and spans", () => {
     forgetKnownSecretsForTest();
     assert.equal(redactKnownSecrets(`log ${TOKEN}`), `log ${TOKEN}`);

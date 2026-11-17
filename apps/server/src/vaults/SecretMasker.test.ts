@@ -102,6 +102,38 @@ describe("SecretMasker: terminal frames", () => {
     }),
   );
 
+  it.live("masks a line of a multi-line Secret cut between two frames (owned-resources 02)", () =>
+    Effect.gen(function* () {
+      const body = "q3x9Zk2LmN8pQrSt";
+      const masker = SecretMasker.threadMaskerOf(
+        makeSecretPatterns([
+          {
+            name: "PEM_KEY",
+            value: `-----BEGIN KEY-----\nMIIBOgIBAAJBAKj34GkxFhD9\n${body}\n-----END KEY-----`,
+          },
+        ]),
+      );
+      const service = SecretMasker.SecretMasker.of({
+        forThread: () => Effect.succeed(masker),
+        forUser: () => Effect.succeed(masker),
+        forViewer: Effect.succeed(masker),
+        remember: () => Effect.void,
+      });
+      // `sed -n 3p key.pem`: one 16-character line, its frames cut in the middle of it.
+      const events = yield* maskTerminalStream(
+        service,
+        "thread-1",
+        Stream.make(
+          output(`$ sed -n 3p key.pem\r\n${body.slice(0, 7)}`),
+          output(`${body.slice(7)}\r\n`),
+        ),
+      ).pipe(Stream.runCollect);
+      const shown = outputsOf([...events]).join("");
+      // A boolean: a failure never prints the line.
+      assert.isTrue(shown === "$ sed -n 3p key.pem\r\n[PEM_KEY]\r\n", "the cut line is masked");
+    }),
+  );
+
   it.live("sends a frame that only looked like a value's start once nothing follows", () =>
     Effect.gen(function* () {
       const events = yield* maskTerminalStream(

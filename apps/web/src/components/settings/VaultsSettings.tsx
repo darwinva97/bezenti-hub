@@ -38,28 +38,10 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { SecretValueArea } from "./SecretValueArea";
 import { SpaceDefaultVaults, VaultAllowances } from "./VaultChoices";
 import { settle } from "./vaultCommands";
 
-const VALUE_INPUT_PROPS = {
-  // Not a login: no password manager prompt, but hidden as typed.
-  type: "text",
-  className: "[-webkit-text-security:disc]",
-  autoComplete: "off",
-  autoCorrect: "off",
-  autoCapitalize: "off",
-  spellCheck: false,
-  "data-1p-ignore": true,
-  "data-lpignore": "true",
-} as const;
-/** A Variable's value is meant to be seen: shown as typed. */
-const SEEN_INPUT_PROPS = {
-  type: "text",
-  autoComplete: "off",
-  spellCheck: false,
-  "data-1p-ignore": true,
-  "data-lpignore": "true",
-} as const;
 const VAULT_SURFACE = isElectron ? "desktop" : "web";
 const CONFIRM_DANGEROUS = "This value changes how tools run";
 
@@ -842,13 +824,12 @@ function EntryRow(props: {
               sees it.
             </span>
           ) : null}
-          <div className="flex gap-2">
-            <Input
+          <div className="flex items-start gap-2">
+            <SecretValueArea
               aria-label={`New value of ${entry.name}`}
-              nativeInput
-              {...(shownAsTyped ? SEEN_INPUT_PROPS : VALUE_INPUT_PROPS)}
+              visible={shownAsTyped}
               value={value}
-              onChange={(event) => setValue(event.currentTarget.value)}
+              onValueChange={setValue}
             />
             <Button
               disabled={value.length === 0 || (dangerous && !confirmed)}
@@ -1003,13 +984,12 @@ function AddSecretForm(props: {
         ) : isTemplate ? null : (
           <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
             Value
-            <Input
+            <SecretValueArea
               aria-label="Value"
-              nativeInput
               disabled={pending}
-              {...(isVariable ? SEEN_INPUT_PROPS : VALUE_INPUT_PROPS)}
+              visible={isVariable}
               value={value}
-              onChange={(event) => setValue(event.currentTarget.value)}
+              onValueChange={setValue}
             />
           </label>
         )}

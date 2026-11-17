@@ -17,6 +17,7 @@ import { useEffect, useEffectEvent, useState } from "react";
 import { View } from "react-native";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
+import { SecretValueInput } from "./SecretValueInput";
 import { Button } from "../../components/ui/Button";
 import { ListSection } from "../../components/ui/ListSection";
 import { serverEnvironment } from "../../state/server";
@@ -207,16 +208,6 @@ function VaultCard(props: {
   );
 }
 
-const SECRET_INPUT = {
-  secureTextEntry: true,
-  autoCorrect: false,
-  autoCapitalize: "none",
-  autoComplete: "off",
-  textContentType: "none",
-  importantForAutofill: "no",
-  spellCheck: false,
-} as const;
-
 function EntryRow(props: {
   readonly entry: VaultEntry;
   readonly canReplace: boolean;
@@ -246,13 +237,12 @@ function EntryRow(props: {
       ) : null}
       {replacing ? (
         <View className="gap-2">
-          <TextInput
+          <SecretValueInput
             accessibilityLabel={`New value for ${entry.name}`}
             placeholder="New value"
             value={value}
             onChangeText={setValue}
             editable={!pending}
-            {...SECRET_INPUT}
           />
           <View className="flex-row gap-2">
             <Button
@@ -322,13 +312,12 @@ function AddSecret(props: { readonly onAdd: (name: string, value: string) => Pro
         spellCheck={false}
       />
       {problem === null ? null : <Text className="text-xs text-danger-foreground">{problem}</Text>}
-      <TextInput
+      <SecretValueInput
         accessibilityLabel="Secret value"
         placeholder="Value"
         value={value}
         onChangeText={setValue}
         editable={!pending}
-        {...SECRET_INPUT}
       />
       <View className="flex-row gap-2">
         <Button

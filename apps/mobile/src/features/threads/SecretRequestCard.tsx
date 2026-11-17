@@ -28,6 +28,7 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../../components/ui/Button";
 import { ListToggleRow } from "../../components/ui/ListToggleRow";
+import { SecretValueInput } from "../vaults/SecretValueInput";
 
 const LOCK_SYMBOL: AppSymbolName = { ios: "lock", android: "lock" };
 const PRIVATE_SYMBOL: AppSymbolName = { ios: "checkmark.shield", android: "lock" };
@@ -163,20 +164,12 @@ function PendingSecretRequestForm(props: {
           </Text>
         ) : null}
       </View>
-      <TextInput
+      <SecretValueInput
         accessibilityLabel={item.label}
         placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
         value={secret}
         onChangeText={setSecret}
         editable={!submitting}
-        secureTextEntry
-        autoCorrect={false}
-        autoCapitalize="none"
-        autoComplete="off"
-        textContentType="none"
-        importantForAutofill="no"
-        spellCheck={false}
-        returnKeyType="done"
         onSubmitEditing={save}
       />
       {targets.length === 0 ? null : (

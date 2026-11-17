@@ -21,6 +21,9 @@ vi.mock("../../components/ui/Button", async () => (await import("./testkit")).na
 vi.mock("../../components/ui/ListSection", async () =>
   (await import("./testkit")).nativeMocks.listSection(),
 );
+vi.mock("../../components/ui/ListToggleRow", async () =>
+  (await import("./testkit")).nativeMocks.toggleRow(),
+);
 vi.mock("@effect/atom-react", async () => {
   const { useSyncExternalStore } = await import("react");
   return {

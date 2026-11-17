@@ -245,6 +245,31 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
     }).pipe(Effect.scoped),
   );
 
+  it.live("reach the shell with their line breaks as saved, LF or CRLF (owned-resources 02)", () =>
+    Effect.gen(function* () {
+      const s = yield* sharedSandbox();
+      const lf =
+        "-----BEGIN KEY-----\nMIIBOgIBAAJBAKj34GkxFhD9\nq3x9Zk2LmN8pQrSt\n-----END KEY-----\n";
+      const crlf = '{\r\n  "type": "service_account",\r\n  "key": "c2VjcmV0LWtleS1ib2R5"\r\n}';
+      for (const [name, value] of [
+        ["ACME_PEM", lf],
+        ["ACME_JSON", crlf],
+      ] as const) {
+        yield* s.vaults
+          .putEntry({ vaultId: s.acmeVault, name, value: Redacted.make(value) })
+          .pipe(s.asOwner);
+      }
+      yield* s.workspace.terminalOpen(
+        { threadId: s.adaThread, terminalId: "term-1", cwd: s.acmeWeb.workspaceRoot },
+        { userId: s.ada },
+      );
+      const env = lastShell(s.sandbox);
+      // Booleans: a failure never prints a value.
+      assert.isTrue(env.ACME_PEM === lf, "the LF value arrives byte for byte");
+      assert.isTrue(env.ACME_JSON === crlf, "the CRLF value arrives byte for byte");
+    }).pipe(Effect.scoped),
+  );
+
   it.live("stop reaching the next shell once revoked; an open one says to reopen", () =>
     Effect.gen(function* () {
       const s = yield* sharedSandbox();

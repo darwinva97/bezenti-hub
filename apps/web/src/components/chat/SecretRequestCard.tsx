@@ -28,6 +28,7 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { SecretValueArea } from "../settings/SecretValueArea";
 import { WorkLogRow } from "./WorkLog";
 
 export function SecretRequestCard(props: {
@@ -160,7 +161,7 @@ function PendingSecretRequestForm(props: {
       // leaves it alone so the reason can still be copied.
       onClick={(event) => {
         if (!(event.target instanceof Element)) return;
-        if (event.target.closest("input, button, a")) return;
+        if (event.target.closest("input, textarea, button, a")) return;
         if (window.getSelection()?.isCollapsed === false) return;
         document.getElementById(inputId)?.focus();
       }}
@@ -175,24 +176,21 @@ function PendingSecretRequestForm(props: {
       </div>
       <div className="flex min-w-0 items-center gap-2">
         <div className="min-w-0 flex-1">
-          <Input
+          {/* A text area: a PEM key or a JSON credential keeps its lines (owned-resources 02). Enter
+              sends, Shift+Enter starts a line; a paste keeps its own. */}
+          <SecretValueArea
             id={inputId}
-            // Password fields prompt to save credentials; this secret is not a login.
-            type="text"
-            className="[-webkit-text-security:disc]"
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            data-1p-ignore
-            data-lpignore="true"
-            data-bwignore
             placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
             value={secret}
             disabled={submitting}
             aria-invalid={error !== null || undefined}
             aria-describedby={error !== null ? `${privacyId} ${errorId}` : privacyId}
-            onChange={(event) => setSecret(event.currentTarget.value)}
+            onValueChange={setSecret}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }}
           />
         </div>
         <Button

@@ -78,6 +78,7 @@ import { useManagedPolicy } from "~/state/managedPolicy";
 import { ManagedNotice } from "../ManagedPolicy";
 import { readEnvironmentScope } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { useSettingsSpaceFilter } from "./useSettingsSpaceFilter";
 import { EnvironmentRow, useEnvironmentTransportLabel } from "./EnvironmentRow";
 import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
@@ -367,6 +368,7 @@ export function ScheduledTasksSettings(target: {
   readonly taskId?: ScheduledTaskId | undefined;
 }) {
   const { scope, environments, connectedEnvironments, environment } = useSettingsScope();
+  const { keepsProjectById } = useSettingsSpaceFilter();
   const [editor, setEditor] = useState<{
     environmentId: EnvironmentId;
     task: ScheduledTask | null;
@@ -391,7 +393,8 @@ export function ScheduledTasksSettings(target: {
     (task) =>
       task.id === target.taskId &&
       linkedEnvironmentId !== undefined &&
-      matchesScheduledTaskScope(scope, linkedEnvironmentId, task.projectId),
+      matchesScheduledTaskScope(scope, linkedEnvironmentId, task.projectId) &&
+      keepsProjectById(linkedEnvironmentId, task.projectId),
   );
   // A `taskId` link opens its editor once, the first time the task loads. The editor then owns
   // the session until close, so a disconnect that disables the query cannot drop unsaved edits.
@@ -404,13 +407,17 @@ export function ScheduledTasksSettings(target: {
     setOpenedLinkTaskId(target.taskId);
     if (editor === null) setEditor({ environmentId: linkedEnvironmentId, task: linkedTask });
   }
-  const navigate = useNavigate({ from: "/settings/scheduled-tasks" });
+  const navigate = useNavigate();
   const closeEditor = () => {
     setEditor(null);
     if (target.taskId === undefined) return;
+    // Drops the task from the URL of the section that is open.
     void navigate({
-      to: "/settings/scheduled-tasks",
-      search: ({ taskId: _closed, ...rest }) => rest,
+      to: ".",
+      search: (previous: Record<string, unknown>) => {
+        const { taskId: _closed, ...rest } = previous;
+        return rest;
+      },
       replace: true,
     });
   };
@@ -510,6 +517,7 @@ function ScheduledTaskEnvironmentList({
   readonly onEdit: (environmentId: EnvironmentId, task: ScheduledTask) => void;
 }) {
   const { scope, environments } = useSettingsScope();
+  const { keepsProjectById } = useSettingsSpaceFilter();
   const connectedIds = environments.flatMap((environment) =>
     environment.connection.phase === "connected" && environment.serverConfig !== null
       ? [environment.environmentId]
@@ -523,8 +531,10 @@ function ScheduledTaskEnvironmentList({
     return {
       environment,
       connected: index >= 0,
-      tasks: data?.tasks.filter((task) =>
-        matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
+      tasks: data?.tasks.filter(
+        (task) =>
+          matchesScheduledTaskScope(scope, environment.environmentId, task.projectId) &&
+          keepsProjectById(environment.environmentId, task.projectId),
       ),
       error: query?._tag === "Failure" ? formatEnvironmentQueryError(query.cause) : null,
     };
@@ -590,15 +600,12 @@ function ScheduledTaskEnvironmentList({
       {taskId && linkedState?.tasks && linkedState.error === null && !linkedTask ? (
         <SettingsRow
           title="Task unavailable"
-          description="This task was deleted or belongs to a different project. Check your project filter."
+          description="This task was deleted, or it belongs to a Project you cannot see or to another Space."
           role="status"
         />
       ) : null}
       {populated.length === 0 && loaded.length > 0 ? (
-        <SettingsRow
-          title="No scheduled tasks"
-          description="No tasks match this environment and project selection."
-        />
+        <SettingsRow title="No scheduled tasks" description="No tasks in this Space." />
       ) : null}
       {Object.entries(summaries).map(([label, entries]) => {
         if (entries.length === 0) return null;
@@ -651,6 +658,7 @@ function ScheduledTaskEnvironmentSection({
   readonly onEdit: (environmentId: EnvironmentId, task: ScheduledTask) => void;
 }) {
   const { scope } = useSettingsScope();
+  const { keepsProjectById } = useSettingsSpaceFilter();
   const connected =
     environment.connection.phase === "connected" && environment.serverConfig !== null;
   const tasksQuery = useEnvironmentQuery(
@@ -661,8 +669,10 @@ function ScheduledTaskEnvironmentSection({
         })
       : null,
   );
-  const tasks = tasksQuery.data?.tasks.filter((task) =>
-    matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
+  const tasks = tasksQuery.data?.tasks.filter(
+    (task) =>
+      matchesScheduledTaskScope(scope, environment.environmentId, task.projectId) &&
+      keepsProjectById(environment.environmentId, task.projectId),
   );
   const linkedTask = tasks?.find((task) => task.id === taskId);
   return (
@@ -690,15 +700,12 @@ function ScheduledTaskEnvironmentSection({
           {taskId && !linkedTask ? (
             <SettingsRow
               title="Task unavailable"
-              description="This task was deleted or belongs to a different project. Check your project filter."
+              description="This task was deleted, or it belongs to a Project you cannot see or to another Space."
               role="status"
             />
           ) : null}
           {tasks.length === 0 ? (
-            <SettingsRow
-              title="No scheduled tasks"
-              description="No tasks match this environment and project selection."
-            />
+            <SettingsRow title="No scheduled tasks" description="No tasks in this Space." />
           ) : (
             tasks.map((task) => (
               <ScheduledTaskRow
@@ -1170,6 +1177,7 @@ function ScheduledTaskEditorForm({
   readonly onClose: () => void;
 }) {
   const { scope, connectedEnvironments } = useSettingsScope();
+  const { keepsProject } = useSettingsSpaceFilter();
   const [environmentId, setEnvironmentId] = useState(initialEnvironmentId);
   const environment = useEnvironment(environmentId);
   // Older servers reject one-time schedules, so offer Once only where it can save.
@@ -1184,7 +1192,10 @@ function ScheduledTaskEditorForm({
   const allProjects = useProjects();
   const projectsOn = (id: EnvironmentId) =>
     allProjects.filter(
-      (project) => project.environmentId === id && matchesScheduledTaskScope(scope, id, project.id),
+      (project) =>
+        project.environmentId === id &&
+        matchesScheduledTaskScope(scope, id, project.id) &&
+        keepsProject(project),
     );
   const scopedProjects = projectsOn(environmentId);
   const settings = useEnvironmentSettings(environmentId);

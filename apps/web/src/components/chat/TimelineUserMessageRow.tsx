@@ -85,6 +85,7 @@ import {
   MessageAuthorHeading,
   TimelineRowTimestamp,
 } from "./TimelineRowParts";
+import { CURRENT_SPACE_SEGMENT } from "../settings/settingsModals";
 import { UserMessageContextReferenceChip } from "./UserMessageContextChips";
 import {
   resolvePreviewAnnotationImage,
@@ -330,7 +331,8 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           <div className="flex shrink-0 items-center gap-2">
             {scheduledTaskId ? (
               <Link
-                to="/settings/scheduled-tasks"
+                to="/settings/space/$spaceId/$section"
+                params={{ spaceId: CURRENT_SPACE_SEGMENT, section: "scheduled-tasks" }}
                 search={{ environmentId: ctx.activeThreadEnvironmentId, taskId: scheduledTaskId }}
                 className="rounded-sm text-xs text-muted-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
               >

@@ -1,14 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
+
 import { validateScheduledTasksSearch } from "../components/settings/scheduledTasksSettings.logic";
 
-import { ScheduledTasksSettings } from "../components/settings/ScheduledTasksSettings";
-
-function SettingsScheduledTasksRoute() {
-  const target = Route.useSearch();
-  return <ScheduledTasksSettings {...target} />;
-}
-
+// Redirected by the settings route, through the old-URL table; the task a link names goes along.
 export const Route = createFileRoute("/_chat/settings/scheduled-tasks")({
   validateSearch: validateScheduledTasksSearch,
-  component: SettingsScheduledTasksRoute,
 });

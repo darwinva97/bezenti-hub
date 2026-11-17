@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { validateScheduledTasksSearch } from "../components/settings/scheduledTasksSettings.logic";
 import { SpaceSettingsPage } from "../components/settings/SpaceSettingsPage";
 
 function SpaceSettingsSectionRoute() {
@@ -8,5 +9,7 @@ function SpaceSettingsSectionRoute() {
 }
 
 export const Route = createFileRoute("/_chat/settings/space/$spaceId/$section")({
+  // Scheduled tasks opens the task a link names.
+  validateSearch: validateScheduledTasksSearch,
   component: SpaceSettingsSectionRoute,
 });

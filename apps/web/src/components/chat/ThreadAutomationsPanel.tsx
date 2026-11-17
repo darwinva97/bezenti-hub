@@ -24,6 +24,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { readEnvironmentScope } from "../../state/session";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { CURRENT_SPACE_SEGMENT } from "../settings/settingsModals";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
@@ -142,7 +143,8 @@ export function ThreadAutomationsPanel(props: {
                 aria-label="Manage scheduled tasks"
                 onClick={() =>
                   void navigate({
-                    to: "/settings/scheduled-tasks",
+                    to: "/settings/space/$spaceId/$section",
+                    params: { spaceId: CURRENT_SPACE_SEGMENT, section: "scheduled-tasks" },
                     search: { environmentId: props.environmentId },
                   })
                 }
@@ -196,7 +198,8 @@ export function ThreadAutomationsPanel(props: {
                     aria-label={`Edit ${task.title}`}
                     onClick={() =>
                       void navigate({
-                        to: "/settings/scheduled-tasks",
+                        to: "/settings/space/$spaceId/$section",
+                        params: { spaceId: CURRENT_SPACE_SEGMENT, section: "scheduled-tasks" },
                         search: { environmentId: props.environmentId, taskId: task.id },
                       })
                     }

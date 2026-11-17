@@ -10,6 +10,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { useSettingsSpaceFilter } from "./useSettingsSpaceFilter";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { readLocalApi } from "../../localApi";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
@@ -22,6 +23,7 @@ import { ProjectFavicon } from "../ProjectFavicon";
 
 export function ArchivedThreadsPanel() {
   const { scope, groups: projectGroups, environments } = useSettingsScope();
+  const { keepsProject } = useSettingsSpaceFilter();
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
   const {
     snapshots: archivedSnapshots,
@@ -40,8 +42,9 @@ export function ArchivedThreadsPanel() {
         snapshot.projects
           .filter(
             (project) =>
-              selectedProjectKeys === null ||
-              selectedProjectKeys.has(`${environmentId}:${project.id}`),
+              (selectedProjectKeys === null ||
+                selectedProjectKeys.has(`${environmentId}:${project.id}`)) &&
+              keepsProject({ environmentId, id: project.id, spaceId: project.spaceId }),
           )
           .map(
             (project) => [`${environmentId}:${project.id}`, { ...project, environmentId }] as const,

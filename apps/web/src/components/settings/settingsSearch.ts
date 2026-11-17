@@ -15,6 +15,7 @@ import { commandLabel } from "./KeybindingsSettings.logic";
 import type { ResolvedSettingsScope } from "./settingsScope";
 import {
   MOVED_SECTION_ANCHORS,
+  CURRENT_SPACE_SEGMENT,
   OLD_SETTINGS_PATHS,
   SETTINGS_MODAL_LABELS,
   findSettingsSection,
@@ -30,7 +31,6 @@ export type SettingsPath =
   | "/settings/threads"
   | "/settings/browser"
   | "/settings/devices"
-  | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/worktrees"
   | "/settings/connections"
@@ -38,8 +38,7 @@ export type SettingsPath =
   | "/settings/secrets"
   | "/settings/vaults"
   | "/settings/maintenance"
-  | "/settings/labs"
-  | "/settings/archived";
+  | "/settings/labs";
 
 export type SettingsSearchScope =
   | "environment"
@@ -100,7 +99,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/threads": "Threads",
   "/settings/browser": "Browser",
   "/settings/devices": "Devices",
-  "/settings/scheduled-tasks": "Scheduled tasks",
   "/settings/source-control": "Source control",
   "/settings/worktrees": "Worktrees",
   "/settings/connections": "Environments",
@@ -109,7 +107,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/vaults": "Vaults",
   "/settings/maintenance": "Maintenance",
   "/settings/labs": "Labs",
-  "/settings/archived": "Archive",
 };
 
 /** Sidebar order. A group without a heading is set apart by space alone. */
@@ -126,7 +123,6 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
       "/settings/threads",
       "/settings/browser",
       "/settings/devices",
-      "/settings/scheduled-tasks",
     ],
   },
   {
@@ -144,7 +140,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   },
   {
     heading: null,
-    paths: ["/settings/maintenance", "/settings/labs", "/settings/archived"],
+    paths: ["/settings/maintenance", "/settings/labs"],
   },
 ];
 
@@ -1247,8 +1243,16 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "archive",
     title: "Archived threads",
-    to: "/settings/archived",
+    modal: "space",
+    section: "archive",
     searchTerms: ["restore reopen deleted history projects"],
+  },
+  {
+    id: "scheduled-tasks",
+    title: "Scheduled tasks",
+    modal: "space",
+    section: "scheduled-tasks",
+    searchTerms: ["automations recurring cron webhook schedule task run"],
   },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;
 
@@ -1270,10 +1274,8 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/access": "connections",
   "/settings/secrets": null,
   "/settings/vaults": null,
-  "/settings/scheduled-tasks": null,
   "/settings/maintenance": null,
   "/settings/labs": null,
-  "/settings/archived": "project-defaults",
 };
 
 // Pages of the old nav whose rows moved elsewhere; a link to one follows its anchor.
@@ -1288,7 +1290,7 @@ export function settingsItemPath(item: SettingsSearchLocation): string {
   // A Project's own settings need its key; without one the old page finds the Project of the context.
   if (item.modal === "project") return "/settings/projects";
   // A Space's own settings need its id; without one they are the current Space's.
-  if (item.modal === "space") return "/settings/space";
+  if (item.modal === "space") return `/settings/space/${CURRENT_SPACE_SEGMENT}/${item.section}`;
   return item.modal === undefined ? item.to : `/settings/${item.modal}/${item.section}`;
 }
 

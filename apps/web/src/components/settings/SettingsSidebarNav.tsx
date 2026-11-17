@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent } from "react";
 import {
-  ArchiveIcon,
   BotIcon,
   NetworkIcon,
-  CalendarClockIcon,
   FlaskConicalIcon,
   FolderTreeIcon,
   GitBranchIcon,
@@ -68,7 +66,6 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/threads": MessagesSquareIcon,
   "/settings/browser": GlobeIcon,
   "/settings/devices": SmartphoneIcon,
-  "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/worktrees": FolderTreeIcon,
   "/settings/connections": ServerIcon,
@@ -77,7 +74,6 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/vaults": VaultIcon,
   "/settings/maintenance": WrenchIcon,
   "/settings/labs": FlaskConicalIcon,
-  "/settings/archived": ArchiveIcon,
 };
 
 // Detail pages without a nav entry highlight the page that links to them.

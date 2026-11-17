@@ -4,6 +4,8 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
   ProjectId,
+  SpaceId,
+  UserId,
   ProviderInstanceId,
   ScheduledTaskId,
   ThreadId,
@@ -14,6 +16,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 import { act, render } from "../../../test/render";
+import { useCurrentSpace } from "../../state/currentSpace";
 import { ScheduledTasksSettings } from "./ScheduledTasksSettings";
 
 const environmentId = EnvironmentId.make("laptop");
@@ -47,7 +50,13 @@ const threadFamilyRead = {
   threads: [{ id: task.threadId, title: "Fix login bug" }],
 };
 
-const state = vi.hoisted(() => ({ connected: true, tasksLoaded: true, secondary: false }));
+const state = vi.hoisted(() => ({
+  connected: true,
+  tasksLoaded: true,
+  secondary: false,
+  tasks: [] as ReadonlyArray<unknown>,
+  projects: [] as ReadonlyArray<unknown>,
+}));
 const secondaryId = EnvironmentId.make("secondary");
 const permissions = new Map<string, Atom.Writable<boolean>>();
 
@@ -55,6 +64,8 @@ function setup() {
   state.connected = true;
   state.tasksLoaded = true;
   state.secondary = false;
+  state.tasks = [task];
+  state.projects = [{ id: projectId, environmentId, title: "Project" }];
   permissions.clear();
   permissions.set(environmentId, Atom.make(true));
   permissions.set(secondaryId, Atom.make(true));
@@ -125,7 +136,7 @@ vi.mock(import("../../state/query"), async (original) => ({
     data:
       request === null || request === threadFamilyRead
         ? request
-        : { tasks: state.tasksLoaded ? [task] : [] },
+        : { tasks: state.tasksLoaded ? state.tasks : [] },
     error: null,
     isPending: false,
     refresh: vi.fn(),
@@ -138,7 +149,7 @@ vi.mock(import("../../state/environments"), async (original) => ({
 }));
 vi.mock(import("../../state/entities"), async (original) => ({
   ...(await original()),
-  useProjects: (() => [{ id: projectId, environmentId, title: "Project" }]) as never,
+  useProjects: (() => state.projects) as never,
 }));
 vi.mock(import("../../hooks/useSettings"), async (original) => ({
   ...(await original()),
@@ -214,5 +225,51 @@ describe("ScheduledTasksSettings", () => {
 
     await expect.element(dialog.getByRole("heading", { name: "New task" })).toBeInTheDocument();
     await expect.element(name).toHaveValue("My draft");
+  });
+
+  it("lists only the tasks of the Projects in the Space", async () => {
+    setup();
+    const spaceA = SpaceId.make("space-a");
+    const spaceB = SpaceId.make("space-b");
+    const otherProjectId = ProjectId.make("other-project");
+    state.projects = [
+      { id: projectId, environmentId, title: "Project", spaceId: spaceA },
+      { id: otherProjectId, environmentId, title: "Other", spaceId: spaceB },
+    ];
+    state.tasks = [
+      task,
+      {
+        ...task,
+        id: ScheduledTaskId.make("deploy"),
+        title: "Deploy site",
+        projectId: otherProjectId,
+      },
+    ];
+    const space = (id: SpaceId, name: string) => ({
+      id,
+      kind: "organization" as const,
+      name,
+      role: "member" as const,
+      isOwn: false,
+      canCreateThreads: true,
+      canInvite: false,
+    });
+    useCurrentSpace.setState({
+      environmentId,
+      currentSpaceId: spaceA,
+      view: {
+        userId: UserId.make("user-me"),
+        spaces: [space(spaceA, "A"), space(spaceB, "B")],
+        personalSpaceId: SpaceId.make("space-personal"),
+        canCreateOrganization: false,
+      },
+    });
+    using _space = {
+      [Symbol.dispose]: () =>
+        useCurrentSpace.setState({ environmentId: null, view: null, currentSpaceId: null }),
+    };
+    await using screen = await render(<ScheduledTasksSettings />);
+    await expect.element(screen.getByText("Review issues")).toBeVisible();
+    expect(screen.getByText("Deploy site").elements()).toHaveLength(0);
   });
 });

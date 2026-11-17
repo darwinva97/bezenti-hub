@@ -1,4 +1,5 @@
 import {
+  ArchiveIcon,
   BotIcon,
   CalendarClockIcon,
   SlidersHorizontalIcon,
@@ -128,6 +129,15 @@ const SpaceInvitationsSection = lazy(() =>
   })),
 );
 
+const SpaceScheduledTasksSection = lazy(() =>
+  import("./SpaceScheduledTasksSection").then((module) => ({
+    default: module.SpaceScheduledTasksSection,
+  })),
+);
+const SpaceArchiveSection = lazy(() =>
+  import("./ArchivedThreadsPanel").then((module) => ({ default: module.ArchivedThreadsPanel })),
+);
+
 const reserved = (
   id: string,
   label: string,
@@ -205,8 +215,20 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
     reserved("ai-accounts", "AI accounts", BotIcon, 1),
     reserved("machines", "Machines", ServerIcon, 1),
     reserved("grants-to-accept", "Grants to accept", KeyRoundIcon, 1),
-    reserved("scheduled-tasks", "Scheduled tasks", CalendarClockIcon, 2),
-    reserved("archive", "Archive", InfoIcon, 2),
+    {
+      id: "scheduled-tasks",
+      label: "Scheduled tasks",
+      icon: CalendarClockIcon,
+      component: SpaceScheduledTasksSection,
+      group: 2,
+    },
+    {
+      id: "archive",
+      label: "Archive",
+      icon: ArchiveIcon,
+      component: SpaceArchiveSection,
+      group: 2,
+    },
   ],
   project: [
     {
@@ -313,6 +335,12 @@ export function oldProjectSettingsUrl(
   return `/settings/project/${encodeURIComponent(search.project)}/${section}${queryString}`;
 }
 
+/**
+ * A Space's modal for the Space that is current, as old links and in-app links name it:
+ * `/settings/space/current/<section>` stands for the current Space's id.
+ */
+export const CURRENT_SPACE_SEGMENT = "current";
+
 /** The pages that moved into a modal, by their old path. A new old URL is a new row. */
 export const OLD_SETTINGS_PATHS: Readonly<Record<string, string>> = {
   "/settings": "/settings/user/general",
@@ -325,6 +353,8 @@ export const OLD_SETTINGS_PATHS: Readonly<Record<string, string>> = {
   "/settings/snap-shot": "/settings/user/snap-shot",
   "/settings/about": "/settings/user/about",
   "/settings/open-source-licenses": "/settings/user/about/licenses",
+  "/settings/archived": `/settings/space/${CURRENT_SPACE_SEGMENT}/archive`,
+  "/settings/scheduled-tasks": `/settings/space/${CURRENT_SPACE_SEGMENT}/scheduled-tasks`,
   // Names older than the modals.
   "/settings/integrations": "/settings/browser",
   "/settings/storage": "/settings/maintenance",

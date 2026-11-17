@@ -161,9 +161,15 @@ function SettingsRouteLayout() {
   const rawSearch = Route.useSearch();
   const navigate = Route.useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
-  // A Project's modal fixes its Project in the path, so the scope never leaves it.
+  // A Project's modal fixes its Project in the path, so the scope never leaves it; a Space's has
+  // no scope to choose: it is the Space.
   const { projectKey } = useParams({ strict: false });
-  const search = projectKey === undefined ? rawSearch : { ...rawSearch, project: projectKey };
+  const search =
+    settingsModalForPathname(pathname) === "space"
+      ? {}
+      : projectKey === undefined
+        ? rawSearch
+        : { ...rawSearch, project: projectKey };
   return (
     <SettingsScopeProvider
       search={search}

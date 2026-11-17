@@ -10,7 +10,7 @@ export function useSettingsVisibility(): SettingsVisibilityContext {
   const { data } = usePrimarySessionState();
   // Until the session is read, it answers yes, as `usePrimaryActsForInstallation` does.
   const hasUser = data === null || !data.authenticated || data.userId !== undefined;
-  // In a Space's modal, the Space it names; elsewhere there is none.
+  // In a Space's modal, the Space it names; elsewhere, the current Space.
   const space = useSettingsSpace();
   return {
     isOwner,

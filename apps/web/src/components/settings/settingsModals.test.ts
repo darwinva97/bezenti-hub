@@ -41,6 +41,10 @@ const OLD_URLS: ReadonlyArray<readonly [pathname: string, hash: string, to: stri
   ["/settings/snap-shot", "", "/settings/user/snap-shot"],
   ["/settings/about", "", "/settings/user/about"],
   ["/settings/open-source-licenses", "", "/settings/user/about/licenses"],
+  ["/settings/archived", "", "/settings/space/current/archive"],
+  ["/settings/archived", "archive", "/settings/space/current/archive"],
+  ["/settings/scheduled-tasks", "", "/settings/space/current/scheduled-tasks"],
+  ["/settings/scheduled-tasks", "scheduled-tasks", "/settings/space/current/scheduled-tasks"],
   ["/settings/connections", "about", "/settings/user/about"],
   ["/settings/connections", "authorized-clients", "/settings/user/sessions"],
   ["/settings/access", "authorized-clients", "/settings/user/sessions"],
@@ -120,11 +124,16 @@ describe("old settings URLs", () => {
 
   it("leads every old URL to a section that exists and is visible", () => {
     for (const [, hash, to] of OLD_URLS) {
-      const [, , modal, sectionId] = to.split("/");
-      if (modal === "user") {
-        const section = findSettingsSection("user", sectionId ?? "");
+      const [, , modal, objectOrSection, spaceSection] = to.split("/");
+      if (modal === "user" || modal === "space") {
+        // The Space modal names its Space before the section; `current` is the current one.
+        const sectionId = modal === "user" ? objectOrSection : spaceSection;
+        const section = findSettingsSection(modal, sectionId ?? "");
         expect(section, `${to} (${hash})`).toBeDefined();
-        expect(isSettingsSectionVisible("user", section!, OWNER_ON_DESKTOP), to).toBe(true);
+        const space = { kind: "organization", isOwn: false, canInvite: true } as const;
+        expect(isSettingsSectionVisible(modal, section!, { ...OWNER_ON_DESKTOP, space }), to).toBe(
+          true,
+        );
       } else {
         expect(SETTINGS_SECTION_LABELS, to).toHaveProperty([to]);
       }
@@ -248,17 +257,19 @@ describe("Space settings sections", () => {
 
   it("gives an Organization its Members, and its Invitations to who may invite", () => {
     // The Owner and an Admin may invite; a Member and a Guest read the list and leave.
+    const shared = ["scheduled-tasks", "archive"];
     expect(ids(ORGANIZATION_ADMIN, OWNER_IN_BROWSER)).toEqual([
       "general",
       "members",
       "invitations",
+      ...shared,
     ]);
-    expect(ids(ORGANIZATION_ADMIN)).toEqual(["general", "members", "invitations"]);
-    expect(ids(ORGANIZATION_MEMBER)).toEqual(["general", "members"]);
+    expect(ids(ORGANIZATION_ADMIN)).toEqual(["general", "members", "invitations", ...shared]);
+    expect(ids(ORGANIZATION_MEMBER)).toEqual(["general", "members", ...shared]);
   });
 
   it("gives a Personal space no Members or Invitations, to its User and to the Owner reading it", () => {
-    expect(ids(OWN_PERSONAL)).toEqual(["general"]);
+    expect(ids(OWN_PERSONAL)).toEqual(["general", "scheduled-tasks", "archive"]);
     expect(ids(OTHERS_PERSONAL, OWNER_IN_BROWSER)).toEqual(["general"]);
   });
 

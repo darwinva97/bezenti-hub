@@ -36,6 +36,7 @@ import { Button, InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { GuestMessageName } from "./guestMessageStyle";
+import { CURRENT_SPACE_SEGMENT } from "../settings/settingsModals";
 import { TimelineRowTimestamp } from "./TimelineRowParts";
 import { FoldedMessageHeader, useScheduledTaskTitle } from "./TimelineUserMessageRow";
 
@@ -509,7 +510,8 @@ function QueuedMessage(props: {
                 tone="muted"
                 render={
                   <Link
-                    to="/settings/scheduled-tasks"
+                    to="/settings/space/$spaceId/$section"
+                    params={{ spaceId: CURRENT_SPACE_SEGMENT, section: "scheduled-tasks" }}
                     search={{ environmentId: props.environmentId, taskId: scheduledTaskId }}
                   />
                 }

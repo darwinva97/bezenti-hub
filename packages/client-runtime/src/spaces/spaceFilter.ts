@@ -92,7 +92,11 @@ export function filterThreadsBySpace<T extends SpaceFilterThread, P extends Spac
   return kept.length === threads.length ? threads : kept;
 }
 
-const projectInSpace = (project: SpaceFilterProject, scope: SpaceScope & { spaceId: SpaceId }) =>
+/** Whether one Project is in the Space; the Projects of other environments always are. */
+export const projectInSpace = (
+  project: SpaceFilterProject,
+  scope: SpaceScope & { spaceId: SpaceId },
+) =>
   project.environmentId !== scope.environmentId ||
   (project.spaceId ?? scope.legacySpaceId) === scope.spaceId;
 

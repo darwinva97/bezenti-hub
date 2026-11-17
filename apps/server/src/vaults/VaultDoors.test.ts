@@ -20,7 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 
 import * as CommandActor from "../auth/CommandActor.ts";
-import { HTTP_ENDPOINT_RULES, MCP_TOOL_RULES } from "../auth/DoorRules.ts";
+import { HTTP_ENDPOINT_RULES, MCP_TOOL_RULES, RAW_ROUTE_RULES } from "../auth/DoorRules.ts";
 import {
   addMember,
   bootstrapOwner,
@@ -417,6 +417,7 @@ it.effect(
       const doors = [
         ...[...WsRpcGroup.requests.keys()].map((tag) => `ws:${tag}`),
         ...Object.keys(HTTP_ENDPOINT_RULES).map((name) => `http:${name}`),
+        ...Object.keys(RAW_ROUTE_RULES).map((name) => `raw:${name}`),
         ...Object.keys(MCP_TOOL_RULES).map((name) => `mcp:${name}`),
       ].filter((door) => RE_VAULTS.test(door));
       assert.deepEqual(
@@ -425,5 +426,145 @@ it.effect(
           .toSorted(),
         [],
       );
+    }).pipe(Effect.scoped),
+);
+
+const ANA_PEM = [
+  "-----BEGIN PRIVATE KEY-----",
+  "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7ana0101",
+  "q2Ow3m1cZx5yJk7W8u9pQ2rSt4uVw6xYz8aBc0dEf1gHi2jKl3mNo4pQ0202",
+  "-----END PRIVATE KEY-----",
+].join("\n");
+const ANA_ENV = "ana-variable-value-0303";
+
+it.effect(
+  "owned-resources 11: Ana's own Vault reaches nobody else, and a session limited to one Space sees nothing of another's, the Owner's included",
+  () =>
+    Effect.gen(function* () {
+      const t = yield* team;
+      const ana = UserId.make("ana");
+      yield* addMember(t.server, { id: "ana", displayName: "Ana" });
+      yield* Context.get(t.server.services, SpaceDirectory.SpaceDirectory).membershipsChanged([
+        ana,
+      ]);
+      const [own] = yield* t.server.sql<{ readonly groupId: VaultGroupId }>`
+        SELECT group_id AS "groupId" FROM vault_groups
+        WHERE owner_kind = 'user' AND owner_id = ${ana} AND is_default = 1
+      `;
+      assert.isDefined(own);
+      yield* t.vaults
+        .putEntry({ vaultId: own.groupId, name: "ANA_PEM", value: Redacted.make(ANA_PEM) })
+        .pipe(t.as(ana));
+      yield* t.vaults
+        .putEntry({
+          vaultId: own.groupId,
+          name: "ANA_ENV",
+          value: Redacted.make(ANA_ENV),
+          class: "variable",
+        })
+        .pipe(t.as(ana));
+      const limited = (userId: UserId, spaceLimit: SpaceId) =>
+        CommandActor.actAsResolved({ _tag: "User", userId, spaceLimit });
+      const sessions = [
+        { who: "ana", act: t.as(ana), names: ["ANA_PEM", "ANA_ENV"], variable: true },
+        // The Owner reads names and Variables of someone else's Vault (spec: until platform-privacy).
+        { who: "owner", act: t.as(t.ownerId), names: ["ANA_PEM", "ANA_ENV"], variable: true },
+        {
+          who: "owner limited to Acme",
+          act: limited(t.ownerId, t.acmeId),
+          names: [],
+          variable: false,
+        },
+        {
+          who: "ada limited to Acme",
+          act: limited(UserId.make("ada"), t.acmeId),
+          names: [],
+          variable: false,
+        },
+        ...t.people
+          .filter((person) => person.role !== "owner")
+          .map((person) => ({
+            who: person.name,
+            act: t.as(person.id),
+            names: [],
+            variable: false,
+          })),
+      ];
+      const answers: Array<{ readonly who: string; readonly text: string }> = [];
+      for (const session of sessions) {
+        const read = Effect.fn(function* <A, E>(effect: Effect.Effect<A, E, never>) {
+          const text = yield* shown(effect.pipe(session.act));
+          answers.push({ who: session.who, text });
+          return text;
+        });
+        const listed = yield* read(t.vaults.list);
+        const entries = yield* read(t.vaults.listEntries({ vaultId: own.groupId }));
+        for (const vaultId of t.vaultIds) yield* read(t.vaults.listEntries({ vaultId }));
+        for (const spaceId of [t.acmeId, t.globexId, SpaceId.make(`personal:${ana}`)]) {
+          yield* read(t.vaults.choices({ spaceId }));
+        }
+        for (const threadId of t.threads) {
+          yield* read(
+            t.effective.threadEnvironment({ threadId }, { variableValue: t.vaults.variableValue }),
+          );
+        }
+        for (const name of session.names) {
+          assert.include(entries, `"${name}"`, `${session.who} sees ${name}`);
+        }
+        assert.equal(
+          entries.includes(ANA_ENV),
+          session.variable,
+          `${session.who} and her Variable`,
+        );
+        if (session.who.endsWith("limited to Acme")) {
+          // Nothing of the Owner's own, of Globex or of Ana in a session bound to Acme.
+          for (const name of ["OWNER_PRIVATE", "GLOBEX_DB_URL", "ANA_PEM", "ANA_ENV"]) {
+            assert.notInclude(
+              answers
+                .filter((answer) => answer.who === session.who)
+                .map((answer) => answer.text)
+                .join("\n"),
+              `"${name}"`,
+              `${session.who} saw ${name}`,
+            );
+          }
+          assert.notInclude(listed, "Globex secrets", `${session.who} listed Globex's group`);
+        }
+      }
+      // Ana's Secret, whole or a line of it, is in no answer; her Variable only in hers and the
+      // Owner's (unlimited) ones.
+      const pemLines = ANA_PEM.split("\n").filter((line) => !line.startsWith("-----"));
+      assert.deepEqual(
+        answers
+          .filter(
+            ({ text }) => text.includes(ANA_PEM) || pemLines.some((line) => text.includes(line)),
+          )
+          .map(({ who }) => who),
+        [],
+      );
+      assert.deepEqual(
+        [
+          ...new Set(answers.filter(({ text }) => text.includes(ANA_ENV)).map(({ who }) => who)),
+        ].toSorted(),
+        ["ana", "owner"],
+      );
+      // Her names reach nobody but her and the Owner.
+      assert.deepEqual(
+        [
+          ...new Set(
+            answers
+              .filter(({ text }) => text.includes('"ANA_PEM"') || text.includes('"ANA_ENV"'))
+              .map(({ who }) => who),
+          ),
+        ].toSorted(),
+        ["ana", "owner"],
+      );
+      // Nobody else writes into her Vault.
+      for (const person of t.people) {
+        const wrote = yield* t.vaults
+          .putEntry({ vaultId: own.groupId, name: "INTRUDER", value: Redacted.make(WRITTEN) })
+          .pipe(t.as(person.id), Effect.option);
+        assert.isTrue(wrote._tag === "None", `${person.name} wrote into Ana's Vault`);
+      }
     }).pipe(Effect.scoped),
 );

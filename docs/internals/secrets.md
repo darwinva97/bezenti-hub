@@ -1140,33 +1140,52 @@ No door of its own: clients call the commands of tickets 02-06, gated by each co
   `apps/mobile/src` for `vaults.reveal`, `revealVaultSecret` and the master key calls.
   Creating, deleting, linking, allowing and defaults stay on web and desktop.
 
-## The door inventory (spec 5 ticket 09)
+## The door inventory
 
 The rule: a Secret's value leaves the Hub only by `secretEnv` to a process that starts (and the
 master key's backup, the Owner's, opens them all from a copy of the disk); a Variable's also in
-`vaults.entries.*` to whoever may read Variables; everything else carries names or `[NAME]`. Each door is declared, and a test fails for one that is not:
+`vaults.entries.*` and a Thread's «Secrets» panel to whoever may read Variables, and in
+`list_secret_names` to its own Thread's agent; everything else carries names or `[NAME]`. Who sees
+a name is who may use its group: its owner's Space (a User's Personal space, an Organization's
+people), the Spaces and Users the Owner allowed one of the Owner's groups, and the Owner, who reads
+names and Variables of every Vault. A session limited to one Space (`spaceLimit`) sees that Space's
+alone. Each door is declared, and a test fails for one that is not:
 
 | Doors                                              | Declared in                                     | Test that fails for a new one                        |
 | -------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------- |
 | WS RPCs                                            | `RPC_SPACE_ACCESS`, `MaskedPaths.WS_DOOR_RULES` | `RpcAuthorization.test.ts`, `MaskedPaths.test.ts`    |
 | HTTP endpoints, raw routes, MCP tools              | `DoorRules.ts`, `MaskedPaths.ts`                | `DoorRules.test.ts`, `MaskedPaths.test.ts`           |
 | Executor operations (`secretEnv` on three of them) | `MaskedPaths.EXECUTOR_OPERATIONS`               | `MaskedPaths.test.ts`, `DoorRules.test.ts` (count)   |
-| Modules that read a value                          | `DoorRules.test.ts`: delivery, masking only     | the same (a new reader, a new caller of `readValue`) |
+| Modules that hold or read a value                  | `DoorRules.test.ts`: delivery, masking only     | the same (a new holder, reader or caller)            |
 | The Vaults' tables                                 | `DoorRules.test.ts`                             | the same                                             |
 | Doors named after Vaults or secrets                | `vaults/VaultDoors.test.ts`                     | the same (a door neither called there nor elsewhere) |
+| AI-account doors                                   | `ai/AiAccounts.test.ts` (the door sweep)        | the same                                             |
+| Machine doors (Environments, Sandboxes, Grants)    | `HubWithEnvironments.environmentDoors.test.ts`  | the same                                             |
 
-- **Value sweep** (`vaults/VaultDoors.test.ts`): full Vaults (Main, link, copy, each
-  Organization's own, one of the Owner's allowed to Acme and one to a User); the Owner and an
-  Admin, a Member and a Guest of Acme and of Globex call every `vaults.*` door, reads and writes,
-  a reveal (no such door: the Owner with a passkey included), the master key's status, the audit
-  log and `list_secret_names`. No answer or refusal holds a Secret's value; none names a secret
-  its caller may not see.
+- **Value sweep** (`vaults/VaultDoors.test.ts`): the Owner's `default` and named groups (one
+  allowed to Acme, one to a User), each Organization's own, and Ana's personal Vault with a
+  multi-line Secret and a Variable. The Owner, Ana, an Admin, a Member and a Guest of Acme and of
+  Globex, and sessions limited to Acme (the Owner's and an Admin's), call every `vaults.*` door,
+  reads and writes, the master key's status, the audit log and `list_secret_names`. No answer or
+  refusal holds a Secret's value or one of its lines; none names a secret its caller may not see;
+  Ana's Variable reaches her and the Owner alone; nobody else writes into her Vault.
+- **AI-account sweep** (`ai/AiAccounts.test.ts`): the Owner's account allowed to Acme, Ana's, and
+  one owned by each Organization; the same cast calls list, create, update (rename, new key),
+  allow, reorder and delete on every account it does not manage. No answer holds a key; each lists
+  the accounts it may use (the Owner, every one) and names no other; no such write changes a row
+  or an allowance.
+- **Machine sweep** (`HubWithEnvironments.environmentDoors.test.ts`): the Owner's and Ana's
+  personal machines and one dedicated to each Organization; the same cast lists, renames, changes
+  the mode of, starts, acts on and limits the Sandbox of, and removes every machine it does not
+  manage. Nobody lists another User's personal machine or another Organization's dedicated one,
+  and no such write changes a machine.
 - **Guest and read-only views**: a guest link's stream and items show `[OWNER_TOKEN]`
   (`HubWithEnvironments.secretMasking.test.ts`); the read-only snapshots serve the masked store.
-- **Leak smoke**: after a turn and a terminal (`secretMasking`), a handoff (`handoff`) and a
-  `request_secret` saved to a Vault (`SecretRequestVaults`), no file of the Hub's state (its sealed
-  store included), no row, no file of a machine but its checkouts and no `/proc/*/cmdline` holds
-  the value. Logs and spans of the real processes are searched by the live pass (the Hub's log,
-  its trace file, every process argument on the host and in the Sandboxes).
+- **Leak smoke** (`HubWithEnvironments.leaks.test.ts`; `secretMasking`, `handoff` and
+  `SecretRequestVaults` for the Owner's values): after Ana's turn prints her PEM Secret (whole and
+  one line) and her own AI key, and her terminal prints the Secret, no log, span, row, file of the
+  Hub's state (its sealed store included), file of her machine but its checkouts or
+  `/proc/*/cmdline` holds the value, one of its lines, or the key. Checked as counts, so a failure
+  never prints one.
 - Not in the smoke: a setup script on the Hub machine (its shell gets the values in its spawn
   environment only, `terminal/Manager.test.ts`).

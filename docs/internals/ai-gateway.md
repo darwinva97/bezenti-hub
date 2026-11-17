@@ -98,11 +98,29 @@ version, `updated` or `failed`, reason) and `ai_gateway.rollback` (`rolled-back`
 
 ## Doors
 
-WS only: `aiGateway.status` (a stream), `aiGateway.checkForUpdates`, `aiGateway.update`,
-`aiGateway.rollback`, `aiGateway.setEnabled`, all in `INSTALLATION_RPC_METHODS` (`installation`
-in `RpcSpaceAccess`: the Owner's alone, whatever the scopes; the changes also need
-`settings:write`). No HttpApi endpoint or MCP tool. The one raw route is the gateway layer
-(`/api/ai/*`, below), in `DoorRules.RAW_ROUTE_RULES` and `AMBIENT_COOKIE_RULES`.
+- **WS `aiGateway.status/checkForUpdates/update/rollback/setEnabled`:** the Owner's alone
+  (`INSTALLATION_RPC_METHODS`, `installation` in `RpcSpaceAccess`; changes also need
+  `settings:write`). `AiGateway.test.ts`.
+- **WS `aiAccounts.list`:** anyone. It answers the accounts they manage (with details), the ones
+  they may use, and, for the Owner, every other one without details.
+- **WS `aiAccounts.create/update/delete/reorder`:** `aiAccount.manage` on the account's owner (the
+  User, theirs; an Organization's Admins and the Owner, the Organization's), `access:write`.
+  `aiAccounts.allow`: the Owner, on the Owner's own accounts. Swept in `AiAccounts.test.ts`.
+- **WS `aiAccounts.login.*`, `aiAccounts.importVertex`:** as create; a sign-in is finished only by
+  who started it (`AiAccounts.subscriptions.test.ts`). `aiAccounts.importCliproxy`: the Owner
+  (`AiAccounts.cliproxyImport.test.ts`).
+- **WS `aiAccounts.picker`, `thread.setAiAccount`:** whoever works in the Space, through
+  `AllowedAiAccounts` (`HubWithEnvironments.aiAccountPicker.test.ts`).
+- **WS `aiGatewayKeys.*`:** the caller's own keys (`AiGatewayKeys.localCli.test.ts`).
+  `aiUsage.summary`: counts only (`AiUsage.test.ts`).
+- **Raw `/api/ai/*`:** a gateway key, checked per request against `AllowedAiAccounts` for its turn
+  owner and Space (`AiGatewayRoute*.test.ts`), in `DoorRules.RAW_ROUTE_RULES` and
+  `AMBIENT_COOKIE_RULES`.
+
+No HttpApi endpoint or MCP tool. No answer, refusal included, carries a credential. The door sweep
+in `AiAccounts.test.ts` calls every write as the Owner, Ana, the Admin, Member and Guest of two
+Organizations and sessions limited to one Space, and fails for an AI-account door it neither calls
+nor names in another file.
 
 ## AI accounts (API keys)
 

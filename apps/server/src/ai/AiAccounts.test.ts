@@ -15,6 +15,7 @@ import {
   type AiAccountSummary,
   SpaceId,
   UserId,
+  WsRpcGroup,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -31,6 +32,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
+import { HTTP_ENDPOINT_RULES, MCP_TOOL_RULES, RAW_ROUTE_RULES } from "../auth/DoorRules.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
   addMember,
@@ -983,5 +985,263 @@ it.live.skipIf(!posix || platform === undefined)(
       );
       assert.equal(invisible.reason, "invalid");
       assert.match(invisible.message, /invisible character/u);
+    }),
+);
+
+/** AI-account doors tested in their own files, with their credential checks. */
+const AI_SWEPT_ELSEWHERE: Record<string, string> = {
+  "ws:aiAccounts.picker": "HubWithEnvironments.aiAccountPicker.test.ts: per Space and role",
+  "ws:thread.setAiAccount": "HubWithEnvironments.aiAccountPicker.test.ts: the Thread switch",
+  "ws:aiAccounts.login.start": "AiAccounts.subscriptions.test.ts: a User's own sign-in",
+  "ws:aiAccounts.login.complete": "AiAccounts.subscriptions.test.ts: only who started it",
+  "ws:aiAccounts.importVertex": "AiAccounts.subscriptions.test.ts: per owner",
+  "ws:aiAccounts.importCliproxy": "AiAccounts.cliproxyImport.test.ts: the Owner only",
+  "ws:aiUsage.summary": "AiUsage.test.ts: counts only, per role",
+  "ws:aiGatewayKeys.list": "AiGatewayKeys.localCli.test.ts: the caller's own keys",
+  "ws:aiGatewayKeys.create": "AiGatewayKeys.localCli.test.ts: the key once, to its maker",
+  "ws:aiGatewayKeys.revoke": "AiGatewayKeys.localCli.test.ts: only its maker or the Owner",
+  "ws:aiGateway.status": "AiGateway.test.ts: the Installation's gateway, the Owner's",
+  "ws:aiGateway.checkForUpdates": "AiGateway.test.ts",
+  "ws:aiGateway.update": "AiGateway.test.ts",
+  "ws:aiGateway.rollback": "AiGateway.test.ts",
+  "ws:aiGateway.setEnabled": "AiGateway.test.ts",
+  "raw:ai/AiGatewayRoute.ts": "AiGatewayRoute*.test.ts: another owner's account by key",
+};
+
+const RE_AI_DOORS =
+  /^(ws:(aiAccounts|aiGateway|aiUsage|aiGatewayKeys)\.|ws:thread\.setAiAccount|raw:ai\/)/u;
+
+it.live.skipIf(!posix || platform === undefined)(
+  "owned-resources 11: every AI-account door, called by the whole cast, never answers a credential, a name its caller may not see, or a write on what is not theirs",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* hub();
+      const { accounts, as, ownerId, acmeId, globexId, people, server, gateway } = setup;
+      yield* waitRunning(gateway);
+      const person = Effect.fn(function* (
+        id: string,
+        spaceId: SpaceId | null,
+        role: "admin" | "member" | "guest",
+      ) {
+        yield* addMember(server, { id, displayName: id });
+        if (spaceId !== null) yield* joinOrganization(server, spaceId, id, role);
+        if (role === "admin") {
+          yield* server.sql`INSERT INTO user_passkeys (credential_id, user_id, public_key,
+              sign_count, transports, rp_id, created_at)
+            VALUES (${`${id}-key`}, ${id}, 'key', 0, '[]', '127.0.0.1', '2026-01-01T00:00:00.000Z')`;
+        }
+        return UserId.make(id);
+      });
+      const ana = yield* person("ana", null, "member");
+      const gwen = yield* person("gwen", globexId, "admin");
+      const gil = yield* person("gil", globexId, "guest");
+      yield* setup.directory.membershipsChanged([ana, gwen, gil]);
+      const ANA_KEY = "sk-ana-own-key-0123456789abcdef0001";
+      const ACME_ORG_KEY = "sk-acme-org-key-0123456789abcdef0002";
+      const GLOBEX_ORG_KEY = "sk-globex-org-key-0123456789abcdef0003";
+      const WRITTEN_KEY = "sk-written-by-caller-0123456789ab0004";
+      const secrets = [ACME_KEY, ANA_KEY, ACME_ORG_KEY, GLOBEX_ORG_KEY, WRITTEN_KEY];
+      const ownerAccount = yield* accounts
+        .create({ name: "Owner Claude", provider: "claude", apiKey: Redacted.make(ACME_KEY) })
+        .pipe(as(ownerId));
+      yield* accounts
+        .allow({ accountId: ownerAccount.id, spaceIds: [acmeId], userIds: [] })
+        .pipe(as(ownerId));
+      const anaAccount = yield* accounts
+        .create({ name: "Ana Claude", provider: "claude", apiKey: Redacted.make(ANA_KEY) })
+        .pipe(as(ana));
+      const acmeAccount = yield* accounts
+        .create({
+          name: "Acme Team Claude",
+          provider: "claude",
+          apiKey: Redacted.make(ACME_ORG_KEY),
+          owner: { kind: "organization", spaceId: acmeId },
+        })
+        .pipe(as(people.admin));
+      const globexAccount = yield* accounts
+        .create({
+          name: "Globex Team Claude",
+          provider: "claude",
+          apiKey: Redacted.make(GLOBEX_ORG_KEY),
+          owner: { kind: "organization", spaceId: globexId },
+        })
+        .pipe(as(gwen));
+      const all = [ownerAccount, anaAccount, acmeAccount, globexAccount];
+      const names = all.map((account) => account.name);
+      const acmeSees = ["Owner Claude", "Acme Team Claude"];
+      const cast = [
+        {
+          name: "owner",
+          id: ownerId,
+          sees: names,
+          manages: [ownerAccount, acmeAccount, globexAccount],
+        },
+        { name: "ana", id: ana, sees: ["Ana Claude"], manages: [anaAccount] },
+        { name: "acme admin", id: people.admin, sees: acmeSees, manages: [acmeAccount] },
+        { name: "acme member", id: people.member, sees: acmeSees, manages: [] },
+        { name: "acme guest", id: people.guest, sees: acmeSees, manages: [] },
+        { name: "globex admin", id: gwen, sees: ["Globex Team Claude"], manages: [globexAccount] },
+        {
+          name: "globex member",
+          id: people.globexMember,
+          sees: ["Globex Team Claude"],
+          manages: [],
+        },
+        { name: "globex guest", id: gil, sees: ["Globex Team Claude"], manages: [] },
+      ];
+      const sessions: Array<{
+        readonly name: string;
+        readonly id: UserId;
+        readonly sees: ReadonlyArray<string>;
+        readonly manages: ReadonlyArray<AiAccountSummary>;
+        readonly limit: SpaceId | undefined;
+      }> = [
+        ...cast.map((who) => ({ ...who, limit: undefined })),
+        // A session limited to one Space sees nothing of another's, its own User's included.
+        { ...cast[2]!, name: "acme admin limited to Acme", limit: acmeId },
+        { ...cast[1]!, name: "ana limited to Acme", limit: acmeId, sees: [], manages: [] },
+      ];
+      const swept = new Set<string>();
+      const answers: Array<{ readonly who: string; readonly door: string; readonly text: string }> =
+        [];
+      const shownText = <A, E>(effect: Effect.Effect<A, E>) =>
+        effect.pipe(
+          Effect.map((answer) => JSON.stringify(answer)),
+          Effect.catch((error) =>
+            Effect.succeed(
+              `${JSON.stringify(error)} ${String((error as { readonly message?: unknown })?.message)}`,
+            ),
+          ),
+        );
+      const rows = () =>
+        server.sql<{
+          readonly id: string;
+          readonly name: string;
+          readonly disabled: number;
+          readonly priority: number;
+          readonly credential: string | null;
+          readonly deleted: string | null;
+        }>`
+          SELECT account_id AS id, name, disabled, priority, credential_id AS credential,
+            deleted_at AS deleted
+          FROM ai_accounts ORDER BY account_id
+        `.pipe(Effect.map((list) => new Map(list.map((row) => [row.id, { ...row }]))));
+      const allowances = () =>
+        server.sql<{ readonly row: string }>`
+          SELECT account_id || ' ' || subject_kind || ' ' || subject_id AS row
+          FROM ai_account_allowances ORDER BY row
+        `.pipe(Effect.map((list) => list.map((entry) => entry.row)));
+      for (const who of sessions) {
+        const act = as(who.id, who.limit);
+        const call = Effect.fn(function* <A, E>(door: string, effect: Effect.Effect<A, E>) {
+          swept.add(door);
+          answers.push({ who: who.name, door, text: yield* shownText(act(effect)) });
+        });
+        const mayManage = new Set(who.manages.map((account) => account.id));
+        const before = yield* rows();
+        const allowedBefore = yield* allowances();
+        yield* call("ws:aiAccounts.list", accounts.list);
+        for (const account of all) {
+          if (mayManage.has(account.id)) continue;
+          yield* call(
+            "ws:aiAccounts.update",
+            accounts.update({ accountId: account.id, name: `${account.name} by ${who.name}` }),
+          );
+          yield* call(
+            "ws:aiAccounts.update",
+            accounts.update({ accountId: account.id, apiKey: Redacted.make(WRITTEN_KEY) }),
+          );
+          yield* call(
+            "ws:aiAccounts.allow",
+            accounts.allow({ accountId: account.id, spaceIds: [globexId], userIds: [] }),
+          );
+          yield* call("ws:aiAccounts.delete", accounts.remove({ accountId: account.id }));
+        }
+        if (!mayManage.has(acmeAccount.id)) {
+          yield* call(
+            "ws:aiAccounts.reorder",
+            accounts.reorder({
+              accountIds: [acmeAccount.id],
+              owner: { kind: "organization", spaceId: acmeId },
+            }),
+          );
+        }
+        yield* call(
+          "ws:aiAccounts.create",
+          accounts.create({
+            name: `${who.name} into Globex`,
+            provider: "claude",
+            apiKey: Redacted.make(WRITTEN_KEY),
+            owner: { kind: "organization", spaceId: globexId },
+          }),
+        );
+        // Nothing it may not manage changed.
+        const after = yield* rows();
+        for (const account of all) {
+          if (mayManage.has(account.id)) continue;
+          assert.deepEqual(
+            after.get(account.id),
+            before.get(account.id),
+            `${who.name} changed ${account.name}`,
+          );
+        }
+        assert.deepEqual(yield* allowances(), allowedBefore, `${who.name} changed an allowance`);
+      }
+
+      // No answer, refusal included, holds a credential.
+      assert.deepEqual(
+        answers
+          .filter(({ text }) => secrets.some((key) => text.includes(key)))
+          .map(({ who, door }) => `${who} ${door}`),
+        [],
+        "an answer held a credential",
+      );
+      // Each list names exactly what its caller may see (so the checks below are not empty).
+      for (const session of sessions) {
+        const listed = answers.find(
+          (answer) => answer.who === session.name && answer.door === "ws:aiAccounts.list",
+        );
+        for (const name of session.sees) {
+          assert.include(listed?.text ?? "", `"${name}"`, `${session.name} lists ${name}`);
+        }
+      }
+      // No answer names an account its caller may not see.
+      const named = answers.flatMap(({ who, door, text }) => {
+        const session = sessions.find((entry) => entry.name === who)!;
+        return names
+          .filter((name) => !session.sees.includes(name))
+          .filter((name) => text.includes(`"${name}`))
+          .map((name) => `${who} ${door} ${name}`);
+      });
+      assert.deepEqual(named, []);
+      // Globex got new accounts from its Admin and the Owner alone.
+      const globexAdded = yield* server.sql<{ readonly name: string }>`
+        SELECT name FROM ai_accounts WHERE owner_kind = 'organization' AND owner_id = ${globexId}
+          AND name LIKE '% into Globex' ORDER BY name
+      `;
+      assert.deepEqual(
+        globexAdded.map((row) => row.name),
+        ["globex admin into Globex", "owner into Globex"],
+      );
+
+      // Every AI-account door is called here, or in the file named for it.
+      const doors = [
+        ...[...WsRpcGroup.requests.keys()].map((tag) => `ws:${tag}`),
+        ...Object.keys(HTTP_ENDPOINT_RULES).map((name) => `http:${name}`),
+        ...Object.keys(RAW_ROUTE_RULES).map((name) => `raw:${name}`),
+        ...Object.keys(MCP_TOOL_RULES).map((name) => `mcp:${name}`),
+      ].filter((door) => RE_AI_DOORS.test(door));
+      assert.deepEqual(
+        doors
+          .filter(
+            (door) =>
+              !swept.has(door) &&
+              !Object.keys(AI_SWEPT_ELSEWHERE).some(
+                (elsewhere) => door === elsewhere || door.startsWith(`${elsewhere}:`),
+              ),
+          )
+          .toSorted(),
+        [],
+      );
     }),
 );

@@ -384,3 +384,42 @@ describe("Space settings sections", () => {
     expect(isSettingsSectionAllowed("space", sectionId, MEMBER_IN_BROWSER, space)).toBe(shown);
   });
 });
+
+describe("section preloading", () => {
+  it("shares one import between lazy() and the preload", async () => {
+    const { lazySection } = await import("./settingsModals");
+    const load = vi.fn(() => Promise.resolve({ default: () => null }));
+    const section = lazySection(load);
+    void section.preload();
+    void section.preload();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives every real section a preload", () => {
+    for (const sections of Object.values(SETTINGS_MODAL_SECTIONS)) {
+      for (const section of sections) {
+        if (section.component !== null) {
+          expect((section.component as { preload?: unknown }).preload, section.id).toBeTypeOf(
+            "function",
+          );
+        }
+      }
+    }
+  });
+
+  it("preloads each section of a modal once, when scheduled", async () => {
+    const { preloadSettingsModal } = await import("./settingsModals");
+    const preloads = SETTINGS_MODAL_SECTIONS.project.map((section) => {
+      const spy = vi.fn(() => Promise.resolve());
+      Object.assign(section.component ?? {}, { preload: spy });
+      return spy;
+    });
+    let scheduled: (() => void) | undefined;
+    preloadSettingsModal("project", (run) => {
+      scheduled = run;
+    });
+    for (const spy of preloads) expect(spy).not.toHaveBeenCalled();
+    scheduled?.();
+    for (const spy of preloads) expect(spy).toHaveBeenCalledTimes(1);
+  });
+});

@@ -31,7 +31,7 @@ import {
   type SettingsPrincipal,
   type SpaceSettingsSubject,
 } from "@t3tools/client-runtime/settings/modal-visibility";
-import { lazy, type ComponentType } from "react";
+import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
 import { isSecretsFeatureEnabled } from "../../env";
 
@@ -77,121 +77,121 @@ const SnapShotIcon = createLucideIcon("snap-shot", [
   ["circle", { cx: "12", cy: "12", r: "1.5", key: "lens" }],
 ]);
 
-const GeneralSection = lazy(() =>
+const GeneralSection = lazySection(() =>
   import("./SettingsPanels").then((module) => ({ default: module.GeneralSettingsPanel })),
 );
-const ChatSection = lazy(() =>
+const ChatSection = lazySection(() =>
   import("./SettingsPanels").then((module) => ({ default: module.ChatSettingsPanel })),
 );
-const DiffsSection = lazy(() =>
+const DiffsSection = lazySection(() =>
   import("./SettingsPanels").then((module) => ({ default: module.DiffsSettingsPanel })),
 );
-const AboutSection = lazy(() =>
+const AboutSection = lazySection(() =>
   import("./SettingsPanels").then((module) => ({ default: module.AboutSettingsPanel })),
 );
-const AppearanceSection = lazy(() =>
+const AppearanceSection = lazySection(() =>
   import("./AppearanceSettingsPanel").then((module) => ({
     default: module.AppearanceSettingsPanel,
   })),
 );
-const KeybindingsSection = lazy(() =>
+const KeybindingsSection = lazySection(() =>
   import("./KeybindingsSettings").then((module) => ({ default: module.KeybindingsSettingsPanel })),
 );
-const SnapShotSection = lazy(() =>
+const SnapShotSection = lazySection(() =>
   import("./SnapShotSettings").then((module) => ({ default: module.SnapShotSettings })),
 );
 
-const AccountSection = lazy(() =>
+const AccountSection = lazySection(() =>
   import("./UserAccountSettings").then((module) => ({ default: module.UserAccountSettings })),
 );
-const SessionsSection = lazy(() =>
+const SessionsSection = lazySection(() =>
   import("./UserSessionsSettings").then((module) => ({ default: module.UserSessionsSettings })),
 );
 
-const ProjectGeneralSection = lazy(() =>
+const ProjectGeneralSection = lazySection(() =>
   import("./ProjectModalSections").then((module) => ({ default: module.ProjectGeneralSection })),
 );
-const ProjectVaultsSection = lazy(() =>
+const ProjectVaultsSection = lazySection(() =>
   import("./ProjectModalSections").then((module) => ({ default: module.ProjectVaultsSection })),
 );
-const ProjectMachineSection = lazy(() =>
+const ProjectMachineSection = lazySection(() =>
   import("./ProjectModalSections").then((module) => ({ default: module.ProjectMachineSection })),
 );
-const ProjectDefaultsSection = lazy(() =>
+const ProjectDefaultsSection = lazySection(() =>
   import("./ProjectModalSections").then((module) => ({ default: module.ProjectDefaultsSection })),
 );
-const ProjectActionsSection = lazy(() =>
+const ProjectActionsSection = lazySection(() =>
   import("./ProjectModalSections").then((module) => ({ default: module.ProjectActionsSection })),
 );
 
-const SpaceGeneralSection = lazy(() =>
+const SpaceGeneralSection = lazySection(() =>
   import("./SpaceSettingsSections").then((module) => ({ default: module.SpaceGeneralSection })),
 );
-const SpaceMembersSection = lazy(() =>
+const SpaceMembersSection = lazySection(() =>
   import("./SpaceSettingsSections").then((module) => ({ default: module.SpaceMembersSection })),
 );
-const SpaceInvitationsSection = lazy(() =>
+const SpaceInvitationsSection = lazySection(() =>
   import("./SpaceSettingsSections").then((module) => ({
     default: module.SpaceInvitationsSection,
   })),
 );
 
-const SpaceScheduledTasksSection = lazy(() =>
+const SpaceScheduledTasksSection = lazySection(() =>
   import("./SpaceScheduledTasksSection").then((module) => ({
     default: module.SpaceScheduledTasksSection,
   })),
 );
-const SpaceArchiveSection = lazy(() =>
+const SpaceArchiveSection = lazySection(() =>
   import("./ArchivedThreadsPanel").then((module) => ({ default: module.ArchivedThreadsPanel })),
 );
 
-const PlatformUsersSection = lazy(() =>
+const PlatformUsersSection = lazySection(() =>
   import("./PlatformUsersSection").then((module) => ({ default: module.PlatformUsersSection })),
 );
-const PlatformAuditLogSection = lazy(() =>
+const PlatformAuditLogSection = lazySection(() =>
   import("./PlatformAuditLogSection").then((module) => ({
     default: module.PlatformAuditLogSection,
   })),
 );
-const PlatformMasterKeySection = lazy(() =>
+const PlatformMasterKeySection = lazySection(() =>
   import("./PlatformSections").then((module) => ({ default: module.PlatformMasterKeySection })),
 );
-const PlatformSecretProvidersSection = lazy(() =>
+const PlatformSecretProvidersSection = lazySection(() =>
   import("./SecretsSettings").then((module) => ({ default: module.SecretsSettingsPanel })),
 );
-const PlatformSandboxesSection = lazy(() =>
+const PlatformSandboxesSection = lazySection(() =>
   import("./PlatformSections").then((module) => ({ default: module.PlatformSandboxesSection })),
 );
-const PlatformAiGatewaySection = lazy(() =>
+const PlatformAiGatewaySection = lazySection(() =>
   import("./AiGatewaySettings").then((module) => ({ default: module.AiGatewaySettingsPanel })),
 );
-const PlatformLabsSection = lazy(() =>
+const PlatformLabsSection = lazySection(() =>
   import("./LabsSettingsPanel").then((module) => ({ default: module.LabsSettingsPanel })),
 );
-const HubDefaultsSection = lazy(() =>
+const HubDefaultsSection = lazySection(() =>
   import("./HubDefaultsSettings").then((module) => ({ default: module.HubDefaultsSettings })),
 );
 
-const HubMachineSection = lazy(() =>
+const HubMachineSection = lazySection(() =>
   import("./MachinePages").then((module) => ({ default: module.HubMachineSection })),
 );
-const UserMachinesSection = lazy(() =>
+const UserMachinesSection = lazySection(() =>
   import("./MachinePages").then((module) => ({ default: module.UserMachinesSection })),
 );
 
-const UserVaultSection = lazy(() =>
+const UserVaultSection = lazySection(() =>
   import("./OwnedResourceSections").then((module) => ({ default: module.UserVaultSection })),
 );
-const UserAiAccountsSection = lazy(() =>
+const UserAiAccountsSection = lazySection(() =>
   import("./OwnedResourceSections").then((module) => ({ default: module.UserAiAccountsSection })),
 );
-const SpaceVaultSection = lazy(() =>
+const SpaceVaultSection = lazySection(() =>
   import("./OwnedResourceSections").then((module) => ({ default: module.SpaceVaultSection })),
 );
-const SpaceAiAccountsSection = lazy(() =>
+const SpaceAiAccountsSection = lazySection(() =>
   import("./OwnedResourceSections").then((module) => ({ default: module.SpaceAiAccountsSection })),
 );
-const SpaceMachinesSection = lazy(() =>
+const SpaceMachinesSection = lazySection(() =>
   import("./OwnedResourceSections").then((module) => ({ default: module.SpaceMachinesSection })),
 );
 
@@ -407,6 +407,49 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
     },
   ],
 };
+
+export interface LazySection extends LazyExoticComponent<ComponentType> {
+  readonly preload: () => Promise<unknown>;
+}
+
+/**
+ * A section's component, loaded on first use. `lazy()` and `preload()` share one import, so
+ * preloading on open or hover is the download the section would have started when rendered.
+ */
+export function lazySection(load: () => Promise<{ default: ComponentType }>): LazySection {
+  let loading: Promise<{ default: ComponentType }> | undefined;
+  const loadOnce = () => (loading ??= load());
+  return Object.assign(lazy(loadOnce), { preload: loadOnce });
+}
+
+type IdleScheduler = (run: () => void) => void;
+
+const scheduleWhenIdle: IdleScheduler = (run) => {
+  if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 2_000 });
+  else setTimeout(run, 200);
+};
+
+function preloadSection(section: SettingsModalSection | undefined) {
+  const component = section?.component;
+  if (!component || !("preload" in component)) return;
+  // A failed download is retried by the section's own render; the preload only warms it.
+  void Promise.resolve((component as LazySection).preload()).catch(() => undefined);
+}
+
+/** When a modal opens, downloads every section of it in the background, when the browser is idle. */
+export function preloadSettingsModal(
+  modal: SettingsModalId,
+  schedule: IdleScheduler = scheduleWhenIdle,
+): void {
+  schedule(() => {
+    for (const section of SETTINGS_MODAL_SECTIONS[modal]) preloadSection(section);
+  });
+}
+
+/** On hover or focus of a nav item: starts that section's download now. */
+export function preloadSettingsSection(modal: SettingsModalId, sectionId: string): void {
+  preloadSection(findSettingsSection(modal, sectionId));
+}
 
 export const SETTINGS_MODAL_LABELS: Readonly<Record<SettingsModalId, string>> = {
   user: "User",

@@ -25,6 +25,8 @@ import {
 } from "./settingsSearch";
 import {
   SETTINGS_MODAL_SECTIONS,
+  preloadSettingsModal,
+  preloadSettingsSection,
   settingsModalForPathname,
   visibleSettingsSections,
   type SettingsModalId,
@@ -140,8 +142,13 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const navGroups =
     modal === null ? [] : modalNavGroups(modal, visibility, { projectKey, spaceId });
   const navEntries = navGroups.flatMap((group) => group.entries);
+  // The section just clicked is active at once; the route (and `pathname`) follow when the
+  // section's code and data are ready. It stops counting as soon as the path changes.
+  const [pendingSection, setPendingSection] = useState<{ key: string; from: string } | null>(null);
+  const shownPath =
+    pendingSection !== null && pendingSection.from === activePath ? pendingSection.key : activePath;
   const sectionNavigation = useSettingsSectionNavigation(
-    navEntries.find((entry) => activePath === entry.key || activePath.startsWith(`${entry.key}/`))
+    navEntries.find((entry) => shownPath === entry.key || shownPath.startsWith(`${entry.key}/`))
       ?.key ??
       navEntries[0]?.key ??
       "",
@@ -205,7 +212,18 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     if (compactSearchOpen) searchInputRef.current?.focus();
   }, [compactSearchOpen]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts the modal's section downloads in the background when it opens
+  useEffect(() => {
+    if (modal !== null) preloadSettingsModal(modal);
+  }, [modal]);
+
+  const preloadEntry = (entry: SettingsNavEntry) => {
+    const [entryModal, section] = entry.key.split("/");
+    if (section !== undefined) preloadSettingsSection(entryModal as SettingsModalId, section);
+  };
+
   const handleSectionClick = (entry: SettingsNavEntry) => {
+    setPendingSection({ key: entry.key, from: activePath });
     void navigate({
       ...entry.target,
       hash: "",
@@ -421,7 +439,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                         {group.entries.map((entry) => {
                           const Icon = entry.icon;
                           const isActive =
-                            activePath === entry.key || activePath.startsWith(`${entry.key}/`);
+                            shownPath === entry.key || shownPath.startsWith(`${entry.key}/`);
                           return (
                             <SidebarMenuItem key={entry.key} role="presentation">
                               <SidebarMenuButton
@@ -431,6 +449,8 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                                 aria-selected={isActive}
                                 aria-current={isActive ? "page" : undefined}
                                 isActive={isActive}
+                                onPointerEnter={() => preloadEntry(entry)}
+                                onFocus={() => preloadEntry(entry)}
                                 onClick={() => handleSectionClick(entry)}
                               >
                                 <Icon />

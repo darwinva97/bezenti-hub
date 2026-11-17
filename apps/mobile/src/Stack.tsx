@@ -126,6 +126,11 @@ import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
+import {
+  SettingsPlatformRouteScreen,
+  SettingsSpaceRouteScreen,
+  SettingsUserRouteScreen,
+} from "./features/settings/SettingsModalIndexRouteScreen";
 import { SettingsLabsRouteScreen } from "./features/settings/ThreadSettingsSections";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
 import { openSettings, settingsOpenIn } from "./features/settings/settings-navigation";
@@ -219,9 +224,24 @@ const SETTINGS_SCREENS = {
       headerBackVisible: false,
     },
   }),
+  SettingsUser: createNativeStackScreen({
+    screen: SettingsUserRouteScreen,
+    linking: "settings/user",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "User" },
+  }),
+  SettingsSpace: createNativeStackScreen({
+    screen: SettingsSpaceRouteScreen,
+    linking: "settings/space",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Space" },
+  }),
+  SettingsPlatform: createNativeStackScreen({
+    screen: SettingsPlatformRouteScreen,
+    linking: "settings/platform",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Platform" },
+  }),
   SettingsEnvironments: createNativeStackScreen({
     screen: SettingsEnvironmentsRouteScreen,
-    linking: "settings/environments",
+    linking: "settings/user/machines",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Environments",
@@ -229,68 +249,68 @@ const SETTINGS_SCREENS = {
   }),
   SettingsEnvironmentDetail: createNativeStackScreen({
     screen: SettingsEnvironmentDetailRouteScreen,
-    linking: "settings/environments/:environmentId",
+    linking: "settings/user/machines/:environmentId",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Environment" },
   }),
   // Old links to New threads and Agent behavior open Threads, which absorbed them.
   SettingsEnvironmentNewThreads: createNativeStackScreen({
     screen: SettingsThreadsRouteScreen,
-    linking: "settings/new-threads",
+    linking: "settings/platform/new-threads",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Threads" },
   }),
   SettingsEnvironmentSourceControl: createNativeStackScreen({
     screen: SettingsEnvironmentSourceControlRouteScreen,
-    linking: "settings/source-control",
+    linking: "settings/platform/source-control",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Source control" },
   }),
   SettingsEnvironmentAgentBehavior: createNativeStackScreen({
     screen: SettingsThreadsRouteScreen,
-    linking: "settings/agent-behavior",
+    linking: "settings/platform/agent-behavior",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Threads" },
   }),
   SettingsWorktrees: createNativeStackScreen({
     screen: SettingsWorktreesRouteScreen,
-    linking: "settings/worktrees",
+    linking: "settings/platform/worktrees",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Worktrees" },
   }),
   SettingsLabs: createNativeStackScreen({
     screen: SettingsLabsRouteScreen,
-    linking: "settings/labs",
+    linking: "settings/platform/labs",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Labs" },
   }),
   SettingsProviderAccounts: createNativeStackScreen({
     screen: SettingsProviderAccountsRouteScreen,
-    linking: "settings/provider-accounts",
+    linking: "settings/platform/providers",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Providers" },
   }),
   SettingsAiAccounts: createNativeStackScreen({
     screen: SettingsAiAccountsRouteScreen,
-    linking: "settings/ai-accounts",
+    linking: "settings/user/ai-accounts",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "AI accounts" },
   }),
   SettingsVaults: createNativeStackScreen({
     screen: SettingsVaultsRouteScreen,
-    linking: "settings/vaults",
+    linking: "settings/user/vaults",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Vaults" },
   }),
   SettingsEnvironmentMaintenance: createNativeStackScreen({
     screen: SettingsEnvironmentMaintenanceRouteScreen,
-    linking: "settings/maintenance",
+    linking: "settings/platform/maintenance",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Maintenance" },
   }),
   SettingsThreads: createNativeStackScreen({
     screen: SettingsThreadsRouteScreen,
-    linking: "settings/thread-preferences",
+    linking: "settings/platform/threads",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Threads" },
   }),
   SettingsAbout: createNativeStackScreen({
     screen: SettingsAboutRouteScreen,
-    linking: "settings/about",
+    linking: "settings/user/about",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "About" },
   }),
   SettingsEnvironmentNew: createNativeStackScreen({
     screen: ConnectionsNewRouteScreen,
-    linking: "settings/environment-new",
+    linking: "settings/user/new-machine",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Add a Hub",
@@ -298,7 +318,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsArchive: createNativeStackScreen({
     screen: ArchivedThreadsRouteScreen,
-    linking: "settings/archive",
+    linking: "settings/space/archive",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Archive",
@@ -306,12 +326,12 @@ const SETTINGS_SCREENS = {
   }),
   SettingsNavigation: createNativeStackScreen({
     screen: SettingsNavigationRouteScreen,
-    linking: "settings/navigation-tabs",
+    linking: "settings/user/navigation-tabs",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Navigation tabs" },
   }),
   SettingsAppearance: createNativeStackScreen({
     screen: SettingsAppearanceRouteScreen,
-    linking: "settings/appearance",
+    linking: "settings/user/appearance",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Appearance",
@@ -319,7 +339,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsProjectGrouping: createNativeStackScreen({
     screen: SettingsProjectGroupingRouteScreen,
-    linking: "settings/project-grouping",
+    linking: "settings/user/project-grouping",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "General",
@@ -327,7 +347,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsOrganization: createNativeStackScreen({
     screen: SettingsProjectGroupingRouteScreen,
-    linking: "settings/organization",
+    linking: "settings/user/general",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "General",
@@ -340,7 +360,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsKeyboard: createNativeStackScreen({
     screen: SettingsKeyboardRouteScreen,
-    linking: "settings/keyboard",
+    linking: "settings/user/keyboard",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Keyboard",
@@ -348,7 +368,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsMicrophone: createNativeStackScreen({
     screen: SettingsMicrophoneRouteScreen,
-    linking: "settings/microphone",
+    linking: "settings/user/microphone",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Microphone",
@@ -356,7 +376,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsFollowUp: createNativeStackScreen({
     screen: SettingsFollowUpRouteScreen,
-    linking: "settings/follow-ups",
+    linking: "settings/user/chat",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Chat",
@@ -364,7 +384,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsScheduledTasks: createNativeStackScreen({
     screen: SettingsScheduledTasksRouteScreen,
-    linking: "settings/scheduled-tasks",
+    linking: "settings/space/scheduled-tasks",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Scheduled tasks",
@@ -373,7 +393,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsScheduledTaskNew: createNativeStackScreen({
     screen: SettingsScheduledTaskNewRouteScreen,
-    linking: "settings/scheduled-tasks/new",
+    linking: "settings/space/scheduled-tasks/new",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "New scheduled task" },
   }),
   SettingsScheduledTaskEdit: createNativeStackScreen({
@@ -398,7 +418,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsClientStorage: createNativeStackScreen({
     screen: SettingsClientStorageRouteScreen,
-    linking: "settings/client-storage",
+    linking: "settings/user/client-storage",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Client Storage",
@@ -406,7 +426,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsDiagnostics: createNativeStackScreen({
     screen: SettingsDiagnosticsRouteScreen,
-    linking: "settings/diagnostics",
+    linking: "settings/platform/diagnostics",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Diagnostics",
@@ -420,7 +440,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsOpenSourceLicenses: createNativeStackScreen({
     screen: SettingsOpenSourceLicensesRouteScreen,
-    linking: "settings/open-source-licenses",
+    linking: "settings/user/open-source-licenses",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Open source licenses",
@@ -428,7 +448,7 @@ const SETTINGS_SCREENS = {
   }),
   SettingsOpenSourceLicense: createNativeStackScreen({
     screen: SettingsOpenSourceLicenseRouteScreen,
-    linking: "settings/open-source-licenses/:entryKey",
+    linking: "settings/user/open-source-licenses/:entryKey",
     options: {
       ...SETTINGS_PAGE_OPTIONS,
       title: "License notice",
@@ -946,7 +966,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     ...SETTINGS_SCREENS,
     SettingsLegal: createNativeStackScreen({
       screen: SettingsLegalRouteScreen,
-      linking: "settings/legal",
+      linking: "settings/user/legal",
       options: {
         ...LEGAL_DOCUMENT_HEADER_OPTIONS,
         title: "Legal",

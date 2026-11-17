@@ -34,10 +34,11 @@ export function SettingsRow(props: {
     detail: valueBelow ? undefined : props.value,
     disabled: props.disabled,
   };
+  // `as never`: past 25 route names TypeScript stops resolving navigate()'s per-route overloads.
   const onPress = () => {
     if (props.target) {
       if (inList) openSettings(navigation, props.target);
-      else navigation.navigate(props.target);
+      else navigation.navigate(props.target as never);
     } else if (props.fullScreenTarget) {
       navigation.navigate(props.fullScreenTarget);
     } else {

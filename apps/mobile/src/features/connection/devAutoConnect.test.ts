@@ -219,7 +219,7 @@ it("a pairing link fills the pairing form already on screen instead of stacking 
     screens: {
       Home: "",
       Settings: "settings",
-      SettingsEnvironmentNew: "settings/environment-new",
+      SettingsEnvironmentNew: "settings/user/new-machine",
       ConnectionsNew: "connections/new",
     },
   };

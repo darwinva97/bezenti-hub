@@ -1,7 +1,4 @@
-import {
-  navigationCustomizationAvailable,
-  overflowNavigationTabs,
-} from "../workspace/navigation-tab-order";
+import { overflowNavigationTabs } from "../workspace/navigation-tab-order";
 import {
   NAVIGATION_TAB_ICONS,
   WORKSPACE_TAB_LABELS,
@@ -18,25 +15,27 @@ import { useNavigationState } from "@react-navigation/native";
 import { use, type ComponentProps } from "react";
 import { Platform, View } from "react-native";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
+import type { SettingsModalId } from "@t3tools/client-runtime/settings/modal-visibility";
 import { deriveProjectGroupLabel } from "@t3tools/client-runtime/state/project-grouping";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAdaptiveWorkspaceLayout } from "../layout/adaptive-workspace-context";
-import { useSpaceSelections } from "../../state/spaces";
-import {
-  useHubConnection,
-  useSavedRemoteConnections,
-} from "../../state/use-remote-environment-registry";
+import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection, SettingsSidebarContext } from "./components/SettingsSection";
 import { SettingsScreen } from "./components/SettingsScreen";
-import type { SettingsPageTarget } from "./components/settings-page-targets";
 import {
   useSettingsEnvironmentMenu,
   SettingsEnvironmentFilterHeader,
 } from "./components/SettingsEnvironmentFilterHeader";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { filterSettingsSections } from "./settings-search";
+import {
+  SETTINGS_MODAL_LABELS,
+  SETTINGS_MODAL_TARGETS,
+  visibleSettingsModals,
+} from "./settings-modals";
+import { useSettingsModalContext } from "./useSettingsModalContext";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 
 export function SettingsRouteScreen() {
@@ -129,9 +128,9 @@ function SettingsList(props: { readonly connections: readonly SettingsListRow[] 
   const workspace = useWorkspaceTabs();
   const query = workspace?.state.tabs.settings.query ?? "";
   const overflowRows = useOverflowRows();
-  const indexSections = useSettingsIndexSections();
+  const indexSections = useSettingsIndexSections(query);
   const sections = filterSettingsSections(
-    [{ rows: overflowRows }, { title: "Connections", rows: props.connections }, ...indexSections],
+    [{ rows: overflowRows }, ...indexSections, { title: "Connections", rows: props.connections }],
     query,
   );
 
@@ -172,14 +171,16 @@ function SettingsList(props: { readonly connections: readonly SettingsListRow[] 
   );
 }
 
-function useSettingsIndexSections(): SettingsListSection[] {
+const SETTINGS_ENTRY_ICONS: Record<SettingsModalId, SettingsListRow["icon"]> = {
+  user: "person.crop.circle",
+  space: "person.2",
+  project: "folder",
+  platform: "server.rack",
+};
+
+function useSettingsIndexSections(query: string): SettingsListSection[] {
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
-  const hub = useHubConnection();
-  const selections = useSpaceSelections();
-  // As on web, a Member of a Hub does not see the pages only its Owner changes.
-  const actsForInstallation =
-    hub === null || selections.get(hub.environmentId)?.view?.isOwner !== false;
-  const ownerPage = (row: SettingsListRow): SettingsListRow[] => (actsForInstallation ? [row] : []);
+  const modals = visibleSettingsModals(useSettingsModalContext());
   const noServerTargets = selectedTargets.length === 0;
   const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
   const scopedProjectMembers =
@@ -195,68 +196,35 @@ function useSettingsIndexSections(): SettingsListSection[] {
           members: scopedProjectMembers,
         })
       : (selectedProject?.label ?? "Unavailable project");
-  const page = (
-    target: SettingsPageTarget,
-    icon: SettingsListRow["icon"],
-    label: string,
-    extra?: Pick<SettingsListRow, "disabled" | "value">,
-  ): SettingsListRow => ({ id: target, icon, label, target, ...extra });
-  const serverPage = (target: SettingsPageTarget, icon: SettingsListRow["icon"], label: string) =>
-    page(target, icon, label, { disabled: noServerTargets });
-  // The same pages and groups as Settings on web, minus what mobile has no setting for.
-  return [
-    {
-      rows: [
-        page("SettingsOrganization", "gearshape", "General"),
-        page("SettingsAppearance", "paintbrush", "Appearance"),
-        page("SettingsFollowUp", "bubble.left.and.bubble.right", "Chat"),
-        ...(navigationCustomizationAvailable()
-          ? [page("SettingsNavigation", "line.3.horizontal", "Navigation tabs")]
-          : []),
-        ...(Platform.OS === "ios" ? [page("SettingsKeyboard", "keyboard", "Keyboard")] : []),
-        page("SettingsMicrophone", "mic", "Microphone"),
-      ],
-    },
-    {
-      title: "Agents",
-      rows: [
-        ...ownerPage(serverPage("SettingsProviderAccounts", "person.crop.circle", "Providers")),
-        serverPage("SettingsThreads", "text.bubble", "Threads"),
-        serverPage(
-          "SettingsAiAccounts",
-          { ios: "sparkles", android: "auto_awesome" },
-          "AI accounts",
-        ),
-        serverPage("SettingsVaults", { ios: "key", android: "lock" }, "Vaults"),
-        page("SettingsScheduledTasks", "clock", "Scheduled tasks"),
-      ],
-    },
-    {
-      title: "Code",
-      rows: [
-        page(
-          "SettingsProjectOverview",
-          "folder",
-          "Projects",
-          selectedProjectKey !== null ? { value: projectLabel } : undefined,
-        ),
-        ...ownerPage(
-          serverPage("SettingsEnvironmentSourceControl", "arrow.triangle.branch", "Source control"),
-        ),
-        serverPage("SettingsWorktrees", "square.on.square", "Worktrees"),
-      ],
-    },
-    {
-      rows: [
-        ...ownerPage(
-          serverPage("SettingsEnvironmentMaintenance", "arrow.clockwise", "Maintenance"),
-        ),
-        page("SettingsLabs", "sparkles", "Labs"),
-        page("SettingsAbout", "info.circle", "About"),
-        page("SettingsArchive", "archivebox", "Archive"),
-      ],
-    },
-  ];
+  const projectValue = selectedProjectKey !== null ? projectLabel : undefined;
+  if (query.trim() === "") {
+    // Four entries; each opens the pages of its modal.
+    return [
+      {
+        rows: modals.map(({ modal }) => ({
+          id: SETTINGS_MODAL_TARGETS[modal],
+          icon: SETTINGS_ENTRY_ICONS[modal],
+          label: SETTINGS_MODAL_LABELS[modal],
+          target: SETTINGS_MODAL_TARGETS[modal],
+          ...(modal === "project" && projectValue !== undefined ? { value: projectValue } : {}),
+        })),
+      },
+    ];
+  }
+  // Searching reaches every page of every entry, grouped under its entry.
+  return modals.map(({ modal, pages }) => ({
+    title: SETTINGS_MODAL_LABELS[modal],
+    rows: pages.map((page) => ({
+      id: page.target,
+      icon: page.icon,
+      label: page.label,
+      target: page.target,
+      disabled: page.needsServer === true && noServerTargets,
+      ...(page.target === "SettingsProjectOverview" && projectValue !== undefined
+        ? { value: projectValue }
+        : {}),
+    })),
+  }));
 }
 
 function useOverflowRows(): SettingsListRow[] {

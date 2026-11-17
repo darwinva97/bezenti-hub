@@ -85,7 +85,7 @@ export function withoutPairingTarget(
 }
 
 /**
- * `connections/new?pairingUrl=…&autoConnect=1` (or `settings/environment-new?…`) pairs from the
+ * `connections/new?pairingUrl=…&autoConnect=1` (or `settings/user/new-machine?…`) pairs from the
  * link itself, so a remount of the form never pairs twice. Production builds ignore the flag so
  * a link can never pair with an attacker-chosen host.
  */

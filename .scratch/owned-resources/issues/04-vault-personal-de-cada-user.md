@@ -1,5 +1,7 @@
 # 04: Vault personal de cada User
 
+> Nota 2026-11-16 (tras reescribir 01, 03 y 05 sobre lo construido): las Provider entries y las de identidad siguen siendo solo del Owner y nunca entran en el vault personal de otro User; el Owner ve en solo lectura nombres y Variables (con valor) del vault personal ajeno, como dice el spec.
+
 **What to build:** Todo User tiene su vault personal, con su grupo `default` creado con su cuenta (y por migración para los que ya existen). Lo gestiona solo él: grupos, Secrets, defectos de su Personal space y choices de sus Projects ahí. Sus grupos llegan solo a su Personal space. El Owner ve en solo lectura los nombres del vault personal ajeno y no edita nada; deja de elegir los defectos de un Personal space ajeno. Ver spec, «Dueño» y «Vaults».
 
 **Blocked by:** 03, `../../identity-and-access/issues/17-personal-space-siempre-disponible.md`.

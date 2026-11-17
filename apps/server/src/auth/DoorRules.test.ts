@@ -186,13 +186,17 @@ describe("every door of the Hub declares its rule", () => {
       )
       .map(({ file }) => file);
     expect(holders.toSorted()).toEqual([
+      "spaces/InstallationUserService.ts",
       "spaces/OrganizationLifecycle.ts",
       "vaults/SecretDelivery.ts",
       "vaults/SecretMasker.ts",
       "vaults/Vaults.ts",
     ]);
-    const lifecycle = files.find(({ file }) => file === "spaces/OrganizationLifecycle.ts")!.text;
-    expect(lifecycle).not.toMatch(/vaultValues\.value\.get\(/u);
+    // A deleted Organization's and a removed User's values are removed, never read (owned-resources 10).
+    for (const file of ["spaces/OrganizationLifecycle.ts", "spaces/InstallationUserService.ts"]) {
+      const text = files.find((candidate) => candidate.file === file)!.text;
+      expect(text, file).not.toMatch(/vaultValues\.value\.get\(/u);
+    }
     expect(
       [...Object.keys(MCP_TOOL_RULES), ...Object.keys(RAW_ROUTE_RULES)].filter((name) =>
         /vault|reveal/iu.test(name),
@@ -285,6 +289,7 @@ describe("every door of the Hub declares its rule", () => {
       .filter((file) => !["auth/ServerSecretStore.ts", "auth/MasterKeyFile.ts"].includes(file));
     expect(holders.toSorted()).toEqual([
       "persistence/Migrations/111_Vaults.ts", // a comment: where values live
+      "spaces/InstallationUserService.ts", // removes a removed User's values
       "spaces/OrganizationLifecycle.ts", // removes an Organization's values
       "vaults/EffectiveVaults.ts", // a comment: value ids, read by delivery alone
       "vaults/SecretDelivery.ts", // reads: the environment of a process that starts
@@ -341,6 +346,7 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/123_WorkloadIdentity.ts",
       "persistence/Migrations/141_VaultEntriesSealed.ts",
       "persistence/Migrations/142_VaultGroups.ts",
+      "persistence/Migrations/144_OwnedResourcesGone.ts",
       "vaults/DeliveredValues.ts",
       "vaults/EffectiveVaults.ts",
       "vaults/SecretDelivery.ts",

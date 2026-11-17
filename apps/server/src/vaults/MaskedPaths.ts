@@ -101,6 +101,8 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "grants.cancel": none("loans: resource and Space names, states and limits"),
   "grants.end": none("loans: resource and Space names, states and limits"),
   "grants.setLimits": none("loans: resource and Space names, states and limits"),
+  "grants.migrationReviews": none("AI account, User and Organization names"),
+  "grants.dismissMigrationReview": none("AI account, User and Organization names"),
   "vaults.choices": none("Vault and secret names, and Variables' values; never a Secret's"),
   "vaults.providerScopes": none(
     "providers, scopes and Vault names; a test answers ok or a class of error, never a value",
@@ -192,7 +194,6 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "aiAccounts.create": none("AI accounts' names and status"),
   "aiAccounts.update": none("AI accounts' names and status"),
   "aiAccounts.delete": none("AI accounts' names and status"),
-  "aiAccounts.allow": none("AI accounts' names and status"),
   "aiAccounts.reorder": none("AI accounts' names and status"),
   "aiAccounts.login.start": none("AI accounts' names and status"),
   "aiAccounts.login.complete": none("AI accounts' names and status"),

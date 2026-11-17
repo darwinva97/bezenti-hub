@@ -22,6 +22,8 @@ import * as Redacted from "effect/Redacted";
 
 import * as AiAccounts from "../ai/AiAccounts.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
+import * as Grants from "../grants/Grants.ts";
+import { activeAiGrants, lendAiAccount } from "../grants/Grants.testkit.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import type { Hub } from "./HubWithEnvironments.testkit.ts";
 import { ownerIdOf } from "./HubWithEnvironments.scenarios.testkit.ts";
@@ -151,7 +153,7 @@ export const fakeGatewayCli = (
     })),
   ).pipe(Layer.provide(adapters));
 
-/** An AI account of the Owner's on the gateway, serving `models`, allowed to Spaces and Users. */
+/** An AI account of the Owner's on the gateway, serving `models`, lent to Spaces and Users. */
 export const addGatewayAccount = Effect.fn(function* (
   hub: Hub,
   name: string,
@@ -169,11 +171,11 @@ export const addGatewayAccount = Effect.fn(function* (
       models: [...models],
     } as never)
     .pipe(CommandActor.actAs(owner), Effect.orDie);
-  yield* allowAccount(hub, made.id, allow);
+  yield* lendAccount(hub, made.id, allow);
   return made.id;
 });
 
-/** A direct AI account of the Owner's (a Cursor key), allowed to Spaces and Users. */
+/** A direct AI account of the Owner's (a Cursor key), lent to Spaces and Users. */
 export const addDirectAccount = Effect.fn(function* (
   hub: Hub,
   name: string,
@@ -185,25 +187,40 @@ export const addDirectAccount = Effect.fn(function* (
     .service(AiAccounts.AiAccounts)
     .create({ name, type: "direct", provider: "cursor", apiKey: Redacted.make(key) })
     .pipe(CommandActor.actAs(owner), Effect.orDie);
-  yield* allowAccount(hub, made.id, allow);
+  yield* lendAccount(hub, made.id, allow);
   return made.id;
 });
 
-/** Sets an account's allowances, as the Owner does in Settings. */
-export const allowAccount = Effect.fn(function* (
+/**
+ * Lends the Owner's account to exactly these Spaces (and these Users' Personal spaces, none to the
+ * Owner's own: it is theirs there), as migration 145 turned allowances into Grants. Loans to other
+ * Spaces are taken back through Grants, as the Owner does in Settings.
+ */
+export const lendAccount = Effect.fn(function* (
   hub: Hub,
   accountId: AiAccountId,
-  allow: { readonly spaceIds?: ReadonlyArray<SpaceId>; readonly userIds?: ReadonlyArray<UserId> },
+  to: { readonly spaceIds?: ReadonlyArray<SpaceId>; readonly userIds?: ReadonlyArray<UserId> },
 ) {
   const owner = yield* ownerIdOf(hub);
-  yield* hub
-    .service(AiAccounts.AiAccounts)
-    .allow({
+  const wanted = new Set<string>([
+    ...(to.spaceIds ?? []),
+    ...(to.userIds ?? [])
+      .filter((userId) => userId !== owner)
+      .map((userId) => `personal:${userId}`),
+  ]);
+  const grants = hub.service(Grants.Grants);
+  const live = yield* activeAiGrants(hub.server.sql, accountId).pipe(Effect.orDie);
+  for (const grant of live) {
+    if (wanted.delete(grant.spaceId)) continue;
+    yield* grants.end({ grantId: grant.grantId }).pipe(CommandActor.actAs(owner), Effect.orDie);
+  }
+  for (const spaceId of wanted) {
+    yield* lendAiAccount(hub.server.sql, {
       accountId,
-      spaceIds: [...(allow.spaceIds ?? [])],
-      userIds: [...(allow.userIds ?? [])],
-    })
-    .pipe(CommandActor.actAs(owner), Effect.orDie);
+      lender: { kind: "user", id: owner },
+      spaceId,
+    }).pipe(Effect.orDie);
+  }
 });
 
 /** Waits (bounded) until `check` holds, re-run every 25 ms. */

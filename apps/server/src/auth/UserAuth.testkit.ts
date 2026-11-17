@@ -31,6 +31,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as EnvironmentConnectRoute from "../environments/connectRoute.ts";
 import * as EnvironmentGitRoute from "../environments/gitRoute.ts";
+import * as AiAccountChanges from "../ai/AiAccountChanges.ts";
 import * as AiGatewayRoute from "../ai/AiGatewayRoute.ts";
 import * as HubRunsAgents from "../environment/HubRunsAgents.ts";
 import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
@@ -231,7 +232,9 @@ const makeLayerServices = (
           // The Hub machine runs Threads here unless a test says otherwise (the dev setting). The
           // Owner's SSH installs register machines with it, by the test's policy if it has one.
           // Grants open and close a lent machine's Sandboxes in the registry (Grants ticket 08).
+          // A loan that ends signals AiAccountChanges, shared with the AI layers built over these.
           Layer.mergeAll(SshInstall.layer, Grants.layer).pipe(
+            Layer.provideMerge(AiAccountChanges.layer),
             Layer.provideMerge(
               sandboxRuntime === undefined
                 ? EnvironmentRegistry.layerWith(registryOptions)

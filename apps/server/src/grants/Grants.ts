@@ -9,18 +9,21 @@ import {
   type GrantEndReason,
   GrantError,
   type GrantErrorReason,
+  type GrantDismissMigrationReviewInput,
   type GrantGiveInput,
   GrantId,
   type GrantLimits,
   GrantLimits as GrantLimitsSchema,
   type GrantList,
   type GrantListReceivedInput,
+  type GrantMigrationReviews,
   type GrantRefInput,
   type GrantResourceKind,
   type GrantSetLimitsInput,
   type GrantState,
   type GrantTargets,
   type GrantTargetsInput,
+  type AiAccountId,
   type AiAccountProvider,
   type AiAccountType,
   EnvironmentId,
@@ -38,6 +41,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 
+import * as AiAccountChanges from "../ai/AiAccountChanges.ts";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
@@ -93,6 +97,14 @@ export class Grants extends Context.Service<
     /** Revoked by the lender, or returned by the destination: whichever side the caller is. */
     readonly end: (input: GrantRefInput) => Effect.Effect<Grant, GrantError>;
     readonly setLimits: (input: GrantSetLimitsInput) => Effect.Effect<Grant, GrantError>;
+    /**
+     * Grants ticket 02, the Owner only: what an allowance «to a User» reached that its Grant does
+     * not. Lending there (`give`) or dismissing removes a row; a row grants nothing.
+     */
+    readonly migrationReviews: Effect.Effect<GrantMigrationReviews, GrantError>;
+    readonly dismissMigrationReview: (
+      input: GrantDismissMigrationReviewInput,
+    ) => Effect.Effect<GrantMigrationReviews, GrantError>;
   }
 >()("t3/grants/Grants") {}
 
@@ -234,6 +246,8 @@ const make = Effect.gen(function* () {
   const audit = yield* AuditLog.AuditLog;
   const random = yield* SecureRandom.SecureRandom;
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+  // Who may use an AI account changed: live processes are checked again (`AiSessionReach`).
+  const accountChanges = yield* Effect.serviceOption(AiAccountChanges.AiAccountChanges);
 
   const storage =
     (what: string) =>
@@ -806,6 +820,13 @@ const make = Effect.gen(function* () {
             ${who.userId}, ${startsActive ? at : null}, ${startsActive ? who.userId : null}
           )
         `;
+        // Lent to an Organization a migrated allowance reached: that review is settled.
+        if (item.kind === "ai-account") {
+          yield* sql`
+            DELETE FROM ai_account_grant_reviews
+            WHERE account_id = ${item.resourceId} AND space_id = ${input.spaceId}
+          `;
+        }
         if (startsActive && input.resource.kind === "environment") {
           yield* registry.openLentSandbox({
             grantId,
@@ -947,6 +968,9 @@ const make = Effect.gen(function* () {
     if (Option.isSome(closed)) {
       yield* registry.lentSandboxEnding({ grantId: input.grantId, environmentId: closed.value });
     }
+    // An AI account's: a session holding a direct credential through it closes (the gateway
+    // refuses the next request of any other anyway).
+    if (Option.isSome(accountChanges)) yield* accountChanges.value.changed;
     return yield* reread(input.grantId, who);
   });
 
@@ -1012,7 +1036,81 @@ const make = Effect.gen(function* () {
     return yield* reread(input.grantId, who);
   });
 
+  const ownerOnly = Effect.gen(function* () {
+    const who = yield* caller;
+    if (!who.principal.isOwner) {
+      return yield* fail("not-allowed", "Only the Owner reviews the loans the upgrade narrowed.");
+    }
+    return who;
+  });
+
+  const migrationReviews = Effect.gen(function* () {
+    const who = yield* ownerOnly;
+    const rows = yield* sql<{
+      readonly aiAccountId: string;
+      readonly aiAccountName: string;
+      readonly provider: AiAccountProvider;
+      readonly lenderKind: "user" | "organization";
+      readonly lenderId: string;
+      readonly userId: string;
+      readonly userName: string;
+      readonly spaceId: string;
+      readonly spaceName: string;
+      readonly usedRecently: number;
+    }>`
+      SELECT r.account_id AS "aiAccountId", a.name AS "aiAccountName", a.provider AS "provider",
+        a.owner_kind AS "lenderKind", a.owner_id AS "lenderId", r.user_id AS "userId",
+        u.display_name AS "userName", r.space_id AS "spaceId", s.name AS "spaceName",
+        r.used_recently AS "usedRecently"
+      FROM ai_account_grant_reviews r
+      JOIN ai_accounts a ON a.account_id = r.account_id AND a.deleted_at IS NULL
+      JOIN users u ON u.user_id = r.user_id
+      JOIN spaces s ON s.space_id = r.space_id
+      ORDER BY a.name, u.display_name, s.name
+    `.pipe(Effect.catch(storage("read the loans to review")));
+    const known = yield* targetsOf(rows.map((row) => ({ targetId: row.spaceId })));
+    return {
+      reviews: rows.flatMap((row) => {
+        const target = known.get(row.spaceId as SpaceId);
+        if (target === undefined) return [];
+        return [
+          {
+            aiAccountId: row.aiAccountId as AiAccountId,
+            aiAccountName: row.aiAccountName,
+            provider: row.provider,
+            userId: row.userId as UserId,
+            userName: row.userName,
+            spaceId: target.resource.id,
+            spaceName: target.name,
+            usedRecently: row.usedRecently === 1,
+            startsActive: AccessPolicy.isAllowed(
+              AccessPolicy.decide(who.principal, "grant.decide", {
+                kind: "grant",
+                lender: lenderOf(row, known),
+                target: target.resource,
+              }),
+            ),
+          },
+        ];
+      }),
+    } satisfies GrantMigrationReviews;
+  });
+
+  const dismissMigrationReview = Effect.fn("Grants.dismissMigrationReview")(function* (
+    input: GrantDismissMigrationReviewInput,
+  ) {
+    yield* ownerOnly;
+    yield* sql`
+      DELETE FROM ai_account_grant_reviews
+      WHERE account_id = ${input.aiAccountId} AND user_id = ${input.userId}
+        AND space_id = ${input.spaceId}
+    `.pipe(Effect.catch(storage("dismiss it")));
+    return yield* migrationReviews;
+  });
+
   return Grants.of({
+    migrationReviews,
+    dismissMigrationReview,
     listGiven,
     listReceived,
     targets,

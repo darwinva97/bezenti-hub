@@ -6,7 +6,7 @@
 import * as Schema from "effect/Schema";
 
 import { AiAccountId, AiAccountProvider, AiAccountType } from "./aiAccounts.ts";
-import { EnvironmentId, makeEntityId, SpaceId } from "./baseSchemas.ts";
+import { EnvironmentId, makeEntityId, SpaceId, UserId } from "./baseSchemas.ts";
 import { SandboxHostReport } from "./hubEnvironments.ts";
 import { AuthReauth } from "./userAccounts.ts";
 
@@ -183,6 +183,42 @@ export type GrantRefInput = typeof GrantRefInput.Type;
 
 export const GrantSetLimitsInput = Schema.Struct({ grantId: GrantId, limits: GrantLimits });
 export type GrantSetLimitsInput = typeof GrantSetLimitsInput.Type;
+
+/**
+ * Grants ticket 02: what an AI account allowance «to a User» reached that the Grant it became
+ * (to their Personal space) does not: an Organization they work in. Only the Owner sees these;
+ * nothing here grants anything until the Owner lends it there.
+ */
+export const GrantMigrationReview = Schema.Struct({
+  aiAccountId: AiAccountId,
+  aiAccountName: Schema.String,
+  provider: AiAccountProvider,
+  userId: UserId,
+  userName: Schema.String,
+  spaceId: SpaceId,
+  spaceName: Schema.String,
+  /** The User used the account in that Organization in the 90 days before the migration. */
+  usedRecently: Schema.Boolean,
+  /** The Owner decides there too: lending starts active at once. */
+  startsActive: Schema.Boolean,
+});
+export type GrantMigrationReview = typeof GrantMigrationReview.Type;
+
+export const GrantMigrationReviewsInput = Schema.Struct({});
+export type GrantMigrationReviewsInput = typeof GrantMigrationReviewsInput.Type;
+
+export const GrantMigrationReviews = Schema.Struct({
+  reviews: Schema.Array(GrantMigrationReview),
+});
+export type GrantMigrationReviews = typeof GrantMigrationReviews.Type;
+
+/** «Dismiss»: the Owner keeps it narrowed; the row goes. */
+export const GrantDismissMigrationReviewInput = Schema.Struct({
+  aiAccountId: AiAccountId,
+  userId: UserId,
+  spaceId: SpaceId,
+});
+export type GrantDismissMigrationReviewInput = typeof GrantDismissMigrationReviewInput.Type;
 
 /** HTTP: giving or accepting a machine needs a strong factor when it makes the Grant active. */
 export const GrantGiveRequest = Schema.Struct({

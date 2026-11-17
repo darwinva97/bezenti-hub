@@ -233,14 +233,6 @@ export const AiAccountDeleteResult = Schema.Struct({
 });
 export type AiAccountDeleteResult = typeof AiAccountDeleteResult.Type;
 
-/** The account's allowances, replaced as a whole. */
-export const AiAccountAllowInput = Schema.Struct({
-  accountId: AiAccountId,
-  spaceIds: Schema.Array(SpaceId).check(Schema.isMaxLength(500)),
-  userIds: Schema.Array(UserId).check(Schema.isMaxLength(500)),
-});
-export type AiAccountAllowInput = typeof AiAccountAllowInput.Type;
-
 /** Every AI account of one owner, first to last: that owner's order (owned-resources 08). */
 export const AiAccountReorderInput = Schema.Struct({
   accountIds: Schema.Array(AiAccountId).check(Schema.isMaxLength(1000)),

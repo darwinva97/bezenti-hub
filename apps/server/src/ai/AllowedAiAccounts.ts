@@ -1,8 +1,8 @@
 /**
  * The one rule of which AI accounts a User may use in a Space: the Space owner's enabled accounts,
- * then those lent to the Space by an active Grant (grants ticket 01), then the Owner's own allowed
- * to the Space or the User; none unless the User may work there (`aiAccount.use`). Never cached;
- * the gateway, picker, default, failover and move plan ask here.
+ * then those lent to the Space by an active Grant (grants tickets 01–02; the Owner's allowances
+ * became Grants); none unless the User may work there (`aiAccount.use`). Never cached; the
+ * gateway, picker, default, failover and move plan ask here.
  */
 import {
   type AiAccountId,
@@ -26,7 +26,8 @@ import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 
 /**
  * An AI account a User may use in a Space, in the rule's order: the Space owner's first, by their
- * priority, then the Owner's allowed ones, by the Owner's. Callers keep this order.
+ * priority, then those lent to it (oldest Grant first, then the lender's priority). Callers keep
+ * this order.
  */
 export interface AllowedAiAccount {
   readonly id: AiAccountId;
@@ -106,11 +107,6 @@ interface AccountRow {
   readonly ownerId: string;
 }
 
-interface AllowedRow extends AccountRow {
-  readonly subjectKind: "space" | "user";
-  readonly subjectId: string;
-}
-
 interface LentRow extends AccountRow {
   readonly grantId: string;
   readonly targetId: string;
@@ -185,18 +181,17 @@ const make = Effect.gen(function* () {
     for (const spaceId of asked) answer.set(spaceId, []);
     // Only the Spaces the User works in: elsewhere nothing, not even what is allowed to them.
     const working = yield* workingSpaces(userId, asked);
-    for (const [spaceId, accounts] of yield* accountsIn(userId, working)) {
+    for (const [spaceId, accounts] of yield* accountsIn(working)) {
       answer.set(spaceId, accounts);
     }
     return answer;
   });
 
   /**
-   * For each of these Spaces (all worked in): its owner's enabled accounts, then the Owner's own
-   * allowed to it or to the User. Allowances on anyone else's account are never read.
+   * For each of these Spaces (all worked in): its owner's enabled accounts, then those an active
+   * Grant lends to it.
    */
   const accountsIn = Effect.fn("AllowedAiAccounts.accountsIn")(function* (
-    userId: UserId,
     working: ReadonlyMap<SpaceId, { readonly resource: AccessPolicy.SpaceResource }>,
   ) {
     const answer = new Map<SpaceId, ReadonlyArray<AllowedAiAccount>>();
@@ -243,21 +238,7 @@ const make = Effect.gen(function* () {
             AND s.archived_at IS NULL AND s.frozen_at IS NULL))
       ORDER BY g.decided_at, a.priority, a.account_id
     `.pipe(Effect.catch(failed("read the AI accounts lent")));
-    const allowedRows = yield* sql<AllowedRow>`
-      SELECT a.account_id AS "accountId", a.name AS "name", a.type AS "type",
-        a.provider AS "provider", a.priority AS "priority", a.owner_kind AS "ownerKind",
-        a.owner_id AS "ownerId", l.subject_kind AS "subjectKind", l.subject_id AS "subjectId"
-      FROM ai_accounts a
-      JOIN ai_account_allowances l ON l.account_id = a.account_id
-      WHERE a.disabled = 0 AND a.deleted_at IS NULL
-        AND a.owner_kind = 'user'
-        AND a.owner_id = (SELECT user_id FROM users WHERE is_owner = 1)
-        AND (
-          (l.subject_kind = 'user' AND l.subject_id = ${userId})
-          OR (l.subject_kind = 'space' AND ${sql.in("l.subject_id", spaceIds)})
-        )
-      ORDER BY a.priority, a.account_id
-    `.pipe(Effect.catch(failed("read the AI accounts")));
+
     for (const [spaceId, { resource }] of working) {
       const owner = ownerOfSpace(resource);
       const seen = new Set<string>();
@@ -284,13 +265,7 @@ const make = Effect.gen(function* () {
           }),
         );
       }
-      for (const row of allowedRows) {
-        const applies =
-          row.subjectKind === "user" ? row.subjectId === userId : row.subjectId === spaceId;
-        if (!applies || seen.has(row.accountId)) continue;
-        seen.add(row.accountId);
-        accounts.push(toAllowed(row));
-      }
+
       answer.set(spaceId, accounts);
     }
     return answer;
@@ -303,7 +278,7 @@ const make = Effect.gen(function* () {
     const working = yield* workingSpaces(userId, [spaceId]);
     const works = working.has(spaceId);
     if (!works) return { works, accounts: [] as ReadonlyArray<AllowedAiAccount> };
-    const accounts = (yield* accountsIn(userId, working)).get(spaceId) ?? [];
+    const accounts = (yield* accountsIn(working)).get(spaceId) ?? [];
     return { works, accounts };
   });
 

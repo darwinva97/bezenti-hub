@@ -283,8 +283,6 @@ export type Action =
   | "aiAccount.manage"
   /** See an AI account's name, provider, owner and status: whoever manages it, and the Owner. */
   | "aiAccount.view"
-  /** Allow an AI account to Spaces and Users (the allowances before Grants): the Owner, own only. */
-  | "aiAccount.allow"
   /**
    * Use the AI accounts allowed to a Space or to oneself in that Space (AllowedAiAccounts): whoever
    * may start a Thread there, Guests included; decided on the Space.
@@ -797,11 +795,7 @@ const decideVaultChoice = (principal: Principal, space: SpaceResource): Decision
   return inOrganization(principal, space, ADMIN_ONLY);
 };
 
-const AI_ACCOUNT_ACTIONS: ReadonlySet<Action> = new Set([
-  "aiAccount.manage",
-  "aiAccount.view",
-  "aiAccount.allow",
-]);
+const AI_ACCOUNT_ACTIONS: ReadonlySet<Action> = new Set(["aiAccount.manage", "aiAccount.view"]);
 
 /**
  * AI accounts by their owner (owned-resources 08). A User's are theirs alone to manage; the Owner
@@ -814,10 +808,6 @@ const decideAiAccount = (
   action: Action,
   { owner }: AiAccountResource,
 ): Decision => {
-  if (action === "aiAccount.allow") {
-    if (!principal.isOwner) return deny("owner-only");
-    return owner.kind === "user" && owner.userId === principal.userId ? allow : deny("not-yours");
-  }
   const manages = (): Decision => {
     if (owner.kind === "user") {
       return owner.userId === principal.userId ? allow : deny("not-yours");
@@ -950,7 +940,7 @@ export function decide(principal: Principal, action: Action, resource: Resource)
       ? decideAiAccount(principal, action, resource)
       : deny("wrong-resource");
   }
-  if (action === "aiAccount.view" || action === "aiAccount.allow") return deny("wrong-resource");
+  if (action === "aiAccount.view") return deny("wrong-resource");
   if (action === "aiAccount.manage") {
     if (resource.kind !== "installation") return deny("wrong-resource");
     return principal.isOwner ? allow : deny("owner-only");

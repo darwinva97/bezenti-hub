@@ -193,7 +193,7 @@ describe("RPC authorization scopes", () => {
         }
         // Owned-resources 08: any User manages AI accounts of their own (AiAccounts decides by
         // AccessPolicy `aiAccount.manage` on the account's owner), with a standard session's
-        // access:write; only allowances stay the Owner's, on the Installation.
+        // access:write. Allowances are gone (Grants ticket 02): AI accounts are lent with Grants.
         for (const method of [
           WS_METHODS.aiAccountsCreate,
           WS_METHODS.aiAccountsUpdate,
@@ -216,17 +216,6 @@ describe("RPC authorization scopes", () => {
             {} as never,
             UserId.make("member"),
           );
-        }
-        for (const method of [WS_METHODS.aiAccountsAllow]) {
-          expect([method, spaceAccessForRpcMethod(method)]).toEqual([method, "installation"]);
-          const refused = yield* guardRpcPayload(
-            method,
-            { accountId: "acct", accountIds: [] },
-            member,
-            {} as never,
-            UserId.make("member"),
-          ).pipe(Effect.flip);
-          expect([method, refused.message]).toEqual([method, INSTALLATION_OWNER_ONLY_MESSAGE]);
         }
         // An ACP agent's model provider is set on the Installation's provider instance, with
         // its secrets; the Project only says where the agent runs.

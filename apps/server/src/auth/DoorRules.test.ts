@@ -435,7 +435,6 @@ describe("every door of the Hub declares its rule", () => {
       rpc._tag.startsWith("aiAccounts."),
     );
     expect(accountRpcs.map((rpc) => rpc._tag).toSorted()).toEqual([
-      "aiAccounts.allow",
       "aiAccounts.create",
       "aiAccounts.delete",
       "aiAccounts.importCliproxy",
@@ -662,11 +661,16 @@ describe("every door of the Hub declares its rule", () => {
     for (const content of ["prompt", "messages", "content", "text", "body", "key", "headers"]) {
       expect(fields).not.toContain(content);
     }
-    // The tables: written and read by AiUsage alone (and created by their migration).
+    // The tables: written and read by AiUsage alone (and created by their migration; migration 145
+    // reads once who used a migrated account where, for the Owner's review, Grants ticket 02).
     const readers = files
       .filter(({ text }) => /\bai_usage(_daily)?\b/u.test(text))
       .map(({ file }) => file);
-    expect(readers.toSorted()).toEqual(["ai/AiUsage.ts", "persistence/Migrations/114_AiUsage.ts"]);
+    expect(readers.toSorted()).toEqual([
+      "ai/AiUsage.ts",
+      "persistence/Migrations/114_AiUsage.ts",
+      "persistence/Migrations/145_AiAccountAllowancesToGrants.ts",
+    ]);
   });
 
   it("signs in to subscriptions over WS RPCs only: no callback route, tokens read by AiAccounts alone", () => {

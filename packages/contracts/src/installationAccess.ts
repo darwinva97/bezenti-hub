@@ -95,7 +95,6 @@ export const INSTALLATION_RPC_METHODS = [
   WS_METHODS.aiGatewaySetEnabled,
   // Allowing the Owner's own AI accounts to Spaces and Users (owned-resources 08: every other
   // `aiAccounts.*` write is its account owner's, decided by AiAccounts).
-  WS_METHODS.aiAccountsAllow,
   // Secret providers' scopes, «Test connection» and what deleting one breaks (Vaults ticket 03):
   // the Owner's, as the providers themselves (`server.updateSettings`).
   WS_METHODS.secretProvidersTest,

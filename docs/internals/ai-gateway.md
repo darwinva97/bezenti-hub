@@ -126,8 +126,8 @@ nor names in another file.
 
 `ai/AiAccounts.ts` is the one service; WS `aiAccounts.*` are its doors (spec 4 ticket 02).
 
-- **Where credentials live:** never in the database (migration 112 keeps `ai_accounts` and
-  `ai_account_allowances`; `key_hint` holds at most the last four characters, shown to the Owner
+- **Where credentials live:** never in the database (migration 112 keeps `ai_accounts`;
+  `key_hint` holds at most the last four characters, shown to the Owner
   only). Each key is an entry of `ServerSecretStore.AiAccountCredentialStore`:
   `secrets/ai-accounts/<credential id>.sealed`, purpose `ai-account-credential` (its own folder,
   like Vault values). «Replace credential» writes a new id, then the row, then removes the old
@@ -145,7 +145,7 @@ nor names in another file.
   A key the store cannot read aborts the change and leaves the gateway as it was. A change that
   fails as a whole is retried after 10 s, doubling up to 5 min. One change and its check have a
   30 s deadline; the lock covers only the change, not the model-list check (`unverified` when the
-  list cannot be read). Renames, allowances and order never reach the gateway.
+  list cannot be read). Renames, loans and order never reach the gateway.
 - **A key leaves only once the gateway drops it:** «Replace credential» and «Delete» retire the
   old key (`ai_account_retired_credentials`; a deleted account stays as `removing`, out of every
   list but the Owner's). It leaves the store, with the row, only after a change the gateway
@@ -160,26 +160,40 @@ nor names in another file.
   an agent limited to one Space manages nothing outside it): a User creates, renames, disables,
   replaces, orders and deletes their own, and nobody else does, the Owner included; an
   Organization's are its Admins' and the Owner's while it is open (owned-resources 09); creating
-  is decided on the owner named (`owner`, the caller's own by default). Allowances stay the Owner's,
-  on the Owner's own accounts only (`aiAccount.allow`; `aiAccounts.allow` is still an
-  `INSTALLATION_RPC_METHODS`). The writes need `access:write`, which a standard session holds.
+  is decided on the owner named (`owner`, the caller's own by default). Lending one to another
+  Space is a Grant (docs/internals/grants.md). The writes need `access:write`, which a standard
+  session holds.
   Importing CLIProxyAPI auth files stays the Owner's (`aiAccount.manage` on the Installation),
   as the Owner's own. `aiAccounts.list` gives each User their own and their Organizations' with
   details, the Owner every other account's name, provider, owner and status (`aiAccount.view`,
   never details, sign-in or quota), and everyone name, provider and status of what they may use,
   and where; `owners` says whom they may add accounts for.
 - **AllowedAiAccounts** (`ai/AllowedAiAccounts.ts`) is the one rule: the enabled accounts of the
-  Space's owner (a Personal space's User, an Organization) by their order, then the Owner's own
-  allowed to the Space or to the User by the Owner's order, and none unless the User may work in
-  that Space (`aiAccount.use`: whoever may start a Thread there, Guests included). So a User's own
-  account reaches their Personal space and nothing else, and the Owner's own serve the Owner's
-  Personal space without an allowance. Allowance rows on anyone else's account are never read.
-  Evaluated on every call. The gateway layer (failover included), the picker, a new Thread's
+  Space's owner (a Personal space's User, an Organization) by their order, then the accounts an
+  `active` Grant lends to that Space (oldest decision first, then the lender's order; Grants
+  tickets 01–02), and none unless the User may work in that Space (`aiAccount.use`: whoever may
+  start a Thread there, Guests included). Each carries `via` (`own`, or the Grant with its
+  lender's name and caps). A Grant lends nothing while its lender is disabled or removed, the
+  lending Organization archived, frozen or gone, or the account has another owner now. So a
+  User's own account reaches their Personal space and, lent, the Spaces it is lent to; nothing
+  else. Evaluated on every call. The gateway layer (failover included), the picker, a new Thread's
   default, local CLI keys and the move plan ask it and keep its order; nothing else decides.
 - **Models:** `modelsOf(accountId)` reads the gateway's `/v1/models` for the account's prefix,
   cached five minutes.
-- Audit: `ai_account.create|update|delete|allow` with provider, type, counts and the owner
-  (`ownerKind`, `ownerId`), never a key.
+- Audit: `ai_account.create|update|delete` with provider, type, counts and the owner
+  (`ownerKind`, `ownerId`), never a key; loans are `grant.*`. `ai_account.allow` stays only to
+  read the history.
+- **Allowances became Grants (Grants ticket 02, migration 145):** each allowance on the Owner's own
+  live account became an `active` Grant of the Owner with no cap: to its Space, or for one «to a
+  User» to their Personal space (nothing for the Owner's own). One «to a User» reached them in
+  every Organization they worked in; a Grant does not, so migration 145 keeps, for the Owner only,
+  each such (account, User, Organization) in `ai_account_grant_reviews` with whether the User used
+  it there in the last 90 days. Settings → AI accounts shows them («Review migrated loans»):
+  «Lend to <Organization>» gives the Grant (active at once where the Owner is an Admin) and settles
+  the row; «Dismiss» drops it. A row grants nothing. Its test proves every (User, Space) keeps the
+  same accounts in the same order except exactly those rows. `aiAccounts.allow` and its table are
+  gone (a breaking change for clients that called it); `AiAccountSummary.details.allowances` stays,
+  always empty, so older mobile builds decode.
 
 ## Subscription AI accounts (OAuth)
 
@@ -236,7 +250,7 @@ keys; `type: subscription`. Pure parts in `ai/subscriptionLogin.ts`.
   `ai/cliproxyImport.ts`. Each `claude`, `codex` or `antigravity` file with an email and a refresh
   token becomes a subscription exactly as a sign-in leaves it: sealed under a new token id, named
   «Claude|ChatGPT|Antigravity (<email>)», **disabled** with «Signed in as <email>» until the Owner
-  turns it on, allowed only to the Owner's Personal space (the Owner then allows it elsewhere).
+  turns it on, the Owner's own, so usable in their Personal space (the Owner lends it elsewhere).
   Only the keys those sign-ins write are kept (an allowlist: `type`, `email`, the tokens and
   their times, `account_uuid`, `account_id`, `organization_*`, `claude_device_ids`, `project_id`,
   `priority`); everything else goes (`headers`, `prefix`, `disabled`, any spelling of a base or
@@ -619,7 +633,7 @@ Decisions; the rule is `ai/chooseAiAccount.ts` (one chooser, also the session pl
 - **The default.** No account named: the Thread's own, while its provider instance stays (old
   clients and agents never drop it; if it is no longer allowed the session plan refuses with
   «Switch AI account»); else the first in AllowedAiAccounts' order (the Space owner's first, then
-  the Owner's allowed ones) that the driver takes and that serves the model, written into the
+  the lent ones) that the driver takes and that serves the model, written into the
   Thread. None: the selection goes on without one and the plan
   says why when a turn starts; the composer says it before sending.
 - **`thread.setAiAccount`** (WS, `RPC_SPACE_ACCESS` `thread`, scope `orchestration:operate`) is
@@ -658,12 +672,12 @@ processes agree with it at once, in the write that ends a reach (`ai/AiAccountRe
 `ai/AiAccountReachLoss.ts`, `orchestration-v2/AiSessionReach.ts`), as Vaults do
 (docs/internals/secrets.md, «Losing reach»).
 
-| How reach is lost                                                                            | In the same transaction                                                                                                                                                                                                                                                                                     | Live processes                                                                                                                          |
-| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| A Project moves to another Space                                                             | each Thread's commit (`thread.space.move`): its gateway keys revoked (`thread-moved`, the old key answers 401), its `modelSelection.aiAccountId` kept if allowed to its turn owner there, else the first allowed one its driver takes, else none («needs an AI account»)                                    | closed after the commit (`reconcileAiSessions`)                                                                                         |
-| A User is removed                                                                            | every key of theirs revoked (`user-inactive`, User keys audited `ai_gateway_key.revoke` by the Owner), every allowance to them and to their Personal space dropped (audited `ai_account.allow`); their own accounts deleted (`AiAccountRetire.retireOwned`, audited `ai_account.delete` `via: user.remove`) | closed after the commit                                                                                                                 |
-| An Organization is deleted                                                                   | its Threads go first (their keys with them); then the keys made for its Space (`space-lost`) and its allowances, audited; its own accounts deleted (`via: organization.delete`)                                                                                                                             | ended with its Threads                                                                                                                  |
-| An allowance taken back, an account disabled or deleted, a Membership ended, a User disabled | nothing to drop: the next request is refused (a Thread key is refused, never revoked, when its turn owner merely lost access)                                                                                                                                                                               | a direct credential's process closed (`AiAccountChanges`, the Space directory's watches); a gateway session stays, its requests refused |
+| How reach is lost                                                                 | In the same transaction                                                                                                                                                                                                                                                  | Live processes                                                                                                                          |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| A Project moves to another Space                                                  | each Thread's commit (`thread.space.move`): its gateway keys revoked (`thread-moved`, the old key answers 401), its `modelSelection.aiAccountId` kept if allowed to its turn owner there, else the first allowed one its driver takes, else none («needs an AI account») | closed after the commit (`reconcileAiSessions`)                                                                                         |
+| A User is removed                                                                 | every key of theirs revoked (`user-inactive`, User keys audited `ai_gateway_key.revoke` by the Owner); their loans end (`GrantEnding`); their own accounts deleted (`AiAccountRetire.retireOwned`, audited `ai_account.delete` `via: user.remove`)                       | closed after the commit                                                                                                                 |
+| An Organization is deleted                                                        | its Threads go first (their keys with them); then the keys made for its Space (`space-lost`), audited; its loans end (`GrantEnding`); its own accounts deleted (`via: organization.delete`)                                                                              | ended with its Threads                                                                                                                  |
+| A loan ended, an account disabled or deleted, a Membership ended, a User disabled | nothing to drop: the next request is refused (a Thread key is refused, never revoked, when its turn owner merely lost access)                                                                                                                                            | a direct credential's process closed (`AiAccountChanges`, the Space directory's watches); a gateway session stays, its requests refused |
 
 - **Accounts of an owner that is gone** (owned-resources 10) are deleted in the removal's own
   transaction with «Delete»'s rows (`ai/AiAccountRetire.ts`): `deleted_at`, the credential queued in
@@ -674,7 +688,7 @@ processes agree with it at once, in the write that ends a reach (`ai/AiAccountRe
 - **The move plan** (`POST /api/projects/move-plan`, same door and rule as before) answers
   `aiAccountsLost`: each account a Thread chose that its turn owner may not use in the destination,
   with how many Threads use it. The name only for an account its viewers see in the Space it leaves
-  (allowed to it, or owned by its owner); otherwise `null`, and clients say «<Provider> account». The dialog lists
+  (lent to it, or owned by its owner); otherwise `null`, and clients say «<Provider> account». The dialog lists
   them under «AI accounts it loses». A Thread left without one shows the composer's «AI account»
   select (ticket 08).
 - **The re-choice** runs only when the Thread's Space in effect changes (one without its own is its
@@ -691,7 +705,7 @@ processes agree with it at once, in the write that ends a reach (`ai/AiAccountRe
   not revoked, and its request in flight finishes). Each owner's accounts are read on their own,
   once more on a failure, then «not allowed» (fail closed). Requests coalesce (one pending at
   most); they come from a move (also one that failed part way, once anything moved), a removal,
-  Membership and User status changes, an account's allowances, disablement or deletion, each
+  Membership and User status changes, an account's loans ending, disablement or deletion, each
   machine as it connects, and each AI session once it is live (its plan may predate the check). A machine away
   when its session is released is told on its return (`provider.detach`, then `retired`). The next
   turn opens a new process by its fingerprint, which holds the Space. A direct credential is thus
@@ -730,7 +744,7 @@ settings side `settingsAiCredentials.ts` and `ServerSettingsService` (`setAiCred
 - **When.** A pass at every start (beside it, not blocking it) and again when the gateway is turned
   on; one pass at a time. It needs the Owner: before one exists nothing moves (the next pass does).
   Only the server does it: no RPC triggers it, and nobody else gains any use of a key, since each
-  account is allowed only to the Owner's Personal space until the Owner allows it elsewhere.
+  account is the Owner's own, usable in their Personal space until the Owner lends it elsewhere.
 - **Which account.** The variable names the provider (`ANTHROPIC_*` → `claude`, `OPENAI_API_KEY`
   → `codex`, `GEMINI_API_KEY` → `gemini`, `XAI_API_KEY` → `xai`, `CURSOR_API_KEY` → `cursor`,
   `KIRO_API_KEY` → `kiro`, `META_API_KEY` → `meta`, `AI_GATEWAY_API_KEY` → `fx`, `DEVIN_TOKEN` →
@@ -739,7 +753,7 @@ settings side `settingsAiCredentials.ts` and `ServerSettingsService` (`setAiCred
   key through the gateway. Named «<Provider> (migrated)», then «<Provider> (migrated, <instance>)»,
   then numbered. The same key on two instances is one account.
 - **Order: the account first, the removal second.** `adoptProviderKey` seals the key under a new
-  credential id, then writes the row (`created_by` the Owner), its one allowance, its ledger row
+  credential id, then writes the row (`created_by` the Owner), its ledger row
   and the audit `ai_account.create` (`via: "migration"`, actor `system`) in one transaction. Only
   then `removeProviderCredentials` takes the variable or field off its instance in one settings
   write, if it still holds that value; the settings service's usual path deletes its

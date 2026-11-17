@@ -553,10 +553,8 @@ live("an account's name is shown only to the Owner and to those who may use it",
     const nameOf = (view: AiUsageSummary) =>
       view.labels.accounts.find((account) => account.id === ids.claudeA)?.name;
     assert.equal(nameOf(yield* summaryAs(setup, setup.people.member)), "Acme Claude A");
-    // Allowed to no one now: the Member still sees their usage, no longer the account's name.
-    yield* setup.accounts
-      .allow({ accountId: ids.claudeA, spaceIds: [], userIds: [] })
-      .pipe(setup.asOwner);
+    // Lent to no one now: the Member still sees their usage, no longer the account's name.
+    yield* setup.lendTo(ids.claudeA, []);
     const after = yield* summaryAs(setup, setup.people.member);
     assert.equal(after.totals.requests, 1);
     assert.equal(nameOf(after), null);

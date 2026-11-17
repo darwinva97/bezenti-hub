@@ -118,13 +118,15 @@ it.live.skipIf(!posix || platform === undefined)(
 );
 
 it.live.skipIf(!posix || platform === undefined)(
-  "in a Personal space its User's own accounts come first, then what the Owner allowed them, and failover keeps that order",
+  "in a Personal space its User's own accounts come first, then what is lent to it, and failover keeps that order",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub;
       const ana = setup.people.member;
-      // The Owner's, allowed to Ana herself (wherever she works); then two of her own.
-      const owners = yield* setup.account("Owner Claude", "claude", { userIds: [ana] });
+      // The Owner's, lent to Ana's Personal space; then two of her own.
+      const owners = yield* setup.account("Owner Claude", "claude", {
+        spaceIds: [personalOf(ana)],
+      });
       const first = yield* ownAccount(setup, ana, "Ana Claude A");
       const second = yield* ownAccount(setup, ana, "Ana Claude B");
       const allowed = Context.get(setup.context, AllowedAiAccounts.AllowedAiAccounts);
@@ -132,10 +134,10 @@ it.live.skipIf(!posix || platform === undefined)(
         (yield* allowed.for(ana, personalOf(ana))).map((account) => account.id),
         [first, second, owners],
       );
-      // In Acme she gets only what the Owner allowed her.
+      // Not in Acme: a loan to her Personal space is not a loan to her (Grants ticket 02).
       assert.deepEqual(
         (yield* allowed.for(ana, setup.acmeId)).map((account) => account.id),
-        [owners],
+        [],
       );
 
       const { key } = yield* setup.thread(ana, personalOf(ana));

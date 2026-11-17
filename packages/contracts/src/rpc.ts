@@ -26,7 +26,6 @@ import {
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import {
-  AiAccountAllowInput,
   AiAccountCreateInput,
   AiAccountDeleteInput,
   AiAccountDeleteResult,
@@ -470,8 +469,11 @@ import {
 import {
   Grant,
   GrantError,
+  GrantDismissMigrationReviewInput,
   GrantList,
   GrantListGivenInput,
+  GrantMigrationReviews,
+  GrantMigrationReviewsInput,
   GrantListReceivedInput,
   GrantRefInput,
   GrantSetLimitsInput,
@@ -643,6 +645,9 @@ export const WS_METHODS = {
   grantsCancel: "grants.cancel",
   grantsEnd: "grants.end",
   grantsSetLimits: "grants.setLimits",
+  // Grants ticket 02: the Owner's review of AI account allowances «to a User» that narrowed.
+  grantsMigrationReviews: "grants.migrationReviews",
+  grantsDismissMigrationReview: "grants.dismissMigrationReview",
   secretProvidersTest: "secretProviders.test",
   secretProvidersImpact: "secretProviders.impact",
   secretProvidersScopesList: "secretProviders.scopes.list",
@@ -710,7 +715,6 @@ export const WS_METHODS = {
   aiAccountsCreate: "aiAccounts.create",
   aiAccountsUpdate: "aiAccounts.update",
   aiAccountsDelete: "aiAccounts.delete",
-  aiAccountsAllow: "aiAccounts.allow",
   aiAccountsReorder: "aiAccounts.reorder",
   // Subscription AI accounts (spec 4 ticket 03): signed in through CLIProxyAPI, Owner only.
   aiAccountsLoginStart: "aiAccounts.login.start",
@@ -1420,11 +1424,6 @@ const WsAiAccountsUpdateRpc = Rpc.make(WS_METHODS.aiAccountsUpdate, {
 const WsAiAccountsDeleteRpc = Rpc.make(WS_METHODS.aiAccountsDelete, {
   payload: AiAccountDeleteInput,
   success: AiAccountDeleteResult,
-  error: AiAccountRpcError,
-});
-const WsAiAccountsAllowRpc = Rpc.make(WS_METHODS.aiAccountsAllow, {
-  payload: AiAccountAllowInput,
-  success: AiAccountSummary,
   error: AiAccountRpcError,
 });
 const WsAiAccountsReorderRpc = Rpc.make(WS_METHODS.aiAccountsReorder, {
@@ -2191,6 +2190,16 @@ const WsGrantsEndRpc = Rpc.make(WS_METHODS.grantsEnd, {
   success: Grant,
   error: GrantRpcError,
 });
+const WsGrantsMigrationReviewsRpc = Rpc.make(WS_METHODS.grantsMigrationReviews, {
+  payload: GrantMigrationReviewsInput,
+  success: GrantMigrationReviews,
+  error: GrantRpcError,
+});
+const WsGrantsDismissMigrationReviewRpc = Rpc.make(WS_METHODS.grantsDismissMigrationReview, {
+  payload: GrantDismissMigrationReviewInput,
+  success: GrantMigrationReviews,
+  error: GrantRpcError,
+});
 const WsGrantsSetLimitsRpc = Rpc.make(WS_METHODS.grantsSetLimits, {
   payload: GrantSetLimitsInput,
   success: Grant,
@@ -2428,6 +2437,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsGrantsCancelRpc,
   WsGrantsEndRpc,
   WsGrantsSetLimitsRpc,
+  WsGrantsMigrationReviewsRpc,
+  WsGrantsDismissMigrationReviewRpc,
   WsSecretProvidersTestRpc,
   WsSecretProvidersImpactRpc,
   WsSecretProvidersScopesListRpc,
@@ -2491,7 +2502,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsAiAccountsCreateRpc,
   WsAiAccountsUpdateRpc,
   WsAiAccountsDeleteRpc,
-  WsAiAccountsAllowRpc,
   WsAiAccountsReorderRpc,
   WsAiAccountsLoginStartRpc,
   WsAiAccountsLoginCompleteRpc,

@@ -1,5 +1,6 @@
 /**
- * An AI account deleted, in the deleting write's transaction: its allowances and moved keys go,
+ * An AI account deleted, in the deleting write's transaction: its moved keys go (its loans lend
+ * nothing once it is deleted; ending them is Grants ticket 11),
  * its credential waits in `ai_account_retired_credentials` until the gateway no longer holds it
  * (`AiAccounts.cleanupRetired`), then the row goes. Shared by «Delete» and the removals.
  */
@@ -15,7 +16,6 @@ export const retireWithin = Effect.fn("AiAccountRetire.retireWithin")(function* 
   account: { readonly accountId: string; readonly credentialId: string | null },
 ) {
   const at = DateTime.formatIso(yield* DateTime.now);
-  yield* sql`DELETE FROM ai_account_allowances WHERE account_id = ${account.accountId}`;
   // Ticket 09: a key moved into it and saved again later is moved again, never lost.
   yield* sql`DELETE FROM ai_account_migrated_keys WHERE account_id = ${account.accountId}`;
   if (account.credentialId !== null) {

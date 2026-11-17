@@ -5,7 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 // Signing in to subscriptions and updating the gateway stay on web and desktop (spec 4, «Clientes»).
 const FORBIDDEN_ATOMS =
-  /aiGatewayEnvironment\s*\.\s*(startAccountLogin|completeAccountLogin|importVertexAccount|createAccount|updateAccount|deleteAccount|allowAccount|reorderAccounts|update|rollback|setEnabled)\b|aiGatewayEnvironment\s*\[/;
+  /aiGatewayEnvironment\s*\.\s*(startAccountLogin|completeAccountLogin|importVertexAccount|createAccount|updateAccount|deleteAccount|reorderAccounts|update|rollback|setEnabled)\b|aiGatewayEnvironment\s*\[/;
 
 const sourceRoot = NodePath.resolve(__dirname, "../..");
 

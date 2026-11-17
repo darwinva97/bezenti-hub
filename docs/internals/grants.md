@@ -77,7 +77,9 @@ picker names a lent account «<name> · from <lender>». Accepting one needs no 
 ## Doors
 
 - WS: `grants.listGiven`, `grants.listReceived`, `grants.targets`, `grants.reject`,
-  `grants.cancel`, `grants.end`, `grants.setLimits` (writes need `access:write`).
+  `grants.cancel`, `grants.end`, `grants.setLimits` (writes need `access:write`); the Owner's
+  `grants.migrationReviews` and `grants.dismissMigrationReview` (allowances that became loans,
+  docs/internals/ai-gateway.md).
 - HTTP: `POST /api/grants/give` and `POST /api/grants/accept`. When a machine's Grant would become
   active (accepting it, or giving it where the lender also decides) the request must carry a
   strong factor (`reauth`: passkey, or password and authenticator code), checked only after Grants

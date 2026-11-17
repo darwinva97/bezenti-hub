@@ -354,18 +354,19 @@ it.live.skipIf(!posix || platform === undefined)(
         body: messages(),
       });
       assert.equal(linus.status, 200);
-      // Grace's own Gemini is hers alone, not Linus's.
+      // «Grace Gemini» is lent to Acme (an allowance to one User became a loan to a Space, Grants
+      // ticket 02): Linus, who works there, uses it as well.
       const linusGemini = yield* call(
         setup,
         "/api/ai/gemini/v1beta/models/gemini-3-pro:generateContent",
         { key: Redacted.value(linusKey.key), keyHeader: "x-goog-api-key", body: { contents: [] } },
       );
-      assert.equal(linusGemini.status, 404);
+      assert.equal(linusGemini.status, 200);
     }).pipe(Effect.scoped),
 );
 
 it.live.skipIf(!posix || platform === undefined)(
-  "a key stops at the next request once its allowance, membership, Space, Thread, account or User is gone",
+  "a key stops at the next request once its loan, membership, Space, Thread, account or User is gone",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub;
@@ -376,16 +377,12 @@ it.live.skipIf(!posix || platform === undefined)(
           Effect.map((answer) => answer.status),
         );
 
-      // The allowance removed mid-Thread: the next request fails; given back, it works again.
+      // The loan taken back mid-Thread: the next request fails; lent again, it works again.
       const first = yield* setup.thread(setup.people.member, setup.acmeId);
       assert.equal(yield* ask(first.key), 200);
-      yield* setup.accounts
-        .allow({ accountId: ids.router, spaceIds: [], userIds: [] })
-        .pipe(setup.asOwner);
+      yield* setup.lendTo(ids.router, []);
       assert.equal(yield* ask(first.key), 404);
-      yield* setup.accounts
-        .allow({ accountId: ids.router, spaceIds: [setup.acmeId], userIds: [] })
-        .pipe(setup.asOwner);
+      yield* setup.lendTo(ids.router, [setup.acmeId]);
       assert.equal(yield* ask(first.key), 200);
 
       // Disabled, then deleted.
@@ -400,9 +397,7 @@ it.live.skipIf(!posix || platform === undefined)(
         call(setup, "/api/ai/anthropic/v1/messages", { key: pinnedThread.key, body: messages() });
       assert.equal((yield* pinnedAsk()).status, 200);
       assert.equal(setup.upstream().at(-1)!.model, `acct-${ids.claudeB}/claude-sonnet-5-5`);
-      yield* setup.accounts
-        .allow({ accountId: ids.claudeB, spaceIds: [setup.globexId], userIds: [] })
-        .pipe(setup.asOwner);
+      yield* setup.lendTo(ids.claudeB, [setup.globexId]);
       const notAllowed = yield* pinnedAsk();
       assert.equal(notAllowed.status, 403);
       assert.include(notAllowed.text, "Switch AI account");
@@ -1006,9 +1001,7 @@ it.live.skipIf(!posix || platform === undefined)(
 
       // A Thread whose own account is no longer allowed lists nothing else either.
       const pinned = yield* setup.thread(setup.people.member, setup.acmeId, ids.claudeB);
-      yield* setup.accounts
-        .allow({ accountId: ids.claudeB, spaceIds: [setup.globexId], userIds: [] })
-        .pipe(setup.asOwner);
+      yield* setup.lendTo(ids.claudeB, [setup.globexId]);
       const listed = yield* call(setup, "/api/ai/anthropic/v1/models", {
         key: pinned.key,
         keyHeader: "x-api-key",

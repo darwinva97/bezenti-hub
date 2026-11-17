@@ -58,8 +58,6 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.aiAccountsLoginComplete]: AuthAccessWriteScope,
   [WS_METHODS.aiAccountsImportVertex]: AuthAccessWriteScope,
   [WS_METHODS.aiAccountsImportCliproxy]: AuthAccessWriteScope,
-  // Allowances widen the Owner's own accounts to others, as saving the Hub's settings does.
-  [WS_METHODS.aiAccountsAllow]: AuthSettingsWriteScope,
   // A User's local CLI keys (spec 4 ticket 10): a credential to the Hub, as a pairing link is.
   [WS_METHODS.aiGatewayKeysCreate]: AuthAccessWriteScope,
   // Switching a Thread's AI account changes the Thread, as any command on it does.
@@ -109,6 +107,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.grantsCancel]: AuthAccessWriteScope,
   [WS_METHODS.grantsEnd]: AuthAccessWriteScope,
   [WS_METHODS.grantsSetLimits]: AuthAccessWriteScope,
+  [WS_METHODS.grantsDismissMigrationReview]: AuthAccessWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

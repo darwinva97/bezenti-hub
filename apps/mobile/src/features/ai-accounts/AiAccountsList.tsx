@@ -20,7 +20,7 @@ const USAGE_DAYS = 30;
 
 /**
  * Settings → AI accounts on a phone: the Hub's list for this User by owner, with status and quota,
- * and the gateway's usage. Read-only: adding, signing in, credentials, allowances and order stay
+ * and the gateway's usage. Read-only: adding, signing in, credentials, loans and order stay
  * on web and desktop; the Hub narrows every answer to what the session may see.
  */
 export function AiAccountsList(props: { readonly environmentId: EnvironmentId }) {

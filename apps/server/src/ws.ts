@@ -2473,6 +2473,8 @@ export const layerWsRpc = (
         [WS_METHODS.grantsCancel]: (input) => grants.cancel(input),
         [WS_METHODS.grantsEnd]: (input) => grants.end(input),
         [WS_METHODS.grantsSetLimits]: (input) => grants.setLimits(input),
+        [WS_METHODS.grantsMigrationReviews]: (_input) => grants.migrationReviews,
+        [WS_METHODS.grantsDismissMigrationReview]: (input) => grants.dismissMigrationReview(input),
         [WS_METHODS.secretProvidersTest]: (input) => secretProviderScopes.test(input),
         [WS_METHODS.secretProvidersImpact]: (input) => secretProviderScopes.impact(input),
         [WS_METHODS.secretProvidersScopesList]: (_input) => secretProviderScopes.list,
@@ -2974,7 +2976,6 @@ export const layerWsRpc = (
         [WS_METHODS.aiAccountsCreate]: (input) => aiAccounts.create(input),
         [WS_METHODS.aiAccountsUpdate]: (input) => aiAccounts.update(input),
         [WS_METHODS.aiAccountsDelete]: (input) => aiAccounts.remove(input),
-        [WS_METHODS.aiAccountsAllow]: (input) => aiAccounts.allow(input),
         [WS_METHODS.aiAccountsReorder]: (input) => aiAccounts.reorder(input),
         // Subscriptions (spec 4 ticket 03): a sign-in belongs to the session that started it.
         [WS_METHODS.aiAccountsLoginStart]: (input) =>

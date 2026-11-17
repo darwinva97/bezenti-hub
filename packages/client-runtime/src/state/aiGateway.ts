@@ -55,10 +55,6 @@ export function createAiGatewayEnvironmentAtoms<R, E>(
       label: "environment-data:ai-accounts:delete",
       tag: WS_METHODS.aiAccountsDelete,
     }),
-    allowAccount: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:ai-accounts:allow",
-      tag: WS_METHODS.aiAccountsAllow,
-    }),
     reorderAccounts: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:ai-accounts:reorder",
       tag: WS_METHODS.aiAccountsReorder,

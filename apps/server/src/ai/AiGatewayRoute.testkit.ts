@@ -35,6 +35,7 @@ import {
   makeAuthenticator,
   serveAuthHttp,
 } from "../auth/UserAuth.testkit.ts";
+import { activeAiGrants, lendAiAccount } from "../grants/Grants.testkit.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as AiAccounts from "./AiAccounts.ts";
 import * as AiGateway from "./AiGateway.ts";
@@ -193,14 +194,45 @@ export const hubWith = Effect.fn(function* (
         ...extra,
       })
       .pipe(asOwner);
-    yield* accounts
-      .allow({
+    // Lent by the Owner as migration 145 turned allowances into Grants: to each Space, and to a
+    // User's Personal space (none to the Owner's own: it is theirs there).
+    const spaceIds = [
+      ...(allow.spaceIds ?? []),
+      ...(allow.userIds ?? [])
+        .filter((userId) => userId !== ownerId)
+        .map((userId) => SpaceId.make(`personal:${userId}`)),
+    ];
+    for (const spaceId of spaceIds) {
+      yield* lendAiAccount(server.sql, {
         accountId: made.id,
-        spaceIds: [...(allow.spaceIds ?? [])],
-        userIds: [...(allow.userIds ?? [])],
-      })
-      .pipe(asOwner);
+        lender: { kind: "user", id: ownerId },
+        spaceId,
+      });
+    }
     return made.id;
+  });
+
+  /**
+   * The Owner's account lent to exactly these Spaces from now on: loans elsewhere end (taken back),
+   * missing ones start, as the Owner does in Settings.
+   */
+  const lendTo = Effect.fn(function* (accountId: AiAccountId, spaceIds: ReadonlyArray<SpaceId>) {
+    const wanted = new Set<string>(spaceIds);
+    for (const grant of yield* activeAiGrants(server.sql, accountId)) {
+      if (wanted.delete(grant.spaceId)) continue;
+      yield* server.sql`
+        UPDATE grants SET state = 'ended', end_reason = 'revoked', ended_at = decided_at,
+          ended_by = ${ownerId}
+        WHERE grant_id = ${grant.grantId}
+      `;
+    }
+    for (const spaceId of wanted) {
+      yield* lendAiAccount(server.sql, {
+        accountId,
+        lender: { kind: "user", id: ownerId },
+        spaceId,
+      });
+    }
   });
 
   let threads = 0;
@@ -291,6 +323,7 @@ export const hubWith = Effect.fn(function* (
     asOwner,
     port,
     account,
+    lendTo,
     thread,
     upstream,
     memory,
@@ -395,7 +428,7 @@ export const messages = (model = "claude-sonnet-5-5", extra: Record<string, unkn
 
 export const upstreamModels = (setup: Hub) => setup.upstream().map((request) => request.model);
 
-/** Acme: Claude A then Claude B (priority 1, 2) and an OpenRouter; Globex: its own Claude. */
+/** Acme: Claude A then Claude B (priority 1, 2), an OpenRouter and a Gemini; Globex: its own Claude. */
 export const acmeSetup = Effect.fn(function* (setup: Hub) {
   const claudeA = yield* setup.account("Acme Claude A", "claude", { spaceIds: [setup.acmeId] });
   const claudeB = yield* setup.account("Acme Claude B", "claude", { spaceIds: [setup.acmeId] });
@@ -414,8 +447,9 @@ export const acmeSetup = Effect.fn(function* (setup: Hub) {
     { spaceIds: [setup.globexId] },
     { baseUrl: "https://openrouter.example/api/v1", models: ["globex-secret-model"] },
   );
+  // Allowed to Grace before Grants (ticket 02); a loan goes to a Space, so Acme's now.
   const graceGemini = yield* setup.account("Grace Gemini", "gemini", {
-    userIds: [setup.people.member],
+    spaceIds: [setup.acmeId],
   });
   return { claudeA, claudeB, globexClaude, router, globexRouter, graceGemini };
 });

@@ -4,7 +4,6 @@
  * lets them use. CLIProxyAPI gets them all by its Management API, `acct-<id>`.
  */
 import {
-  type AiAccountAllowInput,
   type AiAccountCreateInput,
   type AiAccountDeleteInput,
   type AiAccountDeleteResult,
@@ -113,7 +112,6 @@ export class AiAccounts extends Context.Service<
     readonly remove: (
       input: AiAccountDeleteInput,
     ) => Effect.Effect<AiAccountDeleteResult, AiAccountError>;
-    readonly allow: (input: AiAccountAllowInput) => Effect.Effect<AiAccountSummary, AiAccountError>;
     readonly reorder: (
       input: AiAccountReorderInput,
     ) => Effect.Effect<AiAccountListResult, AiAccountError>;
@@ -174,9 +172,9 @@ export class AiAccounts extends Context.Service<
       AiAccountError
     >;
     /**
-     * Ticket 09: a provider instance's key as the Owner's account, allowed to their Personal space
-     * only, in one transaction with its ledger row (`source`). No RPC reaches it. Already moved, or
-     * the same key moved from elsewhere: no new account (`created: false`).
+     * Ticket 09: a provider instance's key as the Owner's account (theirs, so usable in their
+     * Personal space only), in one transaction with its ledger row (`source`). No RPC reaches
+     * it. Already moved, or the same key moved from elsewhere: no new account (`created: false`).
      */
     /** Ticket 09: whether that account exists and holds `key`; unreadable says no. */
     readonly holdsKey: (
@@ -269,12 +267,6 @@ const columnsOf = (owner: ResourceOwner) =>
   owner.kind === "user"
     ? ({ ownerKind: "user", ownerId: owner.userId } as const)
     : ({ ownerKind: "organization", ownerId: owner.spaceId } as const);
-
-interface AllowanceRow {
-  readonly accountId: string;
-  readonly subjectKind: "space" | "user";
-  readonly subjectId: string;
-}
 
 const ACCOUNT_COLUMNS = `
   account_id AS "accountId", name AS "name", type AS "type", provider AS "provider",
@@ -407,9 +399,9 @@ const statusOf = (
 };
 
 /**
- * One account as a User sees it: whoever manages it with every detail but the credential (the
- * allowances only on the Owner's own, to Spaces and Users that still exist); the Owner, of anyone
- * else's, its name, provider, owner and status (`seen`); anyone else with where they may use it.
+ * One account as a User sees it: whoever manages it with every detail but the credential; the
+ * Owner, of anyone else's, its name, provider, owner and status (`seen`); anyone else with where
+ * they may use it. Allowances are gone (Grants ticket 02): always empty, kept for older clients.
  */
 const summaryOf = (
   row: AccountRow,
@@ -417,17 +409,13 @@ const summaryOf = (
   view:
     | {
         readonly _tag: "owner";
-        readonly allowances: ReadonlyArray<AllowanceRow>;
         readonly extras?: ReadonlyMap<string, SubscriptionExtras>;
       }
     | { readonly _tag: "user"; readonly usableIn: ReadonlyArray<SpaceId> }
     | { readonly _tag: "seen"; readonly usableIn: ReadonlyArray<SpaceId> },
 ): AiAccountSummary => {
   const extra = view._tag === "owner" ? view.extras?.get(row.accountId) : undefined;
-  const mine =
-    view._tag === "owner"
-      ? view.allowances.filter((allowance) => allowance.accountId === row.accountId)
-      : [];
+
   return {
     id: row.accountId as AiAccountId,
     name: row.name,
@@ -446,14 +434,7 @@ const summaryOf = (
             keyHint: row.keyHint,
             baseUrl: row.baseUrl,
             models: modelsOfRow(row),
-            allowances: {
-              spaceIds: mine
-                .filter((allowance) => allowance.subjectKind === "space")
-                .map((allowance) => allowance.subjectId as SpaceId),
-              userIds: mine
-                .filter((allowance) => allowance.subjectKind === "user")
-                .map((allowance) => allowance.subjectId as UserId),
-            },
+            allowances: { spaceIds: [], userIds: [] },
             ...(row.type === "subscription"
               ? {
                   signedInAs: extra?.signedInAs ?? null,
@@ -487,7 +468,6 @@ const unavailable = AiAccounts.of({
   create: refuse,
   update: refuse,
   remove: refuse,
-  allow: refuse,
   reorder: refuse,
   modelsOf: refuse,
   ownerSubscriptionLimits: Effect.succeed(null),
@@ -1407,15 +1387,6 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     return row;
   });
 
-  const allowancesOf = (accountIds: ReadonlyArray<string>) =>
-    accountIds.length === 0
-      ? Effect.succeed([] as ReadonlyArray<AllowanceRow>)
-      : sql<AllowanceRow>`
-          SELECT account_id AS "accountId", subject_kind AS "subjectKind", subject_id AS "subjectId"
-          FROM ai_account_allowances WHERE ${sql.in("account_id", accountIds)}
-          ORDER BY subject_kind, subject_id
-        `.pipe(Effect.catch(storage("read who may use the AI accounts")));
-
   /** Accounts whose old key the gateway may still hold (replaced or deleted, not yet dropped). */
   const stillLive = sql<{ readonly accountId: string }>`
     SELECT DISTINCT account_id AS "accountId" FROM ai_account_retired_credentials
@@ -1430,27 +1401,6 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
       running: Option.isSome(yield* gateway.endpoint),
       stillLive: yield* stillLive,
     } satisfies ViewContext;
-  });
-
-  /**
-   * The Owner's existing Spaces and Users, in one read each: an allowance to a deleted Space or a
-   * removed User is not shown and is dropped by the next `allow`.
-   */
-  const existingSubjects = Effect.fn("AiAccounts.existingSubjects")(function* (
-    ownerId: UserId,
-    spaceIds: ReadonlyArray<SpaceId>,
-    /** False: no allowance to check, so no User list (the Owner's alone) is read. */
-    needed = true,
-  ) {
-    if (!needed) return { spaces: new Set<string>(), users: new Set<string>() };
-    const known = yield* spaces.spacesById(spaceIds).pipe(Effect.catch(storage("read the Spaces")));
-    const users = yield* spaces.listUsers(ownerId).pipe(Effect.catch(storage("read the Users")));
-    return {
-      spaces: new Set<string>(known.keys()),
-      users: new Set<string>(
-        users.filter((user) => user.status !== "removed").map((user) => user.id),
-      ),
-    };
   });
 
   /** Quota windows by token file, read from the providers through the gateway (5 min cache). */
@@ -1533,8 +1483,8 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
   });
 
   /**
-   * These accounts as the caller sees them: whoever manages one with its details (allowances on
-   * the Owner's own only, subscriptions' sign-in and quota only to them); the Owner, of anyone
+   * These accounts as the caller sees them: whoever manages one with its details (subscriptions'
+   * sign-in and quota only to them); the Owner, of anyone
    * else's, name, provider, owner and status; anyone else, where they may use it (`usableIn`).
    * Accounts the caller neither manages, sees nor uses are left out.
    */
@@ -1542,30 +1492,16 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     rows: ReadonlyArray<AccountRow>,
     usableIn: ReadonlyMap<string, ReadonlyArray<SpaceId>> = new Map(),
   ) {
-    const { userId, can } = yield* caller;
+    const { can } = yield* caller;
     const resourceOf = yield* resourcesOf(rows);
     const managed = rows.filter((row) => can("aiAccount.manage", resourceOf(row)));
     const managedIds = new Set(managed.map((row) => row.accountId));
-    // Allowances only where the caller may change them: the Owner's own accounts.
-    const allowable = managed.filter((row) => can("aiAccount.allow", resourceOf(row)));
-    const allowances = yield* allowancesOf(allowable.map((row) => row.accountId));
-    const existing = yield* existingSubjects(
-      userId,
-      allowances.flatMap((allowance) =>
-        allowance.subjectKind === "space" ? [allowance.subjectId as SpaceId] : [],
-      ),
-      allowances.length > 0,
-    );
-    const shown = allowances.filter((allowance) =>
-      allowance.subjectKind === "space"
-        ? existing.spaces.has(allowance.subjectId)
-        : existing.users.has(allowance.subjectId),
-    );
+
     const context = yield* viewContext;
     const extras = yield* subscriptionExtras(managed);
     return rows.flatMap((row): ReadonlyArray<AiAccountSummary> => {
       if (managedIds.has(row.accountId)) {
-        return [summaryOf(row, context, { _tag: "owner", allowances: shown, extras })];
+        return [summaryOf(row, context, { _tag: "owner", extras })];
       }
       const where = usableIn.get(row.accountId);
       if (can("aiAccount.view", resourceOf(row))) {
@@ -1972,64 +1908,6 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
       deleted: true,
       gateway: outcome === "not-running" ? "not-running" : "removed",
     } satisfies AiAccountDeleteResult;
-  });
-
-  /**
-   * Replaces who may use it; Spaces and Users that no longer exist are dropped. The Owner's, on
-   * the Owner's own accounts only (AccessPolicy `aiAccount.allow`): anyone else's lends by Grant.
-   */
-  const allow = Effect.fn("AiAccounts.allow")(function* (input: AiAccountAllowInput) {
-    const userId = yield* manager;
-    const row = yield* findAccount(input.accountId);
-    const { can } = yield* caller;
-    if (!can("aiAccount.allow", (yield* resourcesOf([row]))(row))) {
-      return yield* fail("forbidden", "Only the Owner allows the Owner's own AI accounts.");
-    }
-    const existing = yield* existingSubjects(userId, [...new Set(input.spaceIds)]);
-    const spaceIds = [...new Set(input.spaceIds)].filter((id) => existing.spaces.has(id));
-    const userIds = [...new Set(input.userIds)].filter((id) => existing.users.has(id));
-    const at = yield* now;
-    yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const before = yield* sql<AllowanceRow>`
-            SELECT account_id AS "accountId", subject_kind AS "subjectKind", subject_id AS "subjectId"
-            FROM ai_account_allowances WHERE account_id = ${row.accountId}
-          `;
-          const next = new Set([
-            ...spaceIds.map((id) => `space:${id}`),
-            ...userIds.map((id) => `user:${id}`),
-          ]);
-          const had = new Set(
-            before.map((allowance) => `${allowance.subjectKind}:${allowance.subjectId}`),
-          );
-          yield* sql`DELETE FROM ai_account_allowances WHERE account_id = ${row.accountId}`;
-          for (const [kind, ids] of [
-            ["space", spaceIds],
-            ["user", userIds],
-          ] as const) {
-            for (const id of ids) {
-              yield* sql`
-                INSERT INTO ai_account_allowances (account_id, subject_kind, subject_id, created_at)
-                VALUES (${row.accountId}, ${kind}, ${id}, ${at})
-              `;
-            }
-          }
-          yield* audit.record({
-            actor: AuditLog.userActor(userId),
-            action: "ai_account.allow",
-            target: { kind: "ai_account", id: row.accountId, name: row.name },
-            detail: {
-              spaces: spaceIds.length,
-              users: userIds.length,
-              added: [...next].filter((subject) => !had.has(subject)).length,
-              removed: [...had].filter((subject) => !next.has(subject)).length,
-            },
-          });
-        }),
-      )
-      .pipe(Effect.catch(orStorage("change who may use the AI account")));
-    return yield* managedSummaryOf(row.accountId);
   });
 
   /** One owner's order (owned-resources 08); the gateway does not hold it, so it is not touched. */
@@ -2601,13 +2479,13 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
 
   /**
    * Ticket 15: another CLIProxyAPI's auth files, each sealed and disabled as a sign-in leaves it,
-   * allowed to the Owner's Personal space; an identity already held is skipped. No gateway call.
+   * the Owner's own (usable in their Personal space); an identity already held is skipped. No
+   * gateway call.
    */
   const importCliproxy = Effect.fn("AiAccounts.importCliproxy")(function* (
     input: AiAccountImportCliproxyInput,
   ) {
     const userId = yield* manager;
-    const personal = SpaceDirectory.personalSpaceIdOf(userId);
     return yield* syncLock.withPermits(1)(
       Effect.gen(function* () {
         const existing = yield* sql<{
@@ -2680,10 +2558,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
                     ${top + 1}, 'pending', 1, ${confirmMessageOf(read.signedInAs)},
                     ${tokenId}, NULL, NULL, '[]', ${at}, ${at}, ${userId}, 'user', ${userId})
                 `;
-                yield* sql`
-                  INSERT INTO ai_account_allowances (account_id, subject_kind, subject_id, created_at)
-                  VALUES (${accountId}, 'space', ${personal}, ${at})
-                `;
+
                 yield* audit.record({
                   actor: AuditLog.userActor(userId),
                   action: "ai_account.create",
@@ -2817,7 +2692,6 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     const name = candidates.find((candidate) => !taken.has(candidate.toLowerCase()));
     if (name === undefined) return yield* fail("duplicate-name", "No free name for the key.");
     const accountId = yield* newId(8);
-    const spaceId = SpaceDirectory.personalSpaceIdOf(input.ownerId);
     yield* withNewCredential(key, "move a provider key into an AI account", (credentialId) =>
       Effect.gen(function* () {
         const top = yield* topPriorityOf({ ownerKind: "user", ownerId: input.ownerId });
@@ -2829,10 +2703,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
             ${input.type === "direct" ? "working" : "pending"}, 0, ${credentialId}, ${hintOf(key)},
             NULL, ${encodeModels([])}, ${at}, ${at}, ${input.ownerId}, 'user', ${input.ownerId})
         `;
-        yield* sql`
-          INSERT INTO ai_account_allowances (account_id, subject_kind, subject_id, created_at)
-          VALUES (${accountId}, 'space', ${spaceId}, ${at})
-        `;
+
         yield* ledger(accountId);
         yield* audit.record({
           actor: { source: "system" },
@@ -2916,7 +2787,6 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     create,
     update,
     remove,
-    allow,
     reorder,
     modelsOf,
     ownerSubscriptionLimits,
@@ -2939,7 +2809,6 @@ const sweepCredentials = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const credentials = yield* ServerSecretStore.AiAccountCredentialStore;
   yield* sql`DELETE FROM ai_account_retired_credentials`;
-  yield* sql`DELETE FROM ai_account_allowances WHERE account_id IN (SELECT account_id FROM ai_accounts WHERE deleted_at IS NOT NULL)`;
   yield* sql`DELETE FROM ai_accounts WHERE deleted_at IS NOT NULL`;
   const stored = yield* credentials.list;
   const held = new Set(
@@ -3004,13 +2873,6 @@ export const layerWith = (options: AiAccountsOptions) =>
           const removed = yield* accounts.remove(input);
           yield* changes.changed;
           return removed;
-        }),
-        allow: Effect.fn("AiAccounts.allow")(function* (
-          input: Parameters<typeof accounts.allow>[0],
-        ) {
-          const allowed = yield* accounts.allow(input);
-          yield* changes.changed;
-          return allowed;
         }),
       });
     }),

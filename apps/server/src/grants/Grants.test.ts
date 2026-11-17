@@ -474,6 +474,79 @@ const lendAi = (
   });
 
 describe("Grants of AI accounts", () => {
+  it.effect(
+    "the Owner alone reviews what migrated allowances narrowed; lending or dismissing settles it",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* hub;
+        const key = yield* aiAccount(h, "owner-key", { kind: "user", id: h.ownerId });
+        // Left by migration 145: Ana used the Owner's account in Acme and in Globex.
+        yield* h.server.sql`
+          INSERT INTO ai_account_grant_reviews (account_id, user_id, space_id, used_recently,
+            created_at)
+          VALUES (${key}, ${h.ana.id}, ${h.acmeId}, 1, ${at}),
+            (${key}, ${h.ana.id}, ${h.globexId}, 0, ${at})
+        `;
+        // Nothing reaches Ana in Acme until the Owner acts.
+        const live = yield* h.server.sql<{ readonly n: number }>`
+          SELECT COUNT(*) AS n FROM grants WHERE resource_id = ${key}
+        `;
+        assert.equal(live[0]?.n, 0);
+        // Nobody but the Owner sees it, not even an Admin.
+        for (const who of [h.ana.id, h.adam.id]) {
+          const refused = yield* h.grants.migrationReviews.pipe(
+            CommandActor.actAs(who),
+            Effect.flip,
+          );
+          assert.equal(refused.reason, "not-allowed");
+          const dismissed = yield* h.grants
+            .dismissMigrationReview({
+              aiAccountId: key as never,
+              userId: h.ana.id,
+              spaceId: h.acmeId,
+            })
+            .pipe(CommandActor.actAs(who), Effect.flip);
+          assert.equal(dismissed.reason, "not-allowed");
+        }
+        const asOwner = CommandActor.actAs(h.ownerId);
+        const reviews = yield* h.grants.migrationReviews.pipe(asOwner);
+        assert.deepEqual(
+          reviews.reviews.map((review) => [
+            review.spaceName,
+            review.userName,
+            review.usedRecently,
+            review.startsActive,
+          ]),
+          [
+            ["Acme", "ana", true, true],
+            ["Globex", "ana", false, false],
+          ],
+        );
+        // Lent to Acme, which the Owner runs: active at once, and the row is settled.
+        const lent = yield* lendAi(h, h.owner, key, h.acmeId);
+        assert.equal(lent.status, 200, JSON.stringify(lent.body));
+        assert.equal(lent.body.state, "active");
+        const after = yield* h.grants.migrationReviews.pipe(asOwner);
+        assert.deepEqual(
+          after.reviews.map((review) => review.spaceName),
+          ["Globex"],
+        );
+        // Dismissed: gone, and nothing lent to Globex.
+        const dismissed = yield* h.grants
+          .dismissMigrationReview({
+            aiAccountId: key as never,
+            userId: h.ana.id,
+            spaceId: h.globexId,
+          })
+          .pipe(asOwner);
+        assert.deepEqual(dismissed.reviews, []);
+        const globex = yield* h.server.sql<{ readonly n: number }>`
+          SELECT COUNT(*) AS n FROM grants WHERE resource_id = ${key} AND target_id = ${h.globexId}
+        `;
+        assert.equal(globex[0]?.n, 0);
+      }),
+  );
+
   it.effect("a User lends their AI account to their Organization; an Admin accepts it", () =>
     Effect.gen(function* () {
       const h = yield* hub;

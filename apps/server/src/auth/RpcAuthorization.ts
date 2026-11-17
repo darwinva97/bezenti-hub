@@ -141,6 +141,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.grantsListGiven]: AuthAccessReadScope,
   [WS_METHODS.grantsListReceived]: AuthAccessReadScope,
   [WS_METHODS.grantsTargets]: AuthAccessReadScope,
+  // Grants ticket 02: the Owner's review of migrated allowances (Grants checks it is the Owner).
+  [WS_METHODS.grantsMigrationReviews]: AuthAccessReadScope,
   [WS_METHODS.secretProvidersImpact]: AuthAccessReadScope,
   [WS_METHODS.secretProvidersScopesList]: AuthAccessReadScope,
   // Delivery logs hold request bodies, so they need the same scope as the URL.

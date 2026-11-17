@@ -43,6 +43,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import { ProviderSessionManagerV2 } from "../orchestration-v2/ProviderSessionManager.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { type Hub, makeHub, seedProject } from "./HubWithEnvironments.testkit.ts";
+import { lendAccount } from "./HubWithEnvironments.aiAccounts.testkit.ts";
 import {
   createOrganization,
   idleAdapters,
@@ -128,7 +129,7 @@ const fakeCli = (
     })),
   ).pipe(Layer.provide(adapters));
 
-/** An AI account of the Owner's, allowed to Spaces and Users. */
+/** An AI account of the Owner's, lent to Spaces and Users. */
 const addAccount = Effect.fn(function* (
   hub: Hub,
   name: string,
@@ -147,13 +148,7 @@ const addAccount = Effect.fn(function* (
       ...(models === undefined ? {} : { baseUrl: "http://127.0.0.1:9/v1", models: [...models] }),
     })
     .pipe(CommandActor.actAs(owner), Effect.orDie);
-  yield* accounts
-    .allow({
-      accountId: made.id,
-      spaceIds: [...(allow.spaceIds ?? [])],
-      userIds: [...(allow.userIds ?? [])],
-    })
-    .pipe(CommandActor.actAs(owner), Effect.orDie);
+  yield* lendAccount(hub, made.id, allow);
   return made.id;
 });
 

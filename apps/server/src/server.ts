@@ -214,6 +214,7 @@ import * as MachineSecretFiles from "./environment/MachineSecretFiles.ts";
 import * as ThreadSecretFiles from "./secrets/ThreadSecretFiles.ts";
 import * as SecretMasker from "./vaults/SecretMasker.ts";
 import * as MasterKeyBackup from "./auth/MasterKeyBackup.ts";
+import * as AiAccountChanges from "./ai/AiAccountChanges.ts";
 import * as AiAccounts from "./ai/AiAccounts.ts";
 import * as AiGateway from "./ai/AiGateway.ts";
 import * as AiGatewayActivity from "./ai/AiGatewayActivity.ts";
@@ -583,9 +584,11 @@ const layerAuth = Layer.mergeAll(
   // Sandboxes only with a runtime that runs them (`T3CODE_SANDBOX_RUNTIME`, or rootless Podman);
   // the Owner's SSH installs register machines with it.
   // Grants open and close a lent machine's Sandboxes in the registry (Grants ticket 08).
-  Layer.mergeAll(SshInstall.layer, Grants.layer.pipe(Layer.provide(AuditLog.layer))).pipe(
-    Layer.provideMerge(EnvironmentRegistry.layerFromConfig),
-  ),
+  // A loan that ends signals AiAccountChanges (shared with AiAccounts) for AiSessionReach.
+  Layer.mergeAll(
+    SshInstall.layer,
+    Grants.layer.pipe(Layer.provide(AuditLog.layer), Layer.provide(AiAccountChanges.layer)),
+  ).pipe(Layer.provideMerge(EnvironmentRegistry.layerFromConfig)),
 ).pipe(
   Layer.provideMerge(EnvironmentAuth.layer.pipe(Layer.provideMerge(SpaceDirectory.layer))),
   Layer.provideMerge(layerPersistence),

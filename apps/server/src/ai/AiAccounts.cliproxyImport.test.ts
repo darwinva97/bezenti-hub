@@ -135,7 +135,6 @@ live(
       );
       assert.isFalse(mentionsAToken(JSON.stringify(result)), "a token in the answer");
 
-      const personal = SpaceDirectory.personalSpaceIdOf(setup.ownerId);
       const listed = yield* setup.accounts.list.pipe(setup.asOwner);
       for (const file of result.files) {
         const account = listed.accounts.find((one) => one.id === file.accountId);
@@ -144,7 +143,8 @@ live(
         assert.isTrue(account!.disabled, `${file.fileName} enabled`);
         assert.include(account!.statusMessage ?? "", `Signed in as ${file.signedInAs}`);
         assert.equal(account!.details?.signedInAs, file.signedInAs);
-        assert.deepEqual(account!.details?.allowances, { spaceIds: [personal], userIds: [] });
+        // The Owner's own: usable in their Personal space without a loan (Grants ticket 02).
+        assert.deepEqual(account!.owner, { kind: "user", userId: setup.ownerId });
       }
       assert.deepEqual(
         listed.accounts.filter((one) => one.type === "subscription").map((one) => one.provider),

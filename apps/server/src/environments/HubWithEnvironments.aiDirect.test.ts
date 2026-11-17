@@ -57,6 +57,7 @@ import {
   startSandbox,
 } from "./HubWithEnvironments.scenarios.testkit.ts";
 import { databaseText, threadWorkspaceOf } from "./HubWithEnvironments.secretMasking.testkit.ts";
+import { lendAccount } from "./HubWithEnvironments.aiAccounts.testkit.ts";
 
 const CURSOR = ProviderDriverKind.make("cursor");
 const instanceId = "cursor" as ProviderInstanceId;
@@ -130,7 +131,7 @@ const cursorOnly = ProviderAdapterRegistry.layerFromAdapters([
   },
 ]);
 
-/** A direct AI account of the Owner's, allowed to Spaces and Users. */
+/** A direct AI account of the Owner's, lent to Spaces and Users (as migration 145 did). */
 const addDirectAccount = Effect.fn(function* (
   hub: Hub,
   input: {
@@ -151,13 +152,10 @@ const addDirectAccount = Effect.fn(function* (
       apiKey: Redacted.make(input.key),
     })
     .pipe(CommandActor.actAs(owner), Effect.orDie);
-  yield* accounts
-    .allow({
-      accountId: made.id,
-      spaceIds: [...(input.spaceIds ?? [])],
-      userIds: [...(input.userIds ?? [])],
-    })
-    .pipe(CommandActor.actAs(owner), Effect.orDie);
+  yield* lendAccount(hub, made.id, {
+    spaceIds: input.spaceIds ?? [],
+    userIds: input.userIds ?? [],
+  });
   return made;
 });
 

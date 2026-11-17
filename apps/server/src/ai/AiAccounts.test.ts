@@ -41,6 +41,7 @@ import {
   makeAuthenticator,
   serveAuthHttp,
 } from "../auth/UserAuth.testkit.ts";
+import { lendAiAccount } from "../grants/Grants.testkit.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as AiAccounts from "./AiAccounts.ts";
 import * as AiGateway from "./AiGateway.ts";
@@ -237,12 +238,11 @@ const reasonOf = <A, R>(effect: Effect.Effect<A, AiAccountError, R>) =>
   Effect.map(Effect.flip(effect), (error) => error.reason);
 
 /**
- * The Owner's setup: «Acme OpenRouter» (openai-compatible) allowed to Acme, «Globex Claude»
- * allowed to Globex, «Grace Gemini» allowed to the User grace, «Old Acme» allowed to Acme and
- * disabled.
+ * The Owner's setup: «Acme OpenRouter» (openai-compatible) lent to Acme, «Globex Claude» lent to
+ * Globex, «Grace Gemini» lent to grace's Personal space, «Old Acme» lent to Acme and disabled.
  */
 const ownerSetup = Effect.fn(function* (setup: Hub) {
-  const { accounts, as, ownerId, acmeId, globexId, people } = setup;
+  const { accounts, as, ownerId, acmeId, globexId, people, server } = setup;
   const acme = yield* accounts
     .create({
       name: "Acme OpenRouter",
@@ -261,14 +261,15 @@ const ownerSetup = Effect.fn(function* (setup: Hub) {
   const old = yield* accounts
     .create({ name: "Old Acme", provider: "codex", apiKey: Redacted.make(`${ACME_KEY}-old`) })
     .pipe(as(ownerId));
-  yield* accounts.allow({ accountId: acme.id, spaceIds: [acmeId], userIds: [] }).pipe(as(ownerId));
-  yield* accounts
-    .allow({ accountId: globex.id, spaceIds: [globexId], userIds: [] })
-    .pipe(as(ownerId));
-  yield* accounts
-    .allow({ accountId: grace.id, spaceIds: [], userIds: [people.member] })
-    .pipe(as(ownerId));
-  yield* accounts.allow({ accountId: old.id, spaceIds: [acmeId], userIds: [] }).pipe(as(ownerId));
+  const lender = { kind: "user", id: ownerId } as const;
+  for (const [accountId, spaceId] of [
+    [acme.id, acmeId],
+    [globex.id, globexId],
+    [grace.id, SpaceId.make(`personal:${people.member}`)],
+    [old.id, acmeId],
+  ] as const) {
+    yield* lendAiAccount(server.sql, { accountId, lender, spaceId });
+  }
   yield* accounts.update({ accountId: old.id, disabled: true }).pipe(as(ownerId));
   return { acme, globex, grace, old };
 });
@@ -277,7 +278,7 @@ const namesOf = (accounts: ReadonlyArray<AiAccountSummary>) =>
   accounts.map((account) => account.name).toSorted();
 
 it.live.skipIf(!posix || platform === undefined)(
-  "only the Owner changes, allows, orders and deletes the Owner's AI accounts",
+  "only the Owner changes, orders and deletes the Owner's AI accounts",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub();
@@ -307,15 +308,10 @@ it.live.skipIf(!posix || platform === undefined)(
           yield* reasonOf(
             accounts.update({ accountId: acme.id, apiKey: Redacted.make(REPLACED_KEY) }).pipe(run),
           ),
-          yield* reasonOf(
-            accounts
-              .allow({ accountId: acme.id, spaceIds: [acmeId], userIds: [UserId.make(who)] })
-              .pipe(run),
-          ),
           yield* reasonOf(accounts.reorder({ accountIds: [acme.id], owner: ownersOwn }).pipe(run)),
           yield* reasonOf(accounts.remove({ accountId: acme.id }).pipe(run)),
         ];
-        assert.deepEqual(refused, Array(6).fill("forbidden"), `${who} managed an AI account`);
+        assert.deepEqual(refused, Array(5).fill("forbidden"), `${who} managed an AI account`);
       }
       // The Owner's agent bound to Acme adds nothing of the Owner's own either.
       assert.equal(
@@ -414,13 +410,6 @@ it.live.skipIf(!posix || platform === undefined)(
         .update({ accountId: mine.id, name: "Grace's Claude" })
         .pipe(as(grace));
       assert.equal(renamed.name, "Grace's Claude");
-      // Allowances are the Owner's, on the Owner's accounts only: hers lend through Grants.
-      assert.equal(
-        yield* reasonOf(
-          accounts.allow({ accountId: mine.id, spaceIds: [acmeId], userIds: [] }).pipe(as(grace)),
-        ),
-        "forbidden",
-      );
 
       // The Owner sees it with its owner and status, never its details; and changes nothing.
       const owners = yield* accounts.list.pipe(as(ownerId));
@@ -439,15 +428,12 @@ it.live.skipIf(!posix || platform === undefined)(
         yield* reasonOf(accounts.update({ accountId: mine.id, disabled: true }).pipe(as(ownerId))),
         yield* reasonOf(accounts.remove({ accountId: mine.id }).pipe(as(ownerId))),
         yield* reasonOf(
-          accounts.allow({ accountId: mine.id, spaceIds: [acmeId], userIds: [] }).pipe(as(ownerId)),
-        ),
-        yield* reasonOf(
           accounts
             .reorder({ accountIds: [mine.id, second.id], owner: gracesOwn })
             .pipe(as(ownerId)),
         ),
       ];
-      assert.deepEqual(ownerTries, Array(5).fill("forbidden"));
+      assert.deepEqual(ownerTries, Array(4).fill("forbidden"));
       // Nobody else sees or touches it.
       for (const who of [people.admin, people.guest, people.globexMember]) {
         const theirs = yield* accounts.list.pipe(as(who));
@@ -505,7 +491,7 @@ it.live.skipIf(!posix || platform === undefined)(
         member.accounts.map((account) => [account.name, account.usableIn]),
         [
           ["Acme OpenRouter", [acmeId]],
-          ["Grace Gemini", [acmeId, SpaceId.make(`personal:${people.member}`)]],
+          ["Grace Gemini", [SpaceId.make(`personal:${people.member}`)]],
         ],
       );
       // Same rule for an Admin and a Guest of Acme: Acme's, not Globex's, not grace's own.
@@ -523,7 +509,8 @@ it.live.skipIf(!posix || platform === undefined)(
       const full = yield* seenBy(ownerId);
       const acme = full.accounts.find((account) => account.name === "Acme OpenRouter");
       assert.equal(acme?.details?.keyHint, ACME_KEY.slice(-4));
-      assert.deepEqual(acme?.details?.allowances, { spaceIds: [acmeId], userIds: [] });
+      // Allowances became Grants (Grants ticket 02): always empty, kept for older clients.
+      assert.deepEqual(acme?.details?.allowances, { spaceIds: [], userIds: [] });
       assert.deepEqual(acme?.details?.models, ["deepseek-chat", "deepseek-reasoner"]);
       const everything = JSON.stringify([
         full,
@@ -538,37 +525,42 @@ it.live.skipIf(!posix || platform === undefined)(
 );
 
 it.live.skipIf(!posix || platform === undefined)(
-  "AllowedAiAccounts: the Space's and the User's, only where the User works, none disabled",
+  "AllowedAiAccounts: what is lent to the Space, only where the User works, none disabled",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub();
-      const { accounts, allowed, as, ownerId, acmeId, globexId, people, directory } = setup;
+      const { accounts, allowed, as, ownerId, acmeId, globexId, people, directory, server } = setup;
       const { acme, globex, grace, old } = yield* ownerSetup(setup);
       const ids = (userId: UserId, spaceId: SpaceId) =>
         allowed.for(userId, spaceId).pipe(Effect.map((list) => list.map((account) => account.id)));
 
-      // Allowed to Acme: grace in Acme, not gus (who is not in Acme), not grace in Globex.
-      assert.deepEqual(yield* ids(people.member, acmeId), [acme.id, grace.id]);
+      const gracesPersonal = SpaceId.make(`personal:${people.member}`);
+      // Lent to Acme: grace in Acme, not gus (who is not in Acme), not grace in Globex.
+      assert.deepEqual(yield* ids(people.member, acmeId), [acme.id]);
       assert.deepEqual(yield* ids(people.globexMember, acmeId), []);
       assert.deepEqual(yield* ids(people.member, globexId), []);
       assert.deepEqual(yield* ids(people.globexMember, globexId), [globex.id]);
-      // Allowed to grace: hers in her Spaces, nobody else's.
+      // Lent to grace's Personal space: there only, for nobody else.
+      assert.deepEqual(yield* ids(people.member, gracesPersonal), [grace.id]);
       assert.deepEqual(yield* ids(people.admin, acmeId), [acme.id]);
       assert.deepEqual(yield* ids(people.guest, acmeId), [acme.id]);
       assert.deepEqual(yield* ids(ownerId, acmeId), [acme.id]);
       assert.notInclude(yield* ids(ownerId, acmeId), old.id);
 
-      // Changes count from the next call: an allowance gone, an account disabled, a Member out.
-      yield* accounts.allow({ accountId: acme.id, spaceIds: [], userIds: [] }).pipe(as(ownerId));
-      assert.deepEqual(yield* ids(people.member, acmeId), [grace.id]);
-      yield* accounts.update({ accountId: grace.id, disabled: true }).pipe(as(ownerId));
+      // Changes count from the next call: a loan ended, an account disabled, a Member out.
+      yield* server.sql`
+        UPDATE grants SET state = 'ended', end_reason = 'revoked', ended_at = decided_at
+        WHERE resource_id = ${acme.id}
+      `;
       assert.deepEqual(yield* ids(people.member, acmeId), []);
+      yield* accounts.update({ accountId: grace.id, disabled: true }).pipe(as(ownerId));
+      assert.deepEqual(yield* ids(people.member, gracesPersonal), []);
       yield* accounts.update({ accountId: grace.id, disabled: false }).pipe(as(ownerId));
-      assert.deepEqual(yield* ids(people.member, acmeId), [grace.id]);
+      assert.deepEqual(yield* ids(people.member, gracesPersonal), [grace.id]);
       yield* directory.removeMembership({ spaceId: acmeId, userId: people.member });
       yield* directory.membershipsChanged([people.member]);
       assert.deepEqual(yield* ids(people.member, acmeId), []);
-      // Out of Acme she still works in her Personal space, where the one allowed to her goes on.
+      // Out of Acme she still works in her Personal space, where the one lent to her goes on.
       assert.deepEqual(namesOf((yield* accounts.list.pipe(as(people.member))).accounts), [
         "Grace Gemini",
       ]);
@@ -722,7 +714,7 @@ it.live.skipIf(!posix || platform === undefined)(
       `;
       assert.includeMembers(
         audits.map((row) => row.action),
-        ["ai_account.create", "ai_account.update", "ai_account.allow"],
+        ["ai_account.create", "ai_account.update"],
       );
       const files = NodeFS.readdirSync(credentialsDir);
       assert.isAbove(files.length, 0);
@@ -937,24 +929,15 @@ it.live.skipIf(!posix || platform === undefined)(
 );
 
 it.live.skipIf(!posix || platform === undefined)(
-  "renames, allowances and order leave the gateway alone; an unreadable model list is unverified",
+  "renames and order leave the gateway alone; an unreadable model list is unverified",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub();
-      const { accounts, as, ownerId, gateway, memory, acmeId } = setup;
+      const { accounts, as, ownerId, gateway, memory } = setup;
       yield* waitRunning(gateway);
       const { acme, old } = yield* ownerSetup(setup);
       const before = patchesSent(memory);
       yield* accounts.update({ accountId: acme.id, name: "Acme renamed" }).pipe(as(ownerId));
-      const allowed = yield* accounts
-        .allow({
-          accountId: acme.id,
-          // A Space deleted meanwhile is dropped, not refused.
-          spaceIds: [acmeId, SpaceId.make("space-deleted-meanwhile")],
-          userIds: [UserId.make("user-removed-meanwhile")],
-        })
-        .pipe(as(ownerId));
-      assert.deepEqual(allowed.details?.allowances, { spaceIds: [acmeId], userIds: [] });
       const order = (yield* accounts.list.pipe(as(ownerId))).accounts.map((account) => account.id);
       yield* accounts.reorder({ accountIds: order.toReversed() }).pipe(as(ownerId));
       assert.equal(patchesSent(memory), before, "a change the gateway does not hold reached it");
@@ -1044,9 +1027,11 @@ it.live.skipIf(!posix || platform === undefined)(
       const ownerAccount = yield* accounts
         .create({ name: "Owner Claude", provider: "claude", apiKey: Redacted.make(ACME_KEY) })
         .pipe(as(ownerId));
-      yield* accounts
-        .allow({ accountId: ownerAccount.id, spaceIds: [acmeId], userIds: [] })
-        .pipe(as(ownerId));
+      yield* lendAiAccount(server.sql, {
+        accountId: ownerAccount.id,
+        lender: { kind: "user", id: ownerId },
+        spaceId: acmeId,
+      });
       const anaAccount = yield* accounts
         .create({ name: "Ana Claude", provider: "claude", apiKey: Redacted.make(ANA_KEY) })
         .pipe(as(ana));
@@ -1126,10 +1111,11 @@ it.live.skipIf(!posix || platform === undefined)(
             deleted_at AS deleted
           FROM ai_accounts ORDER BY account_id
         `.pipe(Effect.map((list) => new Map(list.map((row) => [row.id, { ...row }]))));
-      const allowances = () =>
+      // Loans are Grants (Grants ticket 02): none of these doors changes one.
+      const loans = () =>
         server.sql<{ readonly row: string }>`
-          SELECT account_id || ' ' || subject_kind || ' ' || subject_id AS row
-          FROM ai_account_allowances ORDER BY row
+          SELECT resource_id || ' ' || target_id || ' ' || state AS row
+          FROM grants ORDER BY row
         `.pipe(Effect.map((list) => list.map((entry) => entry.row)));
       for (const who of sessions) {
         const act = as(who.id, who.limit);
@@ -1139,7 +1125,7 @@ it.live.skipIf(!posix || platform === undefined)(
         });
         const mayManage = new Set(who.manages.map((account) => account.id));
         const before = yield* rows();
-        const allowedBefore = yield* allowances();
+        const loansBefore = yield* loans();
         yield* call("ws:aiAccounts.list", accounts.list);
         for (const account of all) {
           if (mayManage.has(account.id)) continue;
@@ -1150,10 +1136,6 @@ it.live.skipIf(!posix || platform === undefined)(
           yield* call(
             "ws:aiAccounts.update",
             accounts.update({ accountId: account.id, apiKey: Redacted.make(WRITTEN_KEY) }),
-          );
-          yield* call(
-            "ws:aiAccounts.allow",
-            accounts.allow({ accountId: account.id, spaceIds: [globexId], userIds: [] }),
           );
           yield* call("ws:aiAccounts.delete", accounts.remove({ accountId: account.id }));
         }
@@ -1185,7 +1167,7 @@ it.live.skipIf(!posix || platform === undefined)(
             `${who.name} changed ${account.name}`,
           );
         }
-        assert.deepEqual(yield* allowances(), allowedBefore, `${who.name} changed an allowance`);
+        assert.deepEqual(yield* loans(), loansBefore, `${who.name} changed a loan`);
       }
 
       // No answer, refusal included, holds a credential.

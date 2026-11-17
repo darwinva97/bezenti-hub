@@ -38,7 +38,7 @@ import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import {
   addDirectAccount,
   addGatewayAccount,
-  allowAccount,
+  lendAccount,
   callGateway,
   eventually,
   fakeGatewayCli,
@@ -148,7 +148,7 @@ const auditsOf = (hub: Hub, action: string) =>
 
 describe("Hub con Environments: removals drop what an AI account no longer reaches (spec 4 ticket 11)", () => {
   it.live(
-    "a removed User's keys (Thread and local CLI) answer 401 at once, revoked and audited in the removal's commit; allowances to them go; their process closes",
+    "a removed User's keys (Thread and local CLI) answer 401 at once, revoked and audited in the removal's commit; their process closes",
     () =>
       Effect.gen(function* () {
         const loaded = yield* loadFixture("simple");
@@ -162,7 +162,7 @@ describe("Hub con Environments: removals drop what an AI account no longer reach
         const ada = yield* withAda(hub, acme);
         const models = [GATEWAY_MODEL, loaded.variant.modelSelection.model];
         yield* addGatewayAccount(hub, "Acme Claude", { spaceIds: [acme] }, models);
-        const adaAccount = yield* addGatewayAccount(hub, "Ada Claude", { userIds: [ada] }, models);
+        yield* addGatewayAccount(hub, "Ada Claude", { userIds: [ada] }, models);
         yield* startSandbox(hub, acme);
         const thread = yield* replayedThread(
           hub,
@@ -205,16 +205,8 @@ describe("Hub con Environments: removals drop what an AI account no longer reach
           401,
           "the local CLI key",
         );
-        // Nothing stays allowed to them, audited as taken back.
-        const allowances = yield* hub.server.sql<{ readonly n: number }>`
-          SELECT COUNT(*) AS n FROM ai_account_allowances
-          WHERE subject_id IN (${ada}, ${`personal:${ada}`})
-        `;
-        assert.equal(allowances[0]?.n, 0);
-        const taken = (yield* auditsOf(hub, "ai_account.allow")).filter(
-          (row) => row.target === adaAccount && row.detail.includes('"removed":1'),
-        );
-        assert.lengthOf(taken, 1);
+        // What was lent to their Personal space reaches nobody (it is frozen); ending such loans
+        // is Grants ticket 11.
         assert.isTrue(
           yield* eventually(isClosed(hub, thread.providerSessionId)),
           "the process started for them closes",
@@ -223,7 +215,7 @@ describe("Hub con Environments: removals drop what an AI account no longer reach
   );
 
   it.live(
-    "an allowance taken back closes the process holding that account's direct key, also on a machine that was away",
+    "a loan taken back closes the process holding that account's direct key, also on a machine that was away",
     () =>
       Effect.gen(function* () {
         const loaded = yield* loadFixture("simple");
@@ -250,7 +242,7 @@ describe("Hub con Environments: removals drop what an AI account no longer reach
         // Away while the Owner takes the account back from Acme.
         yield* laptop.disconnect;
         const from = laptop.requests.length;
-        yield* allowAccount(hub, account, {});
+        yield* lendAccount(hub, account, {});
         assert.isTrue(
           yield* eventually(isClosed(hub, thread.providerSessionId)),
           "the Hub closes the session at once",
@@ -314,43 +306,30 @@ describe("Hub con Environments: removals drop what an AI account no longer reach
       }).pipe(Effect.scoped),
   );
 
-  it.live(
-    "deleting an Organization revokes the local CLI keys made for it and drops its allowances, audited",
-    () =>
-      Effect.gen(function* () {
-        const hub = yield* makeHub({ aiAccounts: true });
-        const owner = yield* ownerIdOf(hub);
-        const acme = yield* createOrganization(hub, "Acme");
-        const ada = yield* withAda(hub, acme);
-        const account = yield* addGatewayAccount(hub, "Acme Claude", { spaceIds: [acme] }, [
-          GATEWAY_MODEL,
-        ]);
-        const cliKey = yield* hub
-          .service(AiGatewayKeys.AiGatewayKeys)
-          .createForUser({ actorUserId: ada, spaceId: acme, name: "Laptop CLI" })
-          .pipe(Effect.orDie);
-        const organizations = hub.service(OrganizationLifecycle.OrganizationLifecycle);
-        yield* organizations.archive(owner, acme).pipe(Effect.orDie);
-        yield* organizations.delete(owner, acme).pipe(Effect.orDie);
+  it.live("deleting an Organization revokes the local CLI keys made for it, audited", () =>
+    Effect.gen(function* () {
+      const hub = yield* makeHub({ aiAccounts: true });
+      const owner = yield* ownerIdOf(hub);
+      const acme = yield* createOrganization(hub, "Acme");
+      const ada = yield* withAda(hub, acme);
+      yield* addGatewayAccount(hub, "Acme Claude", { spaceIds: [acme] }, [GATEWAY_MODEL]);
+      const cliKey = yield* hub
+        .service(AiGatewayKeys.AiGatewayKeys)
+        .createForUser({ actorUserId: ada, spaceId: acme, name: "Laptop CLI" })
+        .pipe(Effect.orDie);
+      const organizations = hub.service(OrganizationLifecycle.OrganizationLifecycle);
+      yield* organizations.archive(owner, acme).pipe(Effect.orDie);
+      yield* organizations.delete(owner, acme).pipe(Effect.orDie);
 
-        const [key] = yield* hub.server.sql<{ readonly reason: string | null }>`
+      const [key] = yield* hub.server.sql<{ readonly reason: string | null }>`
           SELECT revoked_reason AS reason FROM ai_gateway_keys WHERE key_id = ${cliKey.keyId}
         `;
-        assert.equal(key?.reason, "space-lost");
-        const allowances = yield* hub.server.sql<{ readonly n: number }>`
-          SELECT COUNT(*) AS n FROM ai_account_allowances WHERE subject_id = ${acme}
-        `;
-        assert.equal(allowances[0]?.n, 0);
-        const audits = yield* auditsOf(hub, "ai_account.allow");
-        assert.isTrue(
-          audits.some((row) => row.target === account && row.actor === owner),
-          "the allowance taken back is audited",
-        );
-        assert.equal(
-          (yield* callGateway(hub.server.url, Redacted.value(cliKey.key))).status,
-          403,
-          "its holder is told the Space is gone",
-        );
-      }).pipe(Effect.scoped),
+      assert.equal(key?.reason, "space-lost");
+      assert.equal(
+        (yield* callGateway(hub.server.url, Redacted.value(cliKey.key))).status,
+        403,
+        "its holder is told the Space is gone",
+      );
+    }).pipe(Effect.scoped),
   );
 });

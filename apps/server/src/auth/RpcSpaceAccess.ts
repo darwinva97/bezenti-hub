@@ -80,7 +80,7 @@ const AI_ACCOUNTS_LIST = {
 /** AI accounts are their owners' (owned-resources 08): AiAccounts decides each write. */
 const AI_ACCOUNTS_WRITE = {
   unscoped:
-    "AI accounts: AiAccounts decides each write by AccessPolicy `aiAccount.manage` on the account's owner (a User's own, an Organization's Admins), through SpaceDirectory.authorizer (spaceLimit too); importing CLIProxyAPI files and allowances stay the Owner's on the Installation; no credential is returned",
+    "AI accounts: AiAccounts decides each write by AccessPolicy `aiAccount.manage` on the account's owner (a User's own, an Organization's Admins), through SpaceDirectory.authorizer (spaceLimit too); importing CLIProxyAPI files stays the Owner's on the Installation (allowances became Grants); no credential is returned",
 };
 /** The picker names a Space: AllowedAiAccounts answers nothing where the User does not work. */
 const AI_ACCOUNTS_PICKER = {
@@ -175,6 +175,8 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.grantsCancel]: GRANTS,
   [WS_METHODS.grantsEnd]: GRANTS,
   [WS_METHODS.grantsSetLimits]: GRANTS,
+  [WS_METHODS.grantsMigrationReviews]: GRANTS,
+  [WS_METHODS.grantsDismissMigrationReview]: GRANTS,
   [WS_METHODS.projectsCreateFromThread]: "thread",
   // An app acts inside its Thread's live session, so it is its creator's, like a message.
   [WS_METHODS.mcpAppsCallTool]: "owned",

@@ -258,13 +258,9 @@ it.live.skipIf(!posix || platform === undefined)(
         ],
       );
       for (const account of accounts) assert.equal(account.createdBy, ownerId);
-      const allowances = yield* sql<{ readonly subject: string }>`
-        SELECT subject_kind || ':' || subject_id AS subject FROM ai_account_allowances
-      `;
-      assert.deepEqual(
-        allowances.map((row) => row.subject),
-        accounts.map(() => `space:personal:${ownerId}`),
-      );
+      // The Owner's own, so usable in their Personal space with no loan (Grants ticket 02).
+      const lent = yield* sql<{ readonly n: number }>`SELECT COUNT(*) AS n FROM grants`;
+      assert.equal(lent[0]?.n, 0);
       const audit = yield* sql<{ readonly source: string; readonly detail: string }>`
         SELECT actor_source AS source, detail_json AS detail FROM audit_log
         WHERE action = 'ai_account.create'

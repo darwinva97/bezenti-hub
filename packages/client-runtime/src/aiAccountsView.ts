@@ -126,7 +126,6 @@ export const MOBILE_FORBIDDEN_AI_METHODS: ReadonlyArray<string> = [
   WS_METHODS.aiAccountsCreate,
   WS_METHODS.aiAccountsUpdate,
   WS_METHODS.aiAccountsDelete,
-  WS_METHODS.aiAccountsAllow,
   WS_METHODS.aiAccountsReorder,
   WS_METHODS.aiGatewayUpdate,
   WS_METHODS.aiGatewayRollback,

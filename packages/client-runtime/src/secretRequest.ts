@@ -3,7 +3,7 @@ import {
   SECRET_MASK_MIN_LENGTH,
   type SecretRequestAnswerInput,
   secretNameRisk,
-  type VaultId,
+  type VaultGroupId,
 } from "@t3tools/contracts";
 
 /**
@@ -85,7 +85,7 @@ export function secretRequestAnswerInput(
         readonly type: "save";
         readonly secret: string;
         /** «Also save to Vault»: the Hub accepts only a Vault it offered for this Thread. */
-        readonly saveToVault?: { readonly vaultId: VaultId; readonly name: string };
+        readonly saveToVault?: { readonly vaultId: VaultGroupId; readonly name: string };
       }
     | { readonly type: "decline" },
 ): SecretRequestAnswerInput | null {
@@ -152,3 +152,12 @@ export function secretRequestFailureMessage(failure: unknown): string {
   }
   return "Could not answer the request. Try again.";
 }
+
+/** A save target as the card names it: the group and whose Vault it is part of. */
+export const secretRequestTargetLabel = (target: {
+  readonly name: string;
+  readonly ownerName?: string | null;
+}) =>
+  target.ownerName === undefined || target.ownerName === null
+    ? target.name
+    : `${target.name} · ${target.ownerName}`;

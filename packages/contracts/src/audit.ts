@@ -38,6 +38,9 @@ export const AuditAction = Schema.Literals([
   "vault.create",
   "vault.update",
   "vault.delete",
+  "vault_group.create",
+  "vault_group.update",
+  "vault_group.delete",
   "vault.allow",
   "vault.choose",
   "secret.master_key.export",
@@ -149,10 +152,9 @@ export const AUDIT_DETAIL_KEYS = {
    */
   "secret.reveal": ["vault", "vaultId", "kind"],
   /**
-   * The Vault's name and id and the entry's kind, with `op`: `add`, `replace` (a new value),
-   * `rename`, `describe`, `link`, `copy` or `delete` (`brokenLinks`: how many Secret links its
-   * deletion broke), `class` (`class`: the new one), and on older rows `seal` or `allow-reveal`;
-   * `dangerous` when the Owner confirmed a name that changes how tools run.
+   * Group (`vault`, `vaultId`), kind and `op`: add, replace, rename, describe, delete, class,
+   * unlinked (migration 142, `from` link|copy); older rows: link, copy, seal, allow-reveal,
+   * `brokenLinks`. `dangerous` when such a name was confirmed. Never a value.
    */
   "secret.edit": [
     "vault",
@@ -168,11 +170,16 @@ export const AUDIT_DETAIL_KEYS = {
     // How it reaches a process (`op: delivery` when that changed); a template's text never goes.
     "delivery",
   ],
+  /** Before owned-resources 03 (a Vault); later rows say `vault_group.*`. */
   "vault.create": [],
-  /** The name `from` and `to`, whether it was described, and `archived` when that changed. */
   "vault.update": ["from", "to", "described", "archived"],
-  /** How many secrets it held. */
   "vault.delete": ["entries"],
+  /** A group of a Vault (owned-resources 03): whose Vault it is part of. */
+  "vault_group.create": ["ownerKind", "ownerId"],
+  /** The name `from` and `to`, whether it was described, and `archived` when that changed. */
+  "vault_group.update": ["from", "to", "described", "archived"],
+  /** How many entries it held. */
+  "vault_group.delete": ["entries"],
   /** Allowed (`allowed`: true) or taken back, to a `space` or a `user` (`subjectKind`, `subjectId`). */
   "vault.allow": ["subjectKind", "subjectId", "subjectName", "allowed"],
   /**

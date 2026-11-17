@@ -1,11 +1,12 @@
 import {
+  type ResourceOwner,
   secretNameRisk,
   type VaultEntriesListResult,
   type VaultEntry,
-  type VaultId,
-  type VaultListResult,
+  type VaultGroupId,
+  type VaultGroupListResult,
   type VaultSource,
-  type VaultSummary,
+  type VaultGroupSummary,
   type VaultThreadEnvironment,
 } from "@t3tools/contracts";
 
@@ -29,7 +30,7 @@ export interface VaultActions {
  * every call. Nothing reads a Secret back (owned-resources 01).
  */
 export function vaultActions(
-  vault: Pick<VaultSummary, "canEdit">,
+  vault: Pick<VaultGroupSummary, "canEdit">,
   context: { readonly mayWrite: boolean; readonly surface: VaultSurface },
 ): VaultActions {
   const edit = vault.canEdit && context.mayWrite;
@@ -43,12 +44,9 @@ export interface EntryActions extends VaultActions {
   readonly makeSecret: boolean;
 }
 
-/**
- * A link is replaced at its original, and is what its original is; a name that changes how tools
- * run is the Owner's.
- */
+/** A name that changes how tools run is the Owner's (or, from owned-resources 04, its User's). */
 export function entryActions(
-  vault: Pick<VaultSummary, "canEdit">,
+  vault: Pick<VaultGroupSummary, "canEdit">,
   entry: Pick<VaultEntry, "kind" | "name"> & Partial<Pick<VaultEntry, "class">>,
   context: {
     readonly mayWrite: boolean;
@@ -64,7 +62,6 @@ export function entryActions(
   const mayReplace =
     base.replace &&
     !dangerousOnPhone &&
-    entry.kind !== "link" &&
     entry.kind !== "provider" &&
     entry.kind !== "template" &&
     (secretNameRisk(entry.name) !== "dangerous" || context.isOwner);
@@ -79,15 +76,7 @@ export function entryActions(
 
 export function entryBadges(entry: VaultEntry): ReadonlyArray<string> {
   const badges: string[] = [];
-  if (entry.kind === "link") {
-    badges.push(
-      entry.broken
-        ? "broken"
-        : `linked from Main vault${entry.linkedFrom === null ? "" : ` (${entry.linkedFrom.name})`}`,
-    );
-  } else if (entry.kind === "copy") {
-    badges.push("copy");
-  } else if (entry.kind === "template") {
+  if (entry.kind === "template") {
     badges.push(entry.broken ? "broken" : "template");
   }
   if (entry.delivery === "file") badges.push("file");
@@ -96,9 +85,59 @@ export function entryBadges(entry: VaultEntry): ReadonlyArray<string> {
   return badges;
 }
 
-export function vaultOwnerLine(vault: Pick<VaultSummary, "isMain" | "spaceName">): string {
-  if (vault.isMain) return "Yours alone; reaches Organizations only through links or copies";
-  return vault.spaceName === null ? "Yours alone" : `${vault.spaceName}'s`;
+/** Whose Vault a group is part of, as a line under its name. */
+export function vaultOwnerLine(
+  group: Pick<VaultGroupSummary, "owner" | "ownerName" | "isDefault">,
+  viewer: { readonly userId: string | null },
+): string {
+  const whose =
+    group.owner.kind === "user" && group.owner.userId === viewer.userId
+      ? "Your Vault"
+      : `${group.ownerName ?? "A removed owner"}'s Vault`;
+  return group.isDefault ? `${whose}; every Thread of its Space receives it` : whose;
+}
+
+/** One section of Settings → Vaults: an owner and its groups, `default` first. */
+export interface VaultOwnerSection {
+  readonly owner: ResourceOwner;
+  readonly name: string;
+  /** The viewer's own (a User's own Vault). */
+  readonly mine: boolean;
+  readonly groups: ReadonlyArray<VaultGroupSummary>;
+  /** The viewer may create groups in it. */
+  readonly canCreate: boolean;
+}
+
+const ownerKey = (owner: ResourceOwner) =>
+  owner.kind === "user" ? `user:${owner.userId}` : `organization:${owner.spaceId}`;
+
+/** The groups by owner, in the Hub's order (the viewer's own first); owners they may add to too. */
+export function vaultSections(
+  listed: Pick<VaultGroupListResult, "groups" | "owners">,
+  viewer: { readonly userId: string | null },
+): ReadonlyArray<VaultOwnerSection> {
+  const sections = new Map<string, VaultOwnerSection>();
+  const creatable = new Set(listed.owners.map((option) => ownerKey(option.owner)));
+  const add = (owner: ResourceOwner, name: string) => {
+    const key = ownerKey(owner);
+    const found = sections.get(key);
+    if (found !== undefined) return found;
+    const section: VaultOwnerSection = {
+      owner,
+      name,
+      mine: owner.kind === "user" && owner.userId === viewer.userId,
+      groups: [],
+      canCreate: creatable.has(key),
+    };
+    sections.set(key, section);
+    return section;
+  };
+  for (const group of listed.groups) {
+    const section = add(group.owner, group.ownerName ?? "A removed owner");
+    sections.set(ownerKey(group.owner), { ...section, groups: [...section.groups, group] });
+  }
+  for (const option of listed.owners) add(option.owner, option.name);
+  return [...sections.values()];
 }
 
 export interface ThreadSecretLine {
@@ -109,35 +148,48 @@ export interface ThreadSecretLine {
 
 /** The lines of a Thread's «Secrets» panel: names and where they come from, never values. */
 export function threadSecretLines(
-  environment: Pick<VaultThreadEnvironment, "variables">,
+  environment: Pick<VaultThreadEnvironment, "variables"> &
+    Partial<Pick<VaultThreadEnvironment, "vaults">>,
 ): ReadonlyArray<ThreadSecretLine> {
+  // A group is named with its owner's Vault (owned-resources 03): «default · Acme».
+  const owners = new Map(
+    (environment.vaults ?? []).map((vault) => [vault.vaultId as string, vault.ownerName ?? null]),
+  );
+  const groupName = (vaultId: string, name: string) => {
+    const owner = owners.get(vaultId);
+    return owner === null || owner === undefined ? name : `${name} · ${owner}`;
+  };
   return environment.variables.map((variable) => ({
     name: variable.name,
-    from: `${variable.vaultName} (${VAULT_SOURCE_LABEL[variable.source]})`,
+    from: `${groupName(variable.vaultId, variable.vaultName)} (${VAULT_SOURCE_LABEL[variable.source]})`,
     winsOver:
       variable.shadowed.length === 0
         ? null
         : variable.shadowed
-            .map((other) => `${other.vaultName} (${VAULT_SOURCE_LABEL[other.source]})`)
+            .map(
+              (other) =>
+                `${groupName(other.vaultId, other.vaultName)} (${VAULT_SOURCE_LABEL[other.source]})`,
+            )
             .join(", "),
   }));
 }
 
-/** Every Vault the viewer sees and its names, read in parallel. */
+/** Every group the viewer sees and its names, read in parallel. */
 export async function loadVaultOverview(reads: {
-  readonly list: () => Promise<VaultListResult>;
-  readonly entries: (vaultId: VaultId) => Promise<VaultEntriesListResult>;
+  readonly list: () => Promise<VaultGroupListResult>;
+  readonly entries: (vaultId: VaultGroupId) => Promise<VaultEntriesListResult>;
 }): Promise<{
-  readonly vaults: ReadonlyArray<VaultSummary>;
+  readonly listed: VaultGroupListResult;
+  readonly vaults: ReadonlyArray<VaultGroupSummary>;
   readonly entries: Readonly<Record<string, ReadonlyArray<VaultEntry>>>;
 }> {
   const listed = await reads.list();
   const loaded = await Promise.all(
-    listed.vaults.map(
-      async (vault) => [vault.id, (await reads.entries(vault.id)).entries] as const,
+    listed.groups.map(
+      async (group) => [group.id, (await reads.entries(group.id)).entries] as const,
     ),
   );
-  return { vaults: listed.vaults, entries: Object.fromEntries(loaded) };
+  return { listed, vaults: listed.groups, entries: Object.fromEntries(loaded) };
 }
 
 const VAULT_FAILURE_TAGS = new Set(["VaultError", "EnvironmentAuthorizationError"]);

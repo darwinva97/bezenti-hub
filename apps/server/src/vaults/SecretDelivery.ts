@@ -44,6 +44,7 @@ import * as DeliveredValueId from "./deliveredValueId.ts";
 import * as EffectiveVaults from "./EffectiveVaults.ts";
 import * as ProviderReads from "./ProviderReads.ts";
 import * as SecretMasker from "./SecretMasker.ts";
+import * as VaultReach from "./VaultReach.ts";
 
 /** A Provider entry to read: `key` tells entries apart (a template's of another Vault share names). */
 type ProviderRead = {
@@ -959,13 +960,12 @@ const make = Effect.gen(function* () {
         WHERE th.thread_id = ${threadId}
       )
       SELECT EXISTS (
-        SELECT 1 FROM t, vaults v JOIN vault_entries e ON e.vault_id = v.vault_id
+        SELECT 1 FROM t, vault_groups v JOIN vault_entries e ON e.group_id = v.group_id
         WHERE t.owner_id IS NOT NULL AND v.archived_at IS NULL AND (
-          (v.is_main = 1 AND t.space_id = 'personal:' || t.owner_id)
-          OR v.space_id = t.space_id
-          OR EXISTS (SELECT 1 FROM vault_allowances a WHERE a.vault_id = v.vault_id AND (
-            (a.subject_kind = 'space' AND a.subject_id = t.space_id)
-            OR (a.subject_kind = 'user' AND a.subject_id = t.owner_id)))
+          ${sql.literal(VaultReach.reachesSpaceSql("t.space_id"))}
+          OR (v.is_default = 0 AND ${sql.literal(VaultReach.ownersGroupSql)} AND EXISTS (
+            SELECT 1 FROM vault_allowances a WHERE a.group_id = v.group_id
+              AND a.subject_kind = 'user' AND a.subject_id = t.owner_id))
         )
       ) AS found
     `.pipe(Effect.catch(storage("check the Thread's Vaults")));

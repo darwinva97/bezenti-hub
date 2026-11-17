@@ -8,31 +8,30 @@ import {
   IDENTITY_TTL_DEFAULT_SECONDS,
   IDENTITY_TTL_MAX_SECONDS,
   IDENTITY_TTL_MIN_SECONDS,
-  MAIN_VAULT_ID,
+  DEFAULT_VAULT_GROUP_NAME,
   type ProjectId,
+  type ResourceOwner,
   SECRET_MASK_MIN_LENGTH,
   SECRET_VALUE_MAX_BYTES,
   secretNameRisk,
   type SpaceId,
   type ThreadId,
   type UserId,
-  type VaultBrokenLink,
-  type VaultCreateInput,
-  type VaultDeleteInput,
-  type VaultDeleteResult,
+  type VaultGroupCreateInput,
+  type VaultGroupDeleteInput,
+  type VaultGroupDeleteResult,
   type VaultEntriesListInput,
   type VaultEntriesListResult,
   type VaultEntry,
   type VaultEntryDeleteInput,
   type VaultEntryDeleteResult,
-  type VaultEntryFromMainInput,
   VaultEntryId,
   type VaultEntryKind,
   type VaultEntryPutInput,
   type VaultEntryResult,
   VaultError,
   type VaultErrorReason,
-  VaultId,
+  VaultGroupId,
   type VaultEntryClass,
   type VaultProviderScopes,
   type VaultProviderScopesInput,
@@ -43,9 +42,9 @@ import {
   parseTemplate,
   templateNames,
   templatePathNames,
-  type VaultListResult,
-  type VaultSummary,
-  type VaultUpdateInput,
+  type VaultGroupListResult,
+  type VaultGroupSummary,
+  type VaultGroupUpdateInput,
   type VaultWarning,
   type InstallationUser,
   // Spec 5 ticket 03.
@@ -55,6 +54,8 @@ import {
   type VaultChoicesInput,
   type VaultProjectChoiceSetInput,
   type VaultSpaceDefaultsSetInput,
+  type VaultUnlinkedDismissResult,
+  type VaultUnlinkedEntry,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -78,20 +79,21 @@ import { projectSpaceSql } from "../spaces/SpaceDirectory.ts";
 import * as ProviderReads from "./ProviderReads.ts";
 import { pathsOf } from "./providerScopeRules.ts";
 import * as ThreadSecretValues from "./ThreadSecretValues.ts";
+import * as VaultGroups from "./VaultGroups.ts";
 import * as VaultKeyCheck from "./VaultKeyCheck.ts";
 import * as VaultReach from "./VaultReach.ts";
 import * as VaultReachLoss from "./VaultReachLoss.ts";
 
-const MAIN_VAULT_NAME = "Main vault";
-
 export class Vaults extends Context.Service<
   Vaults,
   {
-    /** The Vaults the acting User sees, the Main vault first. */
-    readonly list: Effect.Effect<VaultListResult, VaultError>;
-    readonly create: (input: VaultCreateInput) => Effect.Effect<VaultSummary, VaultError>;
-    readonly update: (input: VaultUpdateInput) => Effect.Effect<VaultSummary, VaultError>;
-    readonly remove: (input: VaultDeleteInput) => Effect.Effect<VaultDeleteResult, VaultError>;
+    /** The groups the acting User sees, by owner (theirs first), `default` first in each. */
+    readonly list: Effect.Effect<VaultGroupListResult, VaultError>;
+    readonly create: (input: VaultGroupCreateInput) => Effect.Effect<VaultGroupSummary, VaultError>;
+    readonly update: (input: VaultGroupUpdateInput) => Effect.Effect<VaultGroupSummary, VaultError>;
+    readonly remove: (
+      input: VaultGroupDeleteInput,
+    ) => Effect.Effect<VaultGroupDeleteResult, VaultError>;
     readonly listEntries: (
       input: VaultEntriesListInput,
     ) => Effect.Effect<VaultEntriesListResult, VaultError>;
@@ -99,15 +101,11 @@ export class Vaults extends Context.Service<
     readonly deleteEntry: (
       input: VaultEntryDeleteInput,
     ) => Effect.Effect<VaultEntryDeleteResult, VaultError>;
-    readonly linkEntry: (
-      input: VaultEntryFromMainInput,
-    ) => Effect.Effect<VaultEntryResult, VaultError>;
-    readonly copyEntry: (
-      input: VaultEntryFromMainInput,
-    ) => Effect.Effect<VaultEntryResult, VaultError>;
+    /** `vaults.unlinkedNotice.dismiss`: the Owner has read which entries were Secret links. */
+    readonly dismissUnlinked: Effect.Effect<VaultUnlinkedDismissResult, VaultError>;
     // Spec 5 ticket 03: allowances and choices. What a Thread receives is EffectiveVaults'.
     /** `vaults.allow`: the Owner allows one of their Vaults to a Space or a User, or takes it back. */
-    readonly allow: (input: VaultAllowInput) => Effect.Effect<VaultSummary, VaultError>;
+    readonly allow: (input: VaultAllowInput) => Effect.Effect<VaultGroupSummary, VaultError>;
     /** `vaults.choices`: a Space's defaults and a Project's choices, for whoever sees the Space. */
     readonly choices: (input: VaultChoicesInput) => Effect.Effect<VaultChoices, VaultError>;
     /** `vaults.spaceDefaults.set`: the Owner or the Space's Admins, among the allowed Vaults. */
@@ -125,7 +123,7 @@ export class Vaults extends Context.Service<
      */
     readonly saveTargets: (input: {
       readonly threadId: ThreadId;
-    }) => Effect.Effect<ReadonlyArray<VaultSummary>, VaultError>;
+    }) => Effect.Effect<ReadonlyArray<VaultGroupSummary>, VaultError>;
     /**
      * `vaults.providerScopes` (ticket 03): for whoever edits the Vault, the Provider scopes allowed
      * to it, and for the Owner also each provider «Direct». Never a credential or a scope's auth.
@@ -143,12 +141,14 @@ const fail = (reason: VaultErrorReason, message: string) =>
 
 const NOT_FOUND = "That Vault or secret does not exist.";
 
+/** A group of a Vault (owned-resources 03): its owner, and whether it is the owner's `default`. */
 interface VaultRow {
   readonly vaultId: string;
   readonly name: string;
   readonly description: string | null;
-  readonly spaceId: string | null;
-  readonly isMain: number;
+  readonly ownerKind: "user" | "organization";
+  readonly ownerId: string;
+  readonly isDefault: number;
   readonly archivedAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -161,19 +161,12 @@ interface EntryRow {
   readonly name: string;
   readonly description: string | null;
   readonly kind: VaultEntryKind;
-  readonly linkedEntryId: string | null;
   readonly valueId: string | null;
   readonly unmasked: number;
-  /** Null on a link: its original's. */
-  readonly class: VaultEntryClass | null;
+  readonly class: VaultEntryClass;
   readonly version: number;
   readonly updatedAt: string;
   readonly updatedBy: string | null;
-  /** A link's original, when it still exists in the Main vault. */
-  readonly linkedName: string | null;
-  readonly linkedUnmasked: number | null;
-  readonly linkedValueId: string | null;
-  readonly linkedClass: VaultEntryClass | null;
   /** A Provider entry's provider (a key of `settings.secretProviders`) and reference. */
   readonly providerId: string | null;
   readonly providerReference: string | null;
@@ -188,29 +181,27 @@ interface EntryRow {
   readonly identityTtlSeconds: number | null;
 }
 
-/** An entry's class: a link's original's; a broken link's, a Secret. */
-const classOf = (row: EntryRow): VaultEntryClass =>
-  (row.kind === "link" ? row.linkedClass : row.class) ?? "secret";
+const classOf = (row: EntryRow): VaultEntryClass => row.class;
 
-/** The store entry holding what an entry delivers: a link's original's. */
-const valueIdOf = (row: EntryRow): string | null =>
-  row.kind === "link" ? row.linkedValueId : row.valueId;
+/** The store entry holding what an entry delivers. */
+const valueIdOf = (row: EntryRow): string | null => row.valueId;
 
 const VAULT_COLUMNS = `
-  v.vault_id AS "vaultId", v.name AS "name", v.description AS "description",
-  v.space_id AS "spaceId", v.is_main AS "isMain", v.archived_at AS "archivedAt",
-  v.created_at AS "createdAt", v.updated_at AS "updatedAt",
-  (SELECT COUNT(*) FROM vault_entries e WHERE e.vault_id = v.vault_id) AS "entryCount"
+  v.group_id AS "vaultId", v.name AS "name", v.description AS "description",
+  v.owner_kind AS "ownerKind", v.owner_id AS "ownerId", v.is_default AS "isDefault",
+  v.archived_at AS "archivedAt", v.created_at AS "createdAt", v.updated_at AS "updatedAt",
+  (SELECT COUNT(*) FROM vault_entries e WHERE e.group_id = v.group_id) AS "entryCount"
 `;
 
+/** Settings' order within an owner: `default` first, then by position, name. */
+const GROUP_ORDER = `v.is_default DESC, v.position, v.name COLLATE NOCASE`;
+
 const ENTRY_COLUMNS = `
-  e.entry_id AS "entryId", e.vault_id AS "vaultId", e.name AS "name",
-  e.description AS "description", e.kind AS "kind", e.linked_entry_id AS "linkedEntryId",
+  e.entry_id AS "entryId", e.group_id AS "vaultId", e.name AS "name",
+  e.description AS "description", e.kind AS "kind",
   e.value_id AS "valueId", e.unmasked AS "unmasked", e.class AS "class",
   e.version AS "version",
   e.updated_at AS "updatedAt", e.updated_by AS "updatedBy",
-  o.name AS "linkedName", o.unmasked AS "linkedUnmasked", o.value_id AS "linkedValueId",
-  o.class AS "linkedClass",
   e.provider_id AS "providerId", e.provider_reference AS "providerReference",
   e.provider_scope_id AS "providerScopeId", s.label AS "scopeLabel",
   e.delivery AS "delivery", e.template_text AS "templateText",
@@ -233,7 +224,6 @@ const isShort = (value: string) => [...value].length < SECRET_MASK_MIN_LENGTH;
 interface TemplateInput {
   readonly name: string;
   readonly kind: VaultEntryKind;
-  /** A link's original's; a broken link's, a Secret. */
   readonly class: VaultEntryClass;
   readonly delivery: VaultEntryDelivery;
 }
@@ -298,33 +288,52 @@ interface AllowanceRow {
   readonly subjectId: string;
 }
 
-/** What deciding on Vaults needs: their Spaces, allowances, and the allowed Users' names. */
+/**
+ * What deciding on groups needs: their Organizations, allowances, the allowed Users' names, whose
+ * groups are the Installation Owner's and the owners' names.
+ */
 interface Known {
   readonly spaces: Spaces;
   readonly allowances: ReadonlyMap<string, ReadonlyArray<AllowanceRow>>;
   readonly userNames: ReadonlyMap<string, string>;
+  readonly installationOwner: string | null;
+  /** The display names of the Users owning the groups. */
+  readonly ownerNames: ReadonlyMap<string, string>;
 }
 
-const mainResource: AccessPolicy.VaultResource = {
-  kind: "vault",
-  isMain: true,
-  space: null,
-  allowedSpaces: [],
-  allowedUsers: [],
-};
+/** A group's owner as the contracts say it. */
+const ownerOf = (row: VaultRow): ResourceOwner =>
+  row.ownerKind === "organization"
+    ? { kind: "organization", spaceId: row.ownerId as SpaceId }
+    : { kind: "user", userId: row.ownerId as UserId };
+
+const ownerNameOf = (row: VaultRow, known: Known): string | null =>
+  row.ownerKind === "organization"
+    ? (known.spaces.get(row.ownerId as SpaceId)?.name ?? null)
+    : (known.ownerNames.get(row.ownerId) ?? null);
+
+/** Where a group's audit rows go: its Organization; a User's own, nowhere in particular. */
+const auditSpaceOf = (row: VaultRow): SpaceId | null =>
+  row.ownerKind === "organization" ? (row.ownerId as SpaceId) : null;
 
 /**
- * A Vault of a deleted Organization is the Owner's alone, like the Owner's own. Allowances count
- * only on the Owner's own Vaults other than the Main vault, as in VaultReach.
+ * A group as AccessPolicy decides on it. A group of a deleted Organization has no Space. Allowances
+ * count only on the Owner's own named groups, as in VaultReach.
  */
 const resourceOf = (row: VaultRow, known: Known): AccessPolicy.VaultResource => {
-  const counts = row.isMain === 0 && row.spaceId === null;
+  const isInstallationOwner = row.ownerKind === "user" && row.ownerId === known.installationOwner;
+  const counts = row.isDefault === 0 && isInstallationOwner;
   const allowances = counts ? (known.allowances.get(row.vaultId) ?? []) : [];
   return {
     kind: "vault",
-    isMain: row.isMain === 1,
-    space:
-      row.spaceId === null ? null : (known.spaces.get(row.spaceId as SpaceId)?.resource ?? null),
+    owner:
+      row.ownerKind === "organization"
+        ? {
+            kind: "organization",
+            space: known.spaces.get(row.ownerId as SpaceId)?.resource ?? null,
+          }
+        : { kind: "user", userId: row.ownerId as UserId, isInstallationOwner },
+    isDefault: row.isDefault === 1,
     allowedSpaces: allowances.flatMap((allowance) => {
       const space =
         allowance.subjectKind === "space"
@@ -351,17 +360,16 @@ const allowancesShown = (row: VaultRow, known: Known): ReadonlyArray<VaultAllowa
         },
   );
 
-const summaryOf = (row: VaultRow, known: Known, can: Can): VaultSummary => {
-  const spaces = known.spaces;
+const summaryOf = (row: VaultRow, known: Known, can: Can): VaultGroupSummary => {
   const resource = resourceOf(row, known);
   const canManage = can("vault.manage", resource);
   return {
-    id: VaultId.make(row.vaultId),
+    id: VaultGroupId.make(row.vaultId),
     name: row.name,
     description: row.description,
-    spaceId: row.spaceId as SpaceId | null,
-    spaceName: row.spaceId === null ? null : (spaces.get(row.spaceId as SpaceId)?.name ?? null),
-    isMain: row.isMain === 1,
+    owner: ownerOf(row),
+    ownerName: ownerNameOf(row, known),
+    isDefault: row.isDefault === 1,
     archived: row.archivedAt !== null,
     entryCount: row.entryCount,
     canEdit: row.archivedAt === null && can("vault.edit", resource),
@@ -373,30 +381,23 @@ const summaryOf = (row: VaultRow, known: Known, can: Can): VaultSummary => {
   };
 };
 
-/**
- * A secret's name and what it is. A link's original is the Main vault's: whoever does not see the
- * Main vault learns nothing of it (whether it is short, or gone) beyond the link's own row; its
- * editors learn that it broke.
- */
+/** An entry's name and what it is; a Variable's value for whoever may read Variables. */
 const entryOf = (
   row: EntryRow,
-  seesMain: boolean,
   canEdit: boolean,
   readsVariables: boolean,
   variableValue: string | undefined,
   provider: ProviderReads.ProviderStatus | undefined,
   templateBroken: boolean,
 ): VaultEntry => {
-  const isLink = row.kind === "link";
   // A Provider entry whose provider is gone (or cannot be read here) is broken for everyone, as is
-  // a template naming an entry its Vault no longer has.
-  const providerBroken =
+  // a template naming an entry its group no longer has.
+  const broken =
     (row.kind === "provider" && (provider === undefined || provider.broken)) || templateBroken;
-  const broken = (isLink && row.linkedName === null) || providerBroken;
   const entryClass = classOf(row);
   return {
     id: VaultEntryId.make(row.entryId),
-    vaultId: VaultId.make(row.vaultId),
+    vaultId: VaultGroupId.make(row.vaultId),
     name: row.name,
     description: row.description,
     kind: row.kind,
@@ -406,7 +407,7 @@ const entryOf = (
       ? {
           provider: {
             label: provider?.label ?? null,
-            // Where it reads is its editors' to know, as a link's original is the Owner's.
+            // Where it reads is its editors' to know.
             reference: canEdit ? row.providerReference : null,
             scope: row.providerScopeId === null ? null : (row.scopeLabel ?? null),
           },
@@ -424,12 +425,8 @@ const entryOf = (
         }
       : {}),
     delivery: row.delivery,
-    broken: providerBroken || (broken && (seesMain || canEdit)),
-    linkedFrom:
-      seesMain && isLink && row.linkedEntryId !== null && !broken
-        ? { entryId: VaultEntryId.make(row.linkedEntryId), name: row.linkedName ?? "" }
-        : null,
-    unmasked: isLink ? seesMain && row.linkedUnmasked === 1 : row.unmasked === 1,
+    broken,
+    unmasked: row.unmasked === 1,
     version: row.version,
     updatedAt: row.updatedAt,
     updatedBy: row.updatedBy as UserId | null,
@@ -454,8 +451,7 @@ const unavailable = Vaults.of({
   listEntries: refuse,
   putEntry: refuse,
   deleteEntry: refuse,
-  linkEntry: refuse,
-  copyEntry: refuse,
+  dismissUnlinked: Effect.fail(UNAVAILABLE),
   allow: refuse,
   choices: refuse,
   setSpaceDefaults: refuse,
@@ -518,17 +514,18 @@ const make = Effect.gen(function* () {
       WHERE space_id = ${spaceId} AND deleting_at IS NULL AND frozen_at IS NULL
     `.pipe(Effect.map((rows) => (rows[0]?.n ?? 0) > 0));
 
-  /** In a write's transaction: the Vault exists and its Organization is not being deleted. */
+  /** In a write's transaction: the group exists and its Organization is not being deleted. */
   const stillWritable = (vaultId: string) =>
-    sql<{ readonly spaceId: string | null }>`
-      SELECT space_id AS "spaceId" FROM vaults WHERE vault_id = ${vaultId}
+    sql<{ readonly ownerKind: string; readonly ownerId: string }>`
+      SELECT owner_kind AS "ownerKind", owner_id AS "ownerId" FROM vault_groups
+      WHERE group_id = ${vaultId}
     `.pipe(
       Effect.flatMap(([row]) =>
         row === undefined
           ? fail("not-found", NOT_FOUND)
-          : row.spaceId === null
+          : row.ownerKind !== "organization"
             ? Effect.void
-            : Effect.flatMap(spaceTakesVaults(row.spaceId), (alive) =>
+            : Effect.flatMap(spaceTakesVaults(row.ownerId), (alive) =>
                 alive ? Effect.void : fail("not-found", NOT_FOUND),
               ),
       ),
@@ -585,8 +582,8 @@ const make = Effect.gen(function* () {
       vaultIds.length === 0
         ? []
         : yield* sql<AllowanceRow>`
-            SELECT vault_id AS "vaultId", subject_kind AS "subjectKind", subject_id AS "subjectId"
-            FROM vault_allowances WHERE vault_id IN ${sql.in(vaultIds)}
+            SELECT group_id AS "vaultId", subject_kind AS "subjectKind", subject_id AS "subjectId"
+            FROM vault_allowances WHERE group_id IN ${sql.in(vaultIds)}
             ORDER BY subject_kind, subject_id
           `.pipe(Effect.catch(storage("read whom the Vaults are allowed to")));
     const allowances = new Map<string, Array<AllowanceRow>>();
@@ -596,15 +593,33 @@ const make = Effect.gen(function* () {
       allowances.set(allowance.vaultId, list);
     }
     const spaceIds = new Set<SpaceId>();
-    for (const row of rows) if (row.spaceId !== null) spaceIds.add(row.spaceId as SpaceId);
+    for (const row of rows)
+      if (row.ownerKind === "organization") spaceIds.add(row.ownerId as SpaceId);
     for (const allowance of allowanceRows) {
       if (allowance.subjectKind === "space") spaceIds.add(allowance.subjectId as SpaceId);
     }
     const known = yield* spaces
       .spacesById([...spaceIds])
       .pipe(Effect.catch(storage("read the Vaults' Organizations")));
+    const userOwners = [
+      ...new Set(rows.flatMap((row) => (row.ownerKind === "user" ? [row.ownerId] : []))),
+    ];
+    const people = yield* sql<{
+      readonly userId: string;
+      readonly displayName: string;
+      readonly isOwner: number;
+    }>`
+      SELECT user_id AS "userId", display_name AS "displayName", is_owner AS "isOwner" FROM users
+      WHERE is_owner = 1 ${userOwners.length === 0 ? sql.literal("") : sql`OR user_id IN ${sql.in(userOwners)}`}
+    `.pipe(Effect.catch(storage("read whose the Vaults are")));
     const userNames = new Map<string, string>();
-    const base: Known = { spaces: known, allowances, userNames };
+    const base: Known = {
+      spaces: known,
+      allowances,
+      userNames,
+      installationOwner: people.find((person) => person.isOwner === 1)?.userId ?? null,
+      ownerNames: new Map(people.map((person) => [person.userId, person.displayName])),
+    };
     const named =
       who !== undefined &&
       allowanceRows.some((allowance) => allowance.subjectKind === "user") &&
@@ -619,7 +634,7 @@ const make = Effect.gen(function* () {
   });
 
   const findVault = (vaultId: string) =>
-    sql<VaultRow>`SELECT ${sql.literal(VAULT_COLUMNS)} FROM vaults v WHERE v.vault_id = ${vaultId}`.pipe(
+    sql<VaultRow>`SELECT ${sql.literal(VAULT_COLUMNS)} FROM vault_groups v WHERE v.group_id = ${vaultId}`.pipe(
       Effect.map((rows) => Option.fromNullishOr(rows[0])),
       Effect.catch(storage("read the Vault")),
     );
@@ -638,14 +653,22 @@ const make = Effect.gen(function* () {
     const known = yield* spacesOf([row.value], { userId, can });
     const resource = resourceOf(row.value, known);
     if (!can("vault.view", resource)) return yield* fail("not-found", NOT_FOUND);
+    if (action === "vault.manage" && resource.isDefault) {
+      return yield* fail(
+        "default-group",
+        "The default group is never renamed, archived, deleted or allowed elsewhere.",
+      );
+    }
     if (!can(action, resource)) {
       return yield* fail(
         "forbidden",
         action === "vault.edit"
-          ? resource.isMain || resource.space === null
-            ? "Only the Owner edits this Vault."
-            : "Only the Owner and the Organization's Admins edit this Vault's secrets."
-          : "Only the Owner manages Vaults.",
+          ? resource.owner.kind === "organization"
+            ? "Only the Owner and the Organization's Admins edit this group's secrets."
+            : "Only its owner edits this group."
+          : resource.owner.kind === "organization"
+            ? "Only the Owner and the Organization's Admins manage its groups."
+            : "Only its owner manages this group.",
       );
     }
     if (action === "vault.edit" && row.value.archivedAt !== null) {
@@ -690,21 +713,20 @@ const make = Effect.gen(function* () {
 
   const ENTRY_FROM = `
     FROM vault_entries e
-    LEFT JOIN vault_entries o ON o.entry_id = e.linked_entry_id AND o.vault_id = '${MAIN_VAULT_ID}'
     LEFT JOIN secret_provider_scopes s ON s.scope_id = e.provider_scope_id
   `;
 
   const entriesOf = (vaultId: string) =>
     sql<EntryRow>`
       SELECT ${sql.literal(ENTRY_COLUMNS)} ${sql.literal(ENTRY_FROM)}
-      WHERE e.vault_id = ${vaultId}
+      WHERE e.group_id = ${vaultId}
       ORDER BY e.name
     `.pipe(Effect.catch(storage("read the Vault's secrets")));
 
   const findEntry = (vaultId: string, entryId: string) =>
     sql<EntryRow>`
       SELECT ${sql.literal(ENTRY_COLUMNS)} ${sql.literal(ENTRY_FROM)}
-      WHERE e.vault_id = ${vaultId} AND e.entry_id = ${entryId}
+      WHERE e.group_id = ${vaultId} AND e.entry_id = ${entryId}
     `.pipe(
       Effect.map((rows) => Option.fromNullishOr(rows[0])),
       Effect.catch(storage("read the secret")),
@@ -718,23 +740,22 @@ const make = Effect.gen(function* () {
 
   const nameTaken = (vaultId: string, name: string, except?: string) =>
     sql<{ readonly entryId: string }>`
-      SELECT entry_id AS "entryId" FROM vault_entries WHERE vault_id = ${vaultId} AND name = ${name}
+      SELECT entry_id AS "entryId" FROM vault_entries WHERE group_id = ${vaultId} AND name = ${name}
     `.pipe(
       Effect.map((rows) => rows.some((row) => row.entryId !== except)),
       Effect.catch(storage("read the Vault's secrets")),
       Effect.flatMap((taken) =>
         taken
-          ? fail("duplicate-name", `This Vault already has a secret named ${name}.`)
+          ? fail("duplicate-name", `This group already has a secret named ${name}.`)
           : Effect.void,
       ),
     );
 
   const inputsQuery = (vaultId: string) =>
     sql<TemplateInput>`
-      SELECT e.name AS "name", e.kind AS "kind", e.delivery AS "delivery",
-        CASE WHEN e.kind = 'link' THEN COALESCE(o.class, 'secret') ELSE e.class END AS "class"
+      SELECT e.name AS "name", e.kind AS "kind", e.delivery AS "delivery", e.class AS "class"
       ${sql.literal(ENTRY_FROM)}
-      WHERE e.vault_id = ${vaultId}
+      WHERE e.group_id = ${vaultId}
     `;
   /** The entries a template of the Vault may name, as it sees them. */
   const inputsOf = (vaultId: string) =>
@@ -753,7 +774,7 @@ const make = Effect.gen(function* () {
       readonly class: VaultEntryClass;
     }>`
       SELECT entry_id AS "entryId", template_text AS "text", class AS "class"
-      FROM vault_entries WHERE vault_id = ${vaultId} AND kind = 'template'
+      FROM vault_entries WHERE group_id = ${vaultId} AND kind = 'template'
     `;
     if (templates.length === 0) return;
     const inputs = yield* inputsQuery(vaultId);
@@ -773,7 +794,7 @@ const make = Effect.gen(function* () {
   ) {
     const templates = yield* sql<{ readonly text: string }>`
       SELECT template_text AS "text" FROM vault_entries
-      WHERE vault_id = ${vaultId} AND kind = 'template'
+      WHERE group_id = ${vaultId} AND kind = 'template'
     `.pipe(Effect.catch(storage("read the Vault's templates")));
     return templates.some((template) => {
       const parsed = parseTemplate(template.text);
@@ -822,7 +843,6 @@ const make = Effect.gen(function* () {
     readonly kind: VaultEntryKind;
     readonly op: string;
     readonly from?: string;
-    readonly brokenLinks?: number;
     readonly dangerous?: boolean;
     readonly class?: VaultEntryClass;
     /** A Provider entry's provider, by its label; never its reference. */
@@ -832,7 +852,7 @@ const make = Effect.gen(function* () {
     audit.record({
       actor: AuditLog.userActor(input.userId),
       action: "secret.edit",
-      spaceId: input.vault.spaceId as SpaceId | null,
+      spaceId: auditSpaceOf(input.vault),
       target: { kind: "secret", id: input.entryId, name: input.name },
       detail: {
         vault: input.vault.name,
@@ -840,7 +860,6 @@ const make = Effect.gen(function* () {
         kind: input.kind,
         op: input.op,
         ...(input.from === undefined ? {} : { from: input.from }),
-        ...(input.brokenLinks === undefined ? {} : { brokenLinks: input.brokenLinks }),
         ...(input.dangerous === true ? { dangerous: true } : {}),
         ...(input.class === undefined ? {} : { class: input.class }),
         ...(input.provider === undefined ? {} : { provider: input.provider }),
@@ -870,7 +889,6 @@ const make = Effect.gen(function* () {
     can: Can,
     resource: AccessPolicy.VaultResource,
   ) {
-    const seesMain = can("vault.view", mainResource);
     const canEdit = can("vault.edit", resource);
     const readsVariables = can("vault.readVariables", resource);
     // A template is broken when it names what its Vault no longer has (no value is read for it).
@@ -886,7 +904,6 @@ const make = Effect.gen(function* () {
         Effect.map(([value, provider]) =>
           entryOf(
             row,
-            seesMain,
             canEdit,
             readsVariables,
             value,
@@ -916,17 +933,125 @@ const make = Effect.gen(function* () {
       );
   });
 
+  /**
+   * The owners the caller may create groups for: their own User (from owned-resources 04; the
+   * Owner already), and each open Organization they manage the groups of.
+   */
+  const ownerOptions = Effect.fn("Vaults.ownerOptions")(function* (who: {
+    readonly userId: UserId;
+    readonly can: Can;
+  }) {
+    const installationOwner = (yield* sql<{ readonly userId: string }>`
+      SELECT user_id AS "userId" FROM users WHERE is_owner = 1
+    `.pipe(Effect.catch(storage("read who the Owner is"))))[0]?.userId;
+    const options: Array<{ readonly owner: ResourceOwner; readonly name: string }> = [];
+    const self: AccessPolicy.VaultResource = {
+      kind: "vault",
+      owner: {
+        kind: "user",
+        userId: who.userId,
+        isInstallationOwner: who.userId === installationOwner,
+      },
+      isDefault: false,
+      allowedSpaces: [],
+      allowedUsers: [],
+    };
+    if (who.can("vault.manage", self)) {
+      const me = yield* spaces
+        .installationUser(who.userId)
+        .pipe(Effect.catch(storage("read who you are")));
+      options.push({
+        owner: { kind: "user", userId: who.userId },
+        name: Option.match(me, { onNone: () => "Mine", onSome: (user) => user.displayName }),
+      });
+    }
+    const viewed = (yield* spaces.view(who.userId).pipe(Effect.catch(storage("read your Spaces"))))
+      .spaces;
+    const organizations = viewed.filter(
+      (space) => space.kind === "organization" && space.archived !== true,
+    );
+    const known = yield* spaces
+      .spacesById(organizations.map((space) => space.id))
+      .pipe(Effect.catch(storage("read your Organizations")));
+    for (const space of organizations) {
+      const resource = known.get(space.id)?.resource;
+      if (resource === undefined) continue;
+      const group: AccessPolicy.VaultResource = {
+        kind: "vault",
+        owner: { kind: "organization", space: resource },
+        isDefault: false,
+        allowedSpaces: [],
+        allowedUsers: [],
+      };
+      if (who.can("vault.manage", group)) {
+        options.push({ owner: { kind: "organization", spaceId: space.id }, name: space.name });
+      }
+    }
+    return options;
+  });
+
+  /** For the Owner, until dismissed: the entries that were Secret links (owned-resources 03). */
+  const unlinkedFor = Effect.fn("Vaults.unlinkedFor")(function* (userId: UserId) {
+    const rows = yield* sql<{
+      readonly vaultId: string;
+      readonly vaultName: string | null;
+      readonly entryId: string;
+      readonly name: string;
+      readonly originalName: string | null;
+    }>`
+      SELECT n.group_id AS "vaultId", g.name AS "vaultName", n.entry_id AS "entryId",
+        COALESCE(e.name, n.name) AS "name", n.original_name AS "originalName"
+      FROM vault_unlinked_notices n
+      JOIN users u ON u.user_id = ${userId} AND u.is_owner = 1
+      JOIN vault_entries e ON e.entry_id = n.entry_id
+      LEFT JOIN vault_groups g ON g.group_id = n.group_id
+      ORDER BY g.name, n.name
+    `.pipe(Effect.catch(storage("read which entries were Secret links")));
+    return rows.map((row): VaultUnlinkedEntry => ({
+      vaultId: VaultGroupId.make(row.vaultId),
+      vaultName: row.vaultName,
+      entryId: VaultEntryId.make(row.entryId),
+      name: row.name,
+      originalName: row.originalName,
+    }));
+  });
+
+  const dismissUnlinked = Effect.gen(function* () {
+    const { userId } = yield* caller;
+    const [user] = yield* sql<{ readonly isOwner: number }>`
+      SELECT is_owner AS "isOwner" FROM users WHERE user_id = ${userId}
+    `.pipe(Effect.catch(storage("read who you are")));
+    if (user?.isOwner !== 1) return yield* fail("forbidden", "Only the Owner sees this notice.");
+    const gone = yield* sql<{ readonly entryId: string }>`
+      DELETE FROM vault_unlinked_notices RETURNING entry_id AS "entryId"
+    `.pipe(Effect.catch(storage("dismiss the notice")));
+    return { dismissed: gone.length } satisfies VaultUnlinkedDismissResult;
+  }).pipe(Effect.withSpan("Vaults.dismissUnlinked"));
+
   const list = Effect.gen(function* () {
     const who = yield* caller;
     const { can } = who;
     const rows = yield* sql<VaultRow>`
-      SELECT ${sql.literal(VAULT_COLUMNS)} FROM vaults v ORDER BY v.is_main DESC, v.position, v.name
+      SELECT ${sql.literal(VAULT_COLUMNS)} FROM vault_groups v
+      ORDER BY v.owner_kind DESC, v.owner_id, ${sql.literal(GROUP_ORDER)}
     `.pipe(Effect.catch(storage("read the Vaults")));
     const known = yield* spacesOf(rows, who);
-    const vaults = rows
+    // The caller's own first, then each owner's groups together by the owner's name, each
+    // owner's in Settings' order (`default` first).
+    const mine = (row: VaultRow) => row.ownerKind === "user" && row.ownerId === who.userId;
+    const groups = rows
       .filter((row) => can("vault.view", resourceOf(row, known)))
+      .toSorted(
+        (left, right) =>
+          Number(mine(right)) - Number(mine(left)) ||
+          (ownerNameOf(left, known) ?? "").localeCompare(ownerNameOf(right, known) ?? ""),
+      )
       .map((row) => summaryOf(row, known, can));
-    return { vaults };
+    return {
+      groups,
+      owners: yield* ownerOptions(who),
+      unlinked: yield* unlinkedFor(who.userId),
+    } satisfies VaultGroupListResult;
   }).pipe(Effect.withSpan("Vaults.list"));
 
   const providerScopes = Effect.fn("Vaults.providerScopes")(function* (
@@ -945,7 +1070,7 @@ const make = Effect.gen(function* () {
     }>`
       SELECT s.scope_id AS "scopeId", s.provider_id AS "providerId", s.label, s.allowed_paths_json AS "paths"
       FROM secret_provider_scopes s
-      JOIN vault_provider_scopes a ON a.scope_id = s.scope_id AND a.vault_id = ${row.vaultId}
+      JOIN vault_provider_scopes a ON a.scope_id = s.scope_id AND a.group_id = ${row.vaultId}
       ORDER BY s.label
     `.pipe(Effect.catch(storage("read the Vault's Provider scopes")));
     return {
@@ -982,81 +1107,105 @@ const make = Effect.gen(function* () {
       .placementOf(input.threadId)
       .pipe(Effect.catch(storage("read the Thread's Space")));
     if (Option.isNone(placement)) return [];
-    const reaching = new Set<string>(
-      (yield* VaultReach.allowedToSpace(sql, placement.value.space.id).pipe(
-        Effect.catch(storage("read the Vaults allowed to the Space")),
-      )).map((reach) => reach.vaultId),
-    );
-    const rows = yield* sql<VaultRow>`
-      SELECT ${sql.literal(VAULT_COLUMNS)} FROM vaults v ORDER BY v.is_main DESC, v.position, v.name
-    `.pipe(Effect.catch(storage("read the Vaults")));
+    // In the order that reaches the Space: its owner's `default` first.
+    const reaching = (yield* VaultReach.allowedToSpace(sql, placement.value.space.id).pipe(
+      Effect.catch(storage("read the Vaults allowed to the Space")),
+    )).map((reach) => reach.vaultId);
+    const found =
+      reaching.length === 0
+        ? []
+        : yield* sql<VaultRow>`
+            SELECT ${sql.literal(VAULT_COLUMNS)} FROM vault_groups v
+            WHERE v.group_id IN ${sql.in(reaching)}
+          `.pipe(Effect.catch(storage("read the Vaults")));
+    const byId = new Map(found.map((row) => [row.vaultId, row]));
+    const rows = reaching.flatMap((vaultId) => {
+      const row = byId.get(vaultId);
+      return row === undefined ? [] : [row];
+    });
     const known = yield* spacesOf(rows, who);
-    return rows
-      .filter((row) => reaching.has(row.vaultId))
-      .map((row) => summaryOf(row, known, who.can))
-      .filter((summary) => summary.canEdit);
+    return rows.map((row) => summaryOf(row, known, who.can)).filter((summary) => summary.canEdit);
   });
 
-  const create = Effect.fn("Vaults.create")(function* (input: VaultCreateInput) {
+  const create = Effect.fn("Vaults.create")(function* (input: VaultGroupCreateInput) {
     const { userId, can } = yield* caller;
-    let space: AccessPolicy.SpaceResource | null = null;
-    if (input.spaceId !== null) {
+    const { owner } = input;
+    let resource: AccessPolicy.VaultResource;
+    if (owner.kind === "organization") {
       const found = yield* spaces
-        .spaceById(input.spaceId)
+        .spaceById(owner.spaceId)
         .pipe(Effect.catch(storage("read the Organization")));
       if (Option.isNone(found) || found.value.resource.kind !== "organization") {
-        return yield* fail("not-found", "A Vault belongs to an Organization, or to the Owner.");
+        return yield* fail("not-found", "That Organization does not exist.");
       }
-      space = found.value.resource;
-    }
-    if (
-      !can("vault.manage", {
+      resource = {
         kind: "vault",
-        isMain: false,
-        space,
+        owner: { kind: "organization", space: found.value.resource },
+        isDefault: false,
         allowedSpaces: [],
         allowedUsers: [],
-      })
-    ) {
-      return yield* fail("forbidden", "Only the Owner creates Vaults.");
+      };
+    } else {
+      const [user] = yield* sql<{ readonly isOwner: number }>`
+        SELECT is_owner AS "isOwner" FROM users WHERE user_id = ${owner.userId}
+      `.pipe(Effect.catch(storage("read the User")));
+      resource = {
+        kind: "vault",
+        owner: { kind: "user", userId: owner.userId, isInstallationOwner: user?.isOwner === 1 },
+        isDefault: false,
+        allowedSpaces: [],
+        allowedUsers: [],
+      };
     }
+    if (!can("vault.manage", resource)) {
+      return yield* fail("forbidden", "You do not manage that Vault.");
+    }
+    if (input.name.toLowerCase() === DEFAULT_VAULT_GROUP_NAME) {
+      return yield* fail("duplicate-name", "Every Vault already has its default group.");
+    }
+    const ownerId = owner.kind === "organization" ? owner.spaceId : owner.userId;
     const vaultId = yield* newId("vault");
     const at = yield* now;
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          if (input.spaceId !== null && !(yield* spaceTakesVaults(input.spaceId))) {
-            return yield* fail("not-found", "A Vault belongs to an Organization, or to the Owner.");
+          if (owner.kind === "organization" && !(yield* spaceTakesVaults(owner.spaceId))) {
+            return yield* fail("not-found", "That Organization does not exist.");
           }
           const taken = yield* sql<{ readonly n: number }>`
-            SELECT COUNT(*) AS n FROM vaults WHERE name = ${input.name} COLLATE NOCASE
+            SELECT COUNT(*) AS n FROM vault_groups
+            WHERE owner_kind = ${owner.kind} AND owner_id = ${ownerId}
+              AND name = ${input.name} COLLATE NOCASE
           `;
           if ((taken[0]?.n ?? 0) > 0) {
-            return yield* fail("duplicate-name", `There is already a Vault named ${input.name}.`);
+            return yield* fail("duplicate-name", `There is already a group named ${input.name}.`);
           }
           yield* sql`
-            INSERT INTO vaults (vault_id, name, description, space_id, is_main, created_at, updated_at, created_by)
-            VALUES (${vaultId}, ${input.name}, ${input.description ?? null}, ${input.spaceId}, 0, ${at}, ${at}, ${userId})
+            INSERT INTO vault_groups (group_id, owner_kind, owner_id, name, description, is_default,
+              created_at, updated_at, created_by)
+            VALUES (${vaultId}, ${owner.kind}, ${ownerId}, ${input.name},
+              ${input.description ?? null}, 0, ${at}, ${at}, ${userId})
           `;
           yield* audit.record({
             actor: AuditLog.userActor(userId),
-            action: "vault.create",
-            spaceId: input.spaceId,
+            action: "vault_group.create",
+            spaceId: owner.kind === "organization" ? owner.spaceId : null,
             target: { kind: "vault", id: vaultId, name: input.name },
+            detail: { ownerKind: owner.kind, ownerId },
           });
         }),
       )
-      .pipe(Effect.catch(orStorage("create the Vault")));
+      .pipe(Effect.catch(orStorage("create the group")));
     const row = yield* findVault(vaultId);
     if (Option.isNone(row)) return yield* fail("not-found", NOT_FOUND);
     return summaryOf(row.value, yield* spacesOf([row.value], { userId, can }), can);
   });
 
-  const update = Effect.fn("Vaults.update")(function* (input: VaultUpdateInput) {
+  const update = Effect.fn("Vaults.update")(function* (input: VaultGroupUpdateInput) {
     const { userId, can, row } = yield* authorizeVault(input.vaultId, "vault.manage");
     const renamed = input.name !== undefined && input.name !== row.name;
-    if (row.isMain === 1 && (renamed || input.archived !== undefined)) {
-      return yield* fail("main-vault", "The Main vault keeps its name and is never archived.");
+    if (renamed && (input.name ?? "").toLowerCase() === DEFAULT_VAULT_GROUP_NAME) {
+      return yield* fail("duplicate-name", "Only the default group is called default.");
     }
     const at = yield* now;
     const archivedAt =
@@ -1072,29 +1221,30 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           if (renamed) {
             const taken = yield* sql<{ readonly n: number }>`
-              SELECT COUNT(*) AS n FROM vaults
-              WHERE name = ${input.name ?? ""} COLLATE NOCASE AND vault_id <> ${row.vaultId}
+              SELECT COUNT(*) AS n FROM vault_groups
+              WHERE owner_kind = ${row.ownerKind} AND owner_id = ${row.ownerId}
+                AND name = ${input.name ?? ""} COLLATE NOCASE AND group_id <> ${row.vaultId}
             `;
             if ((taken[0]?.n ?? 0) > 0) {
               return yield* fail(
                 "duplicate-name",
-                `There is already a Vault named ${input.name ?? ""}.`,
+                `There is already a group named ${input.name ?? ""}.`,
               );
             }
           }
           yield* sql`
-            UPDATE vaults SET
+            UPDATE vault_groups SET
               name = ${input.name ?? row.name},
               description = ${input.description === undefined ? row.description : input.description},
               archived_at = ${archivedAt},
               updated_at = ${at}
-            WHERE vault_id = ${row.vaultId}
+            WHERE group_id = ${row.vaultId}
           `;
           if (renamed || described || archiveChanged) {
             yield* audit.record({
               actor: AuditLog.userActor(userId),
-              action: "vault.update",
-              spaceId: row.spaceId as SpaceId | null,
+              action: "vault_group.update",
+              spaceId: auditSpaceOf(row),
               target: { kind: "vault", id: row.vaultId, name: input.name ?? row.name },
               detail: {
                 ...(renamed ? { from: row.name, to: input.name ?? row.name } : {}),
@@ -1111,11 +1261,8 @@ const make = Effect.gen(function* () {
     return summaryOf(updated.value, yield* spacesOf([updated.value], { userId, can }), can);
   });
 
-  const remove = Effect.fn("Vaults.remove")(function* (input: VaultDeleteInput) {
+  const remove = Effect.fn("Vaults.remove")(function* (input: VaultGroupDeleteInput) {
     const { userId, row } = yield* authorizeVault(input.vaultId, "vault.manage");
-    if (row.isMain === 1) {
-      return yield* fail("main-vault", "The Main vault is never deleted.");
-    }
     // The values the deleted rows held, read in the same transaction that deletes them.
     const removed = yield* sql
       .withTransaction(
@@ -1123,8 +1270,8 @@ const make = Effect.gen(function* () {
           const gone = yield* VaultReachLoss.forgetVault(sql, row.vaultId);
           yield* audit.record({
             actor: AuditLog.userActor(userId),
-            action: "vault.delete",
-            spaceId: row.spaceId as SpaceId | null,
+            action: "vault_group.delete",
+            spaceId: auditSpaceOf(row),
             target: { kind: "vault", id: row.vaultId, name: row.name },
             detail: { entries: gone.entries },
           });
@@ -1140,7 +1287,7 @@ const make = Effect.gen(function* () {
     const { can, row, resource, known } = yield* authorizeVault(input.vaultId, "vault.view");
     const entries = yield* entriesOf(row.vaultId);
     return {
-      vault: summaryOf(row, known, can),
+      group: summaryOf(row, known, can),
       entries: yield* shown(entries, can, resource),
     } satisfies VaultEntriesListResult;
   });
@@ -1227,7 +1374,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             yield* stillWritable(row.vaultId);
             yield* sql`
-              INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id,
+              INSERT INTO vault_entries (entry_id, group_id, name, description, kind, value_id,
                 unmasked, class, revealable, provider_id, provider_reference, provider_scope_id,
                 delivery, version, created_at, updated_at, updated_by)
               VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null},
@@ -1403,7 +1550,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             yield* stillWritable(row.vaultId);
             yield* sql`
-              INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id,
+              INSERT INTO vault_entries (entry_id, group_id, name, description, kind, value_id,
                 unmasked, class, revealable, delivery, identity_audience, identity_ttl_seconds,
                 version, created_at, updated_at, updated_by)
               VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null},
@@ -1514,7 +1661,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             yield* stillWritable(row.vaultId);
             yield* sql`
-              INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id,
+              INSERT INTO vault_entries (entry_id, group_id, name, description, kind, value_id,
                 unmasked, class, revealable, delivery, template_text, version, created_at,
                 updated_at, updated_by)
               VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null},
@@ -1623,7 +1770,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* stillWritable(row.vaultId);
           yield* sql`
-            INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id, unmasked, class, revealable, delivery, version, created_at, updated_at, updated_by)
+            INSERT INTO vault_entries (entry_id, group_id, name, description, kind, value_id, unmasked, class, revealable, delivery, version, created_at, updated_at, updated_by)
             VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null}, 'own', ${valueId}, ${isShort(value) ? 1 : 0}, ${entryClass}, 0, ${delivery}, 1, ${at}, ${at}, ${userId})
           `;
           yield* refreshTemplateClasses(row.vaultId);
@@ -1651,20 +1798,6 @@ const make = Effect.gen(function* () {
     }
 
     const entry = yield* findEntry(row.vaultId, input.entryId);
-    if (entry.kind === "link") {
-      if (value !== undefined) {
-        return yield* fail(
-          "not-linkable",
-          `${entry.name} is a Secret link: its value is the Main vault's. Replace the original there, or delete the link and add a secret of this Vault's own.`,
-        );
-      }
-      if (input.class !== undefined) {
-        return yield* fail(
-          "not-linkable",
-          `${entry.name} is a Secret link: it is what its original in the Main vault is. Change the original there.`,
-        );
-      }
-    }
     // A name that changes how tools run stays the Owner's, whatever the change.
     yield* checkName(entry.name, can, resource, input.confirmDangerous);
     const renamed = input.name !== entry.name;
@@ -1675,7 +1808,7 @@ const make = Effect.gen(function* () {
     // new value in the same request, so the old one is never read for it (owned-resources 01).
     const wasClass = classOf(entry);
     const nextClass = input.class ?? wasClass;
-    const classChanged = entry.kind !== "link" && nextClass !== wasClass;
+    const classChanged = nextClass !== wasClass;
     if (classChanged && nextClass === "variable" && value === undefined) {
       return yield* fail(
         "needs-new-value",
@@ -1703,8 +1836,8 @@ const make = Effect.gen(function* () {
             description = ${input.description === undefined ? entry.description : input.description},
             value_id = ${valueId ?? before.valueId},
             unmasked = ${value === undefined ? entry.unmasked : isShort(value) ? 1 : 0},
-            class = ${entry.kind === "link" ? null : nextClass},
-            revealable = ${entry.kind === "link" ? null : 0},
+            class = ${nextClass},
+            revealable = 0,
             delivery = ${delivery},
             version = version + ${value === undefined ? 0 : 1},
             updated_at = ${at},
@@ -1738,24 +1871,11 @@ const make = Effect.gen(function* () {
     ]);
   });
 
-  const linksTo = (entryId: string) =>
-    sql<VaultBrokenLink>`
-      SELECT e.vault_id AS "vaultId", v.name AS "vaultName", e.entry_id AS "entryId", e.name AS "name"
-      FROM vault_entries e JOIN vaults v ON v.vault_id = e.vault_id
-      WHERE e.kind = 'link' AND e.linked_entry_id = ${entryId}
-      ORDER BY v.name, e.name
-    `.pipe(Effect.catch(storage("read the Secret links")));
-
   const deleteEntry = Effect.fn("Vaults.deleteEntry")(function* (input: VaultEntryDeleteInput) {
     const { userId, row, can, resource } = yield* authorizeVault(input.vaultId, "vault.edit");
     const entry = yield* findEntry(row.vaultId, input.entryId);
     if (entry.kind === "identity" && !can("vault.identityEntry", resource)) {
       return yield* fail("forbidden", "Only the Owner changes workload identity entries.");
-    }
-    // Only the Main vault's secrets have links, and only the Owner edits it: the list is theirs.
-    const links = row.vaultId === MAIN_VAULT_ID ? yield* linksTo(entry.entryId) : [];
-    if (links.length > 0 && input.breakLinks !== true) {
-      return { deleted: false, brokenLinks: links } satisfies VaultEntryDeleteResult;
     }
     const gone = yield* sql
       .withTransaction(
@@ -1771,7 +1891,6 @@ const make = Effect.gen(function* () {
             name: entry.name,
             kind: entry.kind,
             op: "delete",
-            ...(links.length > 0 ? { brokenLinks: links.length } : {}),
           });
           yield* refreshTemplateClasses(row.vaultId);
           return deleted[0]?.valueId ?? null;
@@ -1779,101 +1898,20 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.catch(orStorage("delete the secret")));
     yield* removeValue(gone);
-    return { deleted: true, brokenLinks: links } satisfies VaultEntryDeleteResult;
-  });
-
-  /**
-   * A link to, or a copy of, a Main vault secret: it takes editing the Main vault (the Owner) as
-   * well as the Vault it goes into, so no one reaches a Main vault value through another Vault.
-   */
-  const fromMain = Effect.fn("Vaults.fromMain")(function* (
-    input: VaultEntryFromMainInput,
-    kind: "link" | "copy",
-  ) {
-    const { userId, can, row, resource } = yield* authorizeVault(input.vaultId, "vault.edit");
-    if (!can("vault.edit", mainResource)) {
-      return yield* fail("forbidden", "Only the Owner links or copies the Main vault's secrets.");
-    }
-    if (row.vaultId === MAIN_VAULT_ID) {
-      return yield* fail(
-        "not-linkable",
-        "Secret links and copies go into another Vault, not the Main vault itself.",
-      );
-    }
-    const source = yield* findEntry(MAIN_VAULT_ID, input.sourceEntryId);
-    if (source.kind === "link") {
-      return yield* fail("not-linkable", "A Secret link points at a secret, never at a link.");
-    }
-    // A template's names are its own Vault's: elsewhere they would name other entries.
-    if (source.kind === "template") {
-      return yield* fail(
-        "not-linkable",
-        `${source.name} is a template of the Main vault: add a template with the same text in this Vault instead.`,
-      );
-    }
-    // A token is signed for each Thread: there is no value to link or copy.
-    if (source.kind === "identity") {
-      return yield* fail(
-        "not-linkable",
-        `${source.name} is a workload identity token the Hub signs: add one with the same audience in this Vault instead.`,
-      );
-    }
-    // Copying would read the provider into the Hub (ticket 08's «Copy into the Hub»).
-    if (source.kind === "provider") {
-      return yield* fail(
-        "not-linkable",
-        `${source.name} is read from a provider: add a Provider entry with the same reference in this Vault instead.`,
-      );
-    }
-    const name = input.name ?? source.name;
-    const dangerous = yield* checkName(name, can, resource, input.confirmDangerous);
-    yield* nameTaken(row.vaultId, name);
-    const entryId = yield* newId("secret");
-    const at = yield* now;
-    const description = input.description === undefined ? source.description : input.description;
-    const copied = kind === "copy" ? yield* readValue(source.valueId) : undefined;
-    yield* withNewValue(copied, `add the ${kind}`, (valueId) =>
-      Effect.gen(function* () {
-        yield* stillWritable(row.vaultId);
-        yield* sql`
-          INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, linked_entry_id, value_id, unmasked, class, revealable, version, created_at, updated_at, updated_by)
-          VALUES (${entryId}, ${row.vaultId}, ${name}, ${description}, ${kind}, ${kind === "link" ? source.entryId : null}, ${valueId}, ${source.unmasked},
-            ${kind === "link" ? null : classOf(source)}, ${kind === "link" ? null : 0},
-            1, ${at}, ${at}, ${userId})
-        `;
-        yield* recordEdit({
-          userId,
-          vault: row,
-          entryId,
-          name,
-          kind,
-          op: kind,
-          from: source.name,
-          dangerous,
-        });
-        yield* refreshTemplateClasses(row.vaultId);
-      }),
-    );
-    const warnings: ReadonlyArray<VaultWarning> =
-      classOf(source) === "secret" && source.unmasked === 1 ? ["short-value"] : [];
-    return yield* result(can, resource, row.vaultId, entryId, warnings);
+    return { deleted: true } satisfies VaultEntryDeleteResult;
   });
 
   // Spec 5 ticket 03: allowances, a Space's defaults and a Project's choices. Which Vaults may
   // reach a Space is VaultReach's rule; what a Thread receives is EffectiveVaults'.
 
   const allow = Effect.fn("Vaults.allow")(function* (input: VaultAllowInput) {
-    const { userId, can, row } = yield* authorizeVault(input.vaultId, "vault.manage");
-    if (row.isMain === 1) {
-      return yield* fail(
-        "main-vault",
-        "The Main vault reaches only your Personal space: link or copy its secrets into another Vault.",
-      );
-    }
-    if (row.spaceId !== null) {
+    const { userId, can, row, known } = yield* authorizeVault(input.vaultId, "vault.manage");
+    // Only the Owner's own named groups are allowed elsewhere (until Grants); `default` never
+    // (authorizeVault refused it).
+    if (row.ownerKind !== "user" || row.ownerId !== known.installationOwner) {
       return yield* fail(
         "not-allowed",
-        "An Organization's Vault reaches its own Organization only: its Admins edit it.",
+        "A group reaches its own owner's Space only: lending it elsewhere is a Grant.",
       );
     }
     const subject = input.subject;
@@ -1901,7 +1939,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const existing = yield* sql<{ readonly n: number }>`
             SELECT COUNT(*) AS n FROM vault_allowances
-            WHERE vault_id = ${row.vaultId} AND subject_kind = ${subject.kind} AND subject_id = ${subjectId}
+            WHERE group_id = ${row.vaultId} AND subject_kind = ${subject.kind} AND subject_id = ${subjectId}
           `;
           const had = (existing[0]?.n ?? 0) > 0;
           if (had === input.allowed) return;
@@ -1920,7 +1958,7 @@ const make = Effect.gen(function* () {
               }
             }
             yield* sql`
-              INSERT INTO vault_allowances (vault_id, subject_kind, subject_id, created_at)
+              INSERT INTO vault_allowances (group_id, subject_kind, subject_id, created_at)
               VALUES (${row.vaultId}, ${subject.kind}, ${subjectId}, ${at})
             `;
             // A default or choice of it there can only be left from before: it never comes back.
@@ -2005,8 +2043,8 @@ const make = Effect.gen(function* () {
         allowed.length === 0
           ? []
           : yield* sql<{ readonly vaultId: string; readonly name: string }>`
-              SELECT vault_id AS "vaultId", name FROM vault_entries
-              WHERE vault_id IN ${sql.in(allowed.map((row) => row.vaultId))} ORDER BY name
+              SELECT group_id AS "vaultId", name FROM vault_entries
+              WHERE group_id IN ${sql.in(allowed.map((row) => row.vaultId))} ORDER BY name
             `;
       return { defaults, choices, names };
     });
@@ -2018,26 +2056,38 @@ const make = Effect.gen(function* () {
       allowed.length === 0
         ? []
         : yield* sql<VaultRow>`
-            SELECT ${sql.literal(VAULT_COLUMNS)} FROM vaults v
-            WHERE v.vault_id IN ${sql.in(allowed.map((row) => row.vaultId))}
+            SELECT ${sql.literal(VAULT_COLUMNS)} FROM vault_groups v
+            WHERE v.group_id IN ${sql.in(allowed.map((row) => row.vaultId))}
           `.pipe(Effect.catch(storage("read the Space's Vaults")));
     const known = yield* spacesOf(rows);
     const visible = new Set(
       rows.filter((row) => can("vault.view", resourceOf(row, known))).map((row) => row.vaultId),
     );
+    const rowById = new Map(rows.map((row) => [row.vaultId, row]));
     return {
       spaceId: space.id,
       projectId,
       canChoose: can("vault.choose", space),
-      allowed: allowed.map((row) => ({
-        vaultId: row.vaultId,
-        name: row.name,
-        isMain: row.isMain,
-        archived: row.archived,
-        names: visible.has(row.vaultId)
-          ? names.filter((entry) => entry.vaultId === row.vaultId).map((entry) => entry.name)
-          : [],
-      })),
+      allowed: allowed.flatMap((row) => {
+        const group = rowById.get(row.vaultId);
+        return group === undefined
+          ? []
+          : [
+              {
+                vaultId: row.vaultId,
+                name: row.name,
+                owner: ownerOf(group),
+                ownerName: ownerNameOf(group, known),
+                isDefault: row.isDefault,
+                archived: row.archived,
+                names: visible.has(row.vaultId)
+                  ? names
+                      .filter((entry) => entry.vaultId === row.vaultId)
+                      .map((entry) => entry.name)
+                  : [],
+              },
+            ];
+      }),
       defaults: defaults.filter((vaultId) => allowedIds.has(vaultId)),
       fixedDefaults: VaultReach.fixedDefaults(allowed),
       projectChoices: choices.filter((choice) => allowedIds.has(choice.vaultId)),
@@ -2060,7 +2110,7 @@ const make = Effect.gen(function* () {
   const notAllowedHere = (vaultId: string) =>
     fail(
       "not-allowed",
-      `${vaultId === MAIN_VAULT_ID ? "The Main vault" : "That Vault"} is not allowed to this Space: the Owner allows Vaults in Settings → Vaults.`,
+      `That group does not reach this Space: a group reaches its owner's Space, and the Owner's named groups whom they are allowed to (${vaultId}).`,
     );
 
   const setSpaceDefaults = Effect.fn("Vaults.setSpaceDefaults")(function* (
@@ -2071,7 +2121,7 @@ const make = Effect.gen(function* () {
     const byId = new Map<string, VaultReach.ReachRow>(allowed.map((row) => [row.vaultId, row]));
     const fixed = new Set<string>(VaultReach.fixedDefaults(allowed));
     // What the Space received as defaults: the stored ones still allowed (stale rows are not).
-    const effectiveBefore = (stored: ReadonlyArray<VaultId>) =>
+    const effectiveBefore = (stored: ReadonlyArray<VaultGroupId>) =>
       stored.filter((vaultId) => byId.has(vaultId) && !fixed.has(vaultId));
     const current = new Set(
       effectiveBefore(
@@ -2084,7 +2134,7 @@ const make = Effect.gen(function* () {
     for (const vaultId of new Set(input.vaultIds)) {
       const row = byId.get(vaultId);
       if (row === undefined) return yield* notAllowedHere(vaultId);
-      // A fixed default (the Main vault in the Owner's Personal space) is never a chosen one.
+      // A fixed default (the `default` of the Space's owner) is never a chosen one.
       if (fixed.has(vaultId)) continue;
       // An archived Vault already a default may stay (or be unchecked); it never becomes one.
       if (row.archived && !current.has(vaultId)) {
@@ -2107,7 +2157,7 @@ const make = Effect.gen(function* () {
           yield* sql`DELETE FROM space_default_vaults WHERE space_id = ${space.id}`;
           for (const [position, row] of wanted.entries()) {
             yield* sql`
-              INSERT INTO space_default_vaults (space_id, vault_id, position)
+              INSERT INTO space_default_vaults (space_id, group_id, position)
               VALUES (${space.id}, ${row.vaultId}, ${position})
             `;
           }
@@ -2154,7 +2204,7 @@ const make = Effect.gen(function* () {
     if (input.choice !== "inherit" && VaultReach.fixedDefaults(allowed).includes(input.vaultId)) {
       return yield* fail(
         "not-allowed",
-        "The Main vault is always a default of your Personal space: a Project neither adds nor removes it.",
+        "The default group is always a default of its owner's Space: a Project neither adds nor removes it.",
       );
     }
     if (input.choice === "add" && row?.archived === true) {
@@ -2177,20 +2227,20 @@ const make = Effect.gen(function* () {
           }
           const current = yield* sql<{ readonly choice: string }>`
             SELECT choice FROM project_vault_choices
-            WHERE project_id = ${input.projectId} AND vault_id = ${input.vaultId}
+            WHERE project_id = ${input.projectId} AND group_id = ${input.vaultId}
           `;
           const was = current[0]?.choice ?? "inherit";
           if (was === input.choice) return;
           if (input.choice === "inherit") {
             yield* sql`
               DELETE FROM project_vault_choices
-              WHERE project_id = ${input.projectId} AND vault_id = ${input.vaultId}
+              WHERE project_id = ${input.projectId} AND group_id = ${input.vaultId}
             `;
           } else {
             yield* sql`
-              INSERT INTO project_vault_choices (project_id, vault_id, choice)
+              INSERT INTO project_vault_choices (project_id, group_id, choice)
               VALUES (${input.projectId}, ${input.vaultId}, ${input.choice})
-              ON CONFLICT (project_id, vault_id) DO UPDATE SET choice = excluded.choice
+              ON CONFLICT (project_id, group_id) DO UPDATE SET choice = excluded.choice
             `;
           }
           yield* audit.record({
@@ -2220,24 +2270,65 @@ const make = Effect.gen(function* () {
     listEntries,
     putEntry,
     deleteEntry,
-    linkEntry: Effect.fn("Vaults.linkEntry")((input: VaultEntryFromMainInput) =>
-      fromMain(input, "link"),
-    ),
-    copyEntry: Effect.fn("Vaults.copyEntry")((input: VaultEntryFromMainInput) =>
-      fromMain(input, "copy"),
-    ),
+    dismissUnlinked,
   });
 });
 
-/** The Main vault exists from the start: the Owner's, never deleted. */
-const ensureMainVault = Effect.gen(function* () {
+/**
+ * Every owner has its `default` group (owned-resources 03): the Owner and every Organization not
+ * being deleted. Made with them (VaultGroups.ensureDefault); this catches any made before.
+ */
+const ensureDefaultGroups = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const at = DateTime.formatIso(yield* DateTime.now);
-  yield* sql`
-    INSERT INTO vaults (vault_id, name, description, space_id, is_main, position, created_at, updated_at)
-    VALUES (${MAIN_VAULT_ID}, ${MAIN_VAULT_NAME}, NULL, NULL, 1, 0, ${at}, ${at})
-    ON CONFLICT (vault_id) DO NOTHING
+  const owners = yield* sql<{
+    readonly ownerKind: "user" | "organization";
+    readonly ownerId: string;
+  }>`
+    SELECT 'user' AS "ownerKind", user_id AS "ownerId" FROM users WHERE is_owner = 1
+    UNION ALL
+    SELECT 'organization', space_id FROM spaces
+    WHERE kind = 'organization' AND deleting_at IS NULL
   `;
+  for (const owner of owners) yield* VaultGroups.ensureDefault(sql, owner);
+});
+
+/**
+ * Owned-resources 03: before any request, each value held by several entries (a former link's)
+ * is copied under a new id for all but one. A crash midway leaves every entry deliverable and an
+ * unheld copy the sweep removes; the next start finishes. Idempotent.
+ */
+export const unshareValues = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const values = yield* ServerSecretStore.VaultValueStore;
+  const random = yield* SecureRandom.SecureRandom;
+  const shared = yield* sql<{ readonly entryId: string; readonly valueId: string }>`
+    SELECT entry_id AS "entryId", value_id AS "valueId" FROM vault_entries
+    WHERE value_id IN (
+      SELECT value_id FROM vault_entries WHERE value_id IS NOT NULL
+      GROUP BY value_id HAVING COUNT(*) > 1
+    )
+    ORDER BY value_id, created_at, entry_id
+  `;
+  const first = new Set<string>();
+  let copied = 0;
+  for (const { entryId, valueId } of shared) {
+    if (!first.has(valueId)) {
+      first.add(valueId);
+      continue;
+    }
+    const bytes = yield* values.get(valueId);
+    // A value gone from the store is the next start's to find missing: nothing to copy.
+    if (Option.isNone(bytes)) continue;
+    const next = `value-${Buffer.from(yield* random.randomBytes(16)).toString("hex")}`;
+    yield* values.set(next, bytes.value);
+    yield* sql`
+      UPDATE vault_entries SET value_id = ${next}
+      WHERE entry_id = ${entryId} AND value_id = ${valueId}
+    `;
+    copied += 1;
+  }
+  if (copied > 0)
+    yield* Effect.logInfo("Vaults: gave former Secret links their own values", { copied });
 });
 
 /**
@@ -2266,7 +2357,8 @@ const sweepOrphanValues = Effect.gen(function* () {
 
 /**
  * The Hub's start: the database's key check first (a wrong key changes nothing in the database),
- * then the Main vault and the sweep. A joined machine has no master key and no Vaults: nothing is
+ * then every owner's `default`, former links' own values and the sweep. A joined machine has no
+ * master key and no Vaults: nothing is
  * written and every call says so.
  */
 export const layer = Layer.effect(
@@ -2277,7 +2369,15 @@ export const layer = Layer.effect(
     yield* VaultKeyCheck.checkDatabaseKey(keyring.value).pipe(
       Effect.catchTags({ SqlError: (cause) => Effect.die(cause) }),
     );
-    yield* ensureMainVault.pipe(Effect.orDie);
+    yield* ensureDefaultGroups.pipe(Effect.orDie);
+    // Before any request reads or writes an entry: a shared value is never replaced in place.
+    yield* unshareValues.pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Vaults: could not give former Secret links their own values", {
+          cause,
+        }),
+      ),
+    );
     yield* sweepOrphanValues.pipe(
       Effect.catch((cause) =>
         Effect.logWarning("Vaults: could not sweep values no secret holds", { cause }),

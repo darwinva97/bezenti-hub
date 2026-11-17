@@ -93,6 +93,7 @@ import {
   type Hub,
   type TestEnvironment,
 } from "./HubWithEnvironments.testkit.ts";
+import { orgOwner, userOwner } from "../vaults/VaultGroups.testkit.ts";
 
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
 
@@ -858,7 +859,9 @@ describe("Hub con Environments: a moved Project's Vaults", () => {
           variable: string,
           value: string,
         ) {
-          const made = yield* vaults.create({ name, spaceId }).pipe(asOwner);
+          const made = yield* vaults
+            .create({ name, owner: spaceId === null ? userOwner(owner) : orgOwner(spaceId) })
+            .pipe(asOwner);
           yield* vaults
             .putEntry({ vaultId: made.id, name: variable, value: Redacted.make(value) })
             .pipe(asOwner);
@@ -932,7 +935,7 @@ describe("Hub con Environments: a moved Project's Vaults", () => {
         assert.equal((yield* moveProject(hub, projectId, globex)).status, 200);
         // Its choice of a Vault that does not reach Globex went with the move.
         const choices = yield* hub.server.sql<{ readonly vaultId: string }>`
-          SELECT vault_id AS "vaultId" FROM project_vault_choices WHERE project_id = ${projectId}
+          SELECT group_id AS "vaultId" FROM project_vault_choices WHERE project_id = ${projectId}
         `;
         assert.deepEqual(choices, []);
         // Dropped as the mover, audited as a Project's choice gone back to inherit, in Acme: the
@@ -1038,9 +1041,10 @@ describe("Hub con Environments: a moved Project's Vaults", () => {
         assert.equal(lastShell().GLOBEX_TOKEN, GLOBEX_TOKEN);
         const names = yield* threadNames;
         assert.deepEqual(namesIn(names.variables), ["GLOBEX_TOKEN"]);
+        // Globex's own `default` (empty) and its chosen default.
         assert.deepEqual(
           names.vaults.map((vault) => vault.name),
-          ["Globex keys"],
+          ["default", "Globex keys"],
         );
 
         // Allowing the Owner's Vault to Globex later does not bring the old choice back unseen.
@@ -1136,7 +1140,7 @@ describe("Hub con Environments: a moved Project's Vaults", () => {
       const acme = yield* createOrganization(hub, "Acme");
       const vaults = hub.service(Vaults.Vaults);
       const acmeVault = yield* vaults
-        .create({ name: "Acme keys", spaceId: acme })
+        .create({ name: "Acme keys", owner: orgOwner(acme) })
         .pipe(CommandActor.actAs(owner));
       yield* vaults
         .setSpaceDefaults({ spaceId: acme, vaultIds: [acmeVault.id] })

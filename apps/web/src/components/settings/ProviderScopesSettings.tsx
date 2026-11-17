@@ -6,10 +6,9 @@ import type {
   SecretProviderCheck,
   SecretProviderConfig,
   SecretProviderId,
-  VaultId,
-  VaultSummary,
+  VaultGroupId,
+  VaultGroupSummary,
 } from "@t3tools/contracts";
-import { MAIN_VAULT_ID } from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useState } from "react";
 
 import { errorMessageOf } from "../../lib/errorMessage";
@@ -95,7 +94,7 @@ export function ProviderScopesSettings(props: {
   const allow = useAtomCommand(serverEnvironment.allowProviderScope, "allow a provider scope");
   const test = useAtomCommand(serverEnvironment.testSecretProvider, "test a provider scope");
   const [scopes, setScopes] = useState<ReadonlyArray<ProviderScope> | null>(null);
-  const [vaults, setVaults] = useState<ReadonlyArray<VaultSummary>>([]);
+  const [vaults, setVaults] = useState<ReadonlyArray<VaultGroupSummary>>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -110,7 +109,10 @@ export function ProviderScopesSettings(props: {
       ]);
       return {
         scopes: scopesAnswer.scopes,
-        vaults: vaultsAnswer.vaults.filter((vault) => vault.id !== MAIN_VAULT_ID),
+        // An Organization's groups, and the Owner's own named ones; never a `default` of a User.
+        vaults: vaultsAnswer.groups.filter(
+          (group) => group.owner.kind === "organization" || (!group.isDefault && group.canManage),
+        ),
       };
     } catch {
       return null;
@@ -177,7 +179,7 @@ export function ProviderScopesSettings(props: {
       return `Saved ${input.label}.`;
     });
 
-  const setAllowed = (scope: ProviderScope, vaultId: VaultId, allowed: boolean) =>
+  const setAllowed = (scope: ProviderScope, vaultId: VaultGroupId, allowed: boolean) =>
     run(async () => {
       const input = { scopeId: scope.id, vaultId, allowed };
       const asked = await settle(allow({ environmentId, input }));

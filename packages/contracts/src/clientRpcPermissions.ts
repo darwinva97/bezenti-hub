@@ -90,13 +90,12 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // A guest link hands thread access to someone outside, like a pairing link.
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
   // Vaults: who may is the Hub's (AccessPolicy `vault.*`); the session must hold access:write.
-  [WS_METHODS.vaultsCreate]: AuthAccessWriteScope,
-  [WS_METHODS.vaultsUpdate]: AuthAccessWriteScope,
-  [WS_METHODS.vaultsDelete]: AuthAccessWriteScope,
+  [WS_METHODS.vaultsGroupsCreate]: AuthAccessWriteScope,
+  [WS_METHODS.vaultsGroupsUpdate]: AuthAccessWriteScope,
+  [WS_METHODS.vaultsGroupsDelete]: AuthAccessWriteScope,
   [WS_METHODS.vaultsEntriesPut]: AuthAccessWriteScope,
   [WS_METHODS.vaultsEntriesDelete]: AuthAccessWriteScope,
-  [WS_METHODS.vaultsEntriesLink]: AuthAccessWriteScope,
-  [WS_METHODS.vaultsEntriesCopy]: AuthAccessWriteScope,
+  [WS_METHODS.vaultsUnlinkedNoticeDismiss]: AuthAccessWriteScope,
   [WS_METHODS.vaultsAllow]: AuthAccessWriteScope,
   // Vaults ticket 03: Secret providers' scopes and «Test connection» are settings, the Owner's.
   [WS_METHODS.secretProvidersTest]: AuthSettingsWriteScope,

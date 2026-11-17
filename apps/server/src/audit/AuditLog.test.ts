@@ -599,6 +599,10 @@ it.effect(
         // vaults/EffectiveVaults.test.ts (spec 5 ticket 03)
         "vault.allow",
         "vault.choose",
+        // vaults/Vaults.test.ts (owned-resources 03): a Vault's groups.
+        "vault_group.create",
+        "vault_group.update",
+        "vault_group.delete",
         // ai/AiGateway.test.ts (spec 4 ticket 01)
         "ai_gateway.update",
         "ai_gateway.rollback",

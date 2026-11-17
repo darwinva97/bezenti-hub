@@ -181,13 +181,15 @@ A `file` answer is for the agent's own shell, which reads it by path.
   Hub machine runs agents (development, `T3CODE_HUB_RUNS_AGENTS`, and the desktop app); a Thread in
   a Sandbox or on a joined machine cannot read a path on the Hub.
 
-## Vaults (spec 5, ticket 02)
+## Vaults (spec 5 ticket 02, owned-resources 03)
 
-A Vault is a named set of secrets, each under an environment-variable name. `vaults/Vaults.ts`
-is the one service; WS RPCs `vaults.*` are its doors. No door answers a Secret's value
-(owned-resources 01, ADR 0012).
+Every owner, a User or an Organization, has one **Vault** made of **groups**: its `default` group
+(made with the owner, never deleted, renamed, described or archived: `default-group`) and named
+ones. Each group holds entries under environment-variable names. `vaults/Vaults.ts` is the one
+service; WS RPCs `vaults.*` are its doors (`vaults.groups.list|create|update|delete` for groups).
+No door answers a Secret's value (owned-resources 01, ADR 0012).
 
-- **Where values live:** never in the database. Each `own` or `copy` value is an entry of
+- **Where values live:** never in the database. Each `own` value is an entry of
   `ServerSecretStore.VaultValueStore`: its own folder, `secrets/vault-values/<value id>.sealed`,
   sealed under its own purpose (`vault-value`; `MasterKeyFile.STORE_NAMESPACES` gives each folder
   its purpose, never a name prefix). The store's own names are single file names, so no other
@@ -201,33 +203,41 @@ is the one service; WS RPCs `vaults.*` are its doors. No door answers a Secret's
   the audit commit in one transaction; only then is the old value removed; if the transaction
   fails, the new value is. A crash between the two leaves a value no row points at, which the
   next start removes (it lists only the Vault values' folder).
-- **Metadata** (migration 111): `vaults` (the Main vault is `vault-main`, made at the Hub's start,
-  never deleted or renamed), `vault_entries` (`own` | `copy` | `link`, `value_id`; a Secret link
-  keeps `linked_entry_id` and is «broken» once its original is gone), `vault_allowances`,
-  `space_default_vaults`, `project_vault_choices` (used from ticket 03) and `vault_key_check`.
+- **Metadata** (migrations 111, 142): `vault_groups` (`owner_kind` user|organization, `owner_id`,
+  `is_default`; one `default` per owner, names unique per owner, `default` reserved),
+  `vault_entries` (`group_id`; `own` | `provider` | `template` | `identity`, `value_id`),
+  `vault_allowances`, `space_default_vaults`, `project_vault_choices`, `vault_provider_scopes`
+  (all by `group_id`) and `vault_key_check`. A `default` is made in the transaction that makes its
+  owner (`VaultGroups.ensureDefault`: the Owner in `Users.insertOwner`, an Organization in
+  `SpaceDirectory`), and again at the Hub's start for any owner without one.
+- **Migration 142** turned each Vault into a group with the same id: the Main vault (`vault-main`)
+  is the Owner's `default`; the Owner's other Vaults are named groups of the Owner; an
+  Organization's are named groups of it, beside a new empty `default`; a Vault called `default`
+  became `default (old)`. Secret links and copies became `own` Secrets: a live link with its
+  original's value, class and its own delivery; a broken link was deleted (it delivered nothing).
+  Each is audited `secret.edit` `op: unlinked` (a broken one `op: delete`) by `system`, and the
+  former links are listed once to the Owner (`vault_unlinked_notices`, `vaults.unlinkedNotice.dismiss`).
+  A migration copies no sealed file, so a former link first shares its original's `value_id`;
+  `Vaults.unshareValues` gives it its own copy at the Hub's start, before any request, and
+  `VaultReachLoss.removeValues` keeps any value an entry still holds. What each Thread receives
+  is unchanged (`142_VaultGroups.test.ts` compares it with what the code before computed).
 - **The database's key check** (`vaults/VaultKeyCheck.ts`): a known text sealed with the master key,
   checked first at the start, before anything is written to the database. Written at the first
   start; re-sealed when it opens only with the previous key (after a rotation; `t3 secrets key
   rotate` re-seals it at once); a key that opens the secrets folder but not this check stops the
   Hub: the database and the folder come from different Hubs.
-- **Who may** (`AccessPolicy`, `vault.view|edit|manage` on a `VaultResource`, through
-  `SpaceDirectory.authorizer`, decided once per request, which also keeps an agent bound to one
-  Space to that Space):
-  the Owner does everything and alone creates, renames, archives and deletes; the Main
-  vault and the Owner's other Vaults are the Owner's alone; an Organization's Admins add, replace,
-  rename and delete its secrets without reading them; its Members and Guests see names and
-  descriptions. A Vault one cannot see answers like a missing one.
-- **Links and copies** come only from the Main vault and need editing it (the Owner), so no Vault
-  hands a Main vault value to anyone the Owner did not choose. A link reads its original at use, so
-  rotating the original changes every link; a copy is sealed again under its own entry. Deleting an
-  original with links answers with the links it would break until it is asked again with
-  `breakLinks`.
-- **Links seen from an Organization:** whoever does not see the Main vault learns nothing of the
-  original: not whether it is short (`unmasked`), not its version or rotation (a link row's own
-  version never moves), not its name. Its editors (the Owner, the Organization's Admins) see that
-  it broke; its Members and Guests do not.
+- **Who may** (`AccessPolicy`, `vault.view|edit|manage` on a `VaultResource` with its owner and
+  `isDefault`, through `SpaceDirectory.authorizer`, decided once per request, which also keeps an
+  agent bound to one Space to that Space): nobody manages a `default` (`default-group`). The Owner
+  does everything else; the Owner's `default` and named groups are the Owner's. An Organization's
+  Admins create, rename, archive and delete its named groups and add, replace, rename and delete
+  entries of all its groups without reading Secrets; its Members and Guests see names and
+  descriptions. Workload identity entries and names that change how tools run stay the Owner's. A
+  group one cannot see answers like a missing one.
+- **Secret links and copies** are gone (owned-resources 03): sharing a group with another Space is
+  a Grant (`../grants/`).
 - **Names** (`secretNameRisk` in contracts, compared uppercased): `^[A-Z_][A-Z0-9_]{0,127}$`,
-  unique in a Vault. `gateway`: the Hub's own (`T3_*`, `T3CODE_*`, the AI gateway's variables,
+  unique in a group. `gateway`: the Hub's own (`T3_*`, `T3CODE_*`, the AI gateway's variables,
   among them the provider homes it sets such as `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
   `CLAUDE_CONFIG_DIR`, `CODEX_HOME`), refused for everyone (`reserved-name`); it is checked
   before `dangerous`, so those names are never the Owner's to confirm. `dangerous`: what changes how tools run or whom they trust (process and
@@ -243,7 +253,7 @@ is the one service; WS RPCs `vaults.*` are its doors. No door answers a Secret's
   still show). A Secret's value is read only to deliver it (`SecretDelivery`) and to mask it
   (`SecretMasker`); a Variable's, also to list it (`Vaults.shown`, `vault.readVariables`). Values
   in arrive as `Schema.RedactedFromValue`, so no log, span or error shows them. Every change is
-  audited (`vault.create|update|delete`, `secret.edit` with `op`) with names and kinds, never
+  audited (`vault_group.create|update|delete`, `secret.edit` with `op`) with names and kinds, never
   values. The master key's backup (`vaults.masterKeyBackup`, `t3 secrets key export`) stays: it
   is the operator's, and ADR 0008 makes the promise the application's.
 
@@ -630,18 +640,19 @@ The Hub is an OIDC issuer for the work it runs (`apps/server/src/identity/`).
     `IdentityRefresher.test.ts`, and the OpenBao driver tests;
   - a live k3s run is left for a person (ticket 18).
 
-## Allowing Vaults (spec 5, ticket 03)
+## Allowing groups (spec 5 ticket 03, owned-resources 03)
 
-Which Vaults may reach a Space or a User is one rule, `vaults/VaultReach.ts`, used by the doors
-that choose Vaults and by the effective set:
+Which groups may reach a Space or a User is one rule, `vaults/VaultReach.ts`, used by the doors
+that choose groups and by the effective set:
 
-- **The Main vault** reaches only the Owner's Personal space, where it is always a default (a
-  fixed one, «Always» in Settings). It is never allowed to anyone (`main-vault`): its secrets
-  reach others only through Secret links or copies.
-- **An Organization's Vault** reaches its own Organization, without an allowance, and nothing
-  else: allowing it to another Space or to a User is refused (`not-allowed`), so what its Admins
-  write stays in their Organization.
-- **One of the Owner's other Vaults** reaches the Spaces and Users the Owner allowed it to
+- **A group reaches its owner's Space**, without an allowance: a User's groups that User's
+  Personal space, an Organization's that Organization.
+- **A `default`** is a fixed default of its owner's Space («Always» in Settings): every Thread there
+  receives it, and a Project neither adds nor removes it. It is never allowed elsewhere
+  (`default-group`).
+- **An Organization's groups** reach nothing else: allowing one is refused (`not-allowed`), so what
+  its Admins write stays in their Organization.
+- **The Owner's named groups** also reach the Spaces and Users the Owner allowed them to
   (`vaults.allow`, AccessPolicy `vault.manage`: the Owner; audited `vault.allow`). Taking it back
   never needs the Space or User to exist any more. Taking it back from a Space also drops that
   Space's default and its Projects' choices of it (Projects by `SpaceDirectory.projectSpaceSql`,
@@ -649,22 +660,22 @@ that choose Vaults and by the effective set:
   brings them back unseen. Allowing it to a User shows the shared-Sandbox warning first
   (ADR 0004): only that User's turns, terminals and scripts receive it, but other agents in the
   same Sandbox can read a running process's environment.
-- Allowance rows on the Main vault or on an Organization's Vault are ignored when reading, so a
-  stray row never widens what a Vault reaches.
-- **Who sees and edits the Owner's allowed Vaults** (`AccessPolicy.decideAllowedVault`): whoever
+- Allowance rows on a `default` or on any group not the Owner's own are ignored when reading, so a
+  stray row never widens what a group reaches.
+- **Who sees and edits the Owner's allowed groups** (`AccessPolicy.decideAllowedVault`): whoever
   works in an allowed Space, or is an allowed User, sees its names. An Admin edits its secrets only
   while it reaches nothing but Organizations they run (no User, no Personal space, no other
   Organization). Whom a Vault is allowed to is shown to the Owner alone.
 
 **Choosing** (`vault.choose`, decided on the Space: the Owner anywhere, a Personal space
 included; an Organization's Admins while it is open): `vaults.spaceDefaults.set` replaces a
-Space's defaults, in order; `vaults.projectChoices.set` adds, removes or clears (`inherit`) one
-Vault for a Project. Both accept only Vaults allowed to the Space (`not-allowed`) and are audited
+Space's chosen defaults, in order; `vaults.projectChoices.set` adds, removes or clears (`inherit`)
+one group for a Project. Both accept only groups reaching the Space (`not-allowed`) and are audited
 `vault.choose` per effective default or choice changed (`scope`, `choice`, `position`,
 `projectId`). An archived Vault never becomes a default or a Project's add; one already a default
-may stay or be unchecked. The fixed defaults (`VaultReach.fixedDefaults`: the Main vault in the
-Owner's Personal space) are never a Project's add or remove, in the service, in `forThread` and in
-the UI. `vaults.choices` shows a Vault's names only to whoever may `vault.view` it. The scratch Project
+may stay or be unchecked. The fixed default (`VaultReach.fixedDefaults`: the `default` of the
+Space's owner) is never a Project's add or remove, in the service, in `forThread` and in the UI.
+`vaults.choices` shows a group's names only to whoever may `vault.view` it, and each group's owner. The scratch Project
 (Threads without a Project) takes no choices: it spans every Space. `vaults.choices` reads them for
 whoever sees the Space.
 
@@ -684,18 +695,18 @@ terminal.
    and once by migration 115 for rows earlier Hubs left).
 3. User side: the Vaults allowed to the acting User, whichever Space the Thread is in. Never
    another User's, even in the same Thread or Sandbox.
-4. Without archived Vaults, broken Secret links (a link's value and length are its original's),
-   and names `secretNameRisk` calls `invalid` or `gateway`, however they got in. `dangerous` names
+4. Without archived groups and names `secretNameRisk` calls `invalid` or `gateway`, however they
+   got in. `dangerous` names
    are delivered (only the Owner sets them) and marked.
 
-**Precedence for a name several Vaults define:** the User's own Vaults, then the Project's adds,
-then the Space's defaults. Within the User's and the Project's, the Owner's order (Settings →
-Vaults: the Main vault, then position, then name); within the defaults, the order they were set
-in (the Main vault first in the Owner's Personal space). The losers are listed as `shadowed`, and
+**Precedence for a name several groups define:** the groups allowed to the User, then the
+Project's adds, then the Space's defaults. Within the User's and the Project's, Settings' order
+(`default` first, then position, then name); within the defaults, the Space owner's `default`
+first, then the chosen ones in the order they were set in. The losers are listed as `shadowed`, and
 the Thread's «Secrets» panel says «Wins over …». Precedence only picks among entries already
 allowed: it never lets a name in that rule 4 keeps out.
 
-It returns value ids (`VaultValueStore` entries; a link's is its original's), never values: only
+It returns value ids (`VaultValueStore` entries), never values: only
 delivery reads them. `vaults.threadEnvironment` (WS, the Thread must be visible) computes it for the
 caller and strips value and entry ids: each User sees what their own turns would receive.
 `DoorRules.test.ts` checks that only `server.ts`, `ws.ts`, `SecretDelivery` and the Project service

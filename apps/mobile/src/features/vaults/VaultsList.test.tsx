@@ -1,4 +1,4 @@
-import { EnvironmentId, type VaultEntry, type VaultSummary } from "@t3tools/contracts";
+import { EnvironmentId, type VaultEntry, type VaultGroupSummary } from "@t3tools/contracts";
 import * as Redacted from "effect/Redacted";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -56,21 +56,21 @@ import { ThreadSecrets } from "./ThreadSecrets";
 import { VaultsList } from "./VaultsList";
 
 const hub = EnvironmentId.make("hub");
-const vault = (over: Partial<VaultSummary>) =>
+const vault = (over: Partial<VaultGroupSummary>) =>
   ({
     id: "vault-acme",
     name: "Acme",
     description: null,
-    spaceId: "space-acme",
-    spaceName: "Acme",
-    isMain: false,
+    owner: { kind: "organization", spaceId: "space-acme" },
+    ownerName: "Acme",
+    isDefault: false,
     archived: false,
     entryCount: 2,
     canEdit: false,
     canManage: false,
     allowances: [],
     ...over,
-  }) as unknown as VaultSummary;
+  }) as unknown as VaultGroupSummary;
 const entries = [
   {
     id: "e1",
@@ -79,7 +79,6 @@ const entries = [
     description: "CI",
     kind: "own",
     broken: false,
-    linkedFrom: null,
     unmasked: false,
   },
   {
@@ -87,9 +86,8 @@ const entries = [
     vaultId: "vault-acme",
     name: "OLD",
     description: null,
-    kind: "link",
+    kind: "template",
     broken: true,
-    linkedFrom: null,
     unmasked: false,
   },
 ] as unknown as ReadonlyArray<VaultEntry>;
@@ -98,8 +96,8 @@ const ok = (value: unknown) => Promise.resolve({ _tag: "Success", value });
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
-const setup = async (summary: VaultSummary) => {
-  mocks.commands.list = vi.fn(() => ok({ vaults: [summary] }));
+const setup = async (summary: VaultGroupSummary) => {
+  mocks.commands.list = vi.fn(() => ok({ groups: [summary], owners: [], unlinked: [] }));
   mocks.commands.entries = vi.fn(() => ok({ entries }));
   mocks.commands.put = vi.fn(() => ok({ entry: entries[0], warnings: [] }));
   await act(async () => root?.render(<VaultsList environmentId={hub} />));
@@ -155,9 +153,9 @@ describe("Settings → Vaults on mobile", () => {
       vault({
         canEdit: true,
         canManage: true,
-        isMain: true,
-        spaceId: null,
-        spaceName: null,
+        isDefault: true,
+        owner: { kind: "user", userId: "owner" as never },
+        ownerName: "Owner",
       }),
     );
     expect(text()).not.toMatch(/\breveal/i);
@@ -186,7 +184,7 @@ describe("Settings → Vaults on mobile", () => {
     expect(byLabel("New value for GITHUB_TOKEN")).toBeNull();
   });
 
-  it("does not replace a Secret link and refuses names the Hub reserves before calling", async () => {
+  it("does not replace a template and refuses names the Hub reserves before calling", async () => {
     await setup(vault({ canEdit: true }));
     expect(byLabel("Replace value of OLD")).toBeNull();
     await click("Add secret");
@@ -200,7 +198,9 @@ describe("Settings → Vaults on mobile", () => {
   it("offers the Owner no Replace on a name that changes how tools run", async () => {
     mocks.isOwner = true;
     const dangerous = { ...entries[0], id: "e3", name: "NODE_OPTIONS" } as unknown as VaultEntry;
-    mocks.commands.list = vi.fn(() => ok({ vaults: [vault({ canEdit: true })] }));
+    mocks.commands.list = vi.fn(() =>
+      ok({ groups: [vault({ canEdit: true })], owners: [], unlinked: [] }),
+    );
     mocks.commands.entries = vi.fn(() => ok({ entries: [entries[0], dangerous] }));
     mocks.commands.put = vi.fn(() => ok({ entry: entries[0], warnings: [] }));
     await act(async () => root?.render(<VaultsList environmentId={hub} />));

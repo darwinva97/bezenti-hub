@@ -5,29 +5,33 @@ import {
   IDENTITY_TTL_MIN_SECONDS,
   type EnvironmentId,
   looksLikeCredential,
-  MAIN_VAULT_ID,
   parseTemplate,
   previewTemplate,
   secretNameRisk,
   templateNames,
   templatePathNames,
-  type SpaceId,
   type VaultEntry,
   type VaultEntryClass,
   type VaultEntryDelivery,
-  type VaultEntryId,
   type SecretProviderId,
   type VaultProviderScopes,
-  type VaultSummary,
+  type VaultGroupListResult,
+  type VaultGroupSummary,
 } from "@t3tools/contracts";
-import { entryActions, loadVaultOverview, vaultActions } from "@t3tools/client-runtime/vaults";
+import {
+  entryActions,
+  loadVaultOverview,
+  vaultActions,
+  vaultOwnerLine,
+  type VaultOwnerSection,
+  vaultSections,
+} from "@t3tools/client-runtime/vaults";
 import * as Redacted from "effect/Redacted";
 import { useEffect, useEffectEvent, useState } from "react";
 
 import { usePrimarySessionState } from "../../environments/primary";
 import { isElectron } from "../../env";
 import { errorMessageOf } from "../../lib/errorMessage";
-import { useCurrentSpace } from "../../state/currentSpace";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -90,7 +94,7 @@ const DELIVERY_ITEMS: ReadonlyArray<{
 const DELIVERY_HINT: Record<VaultEntryDelivery, string> = {
   env: "",
   file: "Written to a file in memory on the Thread's machine; the variable holds its path. A machine without memory for it refuses the Thread.",
-  none: "Only templates of this Vault use it: no process gets it by itself.",
+  none: "Only templates of this group use it: no process gets it by itself.",
 };
 
 /** Why a template's text would be refused by the Hub, from the Vault's entries (names only). */
@@ -213,17 +217,18 @@ function useVaultCommands() {
       reportDefect: false,
     }),
     deleteEntry: useAtomCommand(serverEnvironment.deleteVaultEntry, "delete a secret"),
-    link: useAtomCommand(serverEnvironment.linkVaultEntry, "link a secret"),
-    copy: useAtomCommand(serverEnvironment.copyVaultEntry, "copy a secret"),
+    dismissUnlinked: useAtomCommand(
+      serverEnvironment.dismissUnlinkedVaultEntries,
+      "dismiss the unlinked notice",
+    ),
   };
 }
 type VaultCommands = ReturnType<typeof useVaultCommands>;
 
 /**
- * Settings → Vaults: named sets of secrets, each under an environment-variable name. The Owner
- * manages them; an Organization's Admins add, replace and delete its secrets. Nobody sees a
- * Secret's value again once saved, the Owner included; Members and Guests see names only, and
- * Variables' values. See docs/internals/secrets.md.
+ * Settings → Vaults (owned-resources 03): a section per owner («Mine», each Organization), each a
+ * Vault of groups, `default` first. No Secret's value is ever shown; Variables' are, Guests
+ * excepted. See docs/internals/secrets.md.
  */
 export function VaultsSettings() {
   const environmentId = usePrimaryEnvironmentId();
@@ -237,23 +242,22 @@ export function VaultsSettings() {
 function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const session = usePrimarySessionState();
   const isOwner = session.data?.authenticated === true && session.data.isOwner === true;
+  const userId = session.data?.authenticated === true ? (session.data.userId ?? null) : null;
   const commands = useVaultCommands();
-  // The session may change secrets at all (access:write); each Vault then says what is allowed.
+  // The session may change secrets at all (access:write); each group then says what is allowed.
   const mayWrite = useAtomValue(serverEnvironment.putVaultEntry.permissionAtom(environmentId));
   const mayCreate = useAtomValue(serverEnvironment.createVault.permissionAtom(environmentId));
-  const spaceView = useCurrentSpace((state) => state.view);
-  const organizations = (spaceView?.spaces ?? []).filter((space) => space.kind === "organization");
-  const [vaults, setVaults] = useState<ReadonlyArray<VaultSummary> | null>(null);
+  const [listed, setListed] = useState<VaultGroupListResult | null>(null);
   const [entries, setEntries] = useState<Readonly<Record<string, ReadonlyArray<VaultEntry>>>>({});
   const [error, setError] = useState<string | null>(null);
 
   const listVaults = () => settle(commands.list({ environmentId, input: {} }));
-  const listEntries = (vaultId: VaultSummary["id"]) =>
+  const listEntries = (vaultId: VaultGroupSummary["id"]) =>
     settle(commands.entries({ environmentId, input: { vaultId } })).then(
       (result) => [vaultId, result.entries] as const,
     );
 
-  /** Every Vault the User sees, their names read in parallel. */
+  /** Every group the User sees, their names read in parallel. */
   const fetchAll = useEffectEvent((target: EnvironmentId) =>
     loadVaultOverview({
       list: () => settle(commands.list({ environmentId: target, input: {} })),
@@ -267,7 +271,7 @@ function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }
     void fetchAll(environmentId).then(
       (loaded) => {
         if (cancelled) return;
-        setVaults(loaded.vaults);
+        setListed(loaded.listed);
         setEntries(loaded.entries);
       },
       (cause: unknown) => {
@@ -279,16 +283,16 @@ function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }
     };
   }, [environmentId]);
 
-  /** After a change: the list (counts) and the one Vault that changed; every Vault for `all`. */
-  const refresh = async (changed: VaultSummary["id"] | "all") => {
+  /** After a change: the list (counts) and the one group that changed; every group for `all`. */
+  const refresh = async (changed: VaultGroupSummary["id"] | "all") => {
     try {
-      const listed = await listVaults();
+      const next = await listVaults();
       const targets =
         changed === "all"
-          ? listed.vaults.map((vault) => vault.id)
-          : listed.vaults.filter((vault) => vault.id === changed).map((vault) => vault.id);
+          ? next.groups.map((group) => group.id)
+          : next.groups.filter((group) => group.id === changed).map((group) => group.id);
       const loaded = await Promise.all(targets.map(listEntries));
-      setVaults(listed.vaults);
+      setListed(next);
       setEntries((previous) => ({ ...previous, ...Object.fromEntries(loaded) }));
       setError(null);
     } catch (cause) {
@@ -296,18 +300,14 @@ function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }
     }
   };
 
-  const mainEntries = (entries[MAIN_VAULT_ID] ?? []).filter((entry) => entry.kind !== "link");
+  const sections = listed === null ? [] : vaultSections(listed, { userId });
 
   return (
     <>
       <SettingsSection id="vaults" title="Vaults">
         <SettingsRow
           title="Secrets for your agents"
-          description={
-            isOwner
-              ? "Each entry reaches agents as an environment variable. A Variable is configuration: everyone who sees it reads its value, Guests excepted. A Secret is never shown again once saved, not even to you: replace it or delete it. An Organization's Admins add, replace and delete its entries without seeing Secrets."
-              : "The entries your Organizations' agents receive, by name. Variables show their value; Secrets never do."
-          }
+          description="Each owner has one Vault of groups: its default group, which every Thread of its Space receives, and named ones you choose per Space or Project. A Variable is configuration: everyone who sees it reads its value, Guests excepted. A Secret is never shown again once saved, not even to the Owner: replace it or delete it."
           status={
             error === null ? null : (
               <span className="text-destructive" role="alert">
@@ -316,30 +316,31 @@ function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }
             )
           }
         />
-        {isOwner && mayCreate ? (
-          <NewVaultForm
-            organizations={organizations.map((space) => ({ id: space.id, name: space.name }))}
-            onCreate={async (input) => {
-              await settle(commands.create({ environmentId, input }));
+        {listed !== null && listed.unlinked.length > 0 ? (
+          <UnlinkedNotice
+            entries={listed.unlinked}
+            onDismiss={async () => {
+              await settle(commands.dismissUnlinked({ environmentId, input: {} }));
               await refresh("all");
             }}
           />
         ) : null}
       </SettingsSection>
-      {vaults === null ? null : vaults.length === 0 ? (
+      {listed === null ? null : sections.length === 0 ? (
         <p className="px-4 text-sm text-muted-foreground">No Vault is shared with you.</p>
       ) : (
-        vaults.map((vault) => (
-          <VaultSection
-            key={vault.id}
+        sections.map((section) => (
+          <OwnerVault
+            key={section.owner.kind === "user" ? section.owner.userId : section.owner.spaceId}
+            section={section}
             environmentId={environmentId}
             commands={commands}
-            vault={vault}
             mayWrite={mayWrite}
+            mayCreate={mayCreate}
             isOwner={isOwner}
-            entries={entries[vault.id] ?? []}
-            mainEntries={vault.isMain ? [] : mainEntries}
-            onChanged={(all) => refresh(all ? "all" : vault.id)}
+            userId={userId}
+            entries={entries}
+            onChanged={refresh}
           />
         ))
       )}
@@ -348,26 +349,101 @@ function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }
   );
 }
 
-/** Stands for «no Organization»: the Vault is the Owner's own. */
-const ONLY_YOU = "only-you";
+/**
+ * Owned-resources 03: the entries that were Secret links are independent Secrets now; told once to
+ * the Owner, until dismissed.
+ */
+function UnlinkedNotice(props: {
+  readonly entries: VaultGroupListResult["unlinked"];
+  readonly onDismiss: () => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  return (
+    <SettingsRow
+      title="Secret links are now independent"
+      description={`Rotating the original no longer changes these: ${props.entries
+        .map(
+          (entry) =>
+            `${entry.vaultName ?? "a group"} → ${entry.name}${entry.originalName === null ? "" : ` (was ${entry.originalName})`}`,
+        )
+        .join(", ")}.`}
+      control={
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={pending}
+          onClick={() => {
+            setPending(true);
+            void props.onDismiss().finally(() => setPending(false));
+          }}
+        >
+          Got it
+        </Button>
+      }
+    />
+  );
+}
 
-function NewVaultForm(props: {
-  readonly organizations: ReadonlyArray<{ readonly id: SpaceId; readonly name: string }>;
-  readonly onCreate: (input: {
-    readonly name: string;
-    readonly spaceId: SpaceId | null;
-  }) => Promise<void>;
+/** One owner's Vault: its groups, `default` first, and a form for a new group where allowed. */
+function OwnerVault(props: {
+  readonly section: VaultOwnerSection;
+  readonly environmentId: EnvironmentId;
+  readonly commands: VaultCommands;
+  readonly mayWrite: boolean;
+  readonly mayCreate: boolean;
+  readonly isOwner: boolean;
+  readonly userId: string | null;
+  readonly entries: Readonly<Record<string, ReadonlyArray<VaultEntry>>>;
+  readonly onChanged: (changed: VaultGroupSummary["id"] | "all") => Promise<void>;
+}) {
+  const { section, commands, environmentId } = props;
+  return (
+    <>
+      <SettingsSection
+        id={`vault-owner-${section.owner.kind === "user" ? section.owner.userId : section.owner.spaceId}`}
+        title={section.mine ? "Mine" : section.name}
+      >
+        {section.canCreate && props.mayCreate ? (
+          <NewGroupForm
+            ownerName={section.mine ? "your Vault" : `${section.name}'s Vault`}
+            onCreate={async (name) => {
+              await settle(
+                commands.create({ environmentId, input: { name, owner: section.owner } }),
+              );
+              await props.onChanged("all");
+            }}
+          />
+        ) : (
+          <SettingsRow
+            title={`${section.groups.length} ${section.groups.length === 1 ? "group" : "groups"}`}
+            description={section.mine ? "Your own Vault." : `${section.name}'s Vault.`}
+          />
+        )}
+      </SettingsSection>
+      {section.groups.map((group) => (
+        <VaultSection
+          key={group.id}
+          environmentId={environmentId}
+          commands={commands}
+          vault={group}
+          mayWrite={props.mayWrite}
+          isOwner={props.isOwner}
+          userId={props.userId}
+          entries={props.entries[group.id] ?? []}
+          onChanged={(all) => props.onChanged(all ? "all" : group.id)}
+        />
+      ))}
+    </>
+  );
+}
+
+function NewGroupForm(props: {
+  readonly ownerName: string;
+  readonly onCreate: (name: string) => Promise<void>;
 }) {
   const [name, setName] = useState("");
-  const [spaceId, setSpaceId] = useState<string>("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // An Organization that is gone (archived) falls back to «Only you».
-  const chosenSpace = props.organizations.some((space) => space.id === spaceId) ? spaceId : "";
-  const organizationItems = [
-    { value: ONLY_YOU, label: "Only you (not an Organization's)" },
-    ...props.organizations.map((space) => ({ value: space.id as string, label: space.name })),
-  ];
   return (
     <form
       className="flex flex-col gap-2 px-4 pb-4 sm:flex-row sm:items-end"
@@ -376,21 +452,18 @@ function NewVaultForm(props: {
         setPending(true);
         setError(null);
         void props
-          .onCreate({
-            name: name.trim(),
-            spaceId: chosenSpace === "" ? null : (chosenSpace as SpaceId),
-          })
+          .onCreate(name.trim())
           .then(
             () => setName(""),
-            (cause: unknown) => setError(errorMessageOf(cause, "Could not create the Vault.")),
+            (cause: unknown) => setError(errorMessageOf(cause, "Could not create the group.")),
           )
           .finally(() => setPending(false));
       }}
     >
       <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
-        Vault name
+        {`New group in ${props.ownerName}`}
         <Input
-          aria-label="Vault name"
+          aria-label="Group name"
           nativeInput
           disabled={pending}
           maxLength={80}
@@ -398,28 +471,8 @@ function NewVaultForm(props: {
           onChange={(event) => setName(event.currentTarget.value)}
         />
       </label>
-      <label className="flex flex-col gap-1 text-xs font-medium sm:w-56">
-        Organization
-        <Select
-          disabled={pending}
-          items={organizationItems}
-          value={chosenSpace === "" ? ONLY_YOU : chosenSpace}
-          onValueChange={(value) => setSpaceId(value === null || value === ONLY_YOU ? "" : value)}
-        >
-          <SelectTrigger aria-label="Organization">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectPopup>
-            {organizationItems.map((item) => (
-              <SelectItem key={item.value} value={item.value}>
-                {item.label}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
-      </label>
       <Button disabled={pending || name.trim().length === 0} size="sm" type="submit">
-        Create Vault
+        Create group
       </Button>
       {error === null ? null : (
         <span className="text-xs text-destructive" role="alert">
@@ -436,11 +489,11 @@ type Act = (work: () => Promise<string | null>, all?: boolean) => Promise<boolea
 function VaultSection(props: {
   readonly environmentId: EnvironmentId;
   readonly commands: VaultCommands;
-  readonly vault: VaultSummary;
+  readonly vault: VaultGroupSummary;
   readonly mayWrite: boolean;
   readonly isOwner: boolean;
+  readonly userId: string | null;
   readonly entries: ReadonlyArray<VaultEntry>;
-  readonly mainEntries: ReadonlyArray<VaultEntry>;
   readonly onChanged: (all: boolean) => Promise<void>;
 }) {
   const { vault, commands, environmentId } = props;
@@ -462,7 +515,7 @@ function VaultSection(props: {
   };
   const savedMessage = (name: string, verb: string, warnings: ReadonlyArray<string>) =>
     warnings.includes("not-used-by-template")
-      ? `${name} ${verb}. No template of this Vault uses it yet, so no process gets it.`
+      ? `${name} ${verb}. No template of this group uses it yet, so no process gets it.`
       : warnings.includes("short-value")
         ? `${name} ${verb}. Shorter than 6 characters: it won't be masked in the history.`
         : warnings.includes("looks-like-credential")
@@ -494,11 +547,7 @@ function VaultSection(props: {
               : "replaced";
       return savedMessage(entry.name, verb, result.warnings);
     });
-  const owner = vault.isMain
-    ? "Yours alone; reaches Organizations only through links or copies"
-    : vault.spaceName === null
-      ? "Yours alone"
-      : `${vault.spaceName}'s`;
+  const owner = vaultOwnerLine(vault, { userId: props.userId });
   return (
     <SettingsSection id={`vault-${vault.id}`} title={vault.name}>
       <SettingsRow
@@ -516,20 +565,21 @@ function VaultSection(props: {
           ) : null
         }
         control={
-          vault.canManage && props.mayWrite && !vault.isMain ? (
+          // `default` is never deleted: the Hub says so with `canManage`.
+          vault.canManage && props.mayWrite ? (
             <Button
               size="xs"
               variant="outline"
-              aria-label={`Delete Vault ${vault.name}`}
+              aria-label={`Delete group ${vault.name}`}
               onClick={() => {
-                if (!window.confirm(`Delete ${vault.name} and its secrets?`)) return;
+                if (!window.confirm(`Delete the group ${vault.name} and its secrets?`)) return;
                 void act(async () => {
                   await settle(commands.remove({ environmentId, input: { vaultId: vault.id } }));
                   return null;
                 }, true);
               }}
             >
-              Delete Vault
+              Delete group
             </Button>
           ) : null
         }
@@ -549,19 +599,9 @@ function VaultSection(props: {
             onDelete={() =>
               act(async () => {
                 const input = { vaultId: vault.id, entryId: entry.id };
-                const asked = await settle(commands.deleteEntry({ environmentId, input }));
-                if (asked.deleted) return null;
-                const names = asked.brokenLinks
-                  .map((link) => `${link.vaultName} → ${link.name}`)
-                  .join(", ");
-                if (!window.confirm(`Deleting ${entry.name} breaks these Secret links: ${names}`)) {
-                  return null;
-                }
-                await settle(
-                  commands.deleteEntry({ environmentId, input: { ...input, breakLinks: true } }),
-                );
+                await settle(commands.deleteEntry({ environmentId, input }));
                 return null;
-              }, vault.isMain)
+              })
             }
           />
         ))}
@@ -614,29 +654,12 @@ function VaultSection(props: {
           }
         />
       ) : null}
-      {canEdit && props.isOwner && props.mainEntries.length > 0 ? (
-        <FromMainForm
-          vaultName={vault.name}
-          mainEntries={props.mainEntries}
-          onAdd={(kind, sourceEntryId, name, confirmDangerous) =>
-            act(async () => {
-              const input = {
-                vaultId: vault.id,
-                sourceEntryId,
-                ...(name.length > 0 ? { name } : {}),
-                ...(confirmDangerous ? { confirmDangerous } : {}),
-              };
-              await settle(
-                kind === "link"
-                  ? commands.link({ environmentId, input })
-                  : commands.copy({ environmentId, input }),
-              );
-              return null;
-            })
-          }
-        />
-      ) : null}
-      {vault.canManage && props.mayWrite && !vault.isMain && vault.spaceId === null ? (
+      {/* Only the Owner's own named groups are allowed further (until Grants). */}
+      {props.isOwner &&
+      vault.canManage &&
+      props.mayWrite &&
+      vault.owner.kind === "user" &&
+      vault.owner.userId === props.userId ? (
         <VaultAllowances
           environmentId={environmentId}
           vault={vault}
@@ -648,7 +671,7 @@ function VaultSection(props: {
 }
 
 function EntryRow(props: {
-  readonly vault: VaultSummary;
+  readonly vault: VaultGroupSummary;
   readonly canEdit: boolean;
   readonly isOwner: boolean;
   readonly entry: VaultEntry;
@@ -693,16 +716,6 @@ function EntryRow(props: {
               {entry.provider?.reference ? ` (${entry.provider.reference})` : ""}
             </Badge>
           )
-        ) : entry.kind === "link" ? (
-          entry.broken ? (
-            <Badge variant="destructive">broken</Badge>
-          ) : (
-            <Badge variant="outline">
-              linked from Main vault{entry.linkedFrom === null ? "" : ` (${entry.linkedFrom.name})`}
-            </Badge>
-          )
-        ) : entry.kind === "copy" ? (
-          <Badge variant="outline">copy</Badge>
         ) : entry.kind === "template" ? (
           entry.broken ? (
             <Badge variant="destructive">broken</Badge>
@@ -1080,7 +1093,7 @@ function AddSecretForm(props: {
  */
 function AddProviderEntryForm(props: {
   readonly environmentId: EnvironmentId;
-  readonly vaultId: VaultSummary["id"];
+  readonly vaultId: VaultGroupSummary["id"];
   readonly vaultName: string;
   readonly onAdd: (
     name: string,
@@ -1097,7 +1110,7 @@ function AddProviderEntryForm(props: {
   const [name, setName] = useState("");
   const [reference, setReference] = useState("");
   const [pending, setPending] = useState(false);
-  const fetchChoices = useEffectEvent((vaultId: VaultSummary["id"]) =>
+  const fetchChoices = useEffectEvent((vaultId: VaultGroupSummary["id"]) =>
     settle(load({ environmentId: props.environmentId, input: { vaultId } })).catch(() => null),
   );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the Provider scopes this Vault may use when its section opens.
@@ -1199,90 +1212,5 @@ function AddProviderEntryForm(props: {
         Add Provider entry
       </Button>
     </form>
-  );
-}
-
-function FromMainForm(props: {
-  readonly vaultName: string;
-  readonly mainEntries: ReadonlyArray<VaultEntry>;
-  readonly onAdd: (
-    kind: "link" | "copy",
-    sourceEntryId: VaultEntryId,
-    name: string,
-    confirmDangerous: boolean,
-  ) => Promise<boolean>;
-}) {
-  const [source, setSource] = useState<string>(props.mainEntries[0]?.id ?? "");
-  const [name, setName] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
-  const [pending, setPending] = useState(false);
-  // A secret that was deleted meanwhile is no longer a source.
-  const sourceEntry = props.mainEntries.find((entry) => entry.id === source);
-  const sourceItems = props.mainEntries.map((entry) => ({
-    value: entry.id as string,
-    label: entry.name,
-  }));
-  const effectiveName = name.length > 0 ? name : (sourceEntry?.name ?? "");
-  const dangerous = isDangerous(effectiveName);
-  const add = (kind: "link" | "copy") => {
-    if (sourceEntry === undefined) return;
-    setPending(true);
-    void props
-      .onAdd(kind, source as VaultEntryId, name, dangerous && confirmed)
-      .then((saved) => {
-        if (!saved) return;
-        setName("");
-        setConfirmed(false);
-      })
-      .finally(() => setPending(false));
-  };
-  const disabled = pending || sourceEntry === undefined || (dangerous && !confirmed);
-  return (
-    <div
-      role="group"
-      aria-label={`From the Main vault into ${props.vaultName}`}
-      className="flex flex-col gap-2 px-4 pb-4"
-    >
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
-          Main vault secret
-          <Select
-            disabled={pending}
-            items={sourceItems}
-            value={sourceEntry === undefined ? null : source}
-            onValueChange={(value) => setSource(value ?? "")}
-          >
-            <SelectTrigger aria-label="Main vault secret">
-              <SelectValue placeholder="Choose a secret" />
-            </SelectTrigger>
-            <SelectPopup>
-              {sourceItems.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        </label>
-        <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
-          Name here (optional)
-          <Input
-            aria-label="Name here"
-            nativeInput
-            disabled={pending}
-            maxLength={128}
-            value={name}
-            onChange={(event) => setName(event.currentTarget.value.toUpperCase())}
-          />
-        </label>
-        <Button disabled={disabled} size="sm" variant="outline" onClick={() => add("link")}>
-          Add Secret link
-        </Button>
-        <Button disabled={disabled} size="sm" variant="outline" onClick={() => add("copy")}>
-          Add copy
-        </Button>
-      </div>
-      {dangerous ? <ConfirmDangerous checked={confirmed} onChange={setConfirmed} /> : null}
-    </div>
   );
 }

@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId, TurnItemId, VaultId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, TurnItemId, VaultGroupId } from "@t3tools/contracts";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -110,7 +110,7 @@ describe("request_secret card on mobile", () => {
         answer: {
           type: "save",
           secret: "ghp_abcdefghijkl",
-          saveToVault: { vaultId: VaultId.make("vault-acme"), name: "GITHUB_TOKEN" },
+          saveToVault: { vaultId: VaultGroupId.make("vault-acme"), name: "GITHUB_TOKEN" },
         },
       },
     });

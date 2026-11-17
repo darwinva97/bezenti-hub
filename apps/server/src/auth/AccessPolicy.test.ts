@@ -182,21 +182,37 @@ const spacelessVps: AccessPolicy.EnvironmentResource = {
   workSpaceId: ORG,
 };
 
+/**
+ * A group of a Vault (owned-resources 03): an Organization's (`space`), or a User's (`null`: the
+ * Owner's unless `ownerUser` names another User).
+ */
 const vault = (
   space: AccessPolicy.SpaceResource | null,
   options: {
-    readonly isMain?: boolean;
+    readonly isDefault?: boolean;
+    readonly ownerUser?: string;
     readonly allowedSpaces?: ReadonlyArray<AccessPolicy.SpaceResource>;
     readonly allowedUsers?: ReadonlyArray<string>;
   } = {},
 ): AccessPolicy.VaultResource => ({
   kind: "vault",
-  isMain: options.isMain ?? false,
-  space,
+  owner:
+    space === null
+      ? {
+          kind: "user",
+          userId: UserId.make(options.ownerUser ?? "owner"),
+          isInstallationOwner: (options.ownerUser ?? "owner") === "owner",
+        }
+      : { kind: "organization", space },
+  isDefault: options.isDefault ?? false,
   allowedSpaces: options.allowedSpaces ?? [],
   allowedUsers: (options.allowedUsers ?? []).map((id) => UserId.make(id)),
 });
-const mainVault = vault(null, { isMain: true });
+/** The Owner's `default` group: the Main vault before owned-resources 03. */
+const mainVault = vault(null, { isDefault: true });
+const orgDefault = vault(organization, { isDefault: true });
+const globexMember = principal("gina", { roles: [[OTHER_ORG, "member"]] });
+const globexGuest = principal("otto", { roles: [[OTHER_ORG, "guest"]] });
 const ownersVault = vault(null);
 const orgVault = vault(organization);
 const archivedOrgVault = vault(archivedOrganization);
@@ -1412,12 +1428,13 @@ const rows: ReadonlyArray<Row> = [
     organization,
     deny("wrong-resource"),
   ],
-  // Vaults (spec 5 «Vaults»): the Owner does all; an Organization's Admins edit its Vaults without
-  // reading them; its Members and Guests see names; the Main vault is the Owner's alone.
+  // Vaults (spec 5 «Vaults», owned-resources 03): the Owner does all; an Organization's Admins
+  // manage its groups and edit them without reading Secrets; its Members and Guests see names;
+  // the Owner's `default` (the Main vault) is the Owner's alone.
   ...(
     [
       ["Owner", owner, ["vault.view", "vault.edit", "vault.manage", "vault.dangerousName"], []],
-      ["Admin", admin, ["vault.view", "vault.edit"], ["vault.manage", "vault.dangerousName"]],
+      ["Admin", admin, ["vault.view", "vault.edit", "vault.manage"], ["vault.dangerousName"]],
       ["Member", member, ["vault.view"], ["vault.edit", "vault.manage", "vault.dangerousName"]],
       ["Guest", guest, ["vault.view"], ["vault.edit", "vault.manage", "vault.dangerousName"]],
     ] as const
@@ -1434,27 +1451,31 @@ const rows: ReadonlyArray<Row> = [
       actor,
       action,
       orgVault,
-      action === "vault.edit" ? deny("role-not-allowed") : deny("owner-only"),
+      action === "vault.dangerousName" ? deny("owner-only") : deny("role-not-allowed"),
     ]),
   ]),
   ...(["vault.view", "vault.edit", "vault.manage", "vault.dangerousName"] as const).flatMap(
     (action): ReadonlyArray<Row> => [
-      [`Owner: ${action} on the Main vault`, owner, action, mainVault, allow],
+      [
+        `Owner: ${action} on the Main vault`,
+        owner,
+        action,
+        mainVault,
+        action === "vault.manage" ? deny("default-group") : allow,
+      ],
       ...([admin, member, guest] as const).map((actor): Row => [
         `${actor.userId}: no ${action} on the Main vault`,
         actor,
         action,
         mainVault,
-        deny("owner-only"),
+        action === "vault.manage" ? deny("default-group") : deny("owner-only"),
       ]),
       [
         `another Organization's Admin: no ${action}`,
         outsider,
         action,
         orgVault,
-        action !== "vault.view" && action !== "vault.edit"
-          ? deny("owner-only")
-          : deny("not-a-member"),
+        action === "vault.dangerousName" ? deny("owner-only") : deny("not-a-member"),
       ],
     ],
   ),
@@ -1466,6 +1487,62 @@ const rows: ReadonlyArray<Row> = [
     deny("space-archived"),
   ],
   ["Owner: edits in an archived Organization", owner, "vault.edit", archivedOrgVault, allow],
+  // Owned-resources 03: a Vault per owner, of groups. An Organization's groups are its Admins'
+  // (and the Owner's) to create, rename, archive and delete, never its `default`.
+  ["Acme's Admin manages a named group of Acme", admin, "vault.manage", orgVault, allow],
+  [
+    "nobody manages a `default`, the Owner neither",
+    owner,
+    "vault.manage",
+    orgDefault,
+    deny("default-group"),
+  ],
+  ["nor Acme's Admin", admin, "vault.manage", orgDefault, deny("default-group")],
+  ["Acme's Admin edits Acme's `default`", admin, "vault.edit", orgDefault, allow],
+  ["Acme's Member sees Acme's `default`", member, "vault.view", orgDefault, allow],
+  [
+    "Globex's Admin does not manage Acme's",
+    outsider,
+    "vault.manage",
+    orgVault,
+    deny("not-a-member"),
+  ],
+  [
+    "Globex's Member does not see Acme's",
+    globexMember,
+    "vault.view",
+    orgVault,
+    deny("not-a-member"),
+  ],
+  ["Globex's Guest does not see Acme's", globexGuest, "vault.view", orgVault, deny("not-a-member")],
+  [
+    "Acme's Admin does not in an archived Acme",
+    admin,
+    "vault.manage",
+    archivedOrgVault,
+    deny("space-archived"),
+  ],
+  [
+    "an Admin does not create a group of the Owner's",
+    admin,
+    "vault.manage",
+    ownersVault,
+    deny("owner-only"),
+  ],
+  [
+    "nor does a group of a gone Organization",
+    admin,
+    "vault.view",
+    vault(null, { ownerUser: "owner" }),
+    deny("owner-only"),
+  ],
+  [
+    "the Owner's identity entries stay the Owner's",
+    admin,
+    "vault.identityEntry",
+    orgDefault,
+    deny("owner-only"),
+  ],
   ["Owner's own Vault: not an Admin's", admin, "vault.view", ownersVault, deny("owner-only")],
   ["a Vault action on a Space", owner, "vault.view", organization, deny("wrong-resource")],
   ["a Space action on a Vault", owner, "space.view", orgVault, deny("wrong-resource")],
@@ -1533,7 +1610,7 @@ const rows: ReadonlyArray<Row> = [
     "the Main vault stays the Owner's alone, whatever it holds",
     admin,
     "vault.view",
-    vault(null, { isMain: true, allowedSpaces: [organization], allowedUsers: ["ada"] }),
+    vault(null, { isDefault: true, allowedSpaces: [organization], allowedUsers: ["ada"] }),
     deny("owner-only"),
   ],
   // Spec «Variables y Secrets sellados», ticket 01 (decision 4): whoever sees a Vault reads its

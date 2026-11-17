@@ -22,6 +22,7 @@ import {
 import * as InstallationUserService from "../spaces/InstallationUserService.ts";
 import * as OrganizationLifecycle from "../spaces/OrganizationLifecycle.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import { orgOwner, userOwner } from "./VaultGroups.testkit.ts";
 import * as Vaults from "./Vaults.ts";
 
 const hub = Effect.gen(function* () {
@@ -46,7 +47,9 @@ const hub = Effect.gen(function* () {
     spaceId: SpaceId | null,
     secrets: ReadonlyArray<readonly [string, string]>,
   ) {
-    const made = yield* vaults.create({ name, spaceId }).pipe(asOwner);
+    const made = yield* vaults
+      .create({ name, owner: spaceId === null ? userOwner(ownerId) : orgOwner(spaceId) })
+      .pipe(asOwner);
     for (const [variable, value] of secrets) {
       yield* vaults
         .putEntry({ vaultId: made.id, name: variable, value: Redacted.make(value) })
@@ -115,7 +118,7 @@ it.effect("deleting an Organization deletes its Vaults, their values and every r
       .setProjectChoice({ projectId: web, vaultId: acmeVault, choice: "remove" })
       .pipe(h.asOwner);
     const acmeValues = (yield* sql<{ readonly valueId: string }>`
-        SELECT value_id AS "valueId" FROM vault_entries WHERE vault_id = ${acmeVault}
+        SELECT value_id AS "valueId" FROM vault_entries WHERE group_id = ${acmeVault}
       `).map((row) => row.valueId);
     assert.lengthOf(acmeValues, 2);
 
@@ -124,17 +127,20 @@ it.effect("deleting an Organization deletes its Vaults, their values and every r
     yield* lifecycle.delete(h.ownerId, h.acmeId);
 
     assert.equal(
-      yield* h.count(sql`SELECT COUNT(*) AS n FROM vaults WHERE space_id = ${h.acmeId}`),
+      yield* h.count(sql`
+        SELECT COUNT(*) AS n FROM vault_groups
+        WHERE owner_kind = 'organization' AND owner_id = ${h.acmeId}
+      `),
       0,
     );
     assert.equal(
-      yield* h.count(sql`SELECT COUNT(*) AS n FROM vault_entries WHERE vault_id = ${acmeVault}`),
+      yield* h.count(sql`SELECT COUNT(*) AS n FROM vault_entries WHERE group_id = ${acmeVault}`),
       0,
     );
     assert.equal(
       yield* h.count(sql`
           SELECT COUNT(*) AS n FROM vault_allowances
-          WHERE vault_id = ${acmeVault} OR (subject_kind = 'space' AND subject_id = ${h.acmeId})
+          WHERE group_id = ${acmeVault} OR (subject_kind = 'space' AND subject_id = ${h.acmeId})
         `),
       0,
     );
@@ -157,7 +163,7 @@ it.effect("deleting an Organization deletes its Vaults, their values and every r
     // The Owner's Vault and Globex's own stay as they were, Globex's allowance included.
     assert.deepEqual(
       (yield* sql<{ readonly vaultId: string }>`
-          SELECT vault_id AS "vaultId" FROM vaults WHERE vault_id IN (${shared}, ${globexVault})
+          SELECT group_id AS "vaultId" FROM vault_groups WHERE group_id IN (${shared}, ${globexVault})
           ORDER BY name
         `).map((row) => row.vaultId),
       [globexVault, shared],
@@ -165,15 +171,16 @@ it.effect("deleting an Organization deletes its Vaults, their values and every r
     assert.equal(
       yield* h.count(sql`
           SELECT COUNT(*) AS n FROM vault_allowances
-          WHERE vault_id = ${shared} AND subject_kind = 'space' AND subject_id = ${h.globexId}
+          WHERE group_id = ${shared} AND subject_kind = 'space' AND subject_id = ${h.globexId}
         `),
       1,
     );
     // Recorded without a value.
     const audited = yield* sql<{ readonly targetName: string; readonly detail: string }>`
         SELECT target_name AS "targetName", detail_json AS "detail" FROM audit_log
-        WHERE action = 'vault.delete'
+        WHERE action = 'vault_group.delete' ORDER BY target_name
       `;
+    // Its named group; its `default` held nothing, so it goes unrecorded.
     assert.deepEqual(
       audited.map((row) => row.targetName),
       ["Acme keys"],
@@ -231,23 +238,23 @@ it.effect(
       const web = yield* h.project("globex-web", h.globexId);
       // Rows a Hub before ticket 07 left behind (a Project moved here, an earlier allowance).
       yield* sql`
-        INSERT INTO project_vault_choices (project_id, vault_id, choice) VALUES (${web}, ${tools}, 'add')
+        INSERT INTO project_vault_choices (project_id, group_id, choice) VALUES (${web}, ${tools}, 'add')
       `;
       yield* sql`
-        INSERT INTO space_default_vaults (space_id, vault_id, position) VALUES (${h.globexId}, ${tools}, 0)
+        INSERT INTO space_default_vaults (space_id, group_id, position) VALUES (${h.globexId}, ${tools}, 0)
       `;
       yield* h.vaults
         .allow({ vaultId: tools, subject: { kind: "space", spaceId: h.globexId }, allowed: true })
         .pipe(h.asOwner);
       assert.equal(
         yield* h.count(
-          sql`SELECT COUNT(*) AS n FROM project_vault_choices WHERE vault_id = ${tools}`,
+          sql`SELECT COUNT(*) AS n FROM project_vault_choices WHERE group_id = ${tools}`,
         ),
         0,
       );
       assert.equal(
         yield* h.count(
-          sql`SELECT COUNT(*) AS n FROM space_default_vaults WHERE vault_id = ${tools}`,
+          sql`SELECT COUNT(*) AS n FROM space_default_vaults WHERE group_id = ${tools}`,
         ),
         0,
       );
@@ -272,7 +279,7 @@ it.effect("nothing new is written for an Organization once its deletion began", 
     const reasonOf = <A, R>(effect: Effect.Effect<A, VaultError, R>) =>
       Effect.map(Effect.flip(effect), (error) => error.reason);
     assert.equal(
-      yield* reasonOf(h.vaults.create({ name: "Late", spaceId: h.acmeId }).pipe(h.asOwner)),
+      yield* reasonOf(h.vaults.create({ name: "Late", owner: orgOwner(h.acmeId) }).pipe(h.asOwner)),
       "not-found",
     );
     assert.equal(
@@ -292,7 +299,7 @@ it.effect("nothing new is written for an Organization once its deletion began", 
       "not-found",
     );
     assert.equal(
-      yield* h.count(h.server.sql`SELECT COUNT(*) AS n FROM vaults WHERE name = 'Late'`),
+      yield* h.count(h.server.sql`SELECT COUNT(*) AS n FROM vault_groups WHERE name = 'Late'`),
       0,
     );
   }),
@@ -343,7 +350,7 @@ it.effect("removing a User takes back every Vault allowed to them; disabling kee
       VALUES ('graces-web', 'graces-web', '/w/graces-web', '[]', ${at}, ${at}, ${gracesSpace})
     `;
     yield* sql`
-      INSERT INTO project_vault_choices (project_id, vault_id, choice) VALUES ('graces-web', ${toPersonal}, 'add')
+      INSERT INTO project_vault_choices (project_id, group_id, choice) VALUES ('graces-web', ${toPersonal}, 'add')
     `;
     const allowances = (userId: UserId) =>
       h.count(sql`
@@ -384,7 +391,7 @@ it.effect("removing a User takes back every Vault allowed to them; disabling kee
     assert.include(chose[0]?.detail ?? "", '"choice":"inherit"');
     // The Vault itself stays the Owner's, with its secret.
     assert.equal(
-      yield* h.count(sql`SELECT COUNT(*) AS n FROM vault_entries WHERE vault_id = ${gracesKeys}`),
+      yield* h.count(sql`SELECT COUNT(*) AS n FROM vault_entries WHERE group_id = ${gracesKeys}`),
       1,
     );
     const audited = yield* sql<{ readonly targetId: string; readonly detail: string }>`

@@ -1,4 +1,4 @@
-import { SecretRequestError, ThreadId, TurnItemId, VaultId } from "@t3tools/contracts";
+import { SecretRequestError, ThreadId, TurnItemId, VaultGroupId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -43,7 +43,7 @@ describe("secretRequestFailureMessage", () => {
 
 describe("«Also save to Vault»", () => {
   const item = { id: TurnItemId.make("turn-item:1"), threadId: ThreadId.make("thread-1") };
-  const vaultId = VaultId.make("vault-acme");
+  const vaultId = VaultGroupId.make("vault-acme");
 
   it("sends the Vault and the trimmed name with the answer", () => {
     expect(

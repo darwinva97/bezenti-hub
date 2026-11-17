@@ -1,14 +1,14 @@
 import * as Schema from "effect/Schema";
 
 import { ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
-import { VaultId } from "./vaults.ts";
+import { VaultGroupId } from "./vaults.ts";
 
 /**
  * «Also save to Vault» (spec 5 ticket 06): the answer is also kept as a Vault entry under `name`.
  * Only a Vault of `secrets.vaultTargets` for the Thread is accepted; the Hub decides, never this.
  */
 export const SecretRequestSaveToVault = Schema.Struct({
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   name: Schema.String.check(Schema.isMaxLength(128)),
 });
 export type SecretRequestSaveToVault = typeof SecretRequestSaveToVault.Type;
@@ -28,11 +28,20 @@ export const SecretRequestAnswerInput = Schema.Struct({
 });
 export type SecretRequestAnswerInput = typeof SecretRequestAnswerInput.Type;
 
-/** `secrets.vaultTargets`: the Vaults an answer to this Thread's card may also be saved in. */
+/**
+ * `secrets.vaultTargets`: the Vault groups an answer to this Thread's card may also be saved in,
+ * each with whose Vault it is part of (owned-resources 03; optional for older Hubs).
+ */
 export const SecretRequestVaultTargetsInput = Schema.Struct({ threadId: ThreadId });
 export type SecretRequestVaultTargetsInput = typeof SecretRequestVaultTargetsInput.Type;
 export const SecretRequestVaultTargets = Schema.Struct({
-  vaults: Schema.Array(Schema.Struct({ id: VaultId, name: Schema.String })),
+  vaults: Schema.Array(
+    Schema.Struct({
+      id: VaultGroupId,
+      name: Schema.String,
+      ownerName: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    }),
+  ),
 });
 export type SecretRequestVaultTargets = typeof SecretRequestVaultTargets.Type;
 

@@ -12,7 +12,6 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
   type EnvironmentId,
-  MAIN_VAULT_ID,
   ProjectId,
   type ProviderInstanceId,
   type SecretEnv,
@@ -58,6 +57,7 @@ import {
   replayOn,
   startSandbox,
 } from "./HubWithEnvironments.scenarios.testkit.ts";
+import { orgOwner, ownersDefault, userOwner } from "../vaults/VaultGroups.testkit.ts";
 
 const ACME_TOKEN = "acme-token-value-1111";
 const GRACE_TOKEN = "grace-token-value-2222";
@@ -132,12 +132,14 @@ const sharedSandbox = Effect.fn(function* () {
 
   const vaults = hub.service(Vaults.Vaults);
   const asOwner = CommandActor.actAs(owner);
-  const acmeVault = yield* vaults.create({ name: "Acme", spaceId: acme }).pipe(asOwner);
+  const acmeVault = yield* vaults.create({ name: "Acme", owner: orgOwner(acme) }).pipe(asOwner);
   yield* vaults
     .putEntry({ vaultId: acmeVault.id, name: "ACME_TOKEN", value: Redacted.make(ACME_TOKEN) })
     .pipe(asOwner);
   yield* vaults.setSpaceDefaults({ spaceId: acme, vaultIds: [acmeVault.id] }).pipe(asOwner);
-  const graceVault = yield* vaults.create({ name: "Grace keys", spaceId: null }).pipe(asOwner);
+  const graceVault = yield* vaults
+    .create({ name: "Grace keys", owner: userOwner(owner) })
+    .pipe(asOwner);
   yield* vaults
     .putEntry({ vaultId: graceVault.id, name: "GRACE_TOKEN", value: Redacted.make(GRACE_TOKEN) })
     .pipe(asOwner);
@@ -335,7 +337,9 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
   it.live("stop reaching the Space's next shell once its allowance is taken back (ticket 07)", () =>
     Effect.gen(function* () {
       const s = yield* sharedSandbox();
-      const tools = yield* s.vaults.create({ name: "Tools", spaceId: null }).pipe(s.asOwner);
+      const tools = yield* s.vaults
+        .create({ name: "Tools", owner: userOwner(s.owner) })
+        .pipe(s.asOwner);
       yield* s.vaults
         .putEntry({ vaultId: tools.id, name: "TOOLS_TOKEN", value: Redacted.make(OWNER_TOKEN) })
         .pipe(s.asOwner);
@@ -399,7 +403,7 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
       yield* hub
         .service(Vaults.Vaults)
         .putEntry({
-          vaultId: MAIN_VAULT_ID,
+          vaultId: yield* ownersDefault(hub.server.sql),
           name: "OWNER_TOKEN",
           value: Redacted.make(OWNER_TOKEN),
         })
@@ -513,7 +517,7 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
       const s = yield* sharedSandbox();
       // A Vault of the Owner's, allowed to the Owner alone.
       const ownersOwn = yield* s.vaults
-        .create({ name: "Owner keys", spaceId: null })
+        .create({ name: "Owner keys", owner: userOwner(s.owner) })
         .pipe(s.asOwner);
       yield* s.vaults
         .putEntry({ vaultId: ownersOwn.id, name: "OWNER_ONLY", value: Redacted.make(OWNER_TOKEN) })
@@ -658,7 +662,7 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
         const asOwner = CommandActor.actAs(owner);
         yield* vaults
           .putEntry({
-            vaultId: MAIN_VAULT_ID,
+            vaultId: yield* ownersDefault(hub.server.sql),
             name: "KUBE_TOKEN",
             value: Redacted.make(OWNER_TOKEN),
             delivery: "file",
@@ -666,7 +670,7 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
           .pipe(asOwner);
         yield* vaults
           .putEntry({
-            vaultId: MAIN_VAULT_ID,
+            vaultId: yield* ownersDefault(hub.server.sql),
             name: "KUBECONFIG",
             template: { text: "users: [{ user: { tokenFile: {{ KUBE_TOKEN | path }} } }]\n" },
             delivery: "file",

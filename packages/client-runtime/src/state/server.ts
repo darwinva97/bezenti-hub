@@ -1023,19 +1023,19 @@ export function createServerEnvironmentAtoms<R, E>(
     // Vaults: names and metadata; a Secret's value never comes out (owned-resources 01).
     listVaults: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:vaults:list",
-      tag: WS_METHODS.vaultsList,
+      tag: WS_METHODS.vaultsGroupsList,
     }),
     createVault: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:vaults:create",
-      tag: WS_METHODS.vaultsCreate,
+      tag: WS_METHODS.vaultsGroupsCreate,
     }),
     updateVault: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:vaults:update",
-      tag: WS_METHODS.vaultsUpdate,
+      tag: WS_METHODS.vaultsGroupsUpdate,
     }),
     deleteVault: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:vaults:delete",
-      tag: WS_METHODS.vaultsDelete,
+      tag: WS_METHODS.vaultsGroupsDelete,
     }),
     listVaultEntries: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:vaults:entries:list",
@@ -1049,13 +1049,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:vaults:entries:delete",
       tag: WS_METHODS.vaultsEntriesDelete,
     }),
-    linkVaultEntry: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:vaults:entries:link",
-      tag: WS_METHODS.vaultsEntriesLink,
-    }),
-    copyVaultEntry: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:vaults:entries:copy",
-      tag: WS_METHODS.vaultsEntriesCopy,
+    // Owned-resources 03: the Owner has read which entries were Secret links.
+    dismissUnlinkedVaultEntries: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vaults:unlinked-notice:dismiss",
+      tag: WS_METHODS.vaultsUnlinkedNoticeDismiss,
     }),
     // Spec 5 ticket 03: allowances, defaults, Project choices and a Thread's secret names.
     allowVault: createEnvironmentRpcCommand(runtime, {

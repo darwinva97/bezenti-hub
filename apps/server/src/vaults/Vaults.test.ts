@@ -8,7 +8,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { MAIN_VAULT_ID, SpaceId, UserId, type VaultError } from "@t3tools/contracts";
+import { SpaceId, UserId, type VaultError, VaultGroupId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -108,12 +108,10 @@ const hubWith = Effect.fn(function* (options: { readonly identityIssuer?: string
   const reveal = (cookie: string, vaultId: string, entryId: string, reauth: unknown) =>
     server.request(REVEAL, { cookie, body: { vaultId, entryId, reauth } });
   const values = Context.get(server.services, ServerSecretStore.VaultValueStore);
-  /** The value an entry delivers now (a link's original's), opened from the store. */
+  /** The value an entry delivers now, opened from the store. */
   const storedValue = (entryId: string) =>
     server.sql<{ readonly valueId: string | null }>`
-      SELECT COALESCE(e.value_id, o.value_id) AS "valueId" FROM vault_entries e
-      LEFT JOIN vault_entries o ON e.kind = 'link' AND o.entry_id = e.linked_entry_id
-      WHERE e.entry_id = ${entryId}
+      SELECT value_id AS "valueId" FROM vault_entries WHERE entry_id = ${entryId}
     `.pipe(
       Effect.flatMap((rows) => values.get(rows[0]?.valueId ?? "missing")),
       Effect.map(Option.map((bytes) => new TextDecoder().decode(bytes))),
@@ -123,12 +121,19 @@ const hubWith = Effect.fn(function* (options: { readonly identityIssuer?: string
     storedValue(entryId).pipe(
       Effect.map((found) => Option.isSome(found) && found.value === expected),
     );
+  // The Owner's `default` group (owned-resources 03): the Main vault before.
+  const [mainRow] = yield* server.sql<{ readonly groupId: string }>`
+    SELECT group_id AS "groupId" FROM vault_groups
+    WHERE owner_kind = 'user' AND owner_id = ${ownerId} AND is_default = 1
+  `;
+  const main = VaultGroupId.make(mainRow?.groupId ?? "missing");
   return {
     server,
     provider,
     authenticator,
     owner,
     ownerId,
+    main,
     acmeId,
     globexId,
     people,
@@ -148,23 +153,28 @@ const hub = hubWith();
 
 type Hub = Effect.Success<typeof hub>;
 
+/** An Organization as a group's owner, or a User. */
+const org = (spaceId: SpaceId) => ({ kind: "organization" as const, spaceId });
+const mine = (userId: UserId) => ({ kind: "user" as const, userId });
+
 /**
- * The Owner's setup: GITHUB_TOKEN in the Main vault; «Acme secrets» with a link, a copy, its own.
+ * The Owner's setup: GITHUB_TOKEN in the Owner's `default`; «Acme secrets», a group of Acme, with
+ * its own GITHUB_TOKEN and GITHUB_TOKEN_COPY (what a Secret link and a copy became) and its own.
  */
-const acmeSecrets = Effect.fn(function* ({ vaults, as, ownerId, acmeId }: Hub) {
+const acmeSecrets = Effect.fn(function* ({ vaults, as, ownerId, acmeId, main }: Hub) {
   const github = yield* vaults
     .putEntry({
-      vaultId: MAIN_VAULT_ID,
+      vaultId: main,
       name: "GITHUB_TOKEN",
       value: Redacted.make(ORIGINAL),
     })
     .pipe(as(ownerId));
-  const acme = yield* vaults.create({ name: "Acme secrets", spaceId: acmeId }).pipe(as(ownerId));
+  const acme = yield* vaults.create({ name: "Acme secrets", owner: org(acmeId) }).pipe(as(ownerId));
   const link = yield* vaults
-    .linkEntry({ vaultId: acme.id, sourceEntryId: github.entry.id })
+    .putEntry({ vaultId: acme.id, name: "GITHUB_TOKEN", value: Redacted.make(ORIGINAL) })
     .pipe(as(ownerId));
   const copy = yield* vaults
-    .copyEntry({ vaultId: acme.id, sourceEntryId: github.entry.id, name: "GITHUB_TOKEN_COPY" })
+    .putEntry({ vaultId: acme.id, name: "GITHUB_TOKEN_COPY", value: Redacted.make(ORIGINAL) })
     .pipe(as(ownerId));
   const own = yield* vaults
     .putEntry({
@@ -198,27 +208,62 @@ const reasonOf = <A, R>(effect: Effect.Effect<A, VaultError, R>) =>
 
 const mentionsAValue = (text: string) => VALUES.some((value) => text.includes(value));
 
-it.effect("the Main vault exists from the start and is the Owner's alone", () =>
+it.effect("every owner has a `default` group nobody deletes, renames or archives", () =>
   Effect.gen(function* () {
     const setup = yield* hub;
-    const { vaults, as, ownerId, people } = setup;
+    const { vaults, as, ownerId, people, acmeId } = setup;
     const listed = yield* vaults.list.pipe(as(ownerId));
-    assert.equal(listed.vaults[0]?.id, MAIN_VAULT_ID);
-    assert.isTrue(listed.vaults[0]?.isMain);
-    assert.equal(
-      yield* reasonOf(vaults.remove({ vaultId: MAIN_VAULT_ID }).pipe(as(ownerId))),
-      "main-vault",
+    // The Owner's own first, `default` first; then each Organization's, its `default` first.
+    assert.deepEqual(
+      listed.groups.map((group) => [
+        group.name,
+        group.isDefault,
+        group.owner.kind === "user" ? "Owner" : group.ownerName,
+      ]),
+      [
+        ["default", true, "Owner"],
+        ["default", true, "Acme"],
+        ["default", true, "Globex"],
+      ],
     );
+    assert.equal(listed.groups[0]?.id, setup.main);
+    const acmeDefault = listed.groups[1]!;
+    assert.deepEqual(acmeDefault.owner, { kind: "organization", spaceId: acmeId });
+    for (const [who, group] of [
+      [ownerId, setup.main],
+      [ownerId, acmeDefault.id],
+      [people.admin.id, acmeDefault.id],
+    ] as const) {
+      assert.equal(
+        yield* reasonOf(vaults.remove({ vaultId: group }).pipe(as(who))),
+        "default-group",
+      );
+      assert.equal(
+        yield* reasonOf(vaults.update({ vaultId: group, name: "renamed" }).pipe(as(who))),
+        "default-group",
+      );
+      assert.equal(
+        yield* reasonOf(vaults.update({ vaultId: group, archived: true }).pipe(as(who))),
+        "default-group",
+      );
+    }
+    assert.isFalse(acmeDefault.canManage);
+    // `default` is the default group's name alone.
+    assert.equal(
+      yield* reasonOf(vaults.create({ name: "Default", owner: org(acmeId) }).pipe(as(ownerId))),
+      "duplicate-name",
+    );
+    // The Owner's `default` (the Main vault) is the Owner's alone.
     for (const who of Object.values(people)) {
       const theirs = yield* vaults.list.pipe(as(who.id));
       assert.notInclude(
-        theirs.vaults.map((vault) => vault.id),
-        MAIN_VAULT_ID,
+        theirs.groups.map((group) => group.id),
+        setup.main,
       );
       assert.equal(
         yield* reasonOf(
           vaults
-            .putEntry({ vaultId: MAIN_VAULT_ID, name: "MINE", value: Redacted.make("x".repeat(9)) })
+            .putEntry({ vaultId: setup.main, name: "MINE", value: Redacted.make("x".repeat(9)) })
             .pipe(as(who.id)),
         ),
         "not-found",
@@ -228,31 +273,69 @@ it.effect("the Main vault exists from the start and is the Owner's alone", () =>
 );
 
 it.effect(
-  "only the Owner creates, manages, links and copies; Admins edit their own Organization's",
+  "an Organization's Admins manage its groups and edit them unread; Members and Guests read names",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub;
       const { vaults, as, people, acmeId, globexId } = setup;
-      const { acme, github, own } = yield* acmeSecrets(setup);
+      const { acme, own } = yield* acmeSecrets(setup);
       const globex = yield* vaults
-        .create({ name: "Globex secrets", spaceId: globexId })
+        .create({ name: "Globex secrets", owner: org(globexId) })
         .pipe(as(setup.ownerId));
 
-      for (const who of Object.values(people)) {
-        assert.equal(
+      // Acme's Admin creates, renames, archives and deletes Acme's groups; nobody else does.
+      const { admin } = people;
+      const made = yield* vaults
+        .create({ name: "Acme deploy", owner: org(acmeId) })
+        .pipe(as(admin.id));
+      assert.deepEqual(made.owner, { kind: "organization", spaceId: acmeId });
+      const renamed = yield* vaults
+        .update({ vaultId: made.id, name: "Acme release", archived: true })
+        .pipe(as(admin.id));
+      assert.deepEqual([renamed.name, renamed.archived], ["Acme release", true]);
+      assert.isTrue((yield* vaults.remove({ vaultId: made.id }).pipe(as(admin.id))).deleted);
+      for (const who of [people.member, people.guest, people.otherAdmin]) {
+        assert.oneOf(
           yield* reasonOf(
-            vaults.create({ name: `${who.id} vault`, spaceId: acmeId }).pipe(as(who.id)),
+            vaults.create({ name: `${who.id} group`, owner: org(acmeId) }).pipe(as(who.id)),
           ),
-          "forbidden",
-          `${who.id} created a Vault`,
+          ["forbidden"],
+          `${who.id} created a group of Acme`,
+        );
+        assert.oneOf(
+          yield* reasonOf(vaults.update({ vaultId: acme.id, name: "Mine now" }).pipe(as(who.id))),
+          ["forbidden", "not-found"],
+          `${who.id} renamed a group of Acme`,
         );
       }
-      // Acme's Admin: their Organization's Vault, without reading; nothing else.
-      const { admin } = people;
+      // Nor does an Admin make a group of someone else.
+      assert.equal(
+        yield* reasonOf(
+          vaults.create({ name: "Owner's", owner: mine(setup.ownerId) }).pipe(as(admin.id)),
+        ),
+        "forbidden",
+      );
+      const audits = yield* setup.server.sql<{ readonly action: string }>`
+        SELECT action FROM audit_log WHERE action LIKE 'vault_group.%' AND target_id = ${made.id}
+        ORDER BY audit_id
+      `;
+      assert.deepEqual(
+        audits.map((row) => row.action),
+        ["vault_group.create", "vault_group.update", "vault_group.delete"],
+      );
+
+      // Its entries: added, replaced and deleted without reading.
       const seen = yield* vaults.list.pipe(as(admin.id));
       assert.deepEqual(
-        seen.vaults.map((vault) => [vault.name, vault.canEdit, vault.canManage]),
-        [["Acme secrets", true, false]],
+        seen.groups.map((group) => [group.name, group.canEdit, group.canManage]),
+        [
+          ["default", true, false],
+          ["Acme secrets", true, true],
+        ],
+      );
+      assert.deepEqual(
+        seen.owners.map((owner) => owner.name),
+        ["Acme"],
       );
       const added = yield* vaults
         .putEntry({ vaultId: acme.id, name: "ADMIN_TOKEN", value: Redacted.make(ADMIN_WRITES) })
@@ -271,32 +354,7 @@ it.effect(
         .deleteEntry({ vaultId: acme.id, entryId: added.entry.id })
         .pipe(as(admin.id));
       assert.isTrue(deleted.deleted);
-      assert.equal(
-        yield* reasonOf(vaults.update({ vaultId: acme.id, name: "Mine now" }).pipe(as(admin.id))),
-        "forbidden",
-      );
-      assert.equal(
-        yield* reasonOf(vaults.remove({ vaultId: acme.id }).pipe(as(admin.id))),
-        "forbidden",
-      );
-      // A link or a copy would hand the Main vault's value to Acme: the Owner's alone.
-      assert.equal(
-        yield* reasonOf(
-          vaults
-            .linkEntry({ vaultId: acme.id, sourceEntryId: github.id, name: "STOLEN" })
-            .pipe(as(admin.id)),
-        ),
-        "forbidden",
-      );
-      assert.equal(
-        yield* reasonOf(
-          vaults
-            .copyEntry({ vaultId: acme.id, sourceEntryId: github.id, name: "STOLEN" })
-            .pipe(as(admin.id)),
-        ),
-        "forbidden",
-      );
-      // Another Organization's Vault is not there for them.
+      // Another Organization's group is not there for them.
       assert.equal(
         yield* reasonOf(vaults.listEntries({ vaultId: globex.id }).pipe(as(admin.id))),
         "not-found",
@@ -317,9 +375,7 @@ it.effect(
           "GITHUB_TOKEN",
           "GITHUB_TOKEN_COPY",
         ]);
-        assert.isFalse(listed.vault.canEdit);
-        // A link's original is the Owner's to know.
-        assert.isTrue(listed.entries.every((entry) => entry.linkedFrom === null));
+        assert.isFalse(listed.group.canEdit);
         assert.equal(
           yield* reasonOf(
             vaults
@@ -343,8 +399,8 @@ it.effect(
       // Globex's Admin sees Globex's only.
       const theirs = yield* vaults.list.pipe(as(people.otherAdmin.id));
       assert.deepEqual(
-        theirs.vaults.map((vault) => vault.name),
-        ["Globex secrets"],
+        theirs.groups.map((group) => group.name),
+        ["default", "Globex secrets"],
       );
     }),
 );
@@ -356,13 +412,13 @@ it.effect("an agent bound to one Space sees no Vault of another, the Owner's own
     const { acme } = yield* acmeSecrets(setup);
     const inAcme = yield* vaults.list.pipe(as(ownerId, acmeId));
     assert.deepEqual(
-      inAcme.vaults.map((vault) => vault.id),
+      inAcme.groups.filter((group) => !group.isDefault).map((group) => group.id),
       [acme.id],
     );
     const inGlobex = yield* vaults.list.pipe(as(people.admin.id, globexId));
-    assert.deepEqual(inGlobex.vaults, []);
+    assert.deepEqual(inGlobex.groups, []);
     assert.equal(
-      yield* reasonOf(vaults.listEntries({ vaultId: MAIN_VAULT_ID }).pipe(as(ownerId, acmeId))),
+      yield* reasonOf(vaults.listEntries({ vaultId: setup.main }).pipe(as(ownerId, acmeId))),
       "not-found",
     );
   }),
@@ -403,103 +459,26 @@ it.effect(
     }),
 );
 
-it.effect("rotating the original changes what its Secret links hold; a copy keeps its value", () =>
+it.effect("a Secret is listed without its value and is always sealed", () =>
   Effect.gen(function* () {
     const setup = yield* hub;
-    const { vaults, as, ownerId, holds } = setup;
-    const { acme, github, link, copy } = yield* acmeSecrets(setup);
-    assert.isTrue(yield* holds(link.id, ORIGINAL), "the link delivers the original's value");
-    yield* vaults
-      .putEntry({
-        vaultId: MAIN_VAULT_ID,
-        entryId: github.id,
-        name: github.name,
-        value: Redacted.make(ROTATED),
-      })
+    const { vaults, as, ownerId } = setup;
+    const { acme } = yield* acmeSecrets(setup);
+    const secret = yield* vaults
+      .putEntry({ vaultId: acme.id, name: "NEW_TOKEN", value: Redacted.make(ACME_OWN) })
       .pipe(as(ownerId));
-    assert.isTrue(yield* holds(link.id, ROTATED), "the link follows the rotation");
-    assert.isTrue(yield* holds(copy.id, ORIGINAL), "the copy keeps its value");
-    const listed = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(ownerId));
-    assert.deepEqual(listed.entries.find((entry) => entry.id === link.id)?.linkedFrom, {
-      entryId: github.id,
-      name: "GITHUB_TOKEN",
-    });
-    // A link's value is the Main vault's: replacing it here is refused.
-    assert.equal(
-      yield* reasonOf(
-        vaults
-          .putEntry({
-            vaultId: acme.id,
-            entryId: link.id,
-            name: link.name,
-            value: Redacted.make("q".repeat(9)),
-          })
-          .pipe(as(ownerId)),
-      ),
-      "not-linkable",
-    );
-  }),
-);
-
-it.effect(
-  "deleting an original lists the links it breaks, which stay «broken» and deliver nothing",
-  () =>
-    Effect.gen(function* () {
-      const setup = yield* hub;
-      const { vaults, as, ownerId } = setup;
-      const { acme, github, link } = yield* acmeSecrets(setup);
-      const asked = yield* vaults
-        .deleteEntry({ vaultId: MAIN_VAULT_ID, entryId: github.id })
-        .pipe(as(ownerId));
-      assert.isFalse(asked.deleted);
-      assert.deepEqual(
-        asked.brokenLinks.map((broken) => [broken.vaultName, broken.name]),
-        [["Acme secrets", "GITHUB_TOKEN"]],
-      );
-      const done = yield* vaults
-        .deleteEntry({ vaultId: MAIN_VAULT_ID, entryId: github.id, breakLinks: true })
-        .pipe(as(ownerId));
-      assert.isTrue(done.deleted);
-      const listed = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(ownerId));
-      const broken = listed.entries.find((entry) => entry.id === link.id);
-      assert.isTrue(broken?.broken);
-      assert.isTrue(Option.isNone(yield* setup.storedValue(link.id)));
-    }),
-);
-
-// Spec «Variables y Secrets sellados», ticket 01.
-
-it.effect(
-  "a Secret is listed without its value, as are its copies and links, and is always sealed",
-  () =>
-    Effect.gen(function* () {
-      const setup = yield* hub;
-      const { vaults, as, ownerId } = setup;
-      const { acme } = yield* acmeSecrets(setup);
-      const secret = yield* vaults
-        .putEntry({ vaultId: acme.id, name: "NEW_TOKEN", value: Redacted.make(ACME_OWN) })
-        .pipe(as(ownerId));
-      assert.equal(secret.entry.class, "secret");
-      assert.notProperty(secret.entry, "value");
-      assert.notProperty(secret.entry, "sealed");
-      const mainSecret = yield* vaults
-        .putEntry({ vaultId: MAIN_VAULT_ID, name: "MAIN_TOKEN", value: Redacted.make(ROTATED) })
-        .pipe(as(ownerId));
-      const copy = yield* vaults
-        .copyEntry({ vaultId: acme.id, sourceEntryId: mainSecret.entry.id, name: "MAIN_COPY" })
-        .pipe(as(ownerId));
-      const link = yield* vaults
-        .linkEntry({ vaultId: acme.id, sourceEntryId: mainSecret.entry.id })
-        .pipe(as(ownerId));
-      for (const entry of [copy.entry, link.entry]) {
-        assert.equal(entry.class, "secret", entry.name);
-        assert.notProperty(entry, "value", entry.name);
-      }
-      const rows = yield* setup.server.sql<{ readonly n: number }>`
+    assert.equal(secret.entry.class, "secret");
+    assert.notProperty(secret.entry, "value");
+    assert.notProperty(secret.entry, "sealed");
+    const mainSecret = yield* vaults
+      .putEntry({ vaultId: setup.main, name: "MAIN_TOKEN", value: Redacted.make(ROTATED) })
+      .pipe(as(ownerId));
+    assert.notProperty(mainSecret.entry, "value");
+    const rows = yield* setup.server.sql<{ readonly n: number }>`
         SELECT COUNT(*) AS n FROM vault_entries WHERE revealable = 1
       `;
-      assert.equal(rows[0]?.n, 0, "every Secret written is sealed");
-    }),
+    assert.equal(rows[0]?.n, 0, "every Secret written is sealed");
+  }),
 );
 
 it.effect(
@@ -508,7 +487,7 @@ it.effect(
     Effect.gen(function* () {
       const setup = yield* hub;
       const { vaults, as, ownerId, people } = setup;
-      const { acme, own, link } = yield* acmeSecrets(setup);
+      const { acme, own } = yield* acmeSecrets(setup);
       const put = (input: Omit<Parameters<typeof vaults.putEntry>[0], "vaultId">) =>
         vaults.putEntry({ vaultId: acme.id, ...input });
       // A Member edits nothing, a class change included.
@@ -556,13 +535,6 @@ it.effect(
         "replace",
         "class:secret",
       ]);
-      // A link is what its original is: its class does not change here.
-      assert.equal(
-        yield* reasonOf(
-          put({ entryId: link.id, name: link.name, class: "variable" }).pipe(as(ownerId)),
-        ),
-        "not-linkable",
-      );
     }),
 );
 
@@ -591,21 +563,17 @@ it.effect("a Variable's value goes to whoever sees its name but Guests; a Secret
       })
       .pipe(as(people.admin.id));
     assert.deepEqual(risky.warnings, ["looks-like-credential"]);
-    // A Main vault Variable linked and copied in: the link and the copy are Variables too.
-    const cluster = yield* vaults
-      .putEntry({
-        vaultId: MAIN_VAULT_ID,
-        name: "KUBE_SERVER",
-        value: Redacted.make("https://k3s.example:6443"),
-        class: "variable",
-      })
-      .pipe(as(ownerId));
-    yield* vaults
-      .linkEntry({ vaultId: acme.id, sourceEntryId: cluster.entry.id })
-      .pipe(as(ownerId));
-    yield* vaults
-      .copyEntry({ vaultId: acme.id, sourceEntryId: cluster.entry.id, name: "KUBE_SERVER_COPY" })
-      .pipe(as(ownerId));
+    // What a link and a copy of a Variable became: Variables of Acme's own.
+    for (const name of ["KUBE_SERVER", "KUBE_SERVER_COPY"]) {
+      yield* vaults
+        .putEntry({
+          vaultId: acme.id,
+          name,
+          value: Redacted.make("https://k3s.example:6443"),
+          class: "variable",
+        })
+        .pipe(as(ownerId));
+    }
 
     const valuesSeen = (userId: UserId) =>
       vaults.listEntries({ vaultId: acme.id }).pipe(
@@ -649,7 +617,7 @@ it.effect(
       const { vaults, as, ownerId } = setup;
       const put = (name: string, value = "long-enough-value") =>
         vaults
-          .putEntry({ vaultId: MAIN_VAULT_ID, name, value: Redacted.make(value) })
+          .putEntry({ vaultId: setup.main, name, value: Redacted.make(value) })
           .pipe(as(ownerId));
       for (const name of ["path", "1ABC", "A=B", "A B", "A\u0000B", "", "Ä"]) {
         assert.equal(yield* reasonOf(put(name)), "invalid-name", JSON.stringify(name));
@@ -667,7 +635,7 @@ it.effect(
           yield* reasonOf(
             vaults
               .putEntry({
-                vaultId: MAIN_VAULT_ID,
+                vaultId: setup.main,
                 name,
                 value: Redacted.make("long-enough-value"),
                 confirmDangerous: true,
@@ -735,7 +703,7 @@ it.effect(
       // An Admin's refused write says why, never what.
       const refused = yield* Effect.flip(
         vaults
-          .putEntry({ vaultId: MAIN_VAULT_ID, name: "GITHUB_TOKEN", value: Redacted.make(ROTATED) })
+          .putEntry({ vaultId: setup.main, name: "GITHUB_TOKEN", value: Redacted.make(ROTATED) })
           .pipe(as(people.admin.id)),
       );
       assert.isFalse(mentionsAValue(JSON.stringify(refused) + refused.message));
@@ -784,23 +752,23 @@ it.effect(
       const setup = yield* hub;
       const { server, vaults, as, ownerId, store, valueFiles } = setup;
       const { acme, own } = yield* acmeSecrets(setup);
-      // GITHUB_TOKEN, its copy and ACME_API_KEY hold values; the link holds none.
-      assert.lengthOf(valueFiles(), 3);
+      // GITHUB_TOKEN, Acme's GITHUB_TOKEN, its copy and ACME_API_KEY hold values.
+      assert.lengthOf(valueFiles(), 4);
       yield* vaults
         .putEntry({ vaultId: acme.id, entryId: own.id, name: "ACME_RENAMED" })
         .pipe(as(ownerId));
-      assert.lengthOf(valueFiles(), 3);
+      assert.lengthOf(valueFiles(), 4);
       yield* vaults.deleteEntry({ vaultId: acme.id, entryId: own.id }).pipe(as(ownerId));
-      assert.lengthOf(valueFiles(), 2);
+      assert.lengthOf(valueFiles(), 3);
       yield* vaults.remove({ vaultId: acme.id }).pipe(as(ownerId));
       assert.lengthOf(valueFiles(), 1);
 
       // A replace leaves one value, the new one.
-      const github = (yield* vaults.listEntries({ vaultId: MAIN_VAULT_ID }).pipe(as(ownerId)))
+      const github = (yield* vaults.listEntries({ vaultId: setup.main }).pipe(as(ownerId)))
         .entries[0]!;
       yield* vaults
         .putEntry({
-          vaultId: MAIN_VAULT_ID,
+          vaultId: setup.main,
           entryId: github.id,
           name: github.name,
           value: Redacted.make(ROTATED),
@@ -1007,56 +975,10 @@ it.effect(
     }),
 );
 
-it.effect("a link tells those who do not see the Main vault nothing of its original", () =>
-  Effect.gen(function* () {
-    const setup = yield* hub;
-    const { vaults, as, ownerId, people } = setup;
-    const acme = yield* vaults
-      .create({ name: "Acme secrets", spaceId: setup.acmeId })
-      .pipe(as(ownerId));
-    const pin = yield* vaults
-      .putEntry({ vaultId: MAIN_VAULT_ID, name: "SHORT_PIN", value: Redacted.make("1234") })
-      .pipe(as(ownerId));
-    const link = yield* vaults
-      .linkEntry({ vaultId: acme.id, sourceEntryId: pin.entry.id })
-      .pipe(as(ownerId));
-    const seen = (who: UserId) =>
-      vaults.listEntries({ vaultId: acme.id }).pipe(
-        as(who),
-        Effect.map((listed) => listed.entries.find((entry) => entry.id === link.entry.id)!),
-      );
-    assert.isTrue((yield* seen(ownerId)).unmasked);
-    for (const who of [people.admin, people.member, people.guest]) {
-      const entry = yield* seen(who.id);
-      assert.isFalse(entry.unmasked, `${who.id} learnt the original is short`);
-      assert.isNull(entry.linkedFrom);
-    }
-    const rotatedAt = (yield* seen(people.member.id)).updatedAt;
-    yield* vaults
-      .putEntry({
-        vaultId: MAIN_VAULT_ID,
-        entryId: pin.entry.id,
-        name: "SHORT_PIN",
-        value: Redacted.make("a-much-longer-value"),
-      })
-      .pipe(as(ownerId));
-    const after = yield* seen(people.member.id);
-    assert.equal(after.version, 1);
-    assert.equal(after.updatedAt, rotatedAt);
-    yield* vaults
-      .deleteEntry({ vaultId: MAIN_VAULT_ID, entryId: pin.entry.id, breakLinks: true })
-      .pipe(as(ownerId));
-    // Its editors learn it broke; its readers do not learn the original is gone.
-    assert.isTrue((yield* seen(people.admin.id)).broken);
-    assert.isFalse((yield* seen(people.guest.id)).broken);
-    assert.isFalse((yield* seen(people.member.id)).broken);
-  }),
-);
-
 it.effect("a joined machine has no Vaults: nothing is written, every call says so", () =>
   Effect.gen(function* () {
-    const { server, as, ownerId } = yield* hub;
-    yield* server.sql`DELETE FROM vaults`;
+    const { server, as, ownerId, main } = yield* hub;
+    yield* server.sql`DELETE FROM vault_groups`;
     yield* server.sql`DELETE FROM vault_key_check`;
     const joined = Context.add(server.services, ServerSecretStore.MasterKeyring, {
       keyring: Option.none(),
@@ -1067,14 +989,14 @@ it.effect("a joined machine has no Vaults: nothing is written, every call says s
     );
     const vaults = Context.get(built, Vaults.Vaults);
     const rows = yield* server.sql<{ readonly n: number }>`
-      SELECT (SELECT COUNT(*) FROM vaults) + (SELECT COUNT(*) FROM vault_key_check) AS n
+      SELECT (SELECT COUNT(*) FROM vault_groups) + (SELECT COUNT(*) FROM vault_key_check) AS n
     `;
     assert.equal(rows[0]?.n, 0);
     assert.equal(yield* reasonOf(vaults.list.pipe(as(ownerId))), "unavailable");
     assert.equal(
       yield* reasonOf(
         vaults
-          .putEntry({ vaultId: MAIN_VAULT_ID, name: "X_TOKEN", value: Redacted.make("long-value") })
+          .putEntry({ vaultId: main, name: "X_TOKEN", value: Redacted.make("long-value") })
           .pipe(as(ownerId)),
       ),
       "unavailable",
@@ -1086,7 +1008,7 @@ it.effect("a database another key sealed stops the start before the database cha
   Effect.gen(function* () {
     const { server } = yield* hub;
     const stranger = SecretCipher.MasterKey.generate();
-    yield* server.sql`DELETE FROM vaults`;
+    yield* server.sql`DELETE FROM vault_groups`;
     yield* server.sql`
       UPDATE vault_key_check SET key_id = ${stranger.id},
         sealed = ${SecretCipher.seal(stranger, "key-check", "vault_key_check", new TextEncoder().encode("t3code vault key check"))}
@@ -1095,8 +1017,8 @@ it.effect("a database another key sealed stops the start before the database cha
       Layer.build(Vaults.layer.pipe(Layer.provide(Layer.succeedContext(server.services)))),
     );
     assert.equal(failed._tag, "MasterKeyError");
-    const rows = yield* server.sql<{ readonly n: number }>`SELECT COUNT(*) AS n FROM vaults`;
-    assert.equal(rows[0]?.n, 0, "the Main vault was written before the key check");
+    const rows = yield* server.sql<{ readonly n: number }>`SELECT COUNT(*) AS n FROM vault_groups`;
+    assert.equal(rows[0]?.n, 0, "a default group was written before the key check");
   }),
 );
 
@@ -1217,28 +1139,15 @@ it.effect(
       }
       const main = yield* vaults
         .putEntry({
-          vaultId: MAIN_VAULT_ID,
+          vaultId: setup.main,
           name: "MAIN_KUBE",
           provider: { providerId: FAKE_PROVIDER_ID, reference: "kv/main#token" },
         })
         .pipe(as(ownerId));
-      assert.equal(
-        yield* reasonOf(
-          vaults.linkEntry({ vaultId: acme.id, sourceEntryId: main.entry.id }).pipe(as(ownerId)),
-        ),
-        "not-linkable",
-      );
-      assert.equal(
-        yield* reasonOf(
-          vaults
-            .copyEntry({ vaultId: acme.id, sourceEntryId: main.entry.id, name: "COPIED" })
-            .pipe(as(ownerId)),
-        ),
-        "not-linkable",
-      );
+      assert.equal(main.entry.kind, "provider");
       // A provider removed from the settings: «broken», shown to everyone, never read.
       provider.state.providers = {};
-      const listed = yield* vaults.listEntries({ vaultId: MAIN_VAULT_ID }).pipe(as(ownerId));
+      const listed = yield* vaults.listEntries({ vaultId: setup.main }).pipe(as(ownerId));
       const broken = listed.entries.find((entry) => entry.name === "MAIN_KUBE");
       assert.deepEqual([broken?.broken, broken?.provider?.label], [true, null]);
       assert.lengthOf(provider.state.batches, 0);
@@ -1267,7 +1176,7 @@ it.effect(
       const text = "server: {{ KUBE_SERVER }}\ntokenFile: {{ KUBE_TOKEN | path }}\n";
       yield* vaults
         .putEntry({
-          vaultId: MAIN_VAULT_ID,
+          vaultId: setup.main,
           name: "MAIN_URL",
           value: Redacted.make("https://x"),
           class: "variable",
@@ -1354,18 +1263,11 @@ it.effect(
       yield* vaults.deleteEntry({ vaultId: acme.id, entryId: token.entry.id }).pipe(as(ownerId));
       const gone = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(ownerId));
       assert.isTrue(gone.entries.find((entry) => entry.name === "KUBECONFIG")?.broken);
-      // A template of the Main vault is neither linked nor copied.
+      // A template of the Owner's `default` composes that group's entries.
       const mainTemplate = yield* vaults
-        .putEntry({ vaultId: MAIN_VAULT_ID, name: "MAIN_T", template: { text: "{{ MAIN_URL }}" } })
+        .putEntry({ vaultId: setup.main, name: "MAIN_T", template: { text: "{{ MAIN_URL }}" } })
         .pipe(as(ownerId));
-      assert.equal(
-        yield* reasonOf(
-          vaults
-            .linkEntry({ vaultId: acme.id, sourceEntryId: mainTemplate.entry.id })
-            .pipe(as(ownerId)),
-        ),
-        "not-linkable",
-      );
+      assert.isFalse(mainTemplate.entry.broken);
       // The audit names the template and its delivery, never its text.
       const audited = yield* server.sql<{ readonly detail_json: string }>`
         SELECT detail_json FROM audit_log WHERE target_name = 'KUBECONFIG'
@@ -1408,7 +1310,9 @@ it.effect("a workload identity entry is the Owner's alone, always a sealed Secre
   Effect.gen(function* () {
     const setup = yield* hubWith({ identityIssuer: "https://hub.example.com" });
     const { vaults, as, ownerId, acmeId, people } = setup;
-    const acme = yield* vaults.create({ name: "Acme cluster", spaceId: acmeId }).pipe(as(ownerId));
+    const acme = yield* vaults
+      .create({ name: "Acme cluster", owner: org(acmeId) })
+      .pipe(as(ownerId));
     const added = yield* vaults
       .putEntry({ vaultId: acme.id, name: "KUBE_TOKEN", identity: { audience: "kubernetes" } })
       .pipe(as(ownerId));
@@ -1506,22 +1410,11 @@ it.effect("a workload identity entry is the Owner's alone, always a sealed Secre
       })
       .pipe(owner);
     assert.isFalse(kubeconfig.entry.broken);
-    // Nobody links or copies one out of the Main vault.
+    // One in the Owner's own `default` too.
     const main = yield* vaults
-      .putEntry({ vaultId: MAIN_VAULT_ID, name: "HUB_ID", identity: { audience: "vault" } })
+      .putEntry({ vaultId: setup.main, name: "HUB_ID", identity: { audience: "vault" } })
       .pipe(owner);
-    assert.strictEqual(
-      yield* reasonOf(
-        vaults.linkEntry({ vaultId: acme.id, sourceEntryId: main.entry.id }).pipe(owner),
-      ),
-      "not-linkable",
-    );
-    assert.strictEqual(
-      yield* reasonOf(
-        vaults.copyEntry({ vaultId: acme.id, sourceEntryId: main.entry.id }).pipe(owner),
-      ),
-      "not-linkable",
-    );
+    assert.equal(main.entry.kind, "identity");
     // The Owner deletes it.
     const removed = yield* vaults
       .deleteEntry({ vaultId: acme.id, entryId: kubeconfig.entry.id })
@@ -1536,7 +1429,7 @@ it.effect("a workload identity entry is the Owner's alone, always a sealed Secre
 it.effect("without an issuer the Hub keeps no workload identity entry", () =>
   Effect.gen(function* () {
     const { vaults, as, ownerId, acmeId } = yield* hub;
-    const acme = yield* vaults.create({ name: "Acme", spaceId: acmeId }).pipe(as(ownerId));
+    const acme = yield* vaults.create({ name: "Acme", owner: org(acmeId) }).pipe(as(ownerId));
     assert.strictEqual(
       yield* reasonOf(
         vaults
@@ -1546,4 +1439,179 @@ it.effect("without an issuer the Hub keeps no workload identity entry", () =>
       "identity-no-issuer",
     );
   }),
+);
+
+// Owned-resources 03: what a Secret link became. Migration 142 leaves a former link sharing its
+// original's value id; the Hub's start gives it its own copy before any request.
+
+/** Points `entryId` at the value `sharedWith` holds, as migration 142 leaves a former link. */
+const shareValue = (setup: Hub, entryId: string, sharedWith: string) =>
+  setup.server.sql`
+    UPDATE vault_entries SET value_id = (
+      SELECT value_id FROM vault_entries WHERE entry_id = ${sharedWith}
+    ) WHERE entry_id = ${entryId}
+  `;
+
+const valueIdOf = (setup: Hub, entryId: string) =>
+  setup.server.sql<{ readonly valueId: string | null }>`
+    SELECT value_id AS "valueId" FROM vault_entries WHERE entry_id = ${entryId}
+  `.pipe(Effect.map((rows) => rows[0]?.valueId ?? null));
+
+const unshare = (setup: Hub, services = setup.server.services) =>
+  Vaults.unshareValues.pipe(Effect.provide(Layer.succeedContext(services)));
+
+it.effect("a shared value is never changed or removed under the entry that still holds it", () =>
+  Effect.gen(function* () {
+    const setup = yield* hub;
+    const { vaults, as, ownerId, holds, main } = setup;
+    const { github, link, copy } = yield* acmeSecrets(setup);
+    yield* shareValue(setup, link.id, github.id);
+    yield* shareValue(setup, copy.id, github.id);
+    const shared = yield* valueIdOf(setup, github.id);
+    const bytesBefore = NodeFS.readFileSync(yield* setup.valueFileOf(github.id));
+    // Replacing one of them writes a new value; the shared one is neither rewritten nor removed.
+    yield* vaults
+      .putEntry({
+        vaultId: link.vaultId,
+        entryId: link.id,
+        name: link.name,
+        value: Redacted.make(ROTATED),
+      })
+      .pipe(as(ownerId));
+    assert.notEqual(yield* valueIdOf(setup, link.id), shared);
+    assert.isTrue(
+      NodeFS.readFileSync(yield* setup.valueFileOf(github.id)).equals(bytesBefore),
+      "the shared value's file is untouched",
+    );
+    assert.isTrue(yield* holds(github.id, ORIGINAL), "the original keeps its value");
+    assert.isTrue(yield* holds(copy.id, ORIGINAL), "the other sharer keeps its value");
+    // Deleting the original leaves the value the copy still holds.
+    yield* vaults.deleteEntry({ vaultId: main, entryId: github.id }).pipe(as(ownerId));
+    assert.isTrue(yield* holds(copy.id, ORIGINAL), "deleting the original kept the copy's");
+    assert.equal(yield* valueIdOf(setup, copy.id), shared);
+  }),
+);
+
+it.effect("the start gives each former link its own value, once, and a crash loses nothing", () =>
+  Effect.gen(function* () {
+    const setup = yield* hub;
+    const { vaults, as, ownerId, holds, main, valueFiles } = setup;
+    const { github, link, copy } = yield* acmeSecrets(setup);
+    yield* shareValue(setup, link.id, github.id);
+    yield* shareValue(setup, copy.id, github.id);
+    const shared = yield* valueIdOf(setup, github.id);
+
+    // A crash after the first copy is written and before its row moves: every entry still
+    // delivers, and the next start finishes the job.
+    const values = Context.get(setup.server.services, ServerSecretStore.VaultValueStore);
+    const crashing = Context.add(setup.server.services, ServerSecretStore.VaultValueStore, {
+      ...values,
+      set: (id: string, bytes: Uint8Array) =>
+        values.set(id, bytes).pipe(Effect.andThen(Effect.die("crash"))),
+    });
+    assert.equal((yield* Effect.exit(unshare(setup, crashing)))._tag, "Failure");
+    for (const entryId of [github.id, link.id, copy.id]) {
+      assert.isTrue(yield* holds(entryId, ORIGINAL), `${entryId} delivers after the crash`);
+    }
+
+    yield* unshare(setup);
+    const ids = [
+      yield* valueIdOf(setup, github.id),
+      yield* valueIdOf(setup, link.id),
+      yield* valueIdOf(setup, copy.id),
+    ];
+    // One keeps the shared id; each other gets its own, the same value (as booleans).
+    assert.include(ids, shared);
+    assert.equal(new Set(ids).size, 3);
+    for (const entryId of [github.id, link.id, copy.id]) {
+      assert.isTrue(yield* holds(entryId, ORIGINAL), `${entryId} holds the same value`);
+    }
+    // Twice is a no-op.
+    const files = valueFiles().toSorted();
+    yield* unshare(setup);
+    assert.deepEqual(
+      [yield* valueIdOf(setup, github.id), yield* valueIdOf(setup, link.id)],
+      [ids[0], ids[1]],
+    );
+    assert.deepEqual(valueFiles().toSorted(), files);
+
+    // From now on they are independent: replacing the original leaves the former link, and back.
+    yield* vaults
+      .putEntry({
+        vaultId: main,
+        entryId: github.id,
+        name: github.name,
+        value: Redacted.make(ROTATED),
+      })
+      .pipe(as(ownerId));
+    assert.isTrue(yield* holds(link.id, ORIGINAL), "the former link kept its value");
+    yield* vaults
+      .putEntry({
+        vaultId: link.vaultId,
+        entryId: link.id,
+        name: link.name,
+        value: Redacted.make(ADMIN_REPLACES),
+      })
+      .pipe(as(ownerId));
+    assert.isTrue(yield* holds(github.id, ROTATED), "the original kept its own");
+    // Deleting either never removes what the other holds.
+    yield* vaults.deleteEntry({ vaultId: main, entryId: github.id }).pipe(as(ownerId));
+    assert.isTrue(yield* holds(link.id, ADMIN_REPLACES), "the former link survives the original");
+    assert.isTrue(yield* holds(copy.id, ORIGINAL), "the former copy survives the original");
+  }),
+);
+
+it.effect("the Owner is told once which entries were Secret links; nobody else is", () =>
+  Effect.gen(function* () {
+    const setup = yield* hub;
+    const { vaults, as, ownerId, people } = setup;
+    const { acme, link } = yield* acmeSecrets(setup);
+    yield* setup.server.sql`
+      INSERT INTO vault_unlinked_notices (entry_id, group_id, name, original_name, created_at)
+      VALUES (${link.id}, ${acme.id}, ${link.name}, 'GITHUB_TOKEN', '2026-11-17T00:00:00.000Z')
+    `;
+    const listed = yield* vaults.list.pipe(as(ownerId));
+    assert.deepEqual(listed.unlinked, [
+      {
+        vaultId: acme.id,
+        vaultName: "Acme secrets",
+        entryId: link.id,
+        name: "GITHUB_TOKEN",
+        originalName: "GITHUB_TOKEN",
+      },
+    ]);
+    assert.deepEqual((yield* vaults.list.pipe(as(people.admin.id))).unlinked, []);
+    assert.equal(yield* reasonOf(vaults.dismissUnlinked.pipe(as(people.admin.id))), "forbidden");
+    assert.deepEqual(yield* vaults.dismissUnlinked.pipe(as(ownerId)), { dismissed: 1 });
+    assert.deepEqual((yield* vaults.list.pipe(as(ownerId))).unlinked, []);
+  }),
+);
+
+it.effect(
+  "only the Owner's named groups are allowed elsewhere; never a `default` or an Organization's",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* hub;
+      const { vaults, as, ownerId, acmeId, globexId, main } = setup;
+      const { acme } = yield* acmeSecrets(setup);
+      const subject = { kind: "space" as const, spaceId: globexId };
+      assert.equal(
+        yield* reasonOf(vaults.allow({ vaultId: main, subject, allowed: true }).pipe(as(ownerId))),
+        "default-group",
+      );
+      assert.equal(
+        yield* reasonOf(
+          vaults.allow({ vaultId: acme.id, subject, allowed: true }).pipe(as(ownerId)),
+        ),
+        "not-allowed",
+      );
+      const tools = yield* vaults.create({ name: "Tools", owner: mine(ownerId) }).pipe(as(ownerId));
+      const allowed = yield* vaults
+        .allow({ vaultId: tools.id, subject: { kind: "space", spaceId: acmeId }, allowed: true })
+        .pipe(as(ownerId));
+      assert.deepEqual(
+        allowed.allowances.map((allowance) => allowance.name),
+        ["Acme"],
+      );
+    }),
 );

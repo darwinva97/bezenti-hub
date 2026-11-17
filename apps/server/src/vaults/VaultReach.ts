@@ -1,9 +1,10 @@
 /**
- * Which Vaults may reach a Space or a User: the one rule for Vaults.ts and EffectiveVaults.ts. The
- * Main vault: the Owner's Personal space; an Organization's: itself; the Owner's others: whom they
- * were allowed to. Other allowance rows are ignored. See docs/internals/secrets.md.
+ * Which Vault groups may reach a Space or a User: the one rule for Vaults.ts and EffectiveVaults.ts
+ * (owned-resources 03). A group reaches its owner's Space (a User's Personal space, an
+ * Organization); the Owner's named groups also reach whom they were allowed to. Other allowance
+ * rows are ignored. See docs/internals/secrets.md.
  */
-import { MAIN_VAULT_ID, type SpaceId, type UserId, VaultId } from "@t3tools/contracts";
+import { type SpaceId, type UserId, VaultGroupId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type * as Path from "effect/Path";
 import type * as SqlClient from "effect/sql/SqlClient";
@@ -11,62 +12,74 @@ import type * as SqlClient from "effect/sql/SqlClient";
 import { isScratchWorkspaceRoot } from "../environment/ScratchWorkspace.ts";
 
 export interface ReachRow {
-  readonly vaultId: VaultId;
+  readonly vaultId: VaultGroupId;
   readonly name: string;
-  readonly isMain: boolean;
+  /** Its owner's `default`: a fixed default of the owner's Space. */
+  readonly isDefault: boolean;
   readonly archived: boolean;
 }
 
 interface RawReachRow {
   readonly vaultId: string;
   readonly name: string;
-  readonly isMain: number;
+  readonly isDefault: number;
   readonly archivedAt: string | null;
 }
 
-const COLUMNS = `v.vault_id AS "vaultId", v.name AS "name", v.is_main AS "isMain",
+const COLUMNS = `v.group_id AS "vaultId", v.name AS "name", v.is_default AS "isDefault",
   v.archived_at AS "archivedAt"`;
 
-/** The Owner's order, as Settings → Vaults lists them: the Main vault, then by position, name. */
-const VAULT_ORDER = `v.is_main DESC, v.position, v.name COLLATE NOCASE`;
+/** The order Settings lists them in: `default` first, then by position, name. */
+const GROUP_ORDER = `v.is_default DESC, v.position, v.name COLLATE NOCASE`;
 
 const toReach = (row: RawReachRow): ReachRow => ({
-  vaultId: VaultId.make(row.vaultId),
+  vaultId: VaultGroupId.make(row.vaultId),
   name: row.name,
-  isMain: row.isMain === 1,
+  isDefault: row.isDefault === 1,
   archived: row.archivedAt !== null,
 });
 
-/**
- * The defaults nobody unsets, among the Vaults allowed to a Space: the Main vault, in the Owner's
- * Personal space (the only Space it is allowed to). A Project neither removes nor re-adds them.
- */
-export const fixedDefaults = (allowed: ReadonlyArray<ReachRow>): ReadonlyArray<VaultId> =>
-  allowed.filter((row) => row.isMain).map((row) => row.vaultId);
+/** The Owner's id: whose named groups an allowance may widen. */
+const INSTALLATION_OWNER = `(SELECT user_id FROM users WHERE is_owner = 1)`;
+
+/** Group `v` is the Installation Owner's own (an allowance on it counts). */
+export const ownersGroupSql = `(v.owner_kind = 'user' AND v.owner_id = ${INSTALLATION_OWNER})`;
 
 /**
- * The rule as SQL: whether Vault `v` reaches the Space named by the SQL expression `space` (a
- * column, never a value). The Owner's Personal space is `personal:<Owner's id>`.
+ * The SQL of a group's own Space, from `v`: an Organization's id, or a User's Personal space
+ * (`personal:<id>`).
  */
-const reachesSpaceSql = (space: string) => `(
-  (v.vault_id = '${MAIN_VAULT_ID}' AND v.is_main = 1
-    AND ${space} = 'personal:' || (SELECT user_id FROM users WHERE is_owner = 1))
-  OR (v.is_main = 0 AND v.space_id = ${space})
-  OR (v.is_main = 0 AND v.space_id IS NULL AND EXISTS (
+const ownSpaceSql = `(CASE v.owner_kind WHEN 'organization' THEN v.owner_id
+  ELSE 'personal:' || v.owner_id END)`;
+
+/**
+ * The fixed defaults among the groups reaching a Space: its owner's `default` (the only `default`
+ * that reaches it). A Project neither removes nor re-adds it.
+ */
+export const fixedDefaults = (allowed: ReadonlyArray<ReachRow>): ReadonlyArray<VaultGroupId> =>
+  allowed.filter((row) => row.isDefault).map((row) => row.vaultId);
+
+/**
+ * The rule as SQL: whether group `v` reaches the Space named by the SQL expression `space` (a
+ * column, never a value).
+ */
+export const reachesSpaceSql = (space: string) => `(
+  ${ownSpaceSql} = ${space}
+  OR (v.is_default = 0 AND ${ownersGroupSql} AND EXISTS (
     SELECT 1 FROM vault_allowances a
-    WHERE a.vault_id = v.vault_id AND a.subject_kind = 'space' AND a.subject_id = ${space}
+    WHERE a.group_id = v.group_id AND a.subject_kind = 'space' AND a.subject_id = ${space}
   )))`;
 
-/** The Vaults allowed to a Space, archived ones included, in the Owner's order. */
+/** The groups reaching a Space, archived ones included, in Settings' order. */
 export const allowedToSpace = (sql: SqlClient.SqlClient, spaceId: SpaceId) =>
   sql<RawReachRow>`
-    SELECT ${sql.literal(COLUMNS)} FROM vaults v, (SELECT ${spaceId} AS space_id) target
+    SELECT ${sql.literal(COLUMNS)} FROM vault_groups v, (SELECT ${spaceId} AS space_id) target
     WHERE ${sql.literal(reachesSpaceSql("target.space_id"))}
-    ORDER BY ${sql.literal(VAULT_ORDER)}
+    ORDER BY ${sql.literal(GROUP_ORDER)}
   `.pipe(Effect.map((rows) => rows.map(toReach)));
 
 /**
- * Drops the Project's choices of Vaults that do not reach Space `spaceId` (a Project moving
+ * Drops the Project's choices of groups that do not reach Space `spaceId` (a Project moving
  * there), and answers them, for the audit.
  */
 export const dropChoicesNotReaching = (
@@ -76,34 +89,34 @@ export const dropChoicesNotReaching = (
 ) =>
   sql<{ readonly vaultId: string; readonly choice: string }>`
     DELETE FROM project_vault_choices
-    WHERE project_id = ${projectId} AND vault_id NOT IN (
-      SELECT v.vault_id FROM vaults v, (SELECT ${spaceId} AS space_id) target
+    WHERE project_id = ${projectId} AND group_id NOT IN (
+      SELECT v.group_id FROM vault_groups v, (SELECT ${spaceId} AS space_id) target
       WHERE ${sql.literal(reachesSpaceSql("target.space_id"))}
     )
-    RETURNING vault_id AS "vaultId", choice AS "choice"
+    RETURNING group_id AS "vaultId", choice AS "choice"
   `;
 
-/** The Vaults allowed to a User themselves (the Owner's own, never the Main vault). */
+/** The groups allowed to a User themselves: the Owner's named ones, never a `default`. */
 export const allowedToUser = (sql: SqlClient.SqlClient, userId: UserId) =>
   sql<RawReachRow>`
-    SELECT ${sql.literal(COLUMNS)} FROM vaults v
-    WHERE v.is_main = 0 AND v.space_id IS NULL AND EXISTS (
+    SELECT ${sql.literal(COLUMNS)} FROM vault_groups v
+    WHERE v.is_default = 0 AND ${sql.literal(ownersGroupSql)} AND EXISTS (
       SELECT 1 FROM vault_allowances a
-      WHERE a.vault_id = v.vault_id AND a.subject_kind = 'user' AND a.subject_id = ${userId}
+      WHERE a.group_id = v.group_id AND a.subject_kind = 'user' AND a.subject_id = ${userId}
     )
-    ORDER BY ${sql.literal(VAULT_ORDER)}
+    ORDER BY ${sql.literal(GROUP_ORDER)}
   `.pipe(Effect.map((rows) => rows.map(toReach)));
 
 /** A Space's chosen defaults, in their order (the first wins a shared name). */
 export const chosenDefaults = (sql: SqlClient.SqlClient, spaceId: SpaceId) =>
   sql<{ readonly vaultId: string }>`
-    SELECT vault_id AS "vaultId" FROM space_default_vaults
-    WHERE space_id = ${spaceId} ORDER BY position, vault_id
-  `.pipe(Effect.map((rows) => rows.map((row) => VaultId.make(row.vaultId))));
+    SELECT group_id AS "vaultId" FROM space_default_vaults
+    WHERE space_id = ${spaceId} ORDER BY position, group_id
+  `.pipe(Effect.map((rows) => rows.map((row) => VaultGroupId.make(row.vaultId))));
 
 /**
  * Whether a Project is the scratch one, which holds the Threads without a Project: those use their
- * Space's defaults and their User's Vaults, never a Project's choices (it spans every Space).
+ * Space's defaults and their User's groups, never a Project's choices (it spans every Space).
  */
 export const isScratchProject = (
   sql: SqlClient.SqlClient,
@@ -123,10 +136,10 @@ export const isScratchProject = (
 /** A Project's adds and removes. */
 export const projectChoices = (sql: SqlClient.SqlClient, projectId: string) =>
   sql<{ readonly vaultId: string; readonly choice: "add" | "remove" }>`
-    SELECT vault_id AS "vaultId", choice AS "choice" FROM project_vault_choices
-    WHERE project_id = ${projectId} ORDER BY vault_id
+    SELECT group_id AS "vaultId", choice AS "choice" FROM project_vault_choices
+    WHERE project_id = ${projectId} ORDER BY group_id
   `.pipe(
     Effect.map((rows) =>
-      rows.map((row) => ({ vaultId: VaultId.make(row.vaultId), choice: row.choice })),
+      rows.map((row) => ({ vaultId: VaultGroupId.make(row.vaultId), choice: row.choice })),
     ),
   );

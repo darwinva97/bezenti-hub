@@ -103,14 +103,19 @@ export interface AiAccountResource {
     | { readonly kind: "organization"; readonly space: SpaceResource | null };
 }
 
-/** A Vault of secrets: the Owner's Main vault, another of the Owner's, or an Organization's. */
+/**
+ * A group of a Vault (owned-resources 03): each owner, a User or an Organization, has one Vault of
+ * groups, its `default` and named ones. An Organization's `space` is null once it is gone.
+ */
 export interface VaultResource {
   readonly kind: "vault";
-  readonly isMain: boolean;
-  /** The Organization whose Vault it is; null for the Owner's own (the Main vault among them). */
-  readonly space: SpaceResource | null;
-  // Spec 5 ticket 03: whom the Owner allowed one of their own Vaults to (none for the Main vault
-  // or an Organization's, which reaches its Organization without one).
+  readonly owner:
+    | { readonly kind: "user"; readonly userId: UserId; readonly isInstallationOwner: boolean }
+    | { readonly kind: "organization"; readonly space: SpaceResource | null };
+  /** The owner's `default`: never deleted, renamed or archived (`vault.manage`). */
+  readonly isDefault: boolean;
+  // Spec 5 ticket 03: whom the Owner allowed one of their own named groups to (none for any other
+  // group, which reaches its owner's Space without one).
   readonly allowedSpaces: ReadonlyArray<SpaceResource>;
   readonly allowedUsers: ReadonlyArray<UserId>;
 }
@@ -246,7 +251,10 @@ export type Action =
   | "secretProvider.manage"
   /** Add, replace, rename and delete a Vault's secrets without reading them. */
   | "vault.edit"
-  /** Create, rename, describe, archive and delete a Vault: the Owner. */
+  /**
+   * Create, rename, describe, archive and delete a group, and allow it (the Owner's own): its
+   * owner's managers (owned-resources 03); never on a `default` group.
+   */
   | "vault.manage"
   /** Set a secret whose name changes how tools run (`secretNameRisk`): the Owner, confirmed. */
   | "vault.dangerousName"
@@ -351,6 +359,8 @@ export type DenyReason =
   | "not-your-personal-space"
   /** The Owner reads another User's Personal space and changes nothing in it. */
   | "personal-space-read-only"
+  /** An owner's `default` Vault group is never deleted, renamed or archived. */
+  | "default-group"
   | "space-archived"
   | "space-frozen"
   /** The User was disabled or removed. */
@@ -666,32 +676,32 @@ const VAULT_ACTIONS: ReadonlySet<Action> = new Set([
 ]);
 
 /**
- * Vaults. The Owner does everything, and alone creates, manages and allows; nobody reads a
- * Secret's value (owned-resources 01, ADR 0012). The Main vault is the Owner's alone. An
- * Organization's Vault: its Admins add, replace and delete secrets without reading them; its
- * Members and Guests see names only, and Variables' values but Guests.
+ * Vault groups (owned-resources 03): nobody manages a `default`; the Owner does the rest, never
+ * reading a Secret. The Owner's `default` is theirs alone; an Organization's groups its Admins'
+ * to manage and edit; Members see names and Variables, Guests names. Identity: the Owner's.
  */
 const decideVault = (principal: Principal, action: Action, vault: VaultResource): Decision => {
+  if (action === "vault.manage" && vault.isDefault) return deny("default-group");
   if (principal.isOwner) return allow;
-  // Ticket 03: a Provider entry is an Admin's as an edit is (Vaults then asks for a scope).
-  if (
-    action !== "vault.view" &&
-    action !== "vault.edit" &&
-    action !== "vault.readVariables" &&
-    action !== "vault.providerEntry"
-  ) {
+  if (action === "vault.identityEntry" || action === "vault.dangerousName") {
     return deny("owner-only");
   }
-  if (vault.isMain) return deny("owner-only");
-  const space = vault.space;
-  if (space === null) return decideAllowedVault(principal, action, vault);
+  const { owner } = vault;
+  if (owner.kind === "user") {
+    if (!owner.isInstallationOwner || vault.isDefault || action === "vault.manage") {
+      return deny("owner-only");
+    }
+    return decideAllowedVault(principal, action, vault);
+  }
+  const space = owner.space;
+  if (space === null) return deny("owner-only");
   if (space.kind !== "organization") return deny("wrong-resource");
   if (space.archived) return deny("space-archived");
   if (space.frozen) return deny("space-frozen");
   return inOrganization(
     principal,
     space,
-    action === "vault.edit" || action === "vault.providerEntry"
+    action === "vault.edit" || action === "vault.providerEntry" || action === "vault.manage"
       ? ADMIN_ONLY
       : action === "vault.readVariables"
         ? ROLES_THAT_CREATE_PROJECTS

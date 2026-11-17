@@ -393,11 +393,11 @@ describe("IdentityTokens", () => {
       assert.isFalse(yield* tokens.inUse);
       const sql = yield* SqlClient.SqlClient;
       yield* sql`
-        INSERT INTO vaults (vault_id, name, is_main, created_at, updated_at)
-        VALUES ('tools', 'Tools', 0, ${AT}, ${AT})
+        INSERT INTO vault_groups (group_id, owner_kind, owner_id, name, created_at, updated_at)
+        VALUES ('tools', 'user', 'owner', 'Tools', ${AT}, ${AT})
       `;
       yield* sql`
-        INSERT INTO vault_entries (entry_id, vault_id, name, kind, class, revealable, delivery,
+        INSERT INTO vault_entries (entry_id, group_id, name, kind, class, revealable, delivery,
           identity_audience, identity_ttl_seconds, created_at, updated_at)
         VALUES ('id-1', 'tools', 'KUBE_TOKEN', 'identity', 'secret', 0, 'file', 'kubernetes', 600,
           ${AT}, ${AT})

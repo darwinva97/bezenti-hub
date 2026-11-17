@@ -426,21 +426,20 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import {
-  VaultCreateInput,
-  VaultDeleteInput,
-  VaultDeleteResult,
+  VaultGroupCreateInput,
+  VaultGroupDeleteInput,
+  VaultGroupDeleteResult,
   VaultEntriesListInput,
   VaultEntriesListResult,
   VaultEntryDeleteInput,
   VaultEntryDeleteResult,
-  VaultEntryFromMainInput,
   VaultEntryPutInput,
   VaultEntryResult,
   VaultError,
-  VaultListInput,
-  VaultListResult,
-  VaultSummary,
-  VaultUpdateInput,
+  VaultGroupListInput,
+  VaultGroupListResult,
+  VaultGroupSummary,
+  VaultGroupUpdateInput,
   // Spec 5 ticket 03: allowances, defaults and the effective set.
   VaultAllowInput,
   VaultChoices,
@@ -449,6 +448,8 @@ import {
   VaultSpaceDefaultsSetInput,
   VaultThreadEnvironment,
   VaultThreadEnvironmentInput,
+  VaultUnlinkedDismissInput,
+  VaultUnlinkedDismissResult,
 } from "./vaults.ts";
 import {
   ProviderScopeAllowInput,
@@ -616,15 +617,14 @@ export const WS_METHODS = {
   secretsVaultTargets: "secrets.vaultTargets",
   // Vaults: names and metadata, and Variables' values. Values go in with `put`; a Secret's never
   // comes out (owned-resources 01).
-  vaultsList: "vaults.list",
-  vaultsCreate: "vaults.create",
-  vaultsUpdate: "vaults.update",
-  vaultsDelete: "vaults.delete",
+  vaultsGroupsList: "vaults.groups.list",
+  vaultsGroupsCreate: "vaults.groups.create",
+  vaultsGroupsUpdate: "vaults.groups.update",
+  vaultsGroupsDelete: "vaults.groups.delete",
   vaultsEntriesList: "vaults.entries.list",
   vaultsEntriesPut: "vaults.entries.put",
   vaultsEntriesDelete: "vaults.entries.delete",
-  vaultsEntriesLink: "vaults.entries.link",
-  vaultsEntriesCopy: "vaults.entries.copy",
+  vaultsUnlinkedNoticeDismiss: "vaults.unlinkedNotice.dismiss",
   // Vaults, spec 5 ticket 03: allowances, defaults, Project choices and a Thread's names.
   vaultsAllow: "vaults.allow",
   vaultsChoices: "vaults.choices",
@@ -2198,24 +2198,24 @@ const WsGrantsSetLimitsRpc = Rpc.make(WS_METHODS.grantsSetLimits, {
 });
 
 const VaultRpcError = Schema.Union([VaultError, EnvironmentAuthorizationError]);
-const WsVaultsListRpc = Rpc.make(WS_METHODS.vaultsList, {
-  payload: VaultListInput,
-  success: VaultListResult,
+const WsVaultsGroupsListRpc = Rpc.make(WS_METHODS.vaultsGroupsList, {
+  payload: VaultGroupListInput,
+  success: VaultGroupListResult,
   error: VaultRpcError,
 });
-const WsVaultsCreateRpc = Rpc.make(WS_METHODS.vaultsCreate, {
-  payload: VaultCreateInput,
-  success: VaultSummary,
+const WsVaultsGroupsCreateRpc = Rpc.make(WS_METHODS.vaultsGroupsCreate, {
+  payload: VaultGroupCreateInput,
+  success: VaultGroupSummary,
   error: VaultRpcError,
 });
-const WsVaultsUpdateRpc = Rpc.make(WS_METHODS.vaultsUpdate, {
-  payload: VaultUpdateInput,
-  success: VaultSummary,
+const WsVaultsGroupsUpdateRpc = Rpc.make(WS_METHODS.vaultsGroupsUpdate, {
+  payload: VaultGroupUpdateInput,
+  success: VaultGroupSummary,
   error: VaultRpcError,
 });
-const WsVaultsDeleteRpc = Rpc.make(WS_METHODS.vaultsDelete, {
-  payload: VaultDeleteInput,
-  success: VaultDeleteResult,
+const WsVaultsGroupsDeleteRpc = Rpc.make(WS_METHODS.vaultsGroupsDelete, {
+  payload: VaultGroupDeleteInput,
+  success: VaultGroupDeleteResult,
   error: VaultRpcError,
 });
 const WsVaultsEntriesListRpc = Rpc.make(WS_METHODS.vaultsEntriesList, {
@@ -2233,20 +2233,16 @@ const WsVaultsEntriesDeleteRpc = Rpc.make(WS_METHODS.vaultsEntriesDelete, {
   success: VaultEntryDeleteResult,
   error: VaultRpcError,
 });
-const WsVaultsEntriesLinkRpc = Rpc.make(WS_METHODS.vaultsEntriesLink, {
-  payload: VaultEntryFromMainInput,
-  success: VaultEntryResult,
-  error: VaultRpcError,
-});
-const WsVaultsEntriesCopyRpc = Rpc.make(WS_METHODS.vaultsEntriesCopy, {
-  payload: VaultEntryFromMainInput,
-  success: VaultEntryResult,
+// Owned-resources 03: the Owner has read which entries were Secret links.
+const WsVaultsUnlinkedNoticeDismissRpc = Rpc.make(WS_METHODS.vaultsUnlinkedNoticeDismiss, {
+  payload: VaultUnlinkedDismissInput,
+  success: VaultUnlinkedDismissResult,
   error: VaultRpcError,
 });
 // Spec 5 ticket 03: allowances, defaults, Project choices and a Thread's names.
 const WsVaultsAllowRpc = Rpc.make(WS_METHODS.vaultsAllow, {
   payload: VaultAllowInput,
-  success: VaultSummary,
+  success: VaultGroupSummary,
   error: VaultRpcError,
 });
 const WsVaultsChoicesRpc = Rpc.make(WS_METHODS.vaultsChoices, {
@@ -2411,15 +2407,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
   WsSecretsVaultTargetsRpc,
-  WsVaultsListRpc,
-  WsVaultsCreateRpc,
-  WsVaultsUpdateRpc,
-  WsVaultsDeleteRpc,
+  WsVaultsGroupsListRpc,
+  WsVaultsGroupsCreateRpc,
+  WsVaultsGroupsUpdateRpc,
+  WsVaultsGroupsDeleteRpc,
   WsVaultsEntriesListRpc,
   WsVaultsEntriesPutRpc,
   WsVaultsEntriesDeleteRpc,
-  WsVaultsEntriesLinkRpc,
-  WsVaultsEntriesCopyRpc,
+  WsVaultsUnlinkedNoticeDismissRpc,
   WsVaultsAllowRpc,
   WsVaultsChoicesRpc,
   WsVaultsSpaceDefaultsSetRpc,

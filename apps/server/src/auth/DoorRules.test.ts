@@ -177,7 +177,8 @@ describe("every door of the Hub declares its rule", () => {
     ).toEqual([]);
     expect(Object.keys(HTTP_ENDPOINT_RULES).filter((name) => /reveal/iu.test(name))).toEqual([]);
     // Who opens the Vault values' store: delivery and the masker read it; Vaults reads it for a
-    // Variable (`vault.readVariables`) and to copy a value into a new one; the rest remove only.
+    // Variable (`vault.readVariables`) and, at its start, to give a former Secret link its own
+    // copy (`unshareValues`); the rest remove only.
     const holders = files
       .filter(({ text }) =>
         /(?:yield\* |serviceOption\()ServerSecretStore\.VaultValueStore\b/u.test(text),
@@ -202,18 +203,13 @@ describe("every door of the Hub declares its rule", () => {
     const vaultRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
       rpc._tag.startsWith("vaults."),
     );
-    expect(vaultRpcs.length).toBe(15);
+    expect(vaultRpcs.length).toBe(14);
     expect(
       vaultRpcs
         .filter((rpc) => objectsWith(rpc.successSchema.ast, "value").has(VaultEntry.ast))
         .map((rpc) => rpc._tag)
         .toSorted(),
-    ).toEqual([
-      "vaults.entries.copy",
-      "vaults.entries.link",
-      "vaults.entries.list",
-      "vaults.entries.put",
-    ]);
+    ).toEqual(["vaults.entries.list", "vaults.entries.put"]);
     for (const rpc of vaultRpcs) {
       expect(
         [...objectsWith(rpc.successSchema.ast, "value")].filter(
@@ -316,10 +312,12 @@ describe("every door of the Hub declares its rule", () => {
       "vaults/SecretMasker.ts", // reads: what to show as [NAME]
       "vaults/deliveredValueId.ts", // a comment: where they are read back from
     ]);
-    // In Vaults, a value is read for a copy and for a Variable shown (`shown`, its class checked),
-    // nothing else: no reveal (owned-resources 01).
+    // In Vaults, a value is read for a Variable shown (`shown`, its class checked), nothing else:
+    // no reveal (owned-resources 01), no copy (owned-resources 03). `unshareValues` copies a
+    // value a former Secret link shares under a new id, never reading it out.
     const vaults = files.find(({ file }) => file === "vaults/Vaults.ts")?.text ?? "";
-    expect(vaults.match(/\breadValue\(/gu)?.length).toBe(2);
+    expect(vaults.match(/\breadValue\(/gu)?.length).toBe(1);
+    expect(vaults.match(/\bvalues\.get\(/gu)?.length).toBe(2);
     expect(vaults).toMatch(
       /classOf\(row\) === "variable" && valueIdOf\(row\) !== null\s*\?\s*readValue\(/u,
     );
@@ -340,6 +338,7 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/122_VaultEntryDelivery.ts",
       "persistence/Migrations/123_WorkloadIdentity.ts",
       "persistence/Migrations/141_VaultEntriesSealed.ts",
+      "persistence/Migrations/142_VaultGroups.ts",
       "vaults/DeliveredValues.ts",
       "vaults/EffectiveVaults.ts",
       "vaults/SecretDelivery.ts",

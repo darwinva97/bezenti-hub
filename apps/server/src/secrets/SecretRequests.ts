@@ -152,7 +152,13 @@ const make = Effect.gen(function* () {
   )(function* (input) {
     yield* mayAnswer(input.threadId);
     const targets = yield* targetsOf(input.threadId);
-    return { vaults: targets.map((vault) => ({ id: vault.id, name: vault.name })) };
+    return {
+      vaults: targets.map((vault) => ({
+        id: vault.id,
+        name: vault.name,
+        ownerName: vault.ownerName,
+      })),
+    };
   });
 
   const vaultFailure = (cause: VaultError) =>

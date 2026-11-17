@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 
 import { IsoDateTime, makeEntityId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { SecretProviderId } from "./secretReference.ts";
-import { VaultEntryId, VaultId } from "./vaults.ts";
+import { VaultEntryId, VaultGroupId } from "./vaults.ts";
 
 export const ProviderScopeId = makeEntityId("ProviderScopeId");
 export type ProviderScopeId = typeof ProviderScopeId.Type;
@@ -42,7 +42,7 @@ const ScopePath = TrimmedNonEmptyString.check(Schema.isMaxLength(1024));
 
 /** A Provider entry that a change would break (shown, never delivered, after it). */
 export const ProviderEntryBreak = Schema.Struct({
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   vaultName: Schema.String,
   entryId: VaultEntryId,
   name: Schema.String,
@@ -60,7 +60,7 @@ export const ProviderScope = Schema.Struct({
   writable: Schema.Boolean,
   /** «Test connection» reads it; inside `allowedPaths`. Never its value. */
   probeReference: Schema.NullOr(Schema.String),
-  vaults: Schema.Array(Schema.Struct({ vaultId: VaultId, name: Schema.String })),
+  vaults: Schema.Array(Schema.Struct({ vaultId: VaultGroupId, name: Schema.String })),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -107,7 +107,7 @@ export type ProviderScopeDeleteResult = typeof ProviderScopeDeleteResult.Type;
 /** Allows a scope to a Vault, or takes it back (which breaks its entries there: confirm). */
 export const ProviderScopeAllowInput = Schema.Struct({
   scopeId: ProviderScopeId,
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   allowed: Schema.Boolean,
   confirm: Schema.optionalKey(Schema.Boolean),
 });
@@ -142,7 +142,7 @@ export const SecretProviderImpact = Schema.Struct({
 export type SecretProviderImpact = typeof SecretProviderImpact.Type;
 
 /** For a Vault's editors: the scopes they may add Provider entries through. */
-export const VaultProviderScopesInput = Schema.Struct({ vaultId: VaultId });
+export const VaultProviderScopesInput = Schema.Struct({ vaultId: VaultGroupId });
 export type VaultProviderScopesInput = typeof VaultProviderScopesInput.Type;
 export const VaultProviderScopes = Schema.Struct({
   scopes: Schema.Array(

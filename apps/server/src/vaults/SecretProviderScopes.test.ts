@@ -30,6 +30,7 @@ import * as ProviderReads from "./ProviderReads.ts";
 import { FAKE_PROVIDER_ID, makeFakeSecretProvider } from "./ProviderReads.testkit.ts";
 import * as SecretProviderScopes from "./SecretProviderScopes.ts";
 import * as Vaults from "./Vaults.ts";
+import { orgOwner } from "./VaultGroups.testkit.ts";
 
 const hub = Effect.gen(function* () {
   const provider = makeFakeSecretProvider();
@@ -62,8 +63,10 @@ const hub = Effect.gen(function* () {
   const scopes = Context.get(server.services, SecretProviderScopes.SecretProviderScopes);
   const reads = Context.get(server.services, ProviderReads.ProviderReads);
   const as = (userId: UserId) => CommandActor.actAs(userId);
-  const acme = yield* vaults.create({ name: "Acme secrets", spaceId: acmeId }).pipe(as(ownerId));
-  const other = yield* vaults.create({ name: "Other", spaceId: acmeId }).pipe(as(ownerId));
+  const acme = yield* vaults
+    .create({ name: "Acme secrets", owner: orgOwner(acmeId) })
+    .pipe(as(ownerId));
+  const other = yield* vaults.create({ name: "Other", owner: orgOwner(acmeId) }).pipe(as(ownerId));
   const putScope = (input: Omit<ProviderScopePutInput, "providerId">, userId: UserId = ownerId) =>
     scopes.put({ providerId: FAKE_PROVIDER_ID, ...input }).pipe(as(userId));
   const putEntry = (userId: UserId, name: string, reference: string, scopeId?: ProviderScopeId) =>

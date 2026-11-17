@@ -10,7 +10,6 @@ import * as NodePath from "node:path";
 
 import { assert } from "@effect/vitest";
 import {
-  MAIN_VAULT_ID,
   type ProviderInstanceId,
   type SpaceId,
   type ThreadId,
@@ -44,6 +43,7 @@ import {
   replayOn,
   withEditingTurns,
 } from "./HubWithEnvironments.scenarios.testkit.ts";
+import { orgOwner, ownersDefault } from "../vaults/VaultGroups.testkit.ts";
 
 export const OWNER_TOKEN = "owner-token-value-3333";
 export const ROTATED_TOKEN = "owner-token-rotated-4444";
@@ -154,15 +154,19 @@ export const databaseText = (hub: Hub) =>
   });
 
 export const putOwnerToken = (hub: Hub, owner: UserId, value: string, entryId?: VaultEntryId) =>
-  hub
-    .service(Vaults.Vaults)
-    .putEntry({
-      vaultId: MAIN_VAULT_ID,
-      ...(entryId === undefined ? {} : { entryId }),
-      name: "OWNER_TOKEN",
-      value: Redacted.make(value),
-    })
-    .pipe(CommandActor.actAs(owner));
+  ownersDefault(hub.server.sql).pipe(
+    Effect.flatMap((main) =>
+      hub
+        .service(Vaults.Vaults)
+        .putEntry({
+          vaultId: main,
+          ...(entryId === undefined ? {} : { entryId }),
+          name: "OWNER_TOKEN",
+          value: Redacted.make(value),
+        })
+        .pipe(CommandActor.actAs(owner)),
+    ),
+  );
 
 /** The Hub's copy of the Thread's Project: the folder clients name. */
 export const hubCheckoutOf = Effect.fn(function* (hub: Hub, threadId: ThreadId) {
@@ -187,7 +191,7 @@ export const turnThatPrintsTheSecret = Effect.fn(function* (
     spaceId = yield* createOrganization(hub, "Acme");
     const vaults = hub.service(Vaults.Vaults);
     const acme = yield* vaults
-      .create({ name: "Acme secrets", spaceId })
+      .create({ name: "Acme secrets", owner: orgOwner(spaceId) })
       .pipe(CommandActor.actAs(owner));
     const put = yield* vaults
       .putEntry({ vaultId: acme.id, name: "OWNER_TOKEN", value: Redacted.make(OWNER_TOKEN) })

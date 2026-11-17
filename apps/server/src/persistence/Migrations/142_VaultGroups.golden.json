@@ -1,0 +1,370 @@
+{
+  "t-owner-personal": {
+    "vaults": ["vault-main:space"],
+    "variables": [
+      {
+        "name": "GH_TOKEN",
+        "vaultId": "vault-main",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-m-gh",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "M_FILE",
+        "vaultId": "vault-main",
+        "source": "space",
+        "class": "secret",
+        "delivery": "file",
+        "unmasked": false,
+        "valueId": "value-m-file",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "M_ID",
+        "vaultId": "vault-main",
+        "source": "space",
+        "class": "secret",
+        "delivery": "file",
+        "unmasked": false,
+        "valueId": null,
+        "provider": null,
+        "identity": { "audience": "kubernetes", "ttlSeconds": 600 },
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "M_PROV",
+        "vaultId": "vault-main",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": null,
+        "provider": {
+          "providerId": "op",
+          "reference": "op://hub/kube/token",
+          "scopeId": null,
+          "vaultId": "vault-main"
+        },
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "M_SECRET",
+        "vaultId": "vault-main",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-m-secret",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "M_TPL",
+        "vaultId": "vault-main",
+        "source": "space",
+        "class": "secret",
+        "delivery": "file",
+        "unmasked": false,
+        "valueId": null,
+        "provider": null,
+        "identity": null,
+        "template": {
+          "text": "url={{ M_VAR }}&key={{ M_SECRET }}&ca={{ M_FILE | path }}",
+          "inputs": [
+            { "name": "M_VAR", "valueId": "value-m-var", "class": "variable", "file": false },
+            { "name": "M_SECRET", "valueId": "value-m-secret", "class": "secret", "file": false },
+            { "name": "M_FILE", "valueId": "value-m-file", "class": "secret", "file": true }
+          ]
+        },
+        "shadowed": []
+      },
+      {
+        "name": "M_VAR",
+        "vaultId": "vault-main",
+        "source": "space",
+        "class": "variable",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-m-var",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "REGION",
+        "vaultId": "vault-main",
+        "source": "space",
+        "class": "variable",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-m-region",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      }
+    ]
+  },
+  "t-acme-grace-web": {
+    "vaults": ["vault-tools:user", "vault-acme-b:project", "vault-acme-a:space"],
+    "variables": [
+      {
+        "name": "A_KEY",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-a-key",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "A_PROV",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": null,
+        "provider": {
+          "providerId": "op",
+          "reference": "op://acme/db/password",
+          "scopeId": "scope-acme",
+          "vaultId": "vault-acme-a"
+        },
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "B_FILE",
+        "vaultId": "vault-acme-b",
+        "source": "project",
+        "class": "secret",
+        "delivery": "file",
+        "unmasked": false,
+        "valueId": "value-b-file",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "GH_COPY",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-a-gh-copy",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "GH_LINK",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-m-gh",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "REGION_LINK",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "variable",
+        "delivery": "file",
+        "unmasked": false,
+        "valueId": "value-m-region",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "SHARED",
+        "vaultId": "vault-tools",
+        "source": "user",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-t-shared",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": ["vault-acme-b:project", "vault-acme-a:space"]
+      },
+      {
+        "name": "T_KEY",
+        "vaultId": "vault-tools",
+        "source": "user",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-t-key",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      }
+    ]
+  },
+  "t-acme-ada": {
+    "vaults": ["vault-acme-a:space", "vault-tools:space"],
+    "variables": [
+      {
+        "name": "A_KEY",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-a-key",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "A_PROV",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": null,
+        "provider": {
+          "providerId": "op",
+          "reference": "op://acme/db/password",
+          "scopeId": "scope-acme",
+          "vaultId": "vault-acme-a"
+        },
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "GH_COPY",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-a-gh-copy",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "GH_LINK",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-m-gh",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "REGION_LINK",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "variable",
+        "delivery": "file",
+        "unmasked": false,
+        "valueId": "value-m-region",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "SHARED",
+        "vaultId": "vault-acme-a",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-a-shared",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": ["vault-tools:space"]
+      },
+      {
+        "name": "T_KEY",
+        "vaultId": "vault-tools",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-t-key",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      }
+    ]
+  },
+  "t-globex-gus": {
+    "vaults": ["vault-globex:space", "vault-old-default:space"],
+    "variables": [
+      {
+        "name": "D_KEY",
+        "vaultId": "vault-old-default",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-d-key",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      },
+      {
+        "name": "G_KEY",
+        "vaultId": "vault-globex",
+        "source": "space",
+        "class": "secret",
+        "delivery": "env",
+        "unmasked": false,
+        "valueId": "value-g-key",
+        "provider": null,
+        "identity": null,
+        "template": null,
+        "shadowed": []
+      }
+    ]
+  },
+  "t-ana-personal": { "vaults": [], "variables": [] }
+}

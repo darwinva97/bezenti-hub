@@ -10,6 +10,7 @@ import {
   UserId,
 } from "./baseSchemas.ts";
 import { AI_GATEWAY_ENV_NAMES } from "./aiGatewaySession.ts";
+import { ResourceOwner } from "./ownership.ts";
 import { SecretProviderId } from "./secretReference.ts";
 import { TEMPLATE_TEXT_MAX_LENGTH } from "./vaultTemplates.ts";
 import { AuthReauth } from "./userAccounts.ts";
@@ -47,13 +48,18 @@ export type MasterKeyBackupConfirmRequest = typeof MasterKeyBackupConfirmRequest
 // A value enters the Hub only in `put` (Redacted). A Secret's never leaves it through any door
 // (ADR 0012); a Variable's is listed to whoever may read Variables.
 
-export const VaultId = makeEntityId("VaultId");
-export type VaultId = typeof VaultId.Type;
+/**
+ * A group of a Vault (owned-resources 03): each owner (a User or an Organization) has one Vault
+ * made of groups, a `default` one and named ones. Ids of groups made from the Vaults before are
+ * those Vaults' ids. Fields keep the name `vaultId` on the wire.
+ */
+export const VaultGroupId = makeEntityId("VaultGroupId");
+export type VaultGroupId = typeof VaultGroupId.Type;
 export const VaultEntryId = makeEntityId("VaultEntryId");
 export type VaultEntryId = typeof VaultEntryId.Type;
 
-/** The Main vault's fixed id: one per Hub, the Owner's, never deleted. */
-export const MAIN_VAULT_ID = VaultId.make("vault-main");
+/** Every owner's group that is never deleted, renamed or archived. */
+export const DEFAULT_VAULT_GROUP_NAME = "default";
 
 /** An environment-variable name a Vault may hold. */
 const SECRET_NAME_PATTERN = /^[A-Z_][A-Z0-9_]{0,127}$/;
@@ -214,22 +220,17 @@ export const looksLikeCredential = (name: string, value?: string): boolean => {
 };
 
 /**
- * `provider`: read from a Secret provider when a process starts; a sealed Secret (ADR 0008).
- * `template`: composed from entries of the same Vault (`vaultTemplates.ts`); its text holds names.
+ * `own`: a value of its own. `provider`: read from a Secret provider when a process starts; a sealed
+ * Secret (ADR 0008). `template`: composed from entries of the same group (`vaultTemplates.ts`); its
+ * text holds names. `identity`: a token the Hub signs (ticket 07). Secret links and copies became
+ * `own` entries (owned-resources 03).
  */
 /** A workload identity token's lifetime (ticket 07, question 7): 10 minutes unless set, 1 hour at most. */
 export const IDENTITY_TTL_DEFAULT_SECONDS = 600;
 export const IDENTITY_TTL_MIN_SECONDS = 60;
 export const IDENTITY_TTL_MAX_SECONDS = 3600;
 
-export const VaultEntryKind = Schema.Literals([
-  "own",
-  "copy",
-  "link",
-  "provider",
-  "template",
-  "identity",
-]);
+export const VaultEntryKind = Schema.Literals(["own", "provider", "template", "identity"]);
 
 /**
  * How an entry reaches a process: an environment variable, a Secret file in memory whose path the
@@ -280,39 +281,40 @@ export const VaultAllowance = Schema.Struct({
 export type VaultAllowance = typeof VaultAllowance.Type;
 export type VaultEntryKind = typeof VaultEntryKind.Type;
 
-/** A Vault as the viewer sees it, with what the viewer may do there. */
-export const VaultSummary = Schema.Struct({
-  id: VaultId,
+/** A group of a Vault as the viewer sees it, with what the viewer may do there. */
+export const VaultGroupSummary = Schema.Struct({
+  id: VaultGroupId,
   name: Schema.String,
   description: Schema.NullOr(Schema.String),
-  /** The Organization whose Vault it is; null for the Owner's own (the Main vault among them). */
-  spaceId: Schema.NullOr(SpaceId),
-  spaceName: Schema.NullOr(Schema.String),
-  isMain: Schema.Boolean,
+  /** Whose Vault it is part of: a User's (the Owner's among them) or an Organization's. */
+  owner: ResourceOwner,
+  /** The owner's name; null once it is gone. */
+  ownerName: Schema.NullOr(Schema.String),
+  /** The owner's `default` group: never deleted, renamed or archived. */
+  isDefault: Schema.Boolean,
   archived: Schema.Boolean,
   entryCount: Schema.Number,
-  /** Add, replace and delete secrets: the Owner, and an Organization's Admins on its Vaults. */
+  /** Add, replace and delete its entries: its owner's editors. */
   canEdit: Schema.Boolean,
-  /** Rename, describe, archive and delete the Vault: the Owner. */
+  /** Rename, describe, archive and delete the group: its owner's managers, never on `default`. */
   canManage: Schema.Boolean,
   /**
-   * Whom the Owner allowed it to; empty for anyone who does not manage it. An Organization's
-   * Vault reaches its own Organization without one; the Main vault only the Owner's Personal space.
+   * Whom the Owner allowed it to; empty for anyone who does not manage it. A group reaches its
+   * owner's Space without one; only the Owner's named groups are allowed further.
    */
   allowances: Schema.Array(VaultAllowance),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
-export type VaultSummary = typeof VaultSummary.Type;
+export type VaultGroupSummary = typeof VaultGroupSummary.Type;
 
 /** An entry's name and what it is. Never a Secret's value. */
 export const VaultEntry = Schema.Struct({
   id: VaultEntryId,
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   name: Schema.String,
   description: Schema.NullOr(Schema.String),
   kind: VaultEntryKind,
-  /** A link's original's; a broken link is a sealed Secret. */
   class: VaultEntryClass,
   /** A Variable's value, for whoever may read Variables (`vault.readVariables`): never a Secret's. */
   value: Schema.optionalKey(Schema.String),
@@ -336,12 +338,10 @@ export const VaultEntry = Schema.Struct({
   ),
   delivery: VaultEntryDelivery,
   /**
-   * Shown, never delivered: a broken Secret link, a Provider entry whose provider is gone or cannot
-   * be read here, or a template naming an entry its Vault no longer has.
+   * Shown, never delivered: a Provider entry whose provider is gone or cannot be read here, or a
+   * template naming an entry its group no longer has.
    */
   broken: Schema.Boolean,
-  /** A link's original, for whoever sees the Main vault (the Owner); null for anyone else. */
-  linkedFrom: Schema.NullOr(Schema.Struct({ entryId: VaultEntryId, name: Schema.String })),
   /** Shorter than SECRET_MASK_MIN_LENGTH: kept, but never masked in the history. */
   unmasked: Schema.Boolean,
   version: Schema.Number,
@@ -365,8 +365,8 @@ export const VaultErrorReason = Schema.Literals([
   "reserved-name",
   "invalid-value",
   "duplicate-name",
-  "main-vault",
-  "not-linkable",
+  /** An owner's `default` group is never deleted, renamed or archived. */
+  "default-group",
   /** A name that changes how tools run: the Owner's alone. */
   "dangerous-name",
   /** The Owner's dangerous name, not yet confirmed (`confirmDangerous`). */
@@ -400,35 +400,56 @@ const SecretName = Schema.String.check(Schema.isMaxLength(128));
 /** A value going into the Hub: Redacted, so no log, span or error shows it. */
 const SecretValueInput = Schema.RedactedFromValue(Schema.String);
 
-export const VaultListInput = Schema.Struct({});
-export const VaultListResult = Schema.Struct({ vaults: Schema.Array(VaultSummary) });
-export type VaultListResult = typeof VaultListResult.Type;
+/**
+ * An entry that was a Secret link and is an independent Secret since owned-resources 03: rotating
+ * its original no longer changes it. Shown once to the Owner, until dismissed.
+ */
+export const VaultUnlinkedEntry = Schema.Struct({
+  vaultId: VaultGroupId,
+  vaultName: Schema.NullOr(Schema.String),
+  entryId: VaultEntryId,
+  name: Schema.String,
+  /** The original's name, as it was. */
+  originalName: Schema.NullOr(Schema.String),
+});
+export type VaultUnlinkedEntry = typeof VaultUnlinkedEntry.Type;
 
-export const VaultCreateInput = Schema.Struct({
+export const VaultGroupListInput = Schema.Struct({});
+export const VaultGroupListResult = Schema.Struct({
+  /** By owner (the viewer's own first), `default` first in each. */
+  groups: Schema.Array(VaultGroupSummary),
+  /** The owners the viewer may create groups for. */
+  owners: Schema.Array(Schema.Struct({ owner: ResourceOwner, name: Schema.String })),
+  /** For the Owner, until dismissed: the entries that were Secret links. */
+  unlinked: Schema.Array(VaultUnlinkedEntry),
+});
+export type VaultGroupListResult = typeof VaultGroupListResult.Type;
+
+export const VaultGroupCreateInput = Schema.Struct({
   name: VaultName,
   description: Schema.optionalKey(VaultDescription),
-  /** An Organization's Vault, or null for one of the Owner's own. */
-  spaceId: Schema.NullOr(SpaceId),
+  /** Whose Vault it goes into: an Organization's, or a User's own. */
+  owner: ResourceOwner,
 });
-export type VaultCreateInput = typeof VaultCreateInput.Type;
+export type VaultGroupCreateInput = typeof VaultGroupCreateInput.Type;
 
-export const VaultUpdateInput = Schema.Struct({
-  vaultId: VaultId,
+export const VaultGroupUpdateInput = Schema.Struct({
+  vaultId: VaultGroupId,
   name: Schema.optionalKey(VaultName),
   description: Schema.optionalKey(Schema.NullOr(VaultDescription)),
   archived: Schema.optionalKey(Schema.Boolean),
 });
-export type VaultUpdateInput = typeof VaultUpdateInput.Type;
+export type VaultGroupUpdateInput = typeof VaultGroupUpdateInput.Type;
 
-export const VaultDeleteInput = Schema.Struct({ vaultId: VaultId });
-export type VaultDeleteInput = typeof VaultDeleteInput.Type;
-export const VaultDeleteResult = Schema.Struct({ deleted: Schema.Boolean });
-export type VaultDeleteResult = typeof VaultDeleteResult.Type;
+export const VaultGroupDeleteInput = Schema.Struct({ vaultId: VaultGroupId });
+export type VaultGroupDeleteInput = typeof VaultGroupDeleteInput.Type;
+export const VaultGroupDeleteResult = Schema.Struct({ deleted: Schema.Boolean });
+export type VaultGroupDeleteResult = typeof VaultGroupDeleteResult.Type;
 
-export const VaultEntriesListInput = Schema.Struct({ vaultId: VaultId });
+export const VaultEntriesListInput = Schema.Struct({ vaultId: VaultGroupId });
 export type VaultEntriesListInput = typeof VaultEntriesListInput.Type;
 export const VaultEntriesListResult = Schema.Struct({
-  vault: VaultSummary,
+  group: VaultGroupSummary,
   entries: Schema.Array(VaultEntry),
 });
 export type VaultEntriesListResult = typeof VaultEntriesListResult.Type;
@@ -438,7 +459,7 @@ export type VaultEntriesListResult = typeof VaultEntriesListResult.Type;
  * Making a Secret a Variable needs a new `value`; a Variable made a Secret keeps its value.
  */
 export const VaultEntryPutInput = Schema.Struct({
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   entryId: Schema.optionalKey(VaultEntryId),
   name: SecretName,
   description: Schema.optionalKey(Schema.NullOr(VaultDescription)),
@@ -484,47 +505,26 @@ export const VaultEntryResult = Schema.Struct({
 });
 export type VaultEntryResult = typeof VaultEntryResult.Type;
 
-/** A Secret link that breaks when its original goes: in which Vault, under which name. */
-export const VaultBrokenLink = Schema.Struct({
-  vaultId: VaultId,
-  vaultName: Schema.String,
-  entryId: VaultEntryId,
-  name: Schema.String,
-});
-export type VaultBrokenLink = typeof VaultBrokenLink.Type;
-
-/**
- * Deletes a secret. An original with Secret links goes only with `breakLinks`; without it nothing
- * changes and the answer lists the links that would break.
- */
 export const VaultEntryDeleteInput = Schema.Struct({
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   entryId: VaultEntryId,
-  breakLinks: Schema.optionalKey(Schema.Boolean),
 });
 export type VaultEntryDeleteInput = typeof VaultEntryDeleteInput.Type;
-export const VaultEntryDeleteResult = Schema.Struct({
-  deleted: Schema.Boolean,
-  brokenLinks: Schema.Array(VaultBrokenLink),
-});
+export const VaultEntryDeleteResult = Schema.Struct({ deleted: Schema.Boolean });
 export type VaultEntryDeleteResult = typeof VaultEntryDeleteResult.Type;
-
-/** A Secret link to, or a copy of, a secret of the Main vault: the Owner only. */
-export const VaultEntryFromMainInput = Schema.Struct({
-  vaultId: VaultId,
-  sourceEntryId: VaultEntryId,
-  /** The variable's name in this Vault; the original's when omitted. */
-  name: Schema.optionalKey(SecretName),
-  description: Schema.optionalKey(Schema.NullOr(VaultDescription)),
-  confirmDangerous: Schema.optionalKey(Schema.Boolean),
-});
-export type VaultEntryFromMainInput = typeof VaultEntryFromMainInput.Type;
 
 // Allowances, defaults and the effective set (spec 5 ticket 03): names only, never values.
 
-/** `vaults.allow`: the Owner allows a Vault to a Space or a User, or takes it back. */
+/**
+ * `vaults.unlinkedNotice.dismiss`: the Owner has read the list of entries that were Secret links.
+ */
+export const VaultUnlinkedDismissInput = Schema.Struct({});
+export const VaultUnlinkedDismissResult = Schema.Struct({ dismissed: Schema.Number });
+export type VaultUnlinkedDismissResult = typeof VaultUnlinkedDismissResult.Type;
+
+/** `vaults.allow`: the Owner allows one of their named groups to a Space or a User, or takes it back. */
 export const VaultAllowInput = Schema.Struct({
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   subject: VaultSubject,
   allowed: Schema.Boolean,
 });
@@ -543,9 +543,12 @@ export type VaultProjectChoice = typeof VaultProjectChoice.Type;
 
 /** A Vault allowed to a Space, as the Space's and its Projects' Vault pickers list it. */
 export const VaultChoiceOption = Schema.Struct({
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   name: Schema.String,
-  isMain: Schema.Boolean,
+  /** Its owner, and whether it is the owner's `default`. */
+  owner: ResourceOwner,
+  ownerName: Schema.NullOr(Schema.String),
+  isDefault: Schema.Boolean,
   archived: Schema.Boolean,
   /** The secrets' names it holds (never values). */
   names: Schema.Array(Schema.String),
@@ -567,24 +570,26 @@ export const VaultChoices = Schema.Struct({
   /** The Vaults allowed to the Space, in the Owner's order. */
   allowed: Schema.Array(VaultChoiceOption),
   /** The Space's defaults, the first winning a name they share. */
-  defaults: Schema.Array(VaultId),
-  /** Fixed defaults nobody unsets (the Main vault in the Owner's Personal space). */
-  fixedDefaults: Schema.Array(VaultId),
-  projectChoices: Schema.Array(Schema.Struct({ vaultId: VaultId, choice: VaultProjectChoice })),
+  defaults: Schema.Array(VaultGroupId),
+  /** Fixed defaults nobody unsets: the `default` group of the Space's owner. */
+  fixedDefaults: Schema.Array(VaultGroupId),
+  projectChoices: Schema.Array(
+    Schema.Struct({ vaultId: VaultGroupId, choice: VaultProjectChoice }),
+  ),
 });
 export type VaultChoices = typeof VaultChoices.Type;
 
 /** `vaults.spaceDefaults.set`: the Space's defaults in order (the first wins a shared name). */
 export const VaultSpaceDefaultsSetInput = Schema.Struct({
   spaceId: SpaceId,
-  vaultIds: Schema.Array(VaultId).check(Schema.isMaxLength(200)),
+  vaultIds: Schema.Array(VaultGroupId).check(Schema.isMaxLength(200)),
 });
 export type VaultSpaceDefaultsSetInput = typeof VaultSpaceDefaultsSetInput.Type;
 
 /** `vaults.projectChoices.set`: add or remove one allowed Vault for a Project, or inherit. */
 export const VaultProjectChoiceSetInput = Schema.Struct({
   projectId: ProjectId,
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   choice: Schema.Literals(["add", "remove", "inherit"]),
 });
 export type VaultProjectChoiceSetInput = typeof VaultProjectChoiceSetInput.Type;
@@ -595,7 +600,7 @@ export type VaultThreadEnvironmentInput = typeof VaultThreadEnvironmentInput.Typ
 
 /** A Vault that also defines the name and lost to the winner. */
 export const VaultShadowed = Schema.Struct({
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   vaultName: Schema.String,
   source: VaultSource,
 });
@@ -605,7 +610,7 @@ export type VaultShadowed = typeof VaultShadowed.Type;
 export const VaultThreadVariable = Schema.Struct({
   name: Schema.String,
   description: Schema.NullOr(Schema.String),
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   vaultName: Schema.String,
   source: VaultSource,
   /** Names only here: a Variable's value travels in `vaults.entries.list` alone. */
@@ -622,9 +627,14 @@ export const VaultThreadEnvironment = Schema.Struct({
   threadId: ThreadId,
   spaceId: SpaceId,
   projectId: Schema.NullOr(ProjectId),
-  /** The Vaults it receives, in the order that wins. */
+  /** The groups it receives, in the order that wins, each with its owner's name (03). */
   vaults: Schema.Array(
-    Schema.Struct({ vaultId: VaultId, name: Schema.String, source: VaultSource }),
+    Schema.Struct({
+      vaultId: VaultGroupId,
+      name: Schema.String,
+      source: VaultSource,
+      ownerName: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    }),
   ),
   variables: Schema.Array(VaultThreadVariable),
   /**

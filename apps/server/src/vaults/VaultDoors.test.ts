@@ -6,12 +6,11 @@
  */
 // @effect-diagnostics globalJsonInEffect:off -- answers are searched as text.
 import {
-  MAIN_VAULT_ID,
   ProjectId,
   SpaceId,
   ThreadId,
   UserId,
-  type VaultId,
+  type VaultGroupId,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
@@ -33,6 +32,7 @@ import {
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as EffectiveVaults from "./EffectiveVaults.ts";
 import * as SecretDelivery from "./SecretDelivery.ts";
+import { orgOwner, ownersDefault, userOwner } from "./VaultGroups.testkit.ts";
 import * as Vaults from "./Vaults.ts";
 
 const MAIN_PRIVATE = "owner-private-value-0101";
@@ -112,29 +112,34 @@ const team = Effect.gen(function* () {
   const effective = Context.get(server.services, EffectiveVaults.EffectiveVaults);
   const delivery = Context.get(server.services, SecretDelivery.SecretDelivery);
   const as = (userId: UserId) => CommandActor.actAs(userId);
-  const put = (vaultId: VaultId, name: string, value: string) =>
+  const put = (vaultId: VaultGroupId, name: string, value: string) =>
     vaults.putEntry({ vaultId, name, value: Redacted.make(value) }).pipe(as(ownerId));
 
-  // Full Vaults: the Main vault (one kept, one linked and copied into Acme's), Acme's and Globex's
-  // own, one of the Owner's allowed to Acme and one allowed to Grace alone.
-  yield* put(MAIN_VAULT_ID, "OWNER_PRIVATE", MAIN_PRIVATE);
-  const linked = yield* put(MAIN_VAULT_ID, "GITHUB_TOKEN", MAIN_LINKED);
-  const acme = yield* vaults.create({ name: "Acme secrets", spaceId: acmeId }).pipe(as(ownerId));
-  yield* vaults.linkEntry({ vaultId: acme.id, sourceEntryId: linked.entry.id }).pipe(as(ownerId));
-  yield* vaults
-    .copyEntry({ vaultId: acme.id, sourceEntryId: linked.entry.id, name: "GITHUB_TOKEN_COPY" })
+  // Full Vaults: the Owner's `default` (one kept, one also in Acme's twice, as a former link and
+  // copy), Acme's and Globex's own, one of the Owner's allowed to Acme and one to Grace alone.
+  const main = yield* ownersDefault(server.sql);
+  yield* put(main, "OWNER_PRIVATE", MAIN_PRIVATE);
+  const linked = yield* put(main, "GITHUB_TOKEN", MAIN_LINKED);
+  const acme = yield* vaults
+    .create({ name: "Acme secrets", owner: orgOwner(acmeId) })
     .pipe(as(ownerId));
+  yield* put(acme.id, "GITHUB_TOKEN", MAIN_LINKED);
+  yield* put(acme.id, "GITHUB_TOKEN_COPY", MAIN_LINKED);
   yield* put(acme.id, "ACME_API_KEY", ACME_OWN);
   const globex = yield* vaults
-    .create({ name: "Globex secrets", spaceId: globexId })
+    .create({ name: "Globex secrets", owner: orgOwner(globexId) })
     .pipe(as(ownerId));
   yield* put(globex.id, "GLOBEX_DB_URL", GLOBEX_OWN);
-  const shared = yield* vaults.create({ name: "Shared", spaceId: null }).pipe(as(ownerId));
+  const shared = yield* vaults
+    .create({ name: "Shared", owner: userOwner(ownerId) })
+    .pipe(as(ownerId));
   yield* put(shared.id, "SHARED_KEY", SHARED);
   yield* vaults
     .allow({ vaultId: shared.id, subject: { kind: "space", spaceId: acmeId }, allowed: true })
     .pipe(as(ownerId));
-  const graces = yield* vaults.create({ name: "Grace's", spaceId: null }).pipe(as(ownerId));
+  const graces = yield* vaults
+    .create({ name: "Grace's", owner: userOwner(ownerId) })
+    .pipe(as(ownerId));
   yield* put(graces.id, "GRACE_KEY", GRACES);
   yield* vaults
     .allow({
@@ -200,7 +205,8 @@ const team = Effect.gen(function* () {
     effective,
     delivery,
     as,
-    vaultIds: [MAIN_VAULT_ID, acme.id, globex.id, shared.id, graces.id],
+    vaultIds: [main, acme.id, globex.id, shared.id, graces.id],
+    main,
     acmeVault: acme.id,
     mainEntry: linked.entry.id,
     projects: [acmeWeb, globexApi],
@@ -234,7 +240,7 @@ it.effect(
         });
         const v = t.vaults;
         // Reads.
-        yield* call("ws:vaults.list", v.list);
+        yield* call("ws:vaults.groups.list", v.list);
         for (const vaultId of t.vaultIds) {
           yield* call("ws:vaults.entries.list", v.listEntries({ vaultId }));
         }
@@ -256,15 +262,7 @@ it.effect(
         );
         yield* call(
           "ws:vaults.entries.put",
-          v.putEntry({ vaultId: MAIN_VAULT_ID, name: mine, value: Redacted.make(WRITTEN) }),
-        );
-        yield* call(
-          "ws:vaults.entries.link",
-          v.linkEntry({ vaultId: t.acmeVault, sourceEntryId: t.mainEntry, name: `${mine}_LINK` }),
-        );
-        yield* call(
-          "ws:vaults.entries.copy",
-          v.copyEntry({ vaultId: t.acmeVault, sourceEntryId: t.mainEntry, name: `${mine}_COPY` }),
+          v.putEntry({ vaultId: t.main, name: mine, value: Redacted.make(WRITTEN) }),
         );
         const listed = yield* v.listEntries({ vaultId: t.acmeVault }).pipe(
           t.as(who.id),
@@ -278,20 +276,21 @@ it.effect(
             v.deleteEntry({ vaultId: t.acmeVault, entryId: own.id }),
           );
         }
-        // An original with links: the refusal lists the links, never the value.
+        // The Owner's own `default`'s entry: refused to anyone else, never with its value.
         yield* call(
           "ws:vaults.entries.delete",
-          v.deleteEntry({ vaultId: MAIN_VAULT_ID, entryId: t.mainEntry }),
+          v.deleteEntry({ vaultId: t.main, entryId: t.mainEntry }),
         );
+        yield* call("ws:vaults.unlinkedNotice.dismiss", v.dismissUnlinked);
         const made = yield* v
-          .create({ name: `${who.name} scratch`, spaceId: t.acmeId })
+          .create({ name: `${who.name} scratch`, owner: orgOwner(t.acmeId) })
           .pipe(t.as(who.id), Effect.option);
         yield* call(
-          "ws:vaults.create",
-          v.create({ name: `${who.name} scratch 2`, spaceId: t.globexId }),
+          "ws:vaults.groups.create",
+          v.create({ name: `${who.name} scratch 2`, owner: orgOwner(t.globexId) }),
         );
         const scratch = made._tag === "Some" ? made.value.id : t.acmeVault;
-        yield* call("ws:vaults.update", v.update({ vaultId: scratch, description: "x" }));
+        yield* call("ws:vaults.groups.update", v.update({ vaultId: scratch, description: "x" }));
         yield* call(
           "ws:vaults.allow",
           v.allow({
@@ -312,8 +311,9 @@ it.effect(
             choice: "inherit",
           }),
         );
-        if (made._tag === "Some") yield* call("ws:vaults.delete", v.remove({ vaultId: scratch }));
-        else yield* call("ws:vaults.delete", v.remove({ vaultId: t.acmeVault }));
+        if (made._tag === "Some")
+          yield* call("ws:vaults.groups.delete", v.remove({ vaultId: scratch }));
+        else yield* call("ws:vaults.groups.delete", v.remove({ vaultId: t.acmeVault }));
 
         // HTTP: a reveal (no such door), the key's status, the audit log.
         const http = Effect.fn(function* (door: string, path: string, body?: unknown) {

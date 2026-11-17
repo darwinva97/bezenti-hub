@@ -12,7 +12,7 @@ import {
   type EnvironmentId,
   type OrchestrationV2DomainEvent,
   HUB_MACHINE_ENVIRONMENT_ID,
-  type VaultId,
+  type VaultGroupId,
 } from "@t3tools/contracts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Context from "effect/Context";
@@ -119,7 +119,7 @@ export interface ProjectMovePlan {
   /** On a machine that does not serve `spaceId`: they need an environment after the move. */
   readonly needsEnvironment: ReadonlyArray<ProjectMovePlanThread>;
   /** The Vaults its Threads stop receiving (`EffectiveVaults.projectMove`). */
-  readonly vaultsLost: ReadonlyArray<{ readonly vaultId: VaultId; readonly name: string }>;
+  readonly vaultsLost: ReadonlyArray<{ readonly vaultId: VaultGroupId; readonly name: string }>;
   /** The AI accounts its Threads lose (`AiAccountReach.projectMoveLoss`, spec 4 ticket 11). */
   readonly aiAccountsLost: ReadonlyArray<AiAccountReach.AiAccountLost>;
 }

@@ -11,6 +11,7 @@ import * as SqlSchema from "effect/sql/SqlSchema";
 import { UserId } from "@t3tools/contracts";
 
 import { PersistenceDecodeError, PersistenceSqlError, type UserRepositoryError } from "./Errors.ts";
+import * as VaultGroups from "../vaults/VaultGroups.ts";
 
 export const UserRecord = Schema.Struct({
   userId: UserId,
@@ -225,6 +226,8 @@ const make = Effect.gen(function* () {
         `;
       // Sessions paired before the Owner existed were the operator's, and the operator is the Owner.
       yield* sql`UPDATE auth_sessions SET user_id = ${input.userId} WHERE user_id IS NULL`;
+      // The Owner's Vault starts with its `default` group (owned-resources 03).
+      yield* VaultGroups.ensureDefault(sql, { ownerKind: "user", ownerId: input.userId });
       yield* Effect.forEach(
         input.recoveryCodeHashes,
         (codeHash) => sql`

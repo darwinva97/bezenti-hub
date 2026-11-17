@@ -57,11 +57,11 @@ The Hub's single endpoint through which agents reach their AI accounts, so real 
 _Avoid_: Proxy, CLIProxy, router, hub (for this meaning)
 
 **Vault**:
-A named set of entries, Secrets and Variables, each under an environment-variable name, whose values the Hub stores itself or reads from a Secret provider. Only the Owner creates Vaults and allows them to Spaces or Users.
+Each owner's (a User's or an Organization's) one set of entries, Secrets and Variables, each under an environment-variable name, whose values the Hub stores itself or reads from a Secret provider. It is made of Vault groups.
 _Avoid_: Secret store, env file, bóveda
 
 **Secret**:
-A Vault entry whose value is a credential (token, password, key): Admins write it without reading it, and every place the Hub shows history masks it. A Secret is either revealable (the Owner may reveal it) or sealed.
+A Vault entry whose value is a credential (token, password, key): it is written and replaced but never read back from the Hub, not even by the Owner, and every place the Hub shows history masks it.
 _Avoid_: Credential (reserved for AI accounts), password
 
 **Sealed secret**:
@@ -72,13 +72,9 @@ _Avoid_: Hidden secret, locked secret, write-only secret
 A Vault entry whose value is configuration, not a credential (a URL, a region, a cluster name): anyone who sees the entry's name sees its value, and it is never masked.
 _Avoid_: Plain secret, config var, env var (for the entry itself)
 
-**Main vault**:
-The Owner's primary Vault, from which other Vaults link or copy secrets.
-_Avoid_: Root vault, principal
-
-**Secret link**:
-An entry in one Vault that points to a secret in another Vault, so rotating the original updates every link.
-_Avoid_: Export, alias, reference
+**Vault group**:
+A named part of a Vault and the unit chosen per Space or Project and lent with a Grant. Every Vault has a `default` group, received by every Thread of its owner's Space and never deleted or renamed; the Owner's `default` was the Main vault.
+_Avoid_: Folder, sub-vault, Main vault (now the Owner's `default`), Secret link (gone: a Grant shares a group)
 
 **Secret provider**:
 An outside system the Owner connects to the Hub that holds secret values the Hub reads on demand: OpenBao, HashiCorp Vault, 1Password, a cloud secret manager, a Kubernetes cluster's Secrets… Agents never hold its credentials; the Hub reads for them.

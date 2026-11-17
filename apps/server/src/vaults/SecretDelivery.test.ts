@@ -6,7 +6,6 @@ import {
   ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
   EnvironmentId,
   HUB_MACHINE_ENVIRONMENT_ID,
-  MAIN_VAULT_ID,
   ThreadId,
   UserId,
   SecretDeliveryError,
@@ -42,6 +41,7 @@ import * as SecretDelivery from "./SecretDelivery.ts";
 import * as SecretMasker from "./SecretMasker.ts";
 import * as ThreadSecretFiles from "../secrets/ThreadSecretFiles.ts";
 import * as Vaults from "./Vaults.ts";
+import { ownersDefault } from "./VaultGroups.testkit.ts";
 
 const HUB = {
   environmentId: HUB_MACHINE_ENVIRONMENT_ID,
@@ -62,6 +62,7 @@ const ownersThreadWith = (
     const { created } = yield* bootstrapOwner(server, yield* makeAuthenticator());
     const owner = UserId.make((created.body.user as { id: string }).id);
     const vaults = Context.get(server.services, Vaults.Vaults);
+    const main = yield* ownersDefault(server.sql);
     const delivery = Context.get(server.services, SecretDelivery.SecretDelivery);
     const entries = new Map<string, VaultEntryId>();
     const put = (
@@ -72,7 +73,7 @@ const ownersThreadWith = (
     ) =>
       vaults
         .putEntry({
-          vaultId: MAIN_VAULT_ID,
+          vaultId: main,
           name,
           value: Redacted.make(value),
           ...(entries.has(name) ? { entryId: entries.get(name)! } : {}),
@@ -106,7 +107,7 @@ const ownersThreadWith = (
     const putProvider = (name: string, reference: string) =>
       vaults
         .putEntry({
-          vaultId: MAIN_VAULT_ID,
+          vaultId: main,
           name,
           provider: { providerId: FAKE_PROVIDER_ID, reference },
         })
@@ -114,6 +115,7 @@ const ownersThreadWith = (
     return {
       server,
       owner,
+      main,
       vaults,
       put,
       putProvider,
@@ -438,9 +440,9 @@ const KUBE_TEMPLATE = [
 const kubeconfigSet = Effect.fn(function* (
   setup: Effect.Success<ReturnType<typeof ownersThreadWith>>,
 ) {
-  const { vaults, owner } = setup;
+  const { vaults, owner, main } = setup;
   const put = (input: Omit<Parameters<typeof vaults.putEntry>[0], "vaultId">) =>
-    vaults.putEntry({ vaultId: MAIN_VAULT_ID, ...input }).pipe(CommandActor.actAs(owner));
+    vaults.putEntry({ vaultId: main, ...input }).pipe(CommandActor.actAs(owner));
   yield* put({
     name: "KUBE_SERVER",
     value: Redacted.make("https://k3s.internal:6443"),
@@ -531,14 +533,12 @@ it.effect("a machine before contract 16 or without memory gets no file, and noth
       yield* server.sql`SELECT 1 FROM thread_secret_values WHERE thread_id = ${threadId}`;
     assert.lengthOf(remembered, 0);
     // The Owner switches them to the environment: delivered as variables, on any machine.
-    const { vaults, owner } = setup;
-    const listed = yield* vaults
-      .listEntries({ vaultId: MAIN_VAULT_ID })
-      .pipe(CommandActor.actAs(owner));
+    const { vaults, owner, main } = setup;
+    const listed = yield* vaults.listEntries({ vaultId: main }).pipe(CommandActor.actAs(owner));
     const idOf = (name: string) => listed.entries.find((entry) => entry.name === name)!.id;
     yield* vaults
       .putEntry({
-        vaultId: MAIN_VAULT_ID,
+        vaultId: main,
         entryId: idOf("KUBECONFIG"),
         name: "KUBECONFIG",
         template: { text: "server: {{ KUBE_SERVER }}" },
@@ -547,7 +547,7 @@ it.effect("a machine before contract 16 or without memory gets no file, and noth
       .pipe(CommandActor.actAs(owner));
     yield* vaults
       .putEntry({
-        vaultId: MAIN_VAULT_ID,
+        vaultId: main,
         entryId: idOf("KUBE_TOKEN"),
         name: "KUBE_TOKEN",
         delivery: "env",
@@ -563,12 +563,12 @@ it.effect("a machine before contract 16 or without memory gets no file, and noth
 it.effect("a template fails whole with one of its entries: nothing of the set goes", () =>
   Effect.gen(function* () {
     const setup = yield* ownersThreadWith(hubFilesInMemory);
-    const { thread, forTurn, provider, putProvider, vaults, owner, server } = setup;
+    const { thread, forTurn, provider, putProvider, vaults, owner, server, main } = setup;
     yield* putProvider("DB_PASSWORD", "kv/acme/db#password");
     yield* setup.put("DB_USER", "app-user-value");
     yield* vaults
       .putEntry({
-        vaultId: MAIN_VAULT_ID,
+        vaultId: main,
         name: "DATABASE_URL",
         template: { text: "postgres://{{ DB_USER }}:{{ DB_PASSWORD | urlencode }}@db/app" },
       })
@@ -589,7 +589,7 @@ it.effect("a template fails whole with one of its entries: nothing of the set go
     // A value a filter cannot take fails the template by name, never showing the value.
     yield* vaults
       .putEntry({
-        vaultId: MAIN_VAULT_ID,
+        vaultId: main,
         name: "DECODED",
         template: { text: "{{ DB_USER | base64decode }}" },
       })
@@ -610,9 +610,9 @@ it.effect("a template fails whole with one of its entries: nothing of the set go
 const identitySet = Effect.fn(function* (
   setup: Effect.Success<ReturnType<typeof ownersThreadWith>>,
 ) {
-  const { vaults, owner } = setup;
+  const { vaults, owner, main } = setup;
   const put = (input: Omit<Parameters<typeof vaults.putEntry>[0], "vaultId">) =>
-    vaults.putEntry({ vaultId: MAIN_VAULT_ID, ...input }).pipe(CommandActor.actAs(owner));
+    vaults.putEntry({ vaultId: main, ...input }).pipe(CommandActor.actAs(owner));
   const token = yield* put({ name: "KUBE_TOKEN", identity: { audience: "kubernetes" } });
   yield* put({
     name: "KUBECONFIG",
@@ -734,18 +734,16 @@ it.effect("an identity entry deleted, or out of reach, is no longer refreshed", 
   Effect.gen(function* () {
     yield* TestClock.setTime(Date.parse("2026-11-17T00:00:00.000Z"));
     const setup = yield* ownersThreadWith(hubFilesInMemory, "https://hub.example.com");
-    const { thread, forTurn, delivery, vaults, owner } = setup;
+    const { thread, forTurn, delivery, vaults, owner, main } = setup;
     const entry = yield* identitySet(setup);
     const threadId = yield* thread("thread:gone");
     yield* forTurn({ threadId, target: HUB });
-    const listed = yield* vaults
-      .listEntries({ vaultId: MAIN_VAULT_ID })
-      .pipe(CommandActor.actAs(owner));
+    const listed = yield* vaults.listEntries({ vaultId: main }).pipe(CommandActor.actAs(owner));
     const kubeconfig = listed.entries.find((found) => found.name === "KUBECONFIG")!;
     yield* vaults
-      .deleteEntry({ vaultId: MAIN_VAULT_ID, entryId: kubeconfig.id })
+      .deleteEntry({ vaultId: main, entryId: kubeconfig.id })
       .pipe(
-        Effect.andThen(vaults.deleteEntry({ vaultId: MAIN_VAULT_ID, entryId: entry.id })),
+        Effect.andThen(vaults.deleteEntry({ vaultId: main, entryId: entry.id })),
         CommandActor.actAs(owner),
       );
     const sent: Array<unknown> = [];

@@ -11,7 +11,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, VaultEntry, VaultSummary } from "@t3tools/contracts";
+import type { EnvironmentId, VaultEntry, VaultGroupSummary } from "@t3tools/contracts";
 import * as Redacted from "effect/Redacted";
 import { useEffect, useEffectEvent, useState } from "react";
 import { View } from "react-native";
@@ -36,8 +36,8 @@ const messageOf = (cause: unknown) =>
   cause instanceof Error ? cause.message : "That did not work.";
 
 /**
- * Settings → Vaults on a phone: Vaults and the names in them; the Owner and an Organization's
- * Admins add or replace a value. Never a Secret's value on screen (nobody reads one back), never
+ * Settings → Vaults on a phone: each owner's Vault by group (owned-resources 03) and the names in
+ * them; whoever edits a group adds or replaces a value. Never a Secret's value on screen (nobody reads one back), never
  * the master key: that stays on web and desktop (spec 5, «Clientes»). The Hub decides again on
  * every call.
  */
@@ -58,7 +58,7 @@ function VaultsPage(props: { readonly environmentId: EnvironmentId }) {
     reportDefect: false,
   });
   const [loaded, setLoaded] = useState<{
-    readonly vaults: ReadonlyArray<VaultSummary>;
+    readonly vaults: ReadonlyArray<VaultGroupSummary>;
     readonly entries: Readonly<Record<string, ReadonlyArray<VaultEntry>>>;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +93,7 @@ function VaultsPage(props: { readonly environmentId: EnvironmentId }) {
   }, [environmentId]);
 
   const save = async (
-    vault: VaultSummary,
+    vault: VaultGroupSummary,
     input: { readonly entryId?: VaultEntry["id"]; readonly name: string; readonly value: string },
   ) => {
     const result = await settle(
@@ -147,7 +147,7 @@ function VaultsPage(props: { readonly environmentId: EnvironmentId }) {
 }
 
 function VaultCard(props: {
-  readonly vault: VaultSummary;
+  readonly vault: VaultGroupSummary;
   readonly entries: ReadonlyArray<VaultEntry>;
   readonly mayWrite: boolean;
   readonly isOwner: boolean;
@@ -175,8 +175,8 @@ function VaultCard(props: {
   };
   return (
     <ListSection
-      title={vault.name}
-      footer={`${vaultOwnerLine(vault)}.${vault.archived ? " Archived." : ""}`}
+      title={vault.ownerName === null ? vault.name : `${vault.name} · ${vault.ownerName}`}
+      footer={`${vaultOwnerLine(vault, { userId: null })}.${vault.archived ? " Archived." : ""}`}
     >
       {props.entries.length === 0 ? (
         <Text className="px-4 py-3 text-sm text-foreground-muted">No secrets yet.</Text>

@@ -1,4 +1,4 @@
-import type { VaultEntry, VaultSummary, VaultThreadEnvironment } from "@t3tools/contracts";
+import type { VaultEntry, VaultGroupSummary, VaultThreadEnvironment } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -9,23 +9,24 @@ import {
   vaultActions,
   vaultFailureMessage,
   vaultOwnerLine,
+  vaultSections,
 } from "./vaults.ts";
 
-const vault = (over: Partial<VaultSummary> = {}) =>
+const vault = (over: Partial<VaultGroupSummary> = {}) =>
   ({
     id: "vault-a",
     name: "Acme",
     description: null,
-    spaceId: "space-acme",
-    spaceName: "Acme",
-    isMain: false,
+    owner: { kind: "organization", spaceId: "space-acme" },
+    ownerName: "Acme",
+    isDefault: false,
     archived: false,
     entryCount: 1,
     canEdit: true,
     canManage: false,
     allowances: [],
     ...over,
-  }) as unknown as VaultSummary;
+  }) as unknown as VaultGroupSummary;
 const entry = (over: Partial<VaultEntry> = {}) =>
   ({
     id: "e1",
@@ -35,7 +36,6 @@ const entry = (over: Partial<VaultEntry> = {}) =>
     kind: "own",
     delivery: "env",
     broken: false,
-    linkedFrom: null,
     unmasked: false,
     ...over,
   }) as unknown as VaultEntry;
@@ -60,9 +60,8 @@ describe("vaultActions", () => {
 });
 
 describe("entryActions", () => {
-  it("never replaces a link, and leaves a dangerous name to the Owner", () => {
+  it("leaves a dangerous name to the Owner", () => {
     const ctx = { mayWrite: true, surface: "mobile" as const, isOwner: false };
-    expect(entryActions(vault(), entry({ kind: "link" }), ctx).replace).toBe(false);
     expect(entryActions(vault(), entry({ name: "NODE_OPTIONS" }), ctx).replace).toBe(false);
     expect(
       entryActions(vault(), entry({ name: "NODE_OPTIONS" }), { ...ctx, isOwner: true }).replace,
@@ -106,10 +105,7 @@ describe("entryActions", () => {
       replace: false,
       makeVariable: false,
     });
-    // A link is what its original is; a viewer who does not edit changes nothing.
-    expect(entryActions(owner, entry({ kind: "link", class: "secret" }), web)).toMatchObject({
-      makeVariable: false,
-    });
+    // A viewer who does not edit changes nothing.
     expect(
       entryActions(vault({ canEdit: false }), secret, { ...web, isOwner: false }),
     ).toMatchObject({ makeVariable: false, makeSecret: false });
@@ -117,13 +113,8 @@ describe("entryActions", () => {
 });
 
 describe("labels", () => {
-  it("badges links, broken links, copies and unmasked values", () => {
-    expect(entryBadges(entry({ kind: "link", broken: true }))).toEqual(["broken"]);
-    expect(
-      entryBadges(entry({ kind: "link", linkedFrom: { entryId: "m" as never, name: "GH" } })),
-    ).toEqual(["linked from Main vault (GH)"]);
-    expect(entryBadges(entry({ kind: "link" }))).toEqual(["linked from Main vault"]);
-    expect(entryBadges(entry({ kind: "copy", unmasked: true }))).toEqual(["copy", "not masked"]);
+  it("badges templates, broken ones, files and unmasked values", () => {
+    expect(entryBadges(entry({ unmasked: true }))).toEqual(["not masked"]);
     expect(entryBadges(entry({ kind: "template", delivery: "file" }))).toEqual([
       "template",
       "file",
@@ -131,18 +122,64 @@ describe("labels", () => {
     expect(entryBadges(entry({ kind: "template", broken: true }))).toEqual(["broken"]);
     expect(entryBadges(entry({ delivery: "none" }))).toEqual(["not delivered"]);
   });
-  it("describes whose a Vault is", () => {
-    expect(vaultOwnerLine(vault())).toBe("Acme's");
-    expect(vaultOwnerLine(vault({ spaceId: null, spaceName: null }))).toBe("Yours alone");
+  it("describes whose Vault a group is part of", () => {
+    const me = { userId: "ana" };
+    expect(vaultOwnerLine(vault(), me)).toBe("Acme's Vault");
+    expect(vaultOwnerLine(vault({ isDefault: true }), me)).toBe(
+      "Acme's Vault; every Thread of its Space receives it",
+    );
+    expect(
+      vaultOwnerLine(
+        vault({ owner: { kind: "user", userId: "ana" as never }, ownerName: "Ana" }),
+        me,
+      ),
+    ).toBe("Your Vault");
+  });
+  it("groups by owner, the viewer's own first, with the owners they may add groups to", () => {
+    const mine = vault({
+      id: "g-mine" as never,
+      owner: { kind: "user", userId: "ana" as never },
+      ownerName: "Ana",
+      isDefault: true,
+    });
+    const acmeDefault = vault({ id: "g-acme" as never, isDefault: true });
+    const acmeNamed = vault({ id: "g-acme-2" as never, name: "Deploy" });
+    const sections = vaultSections(
+      {
+        groups: [mine, acmeDefault, acmeNamed],
+        owners: [
+          { owner: { kind: "organization", spaceId: "space-acme" as never }, name: "Acme" },
+          { owner: { kind: "organization", spaceId: "space-globex" as never }, name: "Globex" },
+        ],
+      },
+      { userId: "ana" },
+    );
+    expect(
+      sections.map((section) => [
+        section.name,
+        section.mine,
+        section.canCreate,
+        section.groups.map((group) => group.id),
+      ]),
+    ).toEqual([
+      ["Ana", true, false, ["g-mine"]],
+      ["Acme", false, true, ["g-acme", "g-acme-2"]],
+      ["Globex", false, true, []],
+    ]);
   });
 });
 
 describe("threadSecretLines", () => {
   it("names the winner and whom it beats, never a value", () => {
     const env = {
+      vaults: [
+        { vaultId: "v-mine", name: "Mine", source: "user", ownerName: "Owner" },
+        { vaultId: "v", name: "Acme", source: "space", ownerName: null },
+      ],
       variables: [
         {
           name: "TOKEN",
+          vaultId: "v-mine",
           vaultName: "Mine",
           source: "user",
           shadowed: [{ vaultId: "v", vaultName: "Acme", source: "space" }],
@@ -150,7 +187,7 @@ describe("threadSecretLines", () => {
       ],
     } as unknown as VaultThreadEnvironment;
     expect(threadSecretLines(env)).toEqual([
-      { name: "TOKEN", from: "Mine (yours)", winsOver: "Acme (Space default)" },
+      { name: "TOKEN", from: "Mine · Owner (yours)", winsOver: "Acme (Space default)" },
     ]);
   });
 });
@@ -159,8 +196,8 @@ describe("loadVaultOverview", () => {
   it("lists the Vaults then each one's names", async () => {
     const a = vault();
     const result = await loadVaultOverview({
-      list: async () => ({ vaults: [a] }),
-      entries: async (id) => ({ vault: a, entries: id === a.id ? [entry()] : [] }),
+      list: async () => ({ groups: [a], owners: [], unlinked: [] }),
+      entries: async (id) => ({ group: a, entries: id === a.id ? [entry()] : [] }),
     });
     expect(result.vaults).toEqual([a]);
     expect(result.entries["vault-a"]).toHaveLength(1);

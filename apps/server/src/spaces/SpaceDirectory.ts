@@ -32,6 +32,7 @@ import * as AccessChanges from "../auth/AccessChanges.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as AuditLog from "../audit/AuditLog.ts";
+import * as VaultGroups from "../vaults/VaultGroups.ts";
 import {
   PROJECT_FOLDER_CHANGE_REFUSED,
   PROJECT_FOLDER_REFUSED,
@@ -228,9 +229,13 @@ const spacesOf = (resource: AccessPolicy.Resource): ReadonlyArray<string> => {
       return [resource.from.id, resource.to.id];
     case "environment":
       return resource.space === undefined ? [] : [resource.space.id];
-    // The Owner's own Vaults (the Main vault among them) are no Space's.
+    // A Vault group is used in its owner's Space: a User's Personal space, an Organization.
     case "vault":
-      return resource.space === null ? ["installation"] : [resource.space.id];
+      return resource.owner.kind === "user"
+        ? [personalSpaceIdOf(resource.owner.userId)]
+        : resource.owner.space === null
+          ? ["installation"]
+          : [resource.owner.space.id];
     // An AI account is used in its owner's Space: a User's Personal space, an Organization.
     case "ai-account":
       return resource.owner.kind === "user"
@@ -1033,6 +1038,8 @@ const make = Effect.gen(function* () {
           `;
           // The Owner runs every Organization without a Membership.
           if (!principal.isOwner) yield* addMembership({ spaceId, userId, role: "admin" });
+          // Its Vault starts with its `default` group (owned-resources 03).
+          yield* VaultGroups.ensureDefault(sql, { ownerKind: "organization", ownerId: spaceId });
           yield* audit.record({
             actor: AuditLog.userActor(userId),
             action: "organization.create",

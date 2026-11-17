@@ -7,9 +7,9 @@ import type {
   SpaceId,
   ThreadId,
   VaultChoices,
-  VaultId,
+  VaultGroupId,
   VaultSubject,
-  VaultSummary,
+  VaultGroupSummary,
   VaultThreadEnvironment,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -44,7 +44,7 @@ const subjectKey = (subject: VaultSubject) =>
 /** Whom one of the Owner's own Vaults is allowed to; the Owner adds and takes back. */
 export function VaultAllowances(props: {
   readonly environmentId: EnvironmentId;
-  readonly vault: VaultSummary;
+  readonly vault: VaultGroupSummary;
   readonly onChanged: () => Promise<void>;
 }) {
   const { vault, environmentId } = props;
@@ -242,7 +242,10 @@ function useChoices(environmentId: EnvironmentId, spaceId: SpaceId | null, proje
   return { choices, setChoices, error, setError };
 }
 
-/** Settings → Vaults → «Default Vaults»: which allowed Vaults every Thread of a Space receives. */
+/**
+ * Settings → Vaults → «Default groups»: which groups reaching a Space every Thread of it receives
+ * (owned-resources 03). The Space's owner's `default` always; the others when chosen.
+ */
 export function SpaceDefaultVaults(props: { readonly environmentId: EnvironmentId }) {
   const { environmentId } = props;
   const view = useCurrentSpace((state) => state.view);
@@ -257,7 +260,7 @@ export function SpaceDefaultVaults(props: { readonly environmentId: EnvironmentI
   const shownListed = spaces.some((space) => space.id === shown);
   const spaceName = spaces.find((space) => space.id === shown)?.name ?? "this Space";
 
-  const setDefaults = async (vaultIds: ReadonlyArray<VaultId>) => {
+  const setDefaults = async (vaultIds: ReadonlyArray<VaultGroupId>) => {
     if (shown === null) return;
     setPending(true);
     setError(null);
@@ -280,10 +283,10 @@ export function SpaceDefaultVaults(props: { readonly environmentId: EnvironmentI
   ];
 
   return (
-    <SettingsSection id="default-vaults" title="Default Vaults">
+    <SettingsSection id="default-vaults" title="Default groups">
       <SettingsRow
         title="Every Thread of a Space receives its defaults"
-        description="Projects add or remove Vaults among the ones allowed to their Space. When two Vaults define the same name, a User's own Vault wins, then the Project's, then the defaults in this order."
+        description="A Space's own default group always; other groups that reach it when chosen here. Projects add or remove groups among the ones reaching their Space. When two groups define the same name, a group allowed to you wins, then the Project's, then the defaults in this order."
         status={
           error === null ? null : (
             <span className="text-destructive" role="alert">
@@ -315,9 +318,7 @@ export function SpaceDefaultVaults(props: { readonly environmentId: EnvironmentI
         }
       />
       {choices === null ? null : choices.allowed.length === 0 ? (
-        <p className="px-4 pb-4 text-xs text-muted-foreground">
-          No Vault is allowed to {spaceName} yet.
-        </p>
+        <p className="px-4 pb-4 text-xs text-muted-foreground">No group reaches {spaceName} yet.</p>
       ) : (
         <ul
           className="flex flex-col divide-y divide-border/60"
@@ -347,6 +348,9 @@ export function SpaceDefaultVaults(props: { readonly environmentId: EnvironmentI
                     }
                   />
                   <span className="font-medium">{option.name}</span>
+                  {option.ownerName === null ? null : (
+                    <span className="text-xs text-muted-foreground">{option.ownerName}</span>
+                  )}
                   <span className="truncate text-xs text-muted-foreground">
                     {option.names.join(", ") || "no secrets yet"}
                   </span>
@@ -410,13 +414,13 @@ export function ProjectVaults(props: {
     );
   }
   if (choices.allowed.length === 0) return null;
-  const isDefault = (vaultId: VaultId) =>
+  const isDefault = (vaultId: VaultGroupId) =>
     choices.fixedDefaults.includes(vaultId) || choices.defaults.includes(vaultId);
   return (
     <SettingsSection title="Vaults">
       <SettingsRow
         title="Secrets this Project's Threads receive"
-        description="Its Space's default Vaults, plus the ones you add here, minus the ones you remove. A Vault added here wins a name it shares with a default."
+        description="Its Space's default groups, plus the ones you add here, minus the ones you remove. A group added here wins a name it shares with a default."
         status={
           error === null ? null : (
             <span className="text-destructive" role="alert">
@@ -442,9 +446,16 @@ export function ProjectVaults(props: {
           ];
           return (
             <li key={option.vaultId} className="flex items-center gap-3 px-4 py-2 text-sm">
-              <span className="flex-1 font-medium">{option.name}</span>
+              <span className="flex-1 font-medium">
+                {option.name}
+                {option.ownerName === null ? null : (
+                  <span className="ms-2 text-xs font-normal text-muted-foreground">
+                    {option.ownerName}
+                  </span>
+                )}
+              </span>
               {choices.fixedDefaults.includes(option.vaultId) ? (
-                <span className="text-xs text-muted-foreground">Always (Personal space)</span>
+                <span className="text-xs text-muted-foreground">Always (its default group)</span>
               ) : (
                 <div className="w-full sm:w-56">
                   <Select
@@ -541,8 +552,8 @@ export function ThreadSecrets(props: {
         <div className="flex flex-col gap-2 text-sm">
           <p className="font-medium">Secrets</p>
           <p className="text-xs text-muted-foreground">
-            The environment variables your turns, terminals and scripts in this Thread receive.
-            Values are never shown.
+            The environment variables your turns, terminals and scripts in this Thread receive, by
+            group and whose Vault it is part of. Values are never shown.
           </p>
           {error !== null ? (
             <p className="text-xs text-destructive" role="alert">

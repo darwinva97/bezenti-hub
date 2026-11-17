@@ -379,7 +379,13 @@ makes a new key over encrypted secrets.
 
 ### Vaults: Variables and sealed Secrets
 
-**Settings → Vaults** holds what your agents receive as environment variables.
+**Settings → Vaults** holds what your agents receive as environment variables. Each
+owner has one Vault: the Owner's own, and one per organization. A Vault is made of
+**groups**: its **default** group, which every thread of its space receives and which
+is never deleted or renamed, and named groups an organization's admins (or the Owner)
+create and choose per space or project. When the Hub was updated, the Main vault
+became the Owner's default group and every other vault became a named group of its
+owner, so threads kept receiving the same entries.
 When you add an entry, **Kind** says what it is:
 
 - a **Variable** is configuration, such as `AWS_REGION` or `KUBE_SERVER`. Its value
@@ -393,7 +399,9 @@ When you add an entry, **Kind** says what it is:
 
 **Make variable** asks for a new value, so changing the kind never shows a Secret.
 **Make secret** keeps the Variable's value, but whatever was already printed in a
-Thread's history stays visible there. A Secret link is what its original is.
+Thread's history stays visible there. Secret links and copies became independent
+secrets when the Hub was updated: rotating the original no longer changes them, and
+Settings lists them once to the Owner.
 
 Sealing protects reading through the Hub's screens and APIs. It does not stop
 someone who has the Hub's disk and its master key, and it does not stop the agent
@@ -668,8 +676,8 @@ it, not even from the Owner. The Owner still sees it in the Space selector under
 **Archived**, where **Restore organization** brings it back as it was. Only an
 archived organization can be deleted: **Delete organization** asks you to type its
 name, then deletes its projects, threads, members and invitations for good, and
-its own vaults with their secrets. Vaults of the Owner's that it was allowed keep
-their secrets and only lose that organization.
+its own vault with every group and secret. Groups of the Owner's that it was allowed
+keep their secrets and only lose that organization.
 
 ### Move a project to another Space
 

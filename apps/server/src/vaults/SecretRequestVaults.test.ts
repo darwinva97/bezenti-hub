@@ -8,7 +8,6 @@ import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
-  MAIN_VAULT_ID,
   type OrchestrationV2ServerCommand,
   ProjectId,
   type SecretRequestAnswerInput,
@@ -16,7 +15,7 @@ import {
   ThreadId,
   TurnItemId,
   UserId,
-  type VaultId,
+  type VaultGroupId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -42,6 +41,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as SecretDelivery from "./SecretDelivery.ts";
 import * as Vaults from "./Vaults.ts";
+import { orgOwner, ownersDefault, userOwner } from "./VaultGroups.testkit.ts";
 
 const VALUE = "sk_live_stripe_value_4242";
 const turnItemId = TurnItemId.make("turn-item:secret-request:stripe");
@@ -103,7 +103,9 @@ const hub = Effect.gen(function* () {
     return ThreadId.make(id);
   });
   const vault = Effect.fn(function* (name: string, spaceId: SpaceId | null) {
-    return (yield* vaults.create({ name, spaceId }).pipe(as(ownerId))).id;
+    return (yield* vaults
+      .create({ name, owner: spaceId === null ? userOwner(ownerId) : orgOwner(spaceId) })
+      .pipe(as(ownerId))).id;
   });
   const acmeVault = yield* vault("Acme secrets", acmeId);
   const globexVault = yield* vault("Globex secrets", globexId);
@@ -171,7 +173,7 @@ const hub = Effect.gen(function* () {
 
   const save = (
     threadId: ThreadId,
-    saveToVault?: { readonly vaultId: VaultId; readonly name: string },
+    saveToVault?: { readonly vaultId: VaultGroupId; readonly name: string },
     secret: string = VALUE,
   ): SecretRequestAnswerInput => ({
     threadId,
@@ -182,7 +184,7 @@ const hub = Effect.gen(function* () {
       ...(saveToVault === undefined ? {} : { saveToVault }),
     },
   });
-  const entryNames = (vaultId: VaultId) =>
+  const entryNames = (vaultId: VaultGroupId) =>
     vaults.listEntries({ vaultId }).pipe(
       as(ownerId),
       Effect.map((listed) => listed.entries.map((entry) => entry.name)),
@@ -194,6 +196,7 @@ const hub = Effect.gen(function* () {
     );
   return {
     server,
+    main: yield* ownersDefault(server.sql),
     ownerId,
     acmeId,
     globexId,
@@ -232,17 +235,23 @@ it.effect("the card offers only the Vaults the answerer may edit that reach the 
     const acmeByHedy = yield* t.thread("thread-acme-hedy", t.hedy, t.acmeId);
     const globexByGus = yield* t.thread("thread-globex-gus", t.gus, t.globexId);
 
-    // The Owner: whatever reaches Acme, never the Main vault (it reaches only their own Space).
+    // The Owner: whatever reaches Acme (its `default` first), never the Owner's own `default`
+    // (it reaches only their own Space).
     assert.deepStrictEqual(yield* t.targetNames(t.ownerId, acmeByOwner), [
+      "default",
       "Acme secrets",
       "Shared",
     ]);
-    // An Admin: their Organization's Vault; not the Owner's Shared one, not the Main vault.
-    assert.deepStrictEqual(yield* t.targetNames(t.ada, acmeByAda), ["Acme secrets"]);
+    // An Admin: their Organization's groups; not the Owner's Shared one, nor the Owner's own.
+    assert.deepStrictEqual(yield* t.targetNames(t.ada, acmeByAda), ["default", "Acme secrets"]);
     // An Admin of both Organizations, in an Acme Thread: nothing of Globex's own; the Owner's
-    // Shared Vault reaches only Organizations Hedy runs, so the policy lets her edit it.
-    assert.deepStrictEqual(yield* t.targetNames(t.hedy, acmeByHedy), ["Acme secrets", "Shared"]);
-    assert.deepStrictEqual(yield* t.targetNames(t.gus, globexByGus), ["Globex secrets"]);
+    // Shared group reaches only Organizations Hedy runs, so the policy lets her edit it.
+    assert.deepStrictEqual(yield* t.targetNames(t.hedy, acmeByHedy), [
+      "default",
+      "Acme secrets",
+      "Shared",
+    ]);
+    assert.deepStrictEqual(yield* t.targetNames(t.gus, globexByGus), ["default", "Globex secrets"]);
     // A Member and a Guest edit no Vault (`vault.edit`), a Vault allowed to Grace included.
     assert.deepStrictEqual(yield* t.targetNames(t.grace, acmeByGrace), []);
     assert.deepStrictEqual(yield* t.targetNames(t.linus, acmeByLinus), []);
@@ -267,13 +276,13 @@ it.effect("a Member cannot save into a Vault, even sending the field by hand", (
   }),
 );
 
-it.effect("an Admin cannot save into the Main vault or another Organization's Vault", () =>
+it.effect("an Admin cannot save into the Owner's `default` or another Organization's group", () =>
   Effect.gen(function* () {
     const t = yield* hub;
     const byAda = yield* t.thread("thread-ada", t.ada, t.acmeId);
     const byHedy = yield* t.thread("thread-hedy", t.hedy, t.acmeId);
     for (const [userId, threadId, vaultId] of [
-      [t.ada, byAda, MAIN_VAULT_ID],
+      [t.ada, byAda, t.main],
       [t.ada, byAda, t.globexVault],
       [t.ada, byAda, t.shared],
       // Hedy edits Globex's Vault, but this is an Acme Thread.

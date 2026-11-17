@@ -4,7 +4,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { AiAccountId, AiAccountProvider } from "./aiAccounts.ts";
 import { ModelSelection } from "./modelSelection.ts";
-import { VaultId } from "./vaults.ts";
+import { VaultGroupId } from "./vaults.ts";
 import {
   CommandId,
   EnvironmentId,
@@ -278,7 +278,7 @@ export type ProjectMovePlanThread = typeof ProjectMovePlanThread.Type;
 
 /** A Vault the Project's Threads stop receiving when it moves (spec 5 ticket 07). */
 export const ProjectMovePlanVault = Schema.Struct({
-  vaultId: VaultId,
+  vaultId: VaultGroupId,
   name: Schema.String,
 });
 export type ProjectMovePlanVault = typeof ProjectMovePlanVault.Type;

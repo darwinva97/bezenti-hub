@@ -15,7 +15,7 @@ import {
   VaultEntryId,
   VaultError,
   type VaultErrorReason,
-  VaultId,
+  VaultGroupId,
   type VaultShadowed,
   type VaultSource,
   type VaultThreadEnvironment,
@@ -53,7 +53,7 @@ export interface EffectiveVariable {
   readonly name: string;
   readonly description: string | null;
   readonly entryId: VaultEntryId;
-  readonly vaultId: VaultId;
+  readonly vaultId: VaultGroupId;
   readonly vaultName: string;
   readonly source: VaultSource;
   /**
@@ -101,7 +101,7 @@ export interface EffectiveSet {
   readonly projectId: ProjectId | null;
   /** The Vaults it draws from, in the order that wins. */
   readonly vaults: ReadonlyArray<{
-    readonly vaultId: VaultId;
+    readonly vaultId: VaultGroupId;
     readonly name: string;
     readonly source: VaultSource;
   }>;
@@ -153,7 +153,7 @@ export class EffectiveVaults extends Context.Service<
 
 /** A Vault a Project receives from its Space's side. */
 export interface SpaceSideVault {
-  readonly vaultId: VaultId;
+  readonly vaultId: VaultGroupId;
   readonly name: string;
   readonly source: Exclude<VaultSource, "user">;
 }
@@ -263,26 +263,21 @@ const make = Effect.gen(function* () {
       Effect.andThen(fail("storage", `Could not ${what}. Try again.`)),
     );
 
-  /** Entries of the Vaults, a link's value and length its original's (none once it is gone). */
-  const entriesOf = (vaultIds: ReadonlyArray<VaultId>) =>
+  /** Entries of the groups. */
+  const entriesOf = (vaultIds: ReadonlyArray<VaultGroupId>) =>
     vaultIds.length === 0
       ? Effect.succeed([] as ReadonlyArray<EntryRow>)
       : sql<EntryRow>`
-          SELECT e.vault_id AS "vaultId", e.entry_id AS "entryId", e.name AS "name",
-            e.description AS "description",
-            CASE WHEN e.kind = 'link' THEN o.value_id ELSE e.value_id END AS "valueId",
-            CASE WHEN e.kind = 'link' THEN o.unmasked ELSE e.unmasked END AS "unmasked",
-            CASE WHEN e.kind = 'link' THEN o.class ELSE e.class END AS "class",
-            e.provider_id AS "providerId", e.provider_reference AS "providerReference",
+          SELECT e.group_id AS "vaultId", e.entry_id AS "entryId", e.name AS "name",
+            e.description AS "description", e.value_id AS "valueId", e.unmasked AS "unmasked",
+            e.class AS "class", e.provider_id AS "providerId",
+            e.provider_reference AS "providerReference",
             e.provider_scope_id AS "providerScopeId", e.kind AS "kind",
             e.delivery AS "delivery", e.template_text AS "templateText",
             e.identity_audience AS "identityAudience",
             e.identity_ttl_seconds AS "identityTtlSeconds"
           FROM vault_entries e
-          LEFT JOIN vault_entries o
-            ON e.kind = 'link' AND o.entry_id = e.linked_entry_id
-            AND o.vault_id = (SELECT vault_id FROM vaults WHERE is_main = 1) AND o.kind <> 'link'
-          WHERE e.vault_id IN ${sql.in(vaultIds)}
+          WHERE e.group_id IN ${sql.in(vaultIds)}
         `;
 
   /**
@@ -314,13 +309,13 @@ const make = Effect.gen(function* () {
       readonly row: VaultReach.ReachRow;
       readonly source: Exclude<VaultSource, "user">;
     }> = [];
-    const taken = new Set<VaultId>();
+    const taken = new Set<VaultGroupId>();
     const take = (row: VaultReach.ReachRow | undefined, source: Exclude<VaultSource, "user">) => {
       if (row === undefined || row.archived || taken.has(row.vaultId)) return;
       taken.add(row.vaultId);
       groups.push({ row, source });
     };
-    // The fixed defaults (the Main vault in the Owner's Personal space): never a Project's choice.
+    // The fixed default (the `default` of the Space's owner): never a Project's choice.
     const fixed = new Set(VaultReach.fixedDefaults(allowed));
     for (const row of allowed) {
       if (added.has(row.vaultId) && !fixed.has(row.vaultId)) take(row, "project");
@@ -396,7 +391,7 @@ const make = Effect.gen(function* () {
 
     // The User's own first, then the Space side; a Vault in both counts as the User's.
     const groups: Array<{ readonly row: VaultReach.ReachRow; readonly source: VaultSource }> = [];
-    const taken = new Set<VaultId>();
+    const taken = new Set<VaultGroupId>();
     for (const row of reach.ownVaults) {
       if (row.archived || taken.has(row.vaultId)) continue;
       taken.add(row.vaultId);
@@ -533,6 +528,19 @@ const make = Effect.gen(function* () {
       ORDER BY v.remembered_at DESC LIMIT 1
     `.pipe(Effect.catch(storage("read the Thread's AI account credential")));
     const credential = credentialRows[0];
+    // Owned-resources 03: whose Vault each group is part of, by name.
+    const owners =
+      set.vaults.length === 0
+        ? []
+        : yield* sql<{ readonly vaultId: string; readonly ownerName: string | null }>`
+            SELECT g.group_id AS "vaultId",
+              CASE g.owner_kind
+                WHEN 'organization' THEN (SELECT name FROM spaces WHERE space_id = g.owner_id)
+                ELSE (SELECT display_name FROM users WHERE user_id = g.owner_id)
+              END AS "ownerName"
+            FROM vault_groups g WHERE g.group_id IN ${sql.in(set.vaults.map((v) => v.vaultId))}
+          `.pipe(Effect.catch(storage("read whose the Thread's Vaults are")));
+    const ownerNames = new Map(owners.map((row) => [row.vaultId, row.ownerName]));
     return {
       aiCredential:
         credential === undefined
@@ -541,7 +549,10 @@ const make = Effect.gen(function* () {
       threadId: ThreadId.make(set.threadId),
       spaceId: set.spaceId,
       projectId: set.projectId,
-      vaults: set.vaults,
+      vaults: set.vaults.map((vault) => ({
+        ...vault,
+        ownerName: ownerNames.get(vault.vaultId) ?? null,
+      })),
       variables: set.variables.map((variable) => ({
         name: variable.name,
         description: variable.description,
@@ -573,8 +584,19 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.catch(storage("read the Project's Vaults")));
     // `after` reads the choices as they are; those the move drops do not reach `to` anyway.
     const kept = new Set<string>(after.map((group) => group.row.vaultId));
-    return before
-      .filter((group) => !kept.has(group.row.vaultId))
+    const lost = before.filter((group) => !kept.has(group.row.vaultId));
+    // A `default` that holds nothing is lost without anyone missing it: not named.
+    const defaults = lost.filter((group) => group.row.isDefault).map((group) => group.row.vaultId);
+    const holding = new Set(
+      defaults.length === 0
+        ? []
+        : (yield* sql<{ readonly vaultId: string }>`
+            SELECT DISTINCT group_id AS "vaultId" FROM vault_entries
+            WHERE group_id IN ${sql.in(defaults)}
+          `.pipe(Effect.catch(storage("read the Project's Vaults")))).map((row) => row.vaultId),
+    );
+    return lost
+      .filter((group) => !group.row.isDefault || holding.has(group.row.vaultId))
       .map(({ row, source }) => ({ vaultId: row.vaultId, name: row.name, source }));
   });
 

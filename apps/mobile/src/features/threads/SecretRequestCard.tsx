@@ -5,6 +5,7 @@ import {
   secretRequestDisplay,
   secretRequestFailureMessage,
   secretRequestPrivacyNote,
+  secretRequestTargetLabel,
   secretRequestVaultNameProblem,
   secretRequestVaultValueProblem,
   type SecretRequestItem,
@@ -17,7 +18,7 @@ import type {
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
   SecretRequestVaultTargets,
-  VaultId,
+  VaultGroupId,
 } from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { View, type ColorValue } from "react-native";
@@ -87,7 +88,7 @@ function PendingSecretRequestForm(props: {
   });
   const [targets, setTargets] = useState<SecretRequestVaultTargets["vaults"]>([]);
   const [saveToVault, setSaveToVault] = useState(false);
-  const [vaultId, setVaultId] = useState<VaultId | null>(null);
+  const [vaultId, setVaultId] = useState<VaultGroupId | null>(null);
   const [vaultName, setVaultName] = useState(item.secretName ?? "");
   const targetsAsked = useRef(false);
   const askTargets = useEffectEvent(() => {
@@ -132,7 +133,7 @@ function PendingSecretRequestForm(props: {
       | {
           readonly type: "save";
           readonly secret: string;
-          readonly saveToVault?: { readonly vaultId: VaultId; readonly name: string };
+          readonly saveToVault?: { readonly vaultId: VaultGroupId; readonly name: string };
         }
       | { readonly type: "decline" },
   ) => {
@@ -185,7 +186,7 @@ function PendingSecretRequestForm(props: {
               {targets.map((target) => (
                 <Button
                   key={target.id}
-                  label={target.name}
+                  label={secretRequestTargetLabel(target)}
                   accessibilityLabel={`Vault ${target.name}`}
                   tone={target.id === vaultId ? "primary" : "secondary"}
                   size="compact"

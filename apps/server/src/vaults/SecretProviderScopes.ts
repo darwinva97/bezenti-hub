@@ -4,7 +4,6 @@
  * nothing until confirmed; after it they are «broken». Never a value nor a credential, anywhere.
  */
 import {
-  MAIN_VAULT_ID,
   PROVIDER_SCOPE_AUTH_FIELDS,
   type ProviderEntryBreak,
   type ProviderScope,
@@ -25,7 +24,7 @@ import {
   type SpaceId,
   type UserId,
   VaultEntryId,
-  VaultId,
+  VaultGroupId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -105,7 +104,7 @@ interface EntryRow {
 }
 
 const breakOf = (row: EntryRow): ProviderEntryBreak => ({
-  vaultId: VaultId.make(row.vaultId),
+  vaultId: VaultGroupId.make(row.vaultId),
   vaultName: row.vaultName,
   entryId: VaultEntryId.make(row.entryId),
   name: row.name,
@@ -168,18 +167,18 @@ const make = Effect.gen(function* () {
   /** The Provider entries reading through a scope, optionally in one Vault. */
   const entriesOf = (scopeId: string, vaultId?: string) =>
     sql<EntryRow>`
-      SELECT e.vault_id AS "vaultId", v.name AS "vaultName", e.entry_id AS "entryId", e.name AS "name",
+      SELECT e.group_id AS "vaultId", v.name AS "vaultName", e.entry_id AS "entryId", e.name AS "name",
         e.provider_reference AS "reference", e.provider_id AS "providerId"
-      FROM vault_entries e JOIN vaults v ON v.vault_id = e.vault_id
+      FROM vault_entries e JOIN vault_groups v ON v.group_id = e.group_id
       WHERE e.kind = 'provider' AND e.provider_scope_id = ${scopeId}
-        ${vaultId === undefined ? sql.literal("") : sql`AND e.vault_id = ${vaultId}`}
+        ${vaultId === undefined ? sql.literal("") : sql`AND e.group_id = ${vaultId}`}
       ORDER BY v.name, e.name
     `.pipe(Effect.catch(storage("read the scope's entries")));
 
   const viewOf = Effect.fn("SecretProviderScopes.viewOf")(function* (row: ScopeRow) {
     const vaults = yield* sql<{ readonly vaultId: string; readonly name: string }>`
-      SELECT a.vault_id AS "vaultId", v.name AS "name"
-      FROM vault_provider_scopes a JOIN vaults v ON v.vault_id = a.vault_id
+      SELECT a.group_id AS "vaultId", v.name AS "name"
+      FROM vault_provider_scopes a JOIN vault_groups v ON v.group_id = a.group_id
       WHERE a.scope_id = ${row.scopeId} ORDER BY v.name
     `.pipe(Effect.catch(storage("read the scope's Vaults")));
     const status = yield* reads.status(row.providerId);
@@ -192,7 +191,10 @@ const make = Effect.gen(function* () {
       allowedPaths: pathsOf(row.paths),
       writable: row.writable === 1,
       probeReference: row.probeReference,
-      vaults: vaults.map((vault) => ({ vaultId: VaultId.make(vault.vaultId), name: vault.name })),
+      vaults: vaults.map((vault) => ({
+        vaultId: VaultGroupId.make(vault.vaultId),
+        name: vault.name,
+      })),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     } satisfies ProviderScope;
@@ -376,13 +378,24 @@ const make = Effect.gen(function* () {
   const allow = Effect.fn("SecretProviderScopes.allow")(function* (input: ProviderScopeAllowInput) {
     const userId = yield* owner;
     const scope = yield* findScope(input.scopeId);
-    const vaults = yield* sql<{ readonly name: string; readonly spaceId: string | null }>`
-      SELECT name, space_id AS "spaceId" FROM vaults WHERE vault_id = ${input.vaultId}
+    const vaults = yield* sql<{
+      readonly name: string;
+      readonly ownerKind: string;
+      readonly ownerId: string;
+      readonly isDefault: number;
+    }>`
+      SELECT name, owner_kind AS "ownerKind", owner_id AS "ownerId", is_default AS "isDefault"
+      FROM vault_groups WHERE group_id = ${input.vaultId}
     `.pipe(Effect.catch(storage("read the Vault")));
     const vault = vaults[0];
     if (vault === undefined) return yield* fail("not-found", "That Vault does not exist.");
-    if (input.vaultId === MAIN_VAULT_ID) {
-      return yield* fail("invalid", "The Main vault is yours alone: add «Direct» entries to it.");
+    // A User's `default` (the Owner's: the Main vault before) takes «Direct» entries, never a
+    // scope; nor does another User's Vault, where the Owner adds no Provider entry.
+    if (vault.ownerKind === "user" && (vault.isDefault === 1 || vault.ownerId !== userId)) {
+      return yield* fail(
+        "invalid",
+        "A Provider scope is allowed to an Organization's groups and your named ones.",
+      );
     }
     const at = yield* now;
     const breaks = input.allowed
@@ -394,14 +407,14 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           if (input.allowed) {
             yield* sql`
-              INSERT INTO vault_provider_scopes (vault_id, scope_id, created_at)
+              INSERT INTO vault_provider_scopes (group_id, scope_id, created_at)
               VALUES (${input.vaultId}, ${scope.scopeId}, ${at})
-              ON CONFLICT (vault_id, scope_id) DO NOTHING
+              ON CONFLICT (group_id, scope_id) DO NOTHING
             `;
           } else {
             yield* sql`
               DELETE FROM vault_provider_scopes
-              WHERE vault_id = ${input.vaultId} AND scope_id = ${scope.scopeId}
+              WHERE group_id = ${input.vaultId} AND scope_id = ${scope.scopeId}
             `;
           }
           yield* record(
@@ -414,7 +427,7 @@ const make = Effect.gen(function* () {
               allowed: input.allowed,
               broke: breaks.length,
             },
-            vault.spaceId as SpaceId | null,
+            vault.ownerKind === "organization" ? (vault.ownerId as SpaceId) : null,
           );
         }),
       )
@@ -474,9 +487,9 @@ const make = Effect.gen(function* () {
       WHERE provider_id = ${input.providerId} ORDER BY label
     `.pipe(Effect.catch(storage("read the scopes")));
     const entries = yield* sql<EntryRow>`
-      SELECT e.vault_id AS "vaultId", v.name AS "vaultName", e.entry_id AS "entryId", e.name AS "name",
+      SELECT e.group_id AS "vaultId", v.name AS "vaultName", e.entry_id AS "entryId", e.name AS "name",
         e.provider_reference AS "reference", e.provider_id AS "providerId"
-      FROM vault_entries e JOIN vaults v ON v.vault_id = e.vault_id
+      FROM vault_entries e JOIN vault_groups v ON v.group_id = e.group_id
       WHERE e.kind = 'provider' AND e.provider_id = ${input.providerId}
       ORDER BY v.name, e.name
     `.pipe(Effect.catch(storage("read the provider's entries")));

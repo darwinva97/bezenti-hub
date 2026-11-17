@@ -79,7 +79,7 @@ export const scopeAllows = Effect.fn("ProviderScopeRules.scopeAllows")(function*
   const rows = yield* sql<{ readonly providerId: string; readonly paths: string }>`
     SELECT s.provider_id AS "providerId", s.allowed_paths_json AS "paths"
     FROM secret_provider_scopes s
-    JOIN vault_provider_scopes a ON a.scope_id = s.scope_id AND a.vault_id = ${ref.vaultId}
+    JOIN vault_provider_scopes a ON a.scope_id = s.scope_id AND a.group_id = ${ref.vaultId}
     WHERE s.scope_id = ${ref.scopeId}
   `;
   const row = rows[0];

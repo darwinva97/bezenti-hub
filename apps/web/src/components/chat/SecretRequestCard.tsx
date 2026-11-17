@@ -2,6 +2,7 @@ import { pipe } from "effect/Function";
 import {
   SECRET_REQUEST_DEFAULT_PLACEHOLDER,
   secretRequestAnswerInput,
+  secretRequestTargetLabel,
   secretRequestDisplay,
   secretRequestFailureMessage,
   secretRequestPrivacyNote,
@@ -17,7 +18,7 @@ import type {
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
   SecretRequestVaultTargets,
-  VaultId,
+  VaultGroupId,
 } from "@t3tools/contracts";
 import { CheckIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "lucide-react";
 import { useId, useRef, useState, type FormEvent } from "react";
@@ -83,7 +84,7 @@ function PendingSecretRequestForm(props: {
   });
   const [targets, setTargets] = useState<SecretRequestVaultTargets["vaults"]>([]);
   const [saveToVault, setSaveToVault] = useState(false);
-  const [vaultId, setVaultId] = useState<VaultId | null>(null);
+  const [vaultId, setVaultId] = useState<VaultGroupId | null>(null);
   const [vaultName, setVaultName] = useState(item.secretName ?? "");
   // Asked when the User starts answering (focus enters the card); a failed ask is tried again at
   // the next focus.
@@ -117,7 +118,7 @@ function PendingSecretRequestForm(props: {
       | {
           readonly type: "save";
           readonly secret: string;
-          readonly saveToVault?: { readonly vaultId: VaultId; readonly name: string };
+          readonly saveToVault?: { readonly vaultId: VaultGroupId; readonly name: string };
         }
       | { readonly type: "decline" },
   ) => {
@@ -216,7 +217,10 @@ function PendingSecretRequestForm(props: {
               <div className="min-w-0 sm:w-48">
                 <Select
                   disabled={submitting}
-                  items={targets.map((target) => ({ value: target.id, label: target.name }))}
+                  items={targets.map((target) => ({
+                    value: target.id,
+                    label: secretRequestTargetLabel(target),
+                  }))}
                   value={vaultId}
                   onValueChange={(value) => setVaultId(value)}
                 >
@@ -226,7 +230,7 @@ function PendingSecretRequestForm(props: {
                   <SelectPopup>
                     {targets.map((target) => (
                       <SelectItem key={target.id} value={target.id}>
-                        {target.name}
+                        {secretRequestTargetLabel(target)}
                       </SelectItem>
                     ))}
                   </SelectPopup>

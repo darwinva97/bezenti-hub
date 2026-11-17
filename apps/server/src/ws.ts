@@ -2444,15 +2444,14 @@ export const layerWsRpc = (
           ),
         // Vaults: each decided by Vaults (AccessPolicy `vault.*`) for the connection's User.
         // None returns a Secret's value (owned-resources 01); Variables' to whoever may read them.
-        [WS_METHODS.vaultsList]: (_input) => vaults.list,
-        [WS_METHODS.vaultsCreate]: (input) => vaults.create(input),
-        [WS_METHODS.vaultsUpdate]: (input) => vaults.update(input),
-        [WS_METHODS.vaultsDelete]: (input) => vaults.remove(input),
+        [WS_METHODS.vaultsGroupsList]: (_input) => vaults.list,
+        [WS_METHODS.vaultsGroupsCreate]: (input) => vaults.create(input),
+        [WS_METHODS.vaultsGroupsUpdate]: (input) => vaults.update(input),
+        [WS_METHODS.vaultsGroupsDelete]: (input) => vaults.remove(input),
         [WS_METHODS.vaultsEntriesList]: (input) => vaults.listEntries(input),
         [WS_METHODS.vaultsEntriesPut]: (input) => vaults.putEntry(input),
         [WS_METHODS.vaultsEntriesDelete]: (input) => vaults.deleteEntry(input),
-        [WS_METHODS.vaultsEntriesLink]: (input) => vaults.linkEntry(input),
-        [WS_METHODS.vaultsEntriesCopy]: (input) => vaults.copyEntry(input),
+        [WS_METHODS.vaultsUnlinkedNoticeDismiss]: (_input) => vaults.dismissUnlinked,
         // Spec 5 ticket 03: allowances (the Owner), defaults and Project choices (the Owner and
         // the Space's Admins), and a Thread's names for the caller. Names only, never values.
         [WS_METHODS.vaultsAllow]: (input) => vaults.allow(input),

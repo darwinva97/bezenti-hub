@@ -265,6 +265,7 @@ import * as AiAccountChoice from "./ai/AiAccountChoice.ts";
 import * as AiAccounts from "./ai/AiAccounts.ts";
 import * as AiGateway from "./ai/AiGateway.ts";
 import * as AiUsage from "./ai/AiUsage.ts";
+import { withHubGatewayUsage } from "./usage/hubGatewayUsage.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
@@ -1446,6 +1447,7 @@ export const layerWsRpc = (
         return { change: sameInstance ? ("routing" as const) : ("handoff" as const) };
       });
       const aiUsage = yield* AiUsage.AiUsage;
+      const withGatewayUsage = withHubGatewayUsage(usage, aiUsage);
       const aiGatewayKeys = yield* AiGatewayKeys.AiGatewayKeys;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
@@ -2823,7 +2825,11 @@ export const layerWsRpc = (
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>
           resourceTelemetry.readHistory(input),
-        [WS_METHODS.serverGetUsageSummary]: (input) => usage.readSummary(input),
+        // Plus the Hub turns through the AI gateway the session may see (ticket 16).
+        [WS_METHODS.serverGetUsageSummary]: (input) =>
+          usage
+            .readSummary(input)
+            .pipe(Effect.flatMap((summary) => withGatewayUsage(summary, input))),
         [WS_METHODS.serverRefreshUsageRates]: (_input) => usage.refreshRates,
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) => resourceTelemetry.retry,
         [WS_METHODS.serverCheckOtlpEndpoint]: (input) => otlpEndpointCheck.check(input),

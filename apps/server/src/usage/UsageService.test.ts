@@ -51,6 +51,7 @@ import * as AntigravityUsage from "../provider/Drivers/AntigravityUsage.ts";
 import * as ProviderHostLive from "../provider/ProviderHostLive.ts";
 import { totalTokens, type UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as UsageService from "./UsageService.ts";
+import { GATEWAY_USAGE_SOURCE, gatewayUsageRecord } from "./gatewayUsageRecords.ts";
 import * as MuseSdk from "../../../../packages/provider-muse/src/server/sdk.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import { makeScanCacheWriter, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
@@ -550,6 +551,84 @@ describe("UsageService", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(layerService({ prefix: "usage-compressed-codex", home, settings })),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("adds the Hub turns' gateway records under their own source (ticket 16)", () =>
+    Effect.gen(function* () {
+      const { home, settings } = yield* setup;
+      yield* Effect.gen(function* () {
+        const service = yield* UsageService.make;
+        const transcripts = yield* service.readSummary(WINDOW);
+        const request = (at: string, driver: string, shape: string, model: string) => ({
+          usageId: `u-${at}-${model}`,
+          at,
+          shape,
+          model,
+          threadId: `thread-${driver}`,
+          driver,
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadTokens: 40,
+          cacheWriteTokens: 5,
+        });
+        const records = [
+          request("2026-08-01T10:00:00.000Z", "claudeAgent", "anthropic", "claude-sonnet-5-5"),
+          request("2026-08-01T11:00:00.000Z", "claudeAgent", "anthropic", "claude-sonnet-5-5"),
+          request("2026-08-02T09:00:00.000Z", "opencode", "openai", "deepseek-chat"),
+          // Outside the window: not counted.
+          request("2026-07-20T09:00:00.000Z", "codex", "openai", "gpt-6"),
+        ].flatMap((row) => {
+          const record = gatewayUsageRecord(row);
+          return record === undefined ? [] : [record];
+        });
+        const summary = yield* service.withGatewayRecords(transcripts, WINDOW, records);
+        const gateway = summary.buckets.filter(
+          (bucket) => bucket.sourcePath === GATEWAY_USAGE_SOURCE,
+        );
+        assert.deepStrictEqual(
+          gateway.map((bucket) => [bucket.day, bucket.provider, bucket.model, bucket.records]),
+          [
+            ["2026-08-01", "claude", "claude-sonnet-5-5", 2],
+            ["2026-08-02", "opencode", "deepseek-chat", 1],
+          ],
+        );
+        // Claude's input has no cache inside; OpenAI's does.
+        assert.deepStrictEqual(gateway[0]?.totals, {
+          uncachedInputTokens: 200,
+          cachedInputTokens: 80,
+          cacheCreationTokens: 10,
+          outputTokens: 40,
+          reasoningTokens: 0,
+        });
+        assert.strictEqual(gateway[1]?.totals.uncachedInputTokens, 60);
+        assert.deepStrictEqual(
+          summary.sources
+            .filter((source) => source.fingerprint.resolvedHomePath === GATEWAY_USAGE_SOURCE)
+            .map((source) => [source.fingerprint.provider, source.distinctSessions]),
+          [
+            ["claude", 1],
+            ["opencode", 1],
+          ],
+        );
+        // The model filter applies to them as to the transcripts.
+        const filtered = yield* service.withGatewayRecords(
+          { ...transcripts, modelFilter: { exclude: [{ model: "deepseek-chat" }] } },
+          WINDOW,
+          records,
+        );
+        assert.deepStrictEqual(
+          filtered.buckets
+            .filter((bucket) => bucket.sourcePath === GATEWAY_USAGE_SOURCE)
+            .map((bucket) => bucket.model),
+          ["claude-sonnet-5-5"],
+        );
+        // Nothing to add: the summary as it was.
+        assert.strictEqual(yield* service.withGatewayRecords(transcripts, WINDOW, []), transcripts);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(layerService({ prefix: "usage-gateway", home, settings })),
       );
     }).pipe(Effect.scoped),
   );

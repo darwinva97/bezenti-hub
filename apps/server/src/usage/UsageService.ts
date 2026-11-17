@@ -39,6 +39,7 @@ import type {
   TranscriptUsageFormat,
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
+import { GATEWAY_USAGE_SOURCE } from "./gatewayUsageRecords.ts";
 import { canonicalModelFilter, resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
@@ -143,6 +144,15 @@ export class UsageService extends Context.Service<
   UsageService,
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
+    /**
+     * Adds the Hub turns' gateway records the caller may see to a summary of the same input
+     * (ticket 16): bucketed, filtered and priced like the transcripts', under their own source.
+     */
+    readonly withGatewayRecords: (
+      summary: UsageSummary,
+      input: UsageSummaryInput,
+      records: ReadonlyArray<UsageRecord>,
+    ) => Effect.Effect<UsageSummary, UsageReadError>;
     readonly refreshRates: Effect.Effect<UsagePricing>;
   }
 >()("t3/usage/UsageService") {}
@@ -935,7 +945,58 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates, awaitPersisted } as const;
+  const withGatewayRecords = Effect.fn("UsageService.withGatewayRecords")(function* (
+    summary: UsageSummary,
+    input: UsageSummaryInput,
+    records: ReadonlyArray<UsageRecord>,
+  ) {
+    if (records.length === 0) return summary;
+    const settings = yield* readSettings;
+    // The summary already checked the window: an hourly one has both instants.
+    const sinceTimeMs = input.sinceTime === undefined ? Number.NaN : Date.parse(input.sinceTime);
+    const untilTimeMs = input.untilTime === undefined ? Number.NaN : Date.parse(input.untilTime);
+    const hourly = input.resolution === "hour" && !Number.isNaN(sinceTimeMs + untilTimeMs);
+    const aggregator = new UsageAggregator({
+      timeZone: summary.timeZone,
+      sinceDay: summary.sinceDay,
+      untilDay: summary.untilDay,
+      resolution: hourly ? "hour" : "day",
+      ...(hourly ? { sinceTimeMs, untilTimeMs } : {}),
+      rates,
+      priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
+      modelAliases: resolveModelAliases(settings.usageModelAliases),
+      ...(summary.modelFilter === undefined ? {} : { modelFilter: summary.modelFilter }),
+    });
+    const sessions = new Map<UsageProviderKind, Set<string>>();
+    for (const record of records) {
+      if (!aggregator.add(record, GATEWAY_USAGE_SOURCE)) continue;
+      const seen = sessions.get(record.provider) ?? new Set<string>();
+      seen.add(record.sessionId);
+      sessions.set(record.provider, seen);
+    }
+    const sources: Array<UsageSource> = [...sessions].map(([provider, threads]) => ({
+      fingerprint: {
+        hostId,
+        provider,
+        resolvedHomePath: GATEWAY_USAGE_SOURCE,
+        volumeId: "ai-gateway",
+      },
+      status: "ok",
+      scannedFiles: 0,
+      skippedFiles: 0,
+      malformedRecords: 0,
+      distinctSessions: threads.size,
+      message:
+        "Hub turns through the AI gateway, from its usage log (the last 90 days, what you may see).",
+    }));
+    return {
+      ...summary,
+      buckets: [...summary.buckets, ...aggregator.finish().buckets],
+      sources: [...summary.sources, ...sources],
+    } satisfies UsageSummary;
+  });
+
+  return { readSummary, withGatewayRecords, refreshRates, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);

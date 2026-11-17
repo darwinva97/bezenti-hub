@@ -427,6 +427,15 @@ shown, **never limited**: no quota, cap or block anywhere.
   Both say what they cannot count instead of showing zero (ticket 16, `uncountedUsage`): direct
   credentials (the Usage tab names those accounts), CLIs on their own login, use outside the Hub. A
   Thread with no gateway request says so rather than hiding the panel.
+- **The Usage dialog** (Cost and Tokens, `server.getUsageSummary`) scans transcripts, and a
+  gateway session's CLI writes its own in the Thread's provider home, which is never scanned. On
+  the Hub the answer adds the Hub turns from `ai_usage` instead (ticket 16,
+  `usage/hubGatewayUsage.ts`, `AiUsage.threadRequests`): per-request rows with tokens (the last 90
+  days), Thread keys only (a local CLI's own transcripts may already be counted where it runs),
+  narrowed by the same rules as `aiUsage.summary`, bucketed and priced like the transcripts under
+  the source «Hub AI gateway». The provider is the driver of the Thread's latest provider session
+  when it speaks the request's dialect (`claudeAgent` → Claude, `codex`, `opencode`, `pi`), else
+  the dialect's own (Anthropic → Claude, OpenAI → Codex).
 - **Counted as failed (no tokens):** a refusal after authentication (gateway not running, 415, 429
   limits, body too large or not JSON, no model served, all accounts out of quota) with the account
   last tried or none (account and model `''` in the summary; the model is kept only once the plan

@@ -417,6 +417,40 @@ live("a Member sees only their own usage, never another Member's or another Spac
   }),
 );
 
+live("the Usage dialog's Hub turns follow the same rules as the summary (ticket 16)", () =>
+  Effect.gen(function* () {
+    const setup = yield* hub;
+    const { grace, ada, gus } = yield* threeUsers(setup);
+    const { member, admin, globexMember } = setup.people;
+    const window = { fromAt: "2000-01-01T00:00:00.000Z", toAt: "2100-01-01T00:00:00.000Z" };
+    const threadsSeenBy = (userId: UserId, spaceLimit?: SpaceId) =>
+      setup.usage.threadRequests(window).pipe(
+        spaceLimit === undefined
+          ? CommandActor.actAs(userId)
+          : CommandActor.actAsResolved({ _tag: "User", userId, spaceLimit }),
+        Effect.map((requests) => requests.map((request) => request.threadId).toSorted()),
+      );
+    const all = [grace.threadId, ada.threadId, gus.threadId].toSorted();
+    assert.deepEqual(yield* threadsSeenBy(setup.ownerId), all);
+    assert.deepEqual(yield* threadsSeenBy(member), [grace.threadId]);
+    assert.deepEqual(yield* threadsSeenBy(globexMember), [gus.threadId]);
+    assert.deepEqual(yield* threadsSeenBy(admin), [grace.threadId, ada.threadId].toSorted());
+    assert.deepEqual(yield* threadsSeenBy(setup.ownerId, setup.globexId), [gus.threadId]);
+    // Tokens and the dialect come along; the window bounds them.
+    const [first] = yield* setup.usage.threadRequests(window).pipe(CommandActor.actAs(member));
+    assert.deepEqual([first?.shape, first?.inputTokens, first?.outputTokens], ["anthropic", 11, 7]);
+    assert.deepEqual(
+      yield* setup.usage
+        .threadRequests({ fromAt: "2000-01-01T00:00:00.000Z", toAt: "2000-01-02T00:00:00.000Z" })
+        .pipe(CommandActor.actAs(setup.ownerId)),
+      [],
+    );
+    // Without a signed-in User: refused, as the summary is.
+    const anonymous = yield* setup.usage.threadRequests(window).pipe(Effect.flip);
+    assert.equal(anonymous.reason, "forbidden");
+  }),
+);
+
 live("an Admin sees their Organization's usage, never another Organization's", () =>
   Effect.gen(function* () {
     const setup = yield* hub;

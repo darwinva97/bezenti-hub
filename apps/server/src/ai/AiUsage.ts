@@ -61,12 +61,36 @@ export class AiUsage extends Context.Service<
      * Thread's per-request rows, narrowed the same way.
      */
     readonly summary: (input: AiUsageSummaryInput) => Effect.Effect<AiUsageSummary, AiUsageError>;
+    /**
+     * Hub turns' answered requests with tokens between two instants (per-request rows: the last
+     * 90 days), narrowed to what the session may see exactly as `summary` is. Feeds the Usage
+     * dialog's Cost and Tokens (ticket 16): a Hub turn's own transcript is never scanned there.
+     */
+    readonly threadRequests: (window: {
+      readonly fromAt: string;
+      readonly toAt: string;
+    }) => Effect.Effect<ReadonlyArray<AiUsageThreadRequest>, AiUsageError>;
     /** Deletes per-request rows older than the retention; the summaries stay. Returns how many. */
     readonly sweep: Effect.Effect<number>;
     /** Subscribes now: one outcome for each request written or lost from then on (for tests). */
     readonly outcomes: Effect.Effect<Stream.Stream<AiUsageWriteOutcome>, never, Scope.Scope>;
   }
 >()("t3/ai/AiUsage") {}
+
+/** One Hub turn's request through the gateway, with the tokens its answer reported. */
+export interface AiUsageThreadRequest {
+  readonly usageId: string;
+  readonly at: string;
+  readonly shape: string;
+  readonly model: string;
+  readonly threadId: string;
+  /** The driver of the Thread's latest provider session (`claudeAgent`, `codex`…); or empty. */
+  readonly driver: string;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+}
 
 /** A request the log took in: stored, or lost to a storage failure (logged). */
 export interface AiUsageWriteOutcome {
@@ -336,29 +360,17 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       ),
     );
 
-    const summary = Effect.fn("AiUsage.summary")(function* (input: AiUsageSummaryInput) {
+    /**
+     * Who the session may see, from its rights and never from the data: the Owner (not limited to
+     * one Space) all; others their own rows and every row of each Organization they run. `visible`
+     * holds that, and a session bound to one Space reaches that Space only.
+     */
+    const viewer = Effect.fn("AiUsage.viewer")(function* () {
       const userId = yield* actor;
       const can = yield* spaces
         .authorizer(userId)
         .pipe(Effect.catch(storage("check what you may do")));
       const limit = yield* CommandActor.spaceLimit;
-
-      const now = yield* Clock.currentTimeMillis;
-      // Days are checked as given: an impossible one (2026-02-31) is refused, never rolled over.
-      for (const day of [input.fromDay, input.toDay]) {
-        if (day !== undefined && Number.isNaN(dayMillis(day))) {
-          return yield* fail("invalid", "Those days are not dates.");
-        }
-      }
-      const toDay = input.toDay ?? dayOf(now);
-      const fromDay = input.fromDay ?? dayOf(dayMillis(toDay) - (DEFAULT_WINDOW_DAYS - 1) * DAY_MS);
-      if (fromDay > toDay) return yield* fail("invalid", "The first day is after the last.");
-      if ((dayMillis(toDay) - dayMillis(fromDay)) / DAY_MS >= MAX_WINDOW_DAYS) {
-        return yield* fail("invalid", `Ask for at most ${MAX_WINDOW_DAYS} days at a time.`);
-      }
-
-      // Who the session may see, from its rights and never from the data: the Owner (not limited
-      // to one Space) all; others their own rows and every row of each Organization they run.
       const everything = can("aiAccount.manage", AccessPolicy.installation);
       let administered: ReadonlyArray<SpaceId> = [];
       const readSpaces = new Map<
@@ -379,19 +391,39 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         );
       }
       const scope: AiUsageScope = everything ? "all" : administered.length > 0 ? "spaces" : "own";
+      const visible = sql.and([
+        everything
+          ? sql`1 = 1`
+          : sql.or([
+              sql`user_id = ${userId}`,
+              ...(administered.length > 0 ? [sql.in("space_id", administered)] : []),
+            ]),
+        ...(limit === undefined ? [] : [sql`space_id = ${limit}`]),
+      ]);
+      return { userId, can, everything, readSpaces, scope, visible };
+    });
 
-      const visible = everything
-        ? sql`1 = 1`
-        : sql.or([
-            sql`user_id = ${userId}`,
-            ...(administered.length > 0 ? [sql.in("space_id", administered)] : []),
-          ]);
+    const summary = Effect.fn("AiUsage.summary")(function* (input: AiUsageSummaryInput) {
+      const { userId, can, everything, readSpaces, scope, visible } = yield* viewer();
+
+      const now = yield* Clock.currentTimeMillis;
+      // Days are checked as given: an impossible one (2026-02-31) is refused, never rolled over.
+      for (const day of [input.fromDay, input.toDay]) {
+        if (day !== undefined && Number.isNaN(dayMillis(day))) {
+          return yield* fail("invalid", "Those days are not dates.");
+        }
+      }
+      const toDay = input.toDay ?? dayOf(now);
+      const fromDay = input.fromDay ?? dayOf(dayMillis(toDay) - (DEFAULT_WINDOW_DAYS - 1) * DAY_MS);
+      if (fromDay > toDay) return yield* fail("invalid", "The first day is after the last.");
+      if ((dayMillis(toDay) - dayMillis(fromDay)) / DAY_MS >= MAX_WINDOW_DAYS) {
+        return yield* fail("invalid", `Ask for at most ${MAX_WINDOW_DAYS} days at a time.`);
+      }
+
       const filters = [
         sql`day >= ${fromDay}`,
         sql`day <= ${toDay}`,
         visible,
-        // A session bound to one Space reaches that Space only.
-        ...(limit === undefined ? [] : [sql`space_id = ${limit}`]),
         ...(input.spaceId === undefined ? [] : [sql`space_id = ${input.spaceId}`]),
         ...(input.userId === undefined ? [] : [sql`user_id = ${input.userId}`]),
         ...(input.accountId === undefined ? [] : [sql`account_id = ${input.accountId}`]),
@@ -556,8 +588,40 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       } satisfies AiUsageLabels;
     });
 
+    const threadRequests = Effect.fn("AiUsage.threadRequests")(function* (window: {
+      readonly fromAt: string;
+      readonly toAt: string;
+    }) {
+      const { visible } = yield* viewer();
+      // The driver of the Thread's latest provider session (empty when none is left): the shape
+      // alone cannot tell Codex from OpenCode or Pi.
+      return yield* sql<AiUsageThreadRequest>`
+        SELECT u.usage_id AS "usageId", u.at, u.shape, u.model, u.thread_id AS "threadId",
+          COALESCE((
+            SELECT ps.driver FROM orchestration_v2_projection_provider_sessions ps
+            WHERE ps.thread_id = u.thread_id ORDER BY ps.updated_at DESC LIMIT 1
+          ), '') AS "driver",
+          u.input_tokens AS "inputTokens", u.output_tokens AS "outputTokens",
+          u.cache_read_tokens AS "cacheReadTokens", u.cache_write_tokens AS "cacheWriteTokens"
+        FROM (
+          SELECT * FROM ai_usage
+          WHERE ${sql.and([
+            sql`at >= ${window.fromAt}`,
+            sql`at < ${window.toAt}`,
+            sql`thread_id IS NOT NULL`,
+            sql`model IS NOT NULL`,
+            sql`status < 400`,
+            sql`(input_tokens IS NOT NULL OR output_tokens IS NOT NULL)`,
+            visible,
+          ])}
+        ) u
+        ORDER BY u.at, u.usage_id
+      `.pipe(Effect.catch(storage("read the AI usage")));
+    });
+
     return AiUsage.of({
       summary,
+      threadRequests,
       sweep,
       outcomes: Effect.map(PubSub.subscribe(outcomes), Stream.fromSubscription),
     });

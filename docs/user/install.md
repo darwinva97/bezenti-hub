@@ -986,7 +986,7 @@ authenticator code. Any other loan waits for that Space to accept it.
   capped (see below).
 
 **Accept.** An Admin of the organization, or the owner of the Personal space,
-sees the loan under **Settings → Loans → Waiting** with the machine, its
+sees the loan under **Settings → Environments → Loans** with the machine, its
 lender and its limits, and accepts it with their passkey or authenticator code.
 A password alone cannot accept a machine. The acceptance warns: «<Lender>
 controls this machine and can see everything that runs on it: files,
@@ -1008,7 +1008,7 @@ Sandboxes stop and no new turn starts on them, while the owner's own work goes
 on.
 
 **Take it back, or give it back.** The lender's **Take back** (in **Settings →
-Loans → Lent**) or the Space's **Give back** ends the loan at once: no new turn
+Environments → Loans**) or the Space's **Give back** ends the loan at once: no new turn
 starts on that machine for the Space. Turns already running are stopped and
 get up to two minutes to save their last checkpoint; changes made by hand
 since the last turn may be lost. Then the Sandbox and its files are deleted

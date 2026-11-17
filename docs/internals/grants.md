@@ -56,3 +56,13 @@ there (`grant.give`, `grant.accept`, `grant.reject`, `grant.cancel`, `grant.end`
   allowed the change (`prepareGive`/`prepareAccept`) and required again by the change itself, so
   the WS side can never make one active.
 - No MCP tool: lending is a person's decision of trust.
+
+## Clients
+
+Web, Settings → Environments: **Lend…** on the User's own personal machines
+(`LendMachineDialog`: the Space from `grants.targets`, the limits, what the machine said of itself
+and the lender's risks; the strong factor when the loan starts active) and the **Loans** section
+(`GrantsSettings`: waiting loans to accept with a strong factor or reject, borrowed machines to give
+back, lent ones to take back or cancel, with the Sandbox's state and disk). A lent machine shows in
+the Space's lists as «Lent to <Space> by <lender>, who sees everything that runs on it»
+(`environmentUseDescription`). Mobile and the command palette come later (Grants ticket 12).

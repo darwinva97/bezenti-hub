@@ -38,6 +38,7 @@ import { AccountSettingsSection } from "./AccountSettingsSection";
 import { AuditLogSettingsSection } from "./AuditLogSettingsSection";
 import { MasterKeySettingsSection } from "./MasterKeySettingsSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
+import { GrantsSettings } from "./GrantsSettings";
 import { HubEnvironmentsSettings } from "./HubEnvironmentsSettings";
 import { HubSandboxesSettings } from "./HubSandboxesSettings";
 import { SandboxImageSettings } from "./SandboxImageSettings";
@@ -1393,6 +1394,7 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
   return (
     <SettingsPageContainer>
       <HubEnvironmentsSettings />
+      <GrantsSettings />
       <HubSandboxesSettings />
       <SandboxImageSettings />
       {desktopBridge ? (

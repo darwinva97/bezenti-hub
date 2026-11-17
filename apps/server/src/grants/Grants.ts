@@ -539,7 +539,11 @@ const make = Effect.gen(function* () {
     }
     const ids = yield* knownTargets(who).pipe(Effect.catch(storage("read the Spaces")));
     const known = yield* targetsOf(ids.map((row) => ({ targetId: row.spaceId })));
+    const host = yield* registry
+      .sandboxHostOf(input.resource.environmentId)
+      .pipe(Effect.catch(storage("read the machine")));
     return {
+      host: Option.getOrNull(host),
       targets: ids.flatMap((row) => {
         const target = known.get(row.spaceId as SpaceId);
         if (target === undefined) return [];

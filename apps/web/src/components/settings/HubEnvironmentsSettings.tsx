@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { LendMachineDialog } from "./GrantsSettings";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { SshInstallDialog } from "./SshInstallDialog";
 import { UsedBySelect } from "./UsedBySelect";
@@ -104,9 +105,20 @@ export function HubEnvironmentsSettings() {
   const isOwner = signedIn && session.data?.isOwner === true;
   // Optional in the session: a session from before the Installation had an Owner names no User.
   const userId = signedIn ? session.data?.userId : undefined;
+  // A machine lent to a Space is its lender's: nobody here renames, removes or rededicates it.
   const manages = (environment: HubEnvironmentSummary) =>
-    isOwner ||
-    (userId !== undefined && environment.kind === "external" && environment.ownerUserId === userId);
+    environment.lent === undefined &&
+    (isOwner ||
+      (userId !== undefined &&
+        environment.kind === "external" &&
+        environment.ownerUserId === userId));
+  // Only its owner lends a personal machine (Grants).
+  const lends = (environment: HubEnvironmentSummary) =>
+    userId !== undefined &&
+    environment.kind === "external" &&
+    environment.mode === "personal" &&
+    environment.ownerUserId === userId;
+  const [lending, setLending] = useState<HubEnvironmentSummary>();
   const [environments, setEnvironments] = useState<ReadonlyArray<HubEnvironmentSummary> | null>(
     null,
   );
@@ -195,6 +207,16 @@ export function HubEnvironmentsSettings() {
               control={
                 manages(environment) && environment.kind !== "sandbox" ? (
                   <div className="flex gap-1">
+                    {lends(environment) ? (
+                      <Button
+                        aria-label={`Lend ${environment.name} to another Space`}
+                        size="xs"
+                        variant="outline"
+                        onClick={() => setLending(environment)}
+                      >
+                        Lend…
+                      </Button>
+                    ) : null}
                     {isOwner && environment.kind === "external" ? (
                       <Button
                         aria-label={`Change who uses ${environment.name}`}
@@ -266,6 +288,9 @@ export function HubEnvironmentsSettings() {
         />
       ) : null}
       {error ? <SettingsRow title="Something went wrong" description={error} /> : null}
+      {lending !== undefined ? (
+        <LendMachineDialog machine={lending} onClose={() => setLending(undefined)} />
+      ) : null}
       {renaming !== undefined ? (
         <Dialog open onOpenChange={(open) => (open ? undefined : setRenaming(undefined))}>
           <DialogPopup className="sm:max-w-sm">

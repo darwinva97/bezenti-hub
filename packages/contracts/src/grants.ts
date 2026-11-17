@@ -137,7 +137,11 @@ export const GrantTarget = Schema.Struct({
 });
 export type GrantTarget = typeof GrantTarget.Type;
 
-export const GrantTargets = Schema.Struct({ targets: Schema.Array(GrantTarget) });
+export const GrantTargets = Schema.Struct({
+  targets: Schema.Array(GrantTarget),
+  /** What the machine last said of hosting Sandboxes; null when it never did. */
+  host: Schema.NullOr(SandboxHostReport),
+});
 export type GrantTargets = typeof GrantTargets.Type;
 
 export const GrantGiveInput = Schema.Struct({

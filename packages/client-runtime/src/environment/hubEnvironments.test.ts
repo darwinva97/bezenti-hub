@@ -447,6 +447,13 @@ describe("the same names, labels and colours on every client", () => {
     expect(environmentUseDescription(sandbox, { spaceName: "Acme" })).toBe("Sandbox of Acme");
     expect(environmentUseDescription(vps, { spaceName: "Acme" })).toBe("Dedicated to Acme");
     expect(environmentUseDescription(vps)).toBe("Dedicated to a Space");
+    // A machine lent to the Space (Grants) says by whom, and that they see what runs there.
+    expect(
+      environmentUseDescription(
+        { ...vps, lent: { grantId: "grant-1", lenderName: "Ana" } },
+        { spaceName: "Acme" },
+      ),
+    ).toBe("Lent to Acme by Ana, who sees everything that runs on it");
     expect(environmentUseDescription(laptop, { viewerUserId: "user-1" })).toBe(
       "Your personal machine",
     );

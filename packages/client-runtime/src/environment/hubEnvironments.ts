@@ -325,7 +325,7 @@ export const ENVIRONMENT_USE_LABELS: Record<EnvironmentUse, string> = {
  * «Sandbox of Acme», «Dedicated to Acme», «Your personal machine», «Grace's personal machine».
  */
 export function environmentUseDescription(
-  environment: Pick<HubEnvironmentSummary, "kind" | "mode" | "ownerUserId">,
+  environment: Pick<HubEnvironmentSummary, "kind" | "mode" | "ownerUserId" | "lent">,
   context: {
     /** The machine's Space by name; null or undefined when not known. */
     readonly spaceName?: string | null | undefined;
@@ -341,6 +341,10 @@ export function environmentUseDescription(
     case "sandbox":
       return context.spaceName == null ? "Sandbox" : `Sandbox of ${context.spaceName}`;
     case "dedicated":
+      // A machine lent to the Space (Grants): its lender controls it and sees what runs there.
+      if (environment.lent !== undefined) {
+        return `Lent to ${context.spaceName ?? "a Space"} by ${environment.lent.lenderName ?? "another User"}, who sees everything that runs on it`;
+      }
       return `Dedicated to ${context.spaceName ?? "a Space"}`;
     case "personal":
       if (context.viewerUserId !== undefined && environment.ownerUserId === context.viewerUserId) {

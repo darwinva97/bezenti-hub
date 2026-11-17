@@ -435,12 +435,12 @@ live("the Usage dialog's Hub turns follow the same rules as the summary (ticket 
           : CommandActor.actAsResolved({ _tag: "User", userId, spaceLimit }),
         Effect.map((requests) => requests.map((request) => request.threadId).toSorted()),
       );
-    const all = [grace.threadId, ada.threadId, gus.threadId].toSorted();
-    assert.deepEqual(yield* threadsSeenBy(setup.ownerId), all);
+    // Grants ticket 04: the Owner reads the Threads of Spaces they run only (here none).
+    assert.deepEqual(yield* threadsSeenBy(setup.ownerId), []);
     assert.deepEqual(yield* threadsSeenBy(member), [grace.threadId]);
     assert.deepEqual(yield* threadsSeenBy(globexMember), [gus.threadId]);
     assert.deepEqual(yield* threadsSeenBy(admin), [grace.threadId, ada.threadId].toSorted());
-    assert.deepEqual(yield* threadsSeenBy(setup.ownerId, setup.globexId), [gus.threadId]);
+    assert.deepEqual(yield* threadsSeenBy(setup.ownerId, setup.globexId), []);
     // Tokens and the dialect come along; the window bounds them.
     const [first] = yield* setup.usage.threadRequests(window).pipe(CommandActor.actAs(member));
     assert.deepEqual([first?.shape, first?.inputTokens, first?.outputTokens], ["anthropic", 11, 7]);
@@ -482,7 +482,7 @@ live("the Usage dialog's Hub turns follow the same rules as the summary (ticket 
     yield* dialogAs(undefined);
     yield* dialogAs(setup.ownerId);
     assert.deepEqual(handed.slice(0, 3), [[grace.threadId], [gus.threadId], []]);
-    assert.deepEqual([...(handed[3] ?? [])].toSorted(), all);
+    assert.deepEqual([...(handed[3] ?? [])], []);
   }),
 );
 

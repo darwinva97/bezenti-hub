@@ -130,6 +130,7 @@ interface SummaryRow {
   readonly spaceId: string;
   readonly accountId: string;
   readonly model: string;
+  readonly grantId: string;
   readonly requests: number;
   readonly failedRequests: number;
   readonly unknownRequests: number;
@@ -370,9 +371,9 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
     );
 
     /**
-     * Who the session may see, from its rights and never from the data: the Owner (not limited to
-     * one Space) all; others their own rows and every row of each Organization they run. `visible`
-     * holds that, and a session bound to one Space reaches that Space only.
+     * Who the session may see, from its rights, never the data: `visible` (summary rows: all for
+     * the Owner; else own, run Organizations' and given loans', Grants 04) and `visibleThreads`
+     * (own and run Spaces' only, never through a loan). A session bound to one Space: that Space.
      */
     const viewer = Effect.fn("AiUsage.viewer")(function* () {
       const userId = yield* actor;
@@ -381,6 +382,24 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         .pipe(Effect.catch(storage("check what you may do")));
       const limit = yield* CommandActor.spaceLimit;
       const everything = can("aiAccount.manage", AccessPolicy.installation);
+      const principal = yield* spaces
+        .principalOf(userId)
+        .pipe(Effect.catch(storage("check what you may do")));
+      // The Organizations they run, where they act for its loans (and, for the Owner, read Threads).
+      const runs = [...principal.roles].flatMap(([spaceId, role]) =>
+        role === "admin" ? [spaceId] : [],
+      );
+      // Loans they may see from the lender's side: their own, and their Organizations' as Admins.
+      const given = yield* sql<{ readonly grantId: string; readonly resourceId: string }>`
+        SELECT grant_id AS "grantId", resource_id AS "resourceId" FROM grants
+        WHERE resource_kind = 'ai-account' AND target_kind = 'space' AND ${sql.or([
+          sql`(lender_kind = 'user' AND lender_id = ${userId})`,
+          ...(runs.length === 0
+            ? []
+            : [sql`(lender_kind = 'organization' AND ${sql.in("lender_id", runs)})`]),
+        ])}
+      `.pipe(Effect.catch(storage("read your loans")));
+      const givenIds = given.map((grant) => grant.grantId);
       let administered: ReadonlyArray<SpaceId> = [];
       const readSpaces = new Map<
         SpaceId,
@@ -400,20 +419,41 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         );
       }
       const scope: AiUsageScope = everything ? "all" : administered.length > 0 ? "spaces" : "own";
+      const bound = limit === undefined ? [] : [sql`space_id = ${limit}`];
+      const own = [
+        sql`user_id = ${userId}`,
+        ...(administered.length > 0 ? [sql.in("space_id", administered)] : []),
+      ];
       const visible = sql.and([
         everything
           ? sql`1 = 1`
-          : sql.or([
-              sql`user_id = ${userId}`,
-              ...(administered.length > 0 ? [sql.in("space_id", administered)] : []),
-            ]),
-        ...(limit === undefined ? [] : [sql`space_id = ${limit}`]),
+          : sql.or([...own, ...(givenIds.length > 0 ? [sql.in("grant_id", givenIds)] : [])]),
+        ...bound,
       ]);
-      return { userId, can, everything, readSpaces, scope, visible };
+      // Threads: one's own and those of the Spaces one runs (the Owner's rights reach no further).
+      const threadSpaces = [
+        `personal:${userId}`,
+        ...(everything ? runs : administered.filter((spaceId) => runs.includes(spaceId))),
+      ];
+      const visibleThreads = sql.and([
+        sql.or([sql`user_id = ${userId}`, sql.in("space_id", threadSpaces)]),
+        ...bound,
+      ]);
+      return {
+        userId,
+        can,
+        everything,
+        readSpaces,
+        scope,
+        visible,
+        visibleThreads,
+        given,
+      };
     });
 
     const summary = Effect.fn("AiUsage.summary")(function* (input: AiUsageSummaryInput) {
-      const { userId, can, everything, readSpaces, scope, visible } = yield* viewer();
+      const { userId, can, everything, readSpaces, scope, visible, visibleThreads, given } =
+        yield* viewer();
 
       const now = yield* Clock.currentTimeMillis;
       // Days are checked as given: an impossible one (2026-02-31) is refused, never rolled over.
@@ -432,11 +472,19 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       const filters = [
         sql`day >= ${fromDay}`,
         sql`day <= ${toDay}`,
-        visible,
+        // A Thread's rows never come through a loan given, and the Owner's only where they run.
+        input.threadId === undefined ? visible : visibleThreads,
         ...(input.spaceId === undefined ? [] : [sql`space_id = ${input.spaceId}`]),
         ...(input.userId === undefined ? [] : [sql`user_id = ${input.userId}`]),
         ...(input.accountId === undefined ? [] : [sql`account_id = ${input.accountId}`]),
         ...(input.threadId === undefined ? [] : [sql`thread_id = ${input.threadId}`]),
+        ...(input.grantId === undefined
+          ? []
+          : [
+              input.threadId === undefined
+                ? sql`grant_id = ${input.grantId}`
+                : sql`COALESCE(grant_id, '') = ${input.grantId}`,
+            ]),
       ];
       const maxRows = options.maxRows ?? DEFAULT_MAX_ROWS;
 
@@ -444,18 +492,18 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         input.threadId === undefined
           ? yield* sql<SummaryRow>`
               SELECT day, user_id AS "userId", space_id AS "spaceId", account_id AS "accountId",
-                model, requests, failed_requests AS "failedRequests",
+                model, grant_id AS "grantId", requests, failed_requests AS "failedRequests",
                 unknown_requests AS "unknownRequests", input_tokens AS "inputTokens",
                 output_tokens AS "outputTokens", cache_read_tokens AS "cacheReadTokens",
                 cache_write_tokens AS "cacheWriteTokens"
               FROM ai_usage_daily WHERE ${sql.and(filters)}
-              ORDER BY day DESC, space_id, user_id, account_id, model
+              ORDER BY day DESC, space_id, user_id, account_id, model, grant_id
               LIMIT ${maxRows + 1}
             `.pipe(Effect.catch(storage("read the AI usage")))
           : yield* sql<SummaryRow>`
               SELECT day, user_id AS "userId", space_id AS "spaceId",
                 COALESCE(account_id, '') AS "accountId", COALESCE(model, '') AS "model",
-                COUNT(*) AS "requests",
+                COALESCE(grant_id, '') AS "grantId", COUNT(*) AS "requests",
                 SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS "failedRequests",
                 SUM(CASE WHEN status < 400 AND input_tokens IS NULL AND output_tokens IS NULL
                   THEN 1 ELSE 0 END) AS "unknownRequests",
@@ -464,7 +512,8 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
                 COALESCE(SUM(cache_read_tokens), 0) AS "cacheReadTokens",
                 COALESCE(SUM(cache_write_tokens), 0) AS "cacheWriteTokens"
               FROM ai_usage WHERE ${sql.and(filters)}
-              GROUP BY day, user_id, space_id, COALESCE(account_id, ''), COALESCE(model, '')
+              GROUP BY day, user_id, space_id, COALESCE(account_id, ''), COALESCE(model, ''),
+                COALESCE(grant_id, '')
               ORDER BY day DESC, space_id, user_id, account_id, model
               LIMIT ${maxRows + 1}
             `.pipe(Effect.catch(storage("read the AI usage")));
@@ -477,6 +526,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         spaceId: row.spaceId as SpaceId,
         accountId: row.accountId === "" ? null : (row.accountId as AiAccountId),
         model: row.model === "" ? null : row.model,
+        grantId: row.grantId === "" ? null : row.grantId,
         requests: row.requests,
         failedRequests: row.failedRequests,
         unknownRequests: row.unknownRequests,
@@ -516,7 +566,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
             Effect.catch(storage("read the AI usage")),
           );
 
-      const labels = yield* labelsOf(userId, everything, can, readSpaces, outRows);
+      const labels = yield* labelsOf(userId, everything, can, readSpaces, outRows, given);
       return {
         fromDay,
         toDay,
@@ -539,7 +589,17 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         { readonly resource: AccessPolicy.SpaceResource; readonly name: string }
       >,
       rows: ReadonlyArray<AiUsageRow>,
+      given: ReadonlyArray<{ readonly grantId: string; readonly resourceId: string }>,
     ) {
+      // A lender knows where they lent and what: those Spaces' and accounts' names (Grants 04).
+      const givenIds = new Set(given.map((grant) => grant.grantId));
+      const lentTo = new Set(
+        rows.flatMap((row) =>
+          row.grantId !== undefined && row.grantId !== null && givenIds.has(row.grantId)
+            ? [row.spaceId as string]
+            : [],
+        ),
+      );
       const userIds = [...new Set(rows.map((row) => row.userId))];
       const spaceIds = [...new Set(rows.map((row) => row.spaceId))];
       const accountIds = [
@@ -573,7 +633,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
               WHERE ${sql.in("account_id", accountIds)}
             `.pipe(Effect.catch(storage("read the AI accounts")));
       // Anyone but the Owner learns an account's name only if they may use it somewhere.
-      const mayName = new Set<string>();
+      const mayName = new Set<string>(given.map((grant) => grant.resourceId));
       if (!everything && accounts.length > 0) {
         const byUse = yield* allowed
           .forSpaces(viewer, spaceIds)
@@ -587,7 +647,15 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
           const space = knownSpaces.get(id);
           return space === undefined
             ? []
-            : [{ id, name: everything || can("space.view", space.resource) ? space.name : null }];
+            : [
+                {
+                  id,
+                  name:
+                    everything || lentTo.has(id) || can("space.view", space.resource)
+                      ? space.name
+                      : null,
+                },
+              ];
         }),
         accounts: accounts.map((account) => ({
           id: account.id as AiAccountId,
@@ -601,7 +669,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       readonly fromAt: string;
       readonly toAt: string;
     }) {
-      const { visible } = yield* viewer();
+      const { visibleThreads } = yield* viewer();
       // The driver of the Thread's latest provider session (empty when none is left): the shape
       // alone cannot tell Codex from OpenCode or Pi.
       return yield* sql<AiUsageThreadRequest>`
@@ -621,7 +689,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
             sql`model IS NOT NULL`,
             sql`status < 400`,
             sql`(input_tokens IS NOT NULL OR output_tokens IS NOT NULL)`,
-            visible,
+            visibleThreads,
           ])}
         ) u
         ORDER BY u.at, u.usage_id

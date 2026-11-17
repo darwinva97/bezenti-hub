@@ -12,7 +12,7 @@ import type {
   SandboxHostReport,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { Fragment, useEffect, useEffectEvent, useState } from "react";
 
 import { acceptGrant, giveGrant } from "../../environments/primary/grants";
 import { fetchAccount } from "../../environments/primary/userAccounts";
@@ -35,6 +35,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { emptyStepUp, StepUpFields, toStepUp } from "./AccountSettingsSection";
 import { capUseText, gib, limitsText, spaceLabel, subscriptionTermsWarning } from "./grantText";
 import { ChangeCapsDialog } from "./LendAiAccountDialog";
+import { LoanUsage } from "./LoanUsage";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 const GIB = 1024 ** 3;
@@ -375,6 +376,25 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   } | null>(null);
   const [ending, setEnding] = useState<Grant | null>(null);
   const [capping, setCapping] = useState<Grant | null>(null);
+  // Grants ticket 04: one AI account loan's use, opened from its row.
+  const [usageOf, setUsageOf] = useState<string | null>(null);
+  const loanUseButton = (grant: Grant) =>
+    grant.resource.kind === "ai-account" ? (
+      <Button
+        size="xs"
+        variant="ghost"
+        aria-expanded={usageOf === grant.id}
+        onClick={() => setUsageOf(usageOf === grant.id ? null : grant.id)}
+      >
+        Use
+      </Button>
+    ) : null;
+  const usagePanel = (grant: Grant) =>
+    usageOf === grant.id ? (
+      <div className="px-4 pb-3">
+        <LoanUsage environmentId={environmentId} grant={grant} />
+      </div>
+    ) : null;
 
   const fetchLoans = (target: EnvironmentId) =>
     Promise.all([
@@ -483,70 +503,80 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
         />
       ))}
       {borrowed.map((grant) => (
-        <SettingsRow
-          key={grant.id}
-          title={`${grant.resource.name ?? `A ${nounOf(grant)}`} in ${targetLabel(grant, "your Space")}`}
-          description={
-            <>
-              {loanDescription(grant, "received")}
-              <br />
-              <span className="text-muted-foreground">{lenderSees(grant)}</span>
-            </>
-          }
-          control={
-            mayChange && grant.can.return ? (
-              <Button
-                disabled={pending}
-                size="xs"
-                variant="outline"
-                onClick={() => setEnding(grant)}
-              >
-                Give back
-              </Button>
-            ) : null
-          }
-        />
-      ))}
-      {(given ?? []).map((grant) => (
-        <SettingsRow
-          key={grant.id}
-          title={`${grant.resource.name ?? `Your ${nounOf(grant)}`}`}
-          description={loanDescription(grant, "given")}
-          control={
-            mayChange && (grant.can.revoke || grant.can.cancel || grant.can.setLimits) ? (
+        <Fragment key={grant.id}>
+          <SettingsRow
+            title={`${grant.resource.name ?? `A ${nounOf(grant)}`} in ${targetLabel(grant, "your Space")}`}
+            description={
+              <>
+                {loanDescription(grant, "received")}
+                <br />
+                <span className="text-muted-foreground">{lenderSees(grant)}</span>
+              </>
+            }
+            control={
               <div className="flex gap-1">
-                {grant.resource.kind === "ai-account" && grant.can.setLimits ? (
+                {loanUseButton(grant)}
+                {mayChange && grant.can.return ? (
                   <Button
                     disabled={pending}
                     size="xs"
                     variant="outline"
-                    onClick={() => setCapping(grant)}
+                    onClick={() => setEnding(grant)}
                   >
-                    Caps…
-                  </Button>
-                ) : null}
-                {grant.can.revoke || grant.can.cancel ? (
-                  <Button
-                    disabled={pending}
-                    size="xs"
-                    variant="destructive-outline"
-                    onClick={() =>
-                      grant.can.cancel
-                        ? void run(() =>
-                            settle(
-                              commands.cancel({ environmentId, input: { grantId: grant.id } }),
-                            ),
-                          )
-                        : setEnding(grant)
-                    }
-                  >
-                    {grant.can.cancel ? "Cancel" : "Take back"}
+                    Give back
                   </Button>
                 ) : null}
               </div>
-            ) : null
-          }
-        />
+            }
+          />
+          {usagePanel(grant)}
+        </Fragment>
+      ))}
+      {(given ?? []).map((grant) => (
+        <Fragment key={grant.id}>
+          <SettingsRow
+            title={`${grant.resource.name ?? `Your ${nounOf(grant)}`}`}
+            description={loanDescription(grant, "given")}
+            control={
+              <div className="flex gap-1">
+                {loanUseButton(grant)}
+                {mayChange && (grant.can.revoke || grant.can.cancel || grant.can.setLimits) ? (
+                  <div className="flex gap-1">
+                    {grant.resource.kind === "ai-account" && grant.can.setLimits ? (
+                      <Button
+                        disabled={pending}
+                        size="xs"
+                        variant="outline"
+                        onClick={() => setCapping(grant)}
+                      >
+                        Caps…
+                      </Button>
+                    ) : null}
+                    {grant.can.revoke || grant.can.cancel ? (
+                      <Button
+                        disabled={pending}
+                        size="xs"
+                        variant="destructive-outline"
+                        onClick={() =>
+                          grant.can.cancel
+                            ? void run(() =>
+                                settle(
+                                  commands.cancel({ environmentId, input: { grantId: grant.id } }),
+                                ),
+                              )
+                            : setEnding(grant)
+                        }
+                      >
+                        {grant.can.cancel ? "Cancel" : "Take back"}
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            }
+          />
+          {usagePanel(grant)}
+        </Fragment>
       ))}
       {error === null ? null : <SettingsRow title="Something went wrong" description={error} />}
       {capping !== null ? (

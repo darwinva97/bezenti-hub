@@ -23,6 +23,8 @@ export const AiUsageSummaryInput = Schema.Struct({
   accountId: Schema.optionalKey(AiAccountId),
   /** One Thread's usage (its per-request rows, kept 90 days). */
   threadId: Schema.optionalKey(ThreadId),
+  /** One loan's usage (Grants ticket 04): its lender sees it by Space and User, never a Thread. */
+  grantId: Schema.optionalKey(Schema.String),
 });
 export type AiUsageSummaryInput = typeof AiUsageSummaryInput.Type;
 
@@ -46,6 +48,8 @@ export const AiUsageRow = Schema.Struct({
   /** Null for a request that reached no account. */
   accountId: Schema.NullOr(AiAccountId),
   model: Schema.NullOr(Schema.String),
+  /** The Grant that lent the account (Grants ticket 04); null: the Space's own (or none). */
+  grantId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   ...AiUsageTotals.fields,
 });
 export type AiUsageRow = typeof AiUsageRow.Type;

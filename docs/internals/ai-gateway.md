@@ -497,9 +497,18 @@ shown, **never limited**: no quota, cap or block anywhere.
   reason): the Owner (not limited to one Space) everything; an Organization's Admin
   (`AccessPolicy` `aiUsage.viewSpace`, decided on the Space, archived ones included) every row of
   their Organizations plus their own; anyone else only their own rows. An agent bound to one Space
-  sees that Space only. A filter (Space, User, account, Thread) only narrows, never widens. Names:
-  a User's and a Space's come with the rows they appear in; an AI account's name only for the
-  Owner and for whoever may use it somewhere now (else `null`: «Claude account»).
+  sees that Space only. A filter (Space, User, account, Thread, Grant) only narrows, never widens.
+  Names: a User's and a Space's come with the rows they appear in; an AI account's name only for
+  the Owner and for whoever may use it somewhere now (else `null`: «Claude account»).
+- **Loans (Grants ticket 04).** Each row says the Grant it went through (`grantId`, null: the
+  Space's own). Whoever may `grant.viewGiven` (the lending User; a lending Organization's Admins)
+  also sees the daily rows of their loans: by borrowing Space, User, day and model, with the names
+  of those Users, that Space and their account; never the borrowers' use of other accounts. A
+  Thread's rows (the `threadId` filter, the Usage dialog's `threadRequests`) never come through a
+  loan, and the Owner reads only their own and those of the Spaces they run: every Space's
+  consumption, no Thread of anyone else's. Loans → «Use» shows a loan's last 30 days to each side
+  (narrowed by the Hub), with requests without token counts and what the gateway cannot count
+  said rather than shown as zero.
 - **Doors:** WS only (`aiUsage.summary`, scope `orchestration:read`). No HttpApi endpoint, raw route
   or MCP tool. Windows are at most 366 days (an impossible date is refused); at most 5000 rows answer (`truncated`, totals still whole).
 - **Settings → AI accounts → Usage** (Owner) and the Thread's panel («AI gateway usage») read it.

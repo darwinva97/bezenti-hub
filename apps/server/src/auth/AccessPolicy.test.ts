@@ -253,20 +253,30 @@ const rows: ReadonlyArray<Row> = [
     deny("not-a-member"),
   ],
 
-  // Only the Owner creates Organizations.
+  // Any active User creates Organizations (ticket 18); a disabled or removed one does not.
+  ["Admin creates Organizations", admin, "organization.create", AccessPolicy.installation, allow],
+  ["Member creates Organizations", member, "organization.create", AccessPolicy.installation, allow],
+  ["Guest creates Organizations", guest, "organization.create", AccessPolicy.installation, allow],
   [
-    "Admin cannot create Organizations",
-    admin,
+    "a User in no Organization creates Organizations",
+    personalCreator,
     "organization.create",
     AccessPolicy.installation,
-    deny("owner-only"),
+    allow,
   ],
   [
-    "Member cannot create Organizations",
-    member,
+    "a disabled or removed User creates no Organization",
+    disabledMember,
     "organization.create",
     AccessPolicy.installation,
-    deny("owner-only"),
+    deny("user-inactive"),
+  ],
+  [
+    "an Organization is created on the Installation, not in a Space",
+    member,
+    "organization.create",
+    organization,
+    deny("wrong-resource"),
   ],
 
   // Personal spaces: every User always has theirs, private to them; no permission is involved.

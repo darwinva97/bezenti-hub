@@ -19,11 +19,16 @@ export function HomeHeader(props: HomeHeaderProps) {
     ...spaceChoices.map((choice, choiceIndex) => ({
       id: `space:${choiceIndex}`,
       title: spaceMenuTitle(choice, spaceChoices.length),
-      subactions: choice.spaces.map((space, spaceIndex) => ({
-        id: `space:${choiceIndex}:${spaceIndex}`,
-        title: space.name,
-        state: checkedMenuState(choice.currentSpaceId === space.id),
-      })),
+      subactions: [
+        ...choice.spaces.map((space, spaceIndex) => ({
+          id: `space:${choiceIndex}:${spaceIndex}`,
+          title: space.name,
+          state: checkedMenuState(choice.currentSpaceId === space.id),
+        })),
+        ...(choice.canCreateOrganization === true && props.onCreateOrganization !== undefined
+          ? [{ id: `space:${choiceIndex}:create`, title: "Create organization" }]
+          : []),
+      ],
     })),
     {
       id: "environment",
@@ -64,6 +69,12 @@ export function HomeHeader(props: HomeHeaderProps) {
   ];
   const handleMenuAction = (event: { nativeEvent: { event: string } }) => {
     const id = event.nativeEvent.event;
+    const createPick = /^space:(\d+):create$/u.exec(id);
+    if (createPick) {
+      const choice = spaceChoices[Number(createPick[1])];
+      if (choice) props.onCreateOrganization?.(choice.environmentId);
+      return;
+    }
     const spacePick = /^space:(\d+):(\d+)$/u.exec(id);
     if (spacePick) {
       const choice = spaceChoices[Number(spacePick[1])];

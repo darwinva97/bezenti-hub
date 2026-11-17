@@ -15,6 +15,7 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useEffect, useId, useState } from "react";
 
+import { errorMessageOf } from "../../lib/errorMessage";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import {
   createAndSelectOrganization,
@@ -258,8 +259,9 @@ function CreateOrganizationDialog({ onClose }: { onClose: () => void }) {
     try {
       await createAndSelectOrganization(name.trim());
       onClose();
-    } catch {
-      setError("Could not create the organization. Try again.");
+    } catch (cause) {
+      // A name another Organization has is refused with the reason; say it as the server does.
+      setError(errorMessageOf(cause, "Could not create the organization. Try again."));
       setBusy(false);
     }
   };

@@ -3,6 +3,7 @@ import {
   threadRolePermissions,
 } from "@t3tools/client-runtime/spaces/role-permissions";
 import {
+  createRemoteOrganization,
   fetchRemoteSpaceDirectory,
   makeSpaceSelectionStore,
   type SpaceSelection,
@@ -73,4 +74,24 @@ export function useThreadRolePermissions(
   const selections = useSpaceSelections();
   const view = environmentId === null ? null : (selections.get(environmentId)?.view ?? null);
   return threadRolePermissions(view, thread);
+}
+
+/**
+ * Creates an Organization on the Hub (any User may, and becomes its Admin), then lists it and
+ * makes it the current Space there. Rejects with the server's reason, such as a name in use.
+ */
+export async function createOrganization(
+  connection: SavedRemoteConnection,
+  name: string,
+): Promise<void> {
+  if (connection.bearerToken === null) throw new Error("Sign in to this Hub first.");
+  const created = await runtime.runPromise(
+    createRemoteOrganization({
+      httpBaseUrl: connection.httpBaseUrl,
+      bearerToken: connection.bearerToken,
+      name,
+    }),
+  );
+  await reloadSpaces(connection);
+  selectSpace(connection.environmentId, created.id);
 }

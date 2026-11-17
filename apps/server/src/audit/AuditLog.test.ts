@@ -361,6 +361,12 @@ it.effect(
           target: { kind: "user", id: ownerId },
         },
         {
+          action: "organization.create",
+          actor: user(ownerId),
+          spaceId: acmeId,
+          target: { kind: "space", id: acmeId },
+        },
+        {
           action: "invitation.create",
           actor: user(ownerId),
           spaceId: acmeId,
@@ -479,6 +485,12 @@ it.effect(
           actor: user(ownerId),
           spaceId: acmeId,
           target: { kind: "space", id: acmeId },
+        },
+        {
+          action: "organization.create",
+          actor: user(ownerId),
+          spaceId: globexId,
+          target: { kind: "space", id: globexId },
         },
         {
           action: "organization.archive",
@@ -656,7 +668,7 @@ it.effect("filters by action, actor, Space and date, and pages newest first", ()
     yield* join("linus");
 
     const all = yield* entriesOf(server, owner);
-    assert.lengthOf(all, 5);
+    assert.lengthOf(all, 6);
     const accepted = yield* entriesOf(server, owner, "?action=invitation.accept");
     assert.deepEqual(
       accepted.map((entry) => entry.actor.displayName),
@@ -668,12 +680,12 @@ it.effect("filters by action, actor, Space and date, and pages newest first", ()
       ["invitation.accept"],
     );
     const inAcme = yield* entriesOf(server, owner, `?spaceId=${acmeId}`);
-    assert.lengthOf(inAcme, 4);
+    assert.lengthOf(inAcme, 5);
     assert.isTrue(inAcme.every((entry) => entry.space?.name === "Acme"));
     const byOwner = yield* entriesOf(server, owner, `?actorUserId=${ownerId}&spaceId=${acmeId}`);
     assert.deepEqual(
       byOwner.map((entry) => entry.action),
-      ["invitation.create", "invitation.create"],
+      ["invitation.create", "invitation.create", "organization.create"],
     );
     // The test clock starts at the epoch; Linus joined a day later.
     const sinceLinus = yield* entriesOf(server, owner, "?from=1970-01-02T00:00:00Z");
@@ -681,7 +693,7 @@ it.effect("filters by action, actor, Space and date, and pages newest first", ()
       sinceLinus.map((entry) => entry.action),
       ["invitation.accept", "invitation.create"],
     );
-    assert.lengthOf(yield* entriesOf(server, owner, "?to=1970-01-02T00:00:00Z"), 3);
+    assert.lengthOf(yield* entriesOf(server, owner, "?to=1970-01-02T00:00:00Z"), 4);
 
     const first = yield* auditOf(server, owner, "?limit=2");
     assert.lengthOf(first.body.entries as ReadonlyArray<Entry>, 2);

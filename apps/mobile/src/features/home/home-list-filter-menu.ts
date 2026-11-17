@@ -11,6 +11,8 @@ export interface HomeListSpaceChoice {
   readonly environmentLabel: string;
   readonly spaces: ReadonlyArray<{ readonly id: SpaceId; readonly name: string }>;
   readonly currentSpaceId: SpaceId | null;
+  /** Any signed-in User may create an Organization there (ticket 18). */
+  readonly canCreateOrganization?: boolean;
 }
 
 /** "Space", or "Space · <Hub>" when several Hubs each have their own. */
@@ -51,6 +53,7 @@ export function buildHomeListFilterMenu(props: {
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly spaceChoices?: ReadonlyArray<HomeListSpaceChoice>;
   readonly onSpaceChange?: (environmentId: EnvironmentId, spaceId: SpaceId) => void;
+  readonly onCreateOrganization?: (environmentId: EnvironmentId) => void;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
 
@@ -60,13 +63,25 @@ export function buildHomeListFilterMenu(props: {
     items.push({
       type: "submenu",
       title: spaceMenuTitle(choice, spaceChoices.length),
-      items: choice.spaces.map((space) => ({
-        type: "action" as const,
-        title: space.name,
-        subtitle: "New projects and threads go here",
-        state: choice.currentSpaceId === space.id ? ("on" as const) : ("off" as const),
-        onPress: () => props.onSpaceChange?.(choice.environmentId, space.id),
-      })),
+      items: [
+        ...choice.spaces.map((space) => ({
+          type: "action" as const,
+          title: space.name,
+          subtitle: "New projects and threads go here",
+          state: choice.currentSpaceId === space.id ? ("on" as const) : ("off" as const),
+          onPress: () => props.onSpaceChange?.(choice.environmentId, space.id),
+        })),
+        ...(choice.canCreateOrganization === true && props.onCreateOrganization !== undefined
+          ? [
+              {
+                type: "action" as const,
+                title: "Create organization",
+                subtitle: "A new Space you run",
+                onPress: () => props.onCreateOrganization?.(choice.environmentId),
+              },
+            ]
+          : []),
+      ],
     });
   }
 

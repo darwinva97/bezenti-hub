@@ -274,18 +274,13 @@ export type Action =
 /** Actions that read or manage rather than add something to the Space. */
 const NON_CREATING: ReadonlySet<Action> = new Set([
   "space.view",
-  "organization.create",
   "installationPermission.manage",
   "invitation.manage",
   // Checked beside `invitation.create`, which refuses archived Organizations.
   "admin.manage",
 ]);
 
-const OWNER_ONLY: ReadonlySet<Action> = new Set([
-  "organization.create",
-  "admin.manage",
-  "installationPermission.manage",
-]);
+const OWNER_ONLY: ReadonlySet<Action> = new Set(["admin.manage", "installationPermission.manage"]);
 
 /** Actions on one registered Environment, decided against an `EnvironmentResource`. */
 const ENVIRONMENT_ACTIONS: ReadonlySet<Action> = new Set([
@@ -787,6 +782,10 @@ export function decide(principal: Principal, action: Action, resource: Resource)
   if (action === "aiAccount.manage") {
     if (resource.kind !== "installation") return deny("wrong-resource");
     return principal.isOwner ? allow : deny("owner-only");
+  }
+  // Ticket 18: any active User creates Organizations (and becomes their Admin); no cap yet.
+  if (action === "organization.create") {
+    return resource.kind === "installation" ? allow : deny("wrong-resource");
   }
   // Working in the Space: the same rule as starting a Thread there (archived, frozen, another
   // User's Personal space and an Organization one is not a Member of are refused).

@@ -44,7 +44,7 @@ Todo Project y todo Thread pertenece a un Space: una Organization o el Personal 
 ### Organizations, Personal spaces e Invitations
 
 18. As the Owner, I want to create Organizations, so that I can split my team's work into separate Spaces.
-19. As an Admin, I want to be unable to create Organizations, so that the Owner keeps control of the structure.
+19. As an Admin, I want to be unable to create Organizations, so that the Owner keeps control of the structure. _(Sustituida por el ticket 18: cualquier User crea Organizations y queda como su Admin.)_
 20. As the Owner, I want to invite a person into an Organization with a copyable link that carries their Role, so that I can send it over any chat app.
 21. As an Admin, I want to invite people as Member or Guest into my Organization, so that I can grow my team without bothering the Owner.
 22. As an inviter, I want an Invitation to expire after 7 days, be single-use and be revocable before acceptance, so that a leaked link does little harm.

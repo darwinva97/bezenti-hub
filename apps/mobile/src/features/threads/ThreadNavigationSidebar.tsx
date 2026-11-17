@@ -52,7 +52,7 @@ import { useThreadListSearchMatches } from "./useThreadListSearchMatches";
 import { useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
 import { selectSpace } from "../../state/spaces";
-import { useSpaceChoices } from "../../state/use-space-choices";
+import { useCreateOrganization, useSpaceChoices } from "../../state/use-space-choices";
 import { buildHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -158,6 +158,7 @@ function ThreadNavigationSidebarPane(
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const spaceChoices = useSpaceChoices();
+  const createOrganizationIn = useCreateOrganization();
   const searchInputRef = useRef<TextInputInstance>(null);
   const searchBarRef = useRef<SearchBarCommands>(null);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
@@ -669,6 +670,7 @@ function ThreadNavigationSidebarPane(
     projects: projectFilterOptions,
     spaceChoices,
     onSpaceChange: selectSpace,
+    onCreateOrganization: createOrganizationIn,
     selectedEnvironmentId: options.selectedEnvironmentId,
     selectedProjectKey,
     onEnvironmentChange: setSelectedEnvironmentId,

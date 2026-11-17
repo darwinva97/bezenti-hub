@@ -174,6 +174,26 @@ export class SpaceAccessDeniedError extends Schema.TaggedError<SpaceAccessDenied
   }
 }
 
+/** Another Organization already has this name, as `organizationNameKey` compares them. */
+export class OrganizationNameTakenError extends Schema.TaggedError<OrganizationNameTakenError>()(
+  "OrganizationNameTakenError",
+  { name: Schema.String },
+) {
+  override get message(): string {
+    return `There is already an Organization called "${this.name}". Choose another name.`;
+  }
+}
+
+/** An Organization's name as stored: no outer spaces, inner runs of spaces made one. */
+const tidyOrganizationName = (name: string) => name.trim().replace(/\s+/g, " ");
+
+/**
+ * What two Organization names must not share: the tidy name, ignoring case. Not a guard against
+ * look-alike names, only against exact duplicates.
+ */
+const organizationNameKey = (name: string) =>
+  tidyOrganizationName(name).normalize("NFKC").toLowerCase();
+
 export class InstallationUserNotFoundError extends Schema.TaggedError<InstallationUserNotFoundError>()(
   "InstallationUserNotFoundError",
   { userId: UserId },
@@ -391,10 +411,18 @@ export class SpaceDirectory extends Context.Service<
     readonly subscribeAccessChanges: (
       userId: UserId,
     ) => Effect.Effect<Stream.Stream<void>, never, Scope.Scope>;
+    /**
+     * Any active User creates an Organization and, unless they are the Owner, becomes its Admin
+     * in the same write (acting as a Member until they have a passkey or authenticator app).
+     * Its name must differ from every other Organization's (`organizationNameKey`).
+     */
     readonly createOrganization: (
       userId: UserId,
       name: string,
-    ) => Effect.Effect<SpaceSummary, SpaceAccessDeniedError | SpaceDirectoryStorageError>;
+    ) => Effect.Effect<
+      SpaceSummary,
+      SpaceAccessDeniedError | OrganizationNameTakenError | SpaceDirectoryStorageError
+    >;
     /**
      * Archives or restores an Organization (the Owner's). Archiving hides it from its Members at
      * once, like a removal: their connections close and resume without it. Restoring shows it
@@ -1059,21 +1087,50 @@ const make = Effect.gen(function* () {
   ) {
     const principal = yield* principalOf(userId);
     yield* requireAllowed(principal, "organization.create", AccessPolicy.installation);
+    const tidy = tidyOrganizationName(name);
+    const key = organizationNameKey(tidy);
     const spaceId = SpaceId.make(yield* random.uuidV4().pipe(Effect.mapError(storageError)));
     const now = DateTime.formatIso(yield* DateTime.now);
-    yield* sql`
-      INSERT INTO spaces (space_id, kind, name, created_at)
-      VALUES (${spaceId}, 'organization', ${name}, ${now})
-    `.pipe(Effect.mapError(storageError), Effect.ensuring(changed));
-    return {
-      id: spaceId,
-      kind: "organization",
-      name,
-      role: null,
-      isOwn: false,
-      canCreateThreads: true,
-      canInvite: true,
-    } satisfies SpaceSummary;
+    // One write: the name check, the Space, its creator's Membership and the audit entry, so no
+    // Organization is left without its Admin and no two get the same name.
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const names = yield* sql<{ readonly name: string }>`
+            SELECT name FROM spaces WHERE kind = 'organization'
+          `;
+          if (names.some((row) => organizationNameKey(row.name) === key)) {
+            return yield* new OrganizationNameTakenError({ name: tidy });
+          }
+          yield* sql`
+            INSERT INTO spaces (space_id, kind, name, created_at, created_by_user_id)
+            VALUES (${spaceId}, 'organization', ${tidy}, ${now}, ${userId})
+          `;
+          // The Owner runs every Organization without a Membership.
+          if (!principal.isOwner) yield* addMembership({ spaceId, userId, role: "admin" });
+          yield* audit.record({
+            actor: AuditLog.userActor(userId),
+            action: "organization.create",
+            spaceId,
+            target: { kind: "space", id: spaceId },
+          });
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "OrganizationNameTakenError" || error._tag === "SpaceDirectoryStorageError"
+            ? error
+            : storageError(error),
+        ),
+      );
+    yield* Effect.andThen(changed, accessChanged(userId));
+    const created = (yield* view(userId)).spaces.find((space) => space.id === spaceId);
+    if (created === undefined) {
+      return yield* storageError(
+        new Error(`Organization ${spaceId} was not listed after creation`),
+      );
+    }
+    return created;
   });
 
   const ownerId = findOwnerId().pipe(

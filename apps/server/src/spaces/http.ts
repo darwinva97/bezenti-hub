@@ -1,6 +1,7 @@
 import {
   EnvironmentAuthenticatedPrincipal,
   EnvironmentHttpApi,
+  EnvironmentHttpConflictError,
   EnvironmentHttpForbiddenError,
   type UserId,
 } from "@t3tools/contracts";
@@ -73,9 +74,11 @@ export const layer = HttpApiBuilder.group(
               SpaceAccessDeniedError: () =>
                 Effect.fail(
                   new EnvironmentHttpForbiddenError({
-                    message: "Only the Owner creates Organizations.",
+                    message: "Your account can't create Organizations.",
                   }),
                 ),
+              OrganizationNameTakenError: (error) =>
+                Effect.fail(new EnvironmentHttpConflictError({ message: error.message })),
               SpaceDirectoryStorageError: failStorage,
             }),
           );

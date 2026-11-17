@@ -983,7 +983,8 @@ class EnvironmentSpacesHttpApi extends HttpApiGroup.make("spaces")
       headers: OptionalBearerHeaders,
       payload: CreateOrganizationRequest,
       success: SpaceSummary,
-      error: EnvironmentSpaceErrors,
+      // Conflict: another Organization already has the name.
+      error: [...EnvironmentSpaceErrors, EnvironmentHttpConflictError],
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   // An Organization the viewer cannot see answers exactly like one that does not exist.

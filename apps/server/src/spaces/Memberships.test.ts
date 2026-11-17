@@ -218,6 +218,32 @@ it.effect("a password-only User becomes Admin only once they add an authenticato
   }),
 );
 
+it.effect(
+  "a password-only User's own Organization is run by the Owner until they add an authenticator app",
+  () =>
+    Effect.gen(function* () {
+      const { server, owner, acmeId } = yield* ownerWithOrganization;
+      const grace = yield* invited(server, owner, acmeId, "grace");
+      const created = yield* server.request("/api/spaces/organizations", {
+        body: { name: "Grace's team" },
+        cookie: grace.cookie,
+      });
+      expect(created.status).toBe(200);
+      expect(created.body).toMatchObject({ role: "member", pendingAdmin: true, canInvite: false });
+      const teamId = created.body.id as string;
+      const invite = (cookie: string) =>
+        server.request(`/api/spaces/${teamId}/invitations`, { body: { role: "member" }, cookie });
+      // Her password alone makes no Admin, not even of what she created.
+      expect((yield* invite(grace.cookie)).status).toBe(403);
+      // Meanwhile it is never left without someone to run it: the Owner does.
+      expect((yield* invite(owner)).status).toBe(200);
+      expect(yield* membersOf(server, owner, teamId)).toEqual(["grace:admin"]);
+
+      yield* enrollTotp(server, grace.cookie);
+      expect((yield* invite(grace.cookie)).status).toBe(200);
+    }),
+);
+
 it.effect("a User with a passkey is an Admin at once, and their password then needs a code", () =>
   Effect.gen(function* () {
     const { server, owner, acmeId } = yield* ownerWithOrganization;

@@ -68,6 +68,28 @@ export const fetchRemoteSpaceDirectory = (input: {
     ),
   );
 
+/**
+ * Creates an Organization on a Hub with a bearer session, as mobile holds one per Hub. Any User
+ * may; the caller becomes its Admin. Fails with the server's reason, such as a name in use.
+ */
+export const createRemoteOrganization = (input: {
+  readonly httpBaseUrl: string;
+  readonly bearerToken: string;
+  readonly name: string;
+}) =>
+  makeEnvironmentHttpApiGroupClient(input.httpBaseUrl, "spaces").pipe(
+    Effect.flatMap((client) =>
+      executeEnvironmentHttpRequest(
+        environmentEndpointUrl(input.httpBaseUrl, "/api/spaces/organizations"),
+        10_000,
+        client.createOrganization({
+          headers: { authorization: `Bearer ${input.bearerToken}` },
+          payload: { name: input.name },
+        }),
+      ),
+    ),
+  );
+
 export function makeSpaceSelectionStore(storage: SpaceChoiceStorage) {
   let selections = new Map<EnvironmentId, SpaceSelection>();
   const listeners = new Set<() => void>();

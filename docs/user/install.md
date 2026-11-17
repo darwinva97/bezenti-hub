@@ -258,8 +258,18 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 Every project and thread belongs to a Space: your Personal space or an
 organization. Pick the current Space from the selector at the bottom of the
 sidebar; new projects and threads go there, and a thread started in a project
-joins that project's Space. Each person's choice is remembered in their browser. The Owner creates organizations from the same
-selector with **Create organization**.
+joins that project's Space. Each person's choice is remembered in their browser.
+
+Anyone can create an organization from the same selector with **Create
+organization** (on mobile, in the thread list options under **Space**), and
+becomes its Admin. If you sign in with only a password, you act as a Member
+there until you add an authenticator app; meanwhile the Owner runs it. No two
+organizations can have the same name, whatever the case or spacing. As its
+Admin you invite Members and Guests, and an invitation also creates the account
+of someone who has none yet, so anyone with an account can bring new people
+into the Hub this way; the audit log records who invited whom. Archiving or
+deleting an organization and naming its Admins stay with the Owner, who sees
+every organization, also the ones they did not create.
 
 The sidebar lists only the projects and threads of the current Space. The thread
 you have open stays listed even if it belongs to another Space, and the current

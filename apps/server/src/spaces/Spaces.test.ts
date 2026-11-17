@@ -10,49 +10,102 @@ import {
   serveAuthHttp,
 } from "../auth/UserAuth.testkit.ts";
 
-it.effect("lets only the Owner create Organizations, which then show in the Space selector", () =>
-  Effect.gen(function* () {
-    const server = yield* serveAuthHttp;
-    const { created } = yield* bootstrapOwner(server, yield* makeAuthenticator());
-    const owner = created.cookie ?? "";
-    const member = yield* addMember(server);
+it.effect(
+  "any User creates an Organization, as its Admin, under a name no other Organization has",
+  () =>
+    Effect.gen(function* () {
+      const server = yield* serveAuthHttp;
+      const { created } = yield* bootstrapOwner(server, yield* makeAuthenticator());
+      const owner = created.cookie ?? "";
+      const ownerId = (created.body.user as { id: string }).id;
+      const member = yield* addMember(server);
 
-    const ownerBefore = yield* server.request("/api/spaces", { cookie: owner });
-    expect(ownerBefore.body).toMatchObject({
-      canCreateOrganization: true,
-      isOwner: true,
-      // The Owner also lists every other Personal space, to read and not to create in.
-      spaces: [
-        { kind: "personal", isOwn: true, canCreateThreads: true },
-        { kind: "personal", isOwn: false, name: "Grace Hopper", canCreateThreads: false },
-      ],
-    });
+      const ownerBefore = yield* server.request("/api/spaces", { cookie: owner });
+      expect(ownerBefore.body).toMatchObject({
+        canCreateOrganization: true,
+        isOwner: true,
+        // The Owner also lists every other Personal space, to read and not to create in.
+        spaces: [
+          { kind: "personal", isOwn: true, canCreateThreads: true },
+          { kind: "personal", isOwn: false, name: "Grace Hopper", canCreateThreads: false },
+        ],
+      });
+      // Granted nothing and in no Organization, Grace has her Personal space and may create one.
+      const memberBefore = yield* server.request("/api/spaces", { cookie: member });
+      expect(memberBefore.body).toMatchObject({ canCreateOrganization: true, isOwner: false });
+      expect(memberBefore.body.spaces).toEqual([
+        expect.objectContaining({ kind: "personal", isOwn: true, canCreateThreads: true }),
+      ]);
 
-    const acme = yield* server.request("/api/spaces/organizations", {
-      body: { name: "Acme" },
-      cookie: owner,
-    });
-    expect(acme.status).toBe(200);
-    expect(acme.body).toMatchObject({ kind: "organization", name: "Acme" });
-    const refused = yield* server.request("/api/spaces/organizations", {
-      body: { name: "Shadow" },
-      cookie: member,
-    });
-    expect(refused.status).toBe(403);
+      const organization = (cookie: string, name: string) =>
+        server.request("/api/spaces/organizations", { body: { name }, cookie });
+      const acme = yield* organization(owner, "Acme");
+      expect(acme.status).toBe(200);
+      expect(acme.body).toMatchObject({ kind: "organization", name: "Acme" });
+      // Grace makes her own. She signs in with no passkey or authenticator app, so she is its
+      // Admin but acts as a Member until she adds one.
+      const shadow = yield* organization(member, "Big   Team");
+      expect(shadow.status).toBe(200);
+      expect(shadow.body).toMatchObject({
+        kind: "organization",
+        name: "Big Team",
+        role: "member",
+        pendingAdmin: true,
+        canInvite: false,
+      });
+      const shadowId = shadow.body.id as string;
 
-    const ownerAfter = yield* server.request("/api/spaces", { cookie: owner });
-    expect((ownerAfter.body.spaces as ReadonlyArray<{ name: string }>).map((s) => s.name)).toEqual([
-      "Personal",
-      "Acme",
-      "Grace Hopper",
-    ]);
-    // Not a Member of Acme and granted nothing, Grace still has her own Personal space.
-    const memberView = yield* server.request("/api/spaces", { cookie: member });
-    expect(memberView.body).toMatchObject({ canCreateOrganization: false, isOwner: false });
-    expect(memberView.body.spaces).toEqual([
-      expect.objectContaining({ kind: "personal", isOwn: true, canCreateThreads: true }),
-    ]);
-  }),
+      // No two Organizations share a name, whatever its case or spacing.
+      for (const [cookie, name] of [
+        [member, "acme"],
+        [owner, "  ACME "],
+        [owner, "big team"],
+        [member, "Big  TEAM"],
+      ] as const) {
+        const taken = yield* organization(cookie, name);
+        expect(taken.status, name).toBe(409);
+      }
+
+      const memberAfter = yield* server.request("/api/spaces", { cookie: member });
+      expect(memberAfter.body.spaces).toEqual([
+        expect.objectContaining({ kind: "personal", isOwn: true }),
+        expect.objectContaining({
+          id: shadowId,
+          name: "Big Team",
+          role: "member",
+          pendingAdmin: true,
+        }),
+      ]);
+      const ownerAfter = yield* server.request("/api/spaces", { cookie: owner });
+      expect(
+        (ownerAfter.body.spaces as ReadonlyArray<{ name: string }>).map((s) => s.name).toSorted(),
+      ).toEqual(["Acme", "Big Team", "Grace Hopper", "Personal"]);
+
+      // The creator is stored with the Organization (the Steward to be) and in the audit log;
+      // the Owner holds no Membership of their own.
+      const stored = yield* server.sql<{ name: string; createdBy: string | null }>`
+        SELECT name, created_by_user_id AS "createdBy" FROM spaces
+        WHERE kind = 'organization' ORDER BY name
+      `;
+      expect(stored.map((row) => ({ ...row }))).toEqual([
+        { name: "Acme", createdBy: ownerId },
+        { name: "Big Team", createdBy: "member-1" },
+      ]);
+      const memberships = yield* server.sql<{ spaceId: string; userId: string; role: string }>`
+        SELECT space_id AS "spaceId", user_id AS "userId", role FROM space_memberships
+      `;
+      expect(memberships.map((row) => ({ ...row }))).toEqual([
+        { spaceId: shadowId, userId: "member-1", role: "admin" },
+      ]);
+      const audited = yield* server.sql<{ actor: string; spaceId: string }>`
+        SELECT actor_user_id AS "actor", target_id AS "spaceId" FROM audit_log
+        WHERE action = 'organization.create' ORDER BY audit_id
+      `;
+      expect(audited.map((row) => ({ ...row }))).toEqual([
+        { actor: ownerId, spaceId: acme.body.id },
+        { actor: "member-1", spaceId: shadowId },
+      ]);
+    }),
 );
 
 it.effect(

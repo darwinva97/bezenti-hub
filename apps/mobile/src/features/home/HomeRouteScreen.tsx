@@ -37,7 +37,7 @@ import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { openSettings } from "../settings/settings-navigation";
 import { selectSpace } from "../../state/spaces";
-import { useSpaceChoices } from "../../state/use-space-choices";
+import { useCreateOrganization, useSpaceChoices } from "../../state/use-space-choices";
 import { useSelectWorkspaceTab } from "../workspace/useSelectWorkspaceTab";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 
@@ -64,6 +64,7 @@ export function HomeRouteScreen() {
   const workspace = useWorkspaceTabs();
   const [localSearchQuery, setLocalSearchQuery] = useState("");
   const spaceChoices = useSpaceChoices();
+  const createOrganizationIn = useCreateOrganization();
   const searchQuery =
     Platform.OS === "android"
       ? primarySidebarSearchQuery
@@ -233,6 +234,7 @@ export function HomeRouteScreen() {
           onProjectChange={setSelectedProjectKey}
           spaceChoices={spaceChoices}
           onSpaceChange={selectSpace}
+          onCreateOrganization={createOrganizationIn}
           onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
           onOpenSettings={() => selectTab("settings")}
           onSearchQueryChange={setSearchQuery}

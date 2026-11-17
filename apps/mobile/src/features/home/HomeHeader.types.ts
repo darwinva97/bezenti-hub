@@ -19,6 +19,8 @@ export interface HomeHeaderProps {
   /** The Space selector: where new Projects and Threads go on each Hub. */
   readonly spaceChoices?: ReadonlyArray<HomeListSpaceChoice>;
   readonly onSpaceChange?: (environmentId: EnvironmentId, spaceId: SpaceId) => void;
+  /** «Create organization» on a Hub whose User may (any User may, ticket 18). */
+  readonly onCreateOrganization?: (environmentId: EnvironmentId) => void;
   readonly onOpenEnvironments: () => void;
   readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;

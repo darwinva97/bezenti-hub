@@ -121,6 +121,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "user.disable": "Disabled a User",
   "user.enable": "Turned a User back on",
   "user.remove": "Removed a User",
+  "organization.create": "Created an Organization",
   "organization.archive": "Archived an Organization",
   "organization.restore": "Restored an Organization",
   "organization.delete": "Deleted an Organization",

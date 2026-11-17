@@ -220,14 +220,24 @@ function SidebarUtilityItem({
   );
 }
 
-/** The Settings button of a signed-in User carries their name and opens their settings. */
-function SidebarUserSettingsItem({ onClick }: { onClick: () => void }) {
+/**
+ * The Settings button of a signed-in User always says "Settings", with their name as a smaller
+ * second line: a name equal to an Organization's sits right under the Space selector.
+ */
+export function SidebarUserSettingsItem({ onClick }: { onClick: () => void }) {
   const name = useCurrentUserName();
   return (
     <SidebarMenuItem className="min-w-0 flex-1">
-      <SidebarMenuButton aria-label={name ? `Settings for ${name}` : "Settings"} onClick={onClick}>
+      <SidebarMenuButton
+        aria-label={name ? `Settings — ${name}` : "Settings"}
+        className={name ? "h-auto py-1" : undefined}
+        onClick={onClick}
+      >
         <SettingsIcon />
-        <span className="min-w-0 flex-1 truncate">{name ?? "Settings"}</span>
+        <span className="flex min-w-0 flex-1 flex-col text-left leading-tight">
+          <span className="truncate">Settings</span>
+          {name ? <span className="truncate text-muted-foreground text-xs">{name}</span> : null}
+        </span>
       </SidebarMenuButton>
     </SidebarMenuItem>
   );

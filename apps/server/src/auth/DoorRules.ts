@@ -31,6 +31,10 @@ const MASTER_KEY = own(
 const VAULT_REVEAL = own(
   "Vaults.authorizeReveal (AccessPolicy `vault.reveal`: the Owner only), checked before the strong factor in the request (UserDirectory.confirmStrongFactor), then Vaults.reveal, audited `secret.reveal` before the value leaves; no WS, MCP or CLI door",
 );
+/** A loan that becomes active opens a machine to another Space: a strong factor, never WS. */
+const GRANT_MAKES_ACTIVE = own(
+  "Grants.prepareGive/prepareAccept (AccessPolicy `grant.give`/`grant.decide`) before the strong factor in the request (UserDirectory.confirmStrongFactor) when a machine's loan becomes active, then Grants.give/accept, which check it all again in their transaction and audit `grant.*`; access:write; no MCP door",
+);
 const WEBHOOK = own("the task's secret token in the path; runs as the task's creator");
 const THREAD_READ = own(
   "SpaceVisibility.visibleThreadIds like getThreadProjection: hidden answers thread_not_found",
@@ -140,6 +144,8 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "vaults.masterKeyBackupConfirm": MASTER_KEY,
   "vaults.masterKeyStatus": MASTER_KEY,
   "vaults.reveal": VAULT_REVEAL,
+  "grants.give": GRANT_MAKES_ACTIVE,
+  "grants.accept": GRANT_MAKES_ACTIVE,
   "webhooks.webhookGet": WEBHOOK,
   "webhooks.webhookPatch": WEBHOOK,
   "webhooks.webhookPost": WEBHOOK,

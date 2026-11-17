@@ -125,6 +125,7 @@ import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as Vaults from "./vaults/Vaults.ts";
 import * as SecretProviderScopes from "./vaults/SecretProviderScopes.ts";
+import * as Grants from "./grants/Grants.ts";
 import * as EffectiveVaults from "./vaults/EffectiveVaults.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
 import {
@@ -1286,6 +1287,7 @@ export const layerWsRpc = (
       const secretRequests = yield* SecretRequests.SecretRequests;
       const vaults = yield* Vaults.Vaults;
       const secretProviderScopes = yield* SecretProviderScopes.SecretProviderScopes;
+      const grants = yield* Grants.Grants;
       const effectiveVaults = yield* EffectiveVaults.EffectiveVaults;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -2458,6 +2460,15 @@ export const layerWsRpc = (
         // Vaults ticket 03: a Vault's usable Provider scopes (its editors); Secret providers'
         // scopes, «Test connection» and what a deletion breaks (the Owner, SecretProviderScopes).
         [WS_METHODS.vaultsProviderScopes]: (input) => vaults.providerScopes(input),
+        // Grants: each decided by Grants (AccessPolicy `grant.*`) for the connection's User.
+        // Giving and accepting go over HTTP, which carries the strong factor a machine needs.
+        [WS_METHODS.grantsListGiven]: (_input) => grants.listGiven,
+        [WS_METHODS.grantsListReceived]: (input) => grants.listReceived(input),
+        [WS_METHODS.grantsTargets]: (input) => grants.targets(input),
+        [WS_METHODS.grantsReject]: (input) => grants.reject(input),
+        [WS_METHODS.grantsCancel]: (input) => grants.cancel(input),
+        [WS_METHODS.grantsEnd]: (input) => grants.end(input),
+        [WS_METHODS.grantsSetLimits]: (input) => grants.setLimits(input),
         [WS_METHODS.secretProvidersTest]: (input) => secretProviderScopes.test(input),
         [WS_METHODS.secretProvidersImpact]: (input) => secretProviderScopes.impact(input),
         [WS_METHODS.secretProvidersScopesList]: (_input) => secretProviderScopes.list,

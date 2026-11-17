@@ -76,6 +76,13 @@ export const AuditAction = Schema.Literals([
   "provider_scope.allow",
   // Vaults ticket 07: a workload identity token the Hub signed (never the token itself).
   "identity.issue",
+  // Grants: a resource lent to a Space, decided, taken back or returned.
+  "grant.give",
+  "grant.accept",
+  "grant.reject",
+  "grant.cancel",
+  "grant.end",
+  "grant.limits.change",
 ]);
 export type AuditAction = typeof AuditAction.Type;
 
@@ -93,6 +100,7 @@ export const AuditTargetKind = Schema.Literals([
   "ai_gateway_key",
   "secret_provider",
   "provider_scope",
+  "grant",
 ]);
 export type AuditTargetKind = typeof AuditTargetKind.Type;
 
@@ -257,6 +265,36 @@ export const AUDIT_DETAIL_KEYS = {
   "provider_scope.allow": ["vault", "vaultId", "allowed", "broke"],
   /** Its audience, subject, id and expiry, and the Thread it was signed for; never the token. */
   "identity.issue": ["aud", "sub", "jti", "exp", "thread"],
+  /**
+   * The resource's kind, id and name, the lender, the destination Space and the limits (by field);
+   * `state` it started in. Never a token or a credential.
+   */
+  "grant.give": [
+    "resourceKind",
+    "resourceId",
+    "resourceName",
+    "lenderId",
+    "targetSpaceId",
+    "state",
+    "cpus",
+    "memoryBytes",
+    "pids",
+    "diskBytes",
+  ],
+  "grant.accept": ["resourceKind", "resourceId", "resourceName", "lenderId", "targetSpaceId"],
+  "grant.reject": ["resourceKind", "resourceId", "resourceName", "lenderId", "targetSpaceId"],
+  "grant.cancel": ["resourceKind", "resourceId", "resourceName", "lenderId", "targetSpaceId"],
+  /** `reason` (revoked, returned, resource-gone…) and the `side` that ended it. */
+  "grant.end": [
+    "resourceKind",
+    "resourceId",
+    "resourceName",
+    "lenderId",
+    "targetSpaceId",
+    "reason",
+    "side",
+  ],
+  "grant.limits.change": ["resourceKind", "resourceId", "cpus", "memoryBytes", "pids", "diskBytes"],
 } as const satisfies Record<AuditAction, ReadonlyArray<string>>;
 
 export type AuditDetailOf<A extends AuditAction> = {

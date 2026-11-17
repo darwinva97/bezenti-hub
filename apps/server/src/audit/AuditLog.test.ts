@@ -633,6 +633,13 @@ it.effect(
         "provider_scope.allow",
         // identity/IdentityTokens.test.ts (Vaults ticket 07)
         "identity.issue",
+        // grants/Grants.test.ts (Grants ticket 01)
+        "grant.give",
+        "grant.accept",
+        "grant.reject",
+        "grant.cancel",
+        "grant.end",
+        "grant.limits.change",
       ];
       assert.sameMembers(
         [...new Set([...expected.map((row) => row.action), ...recordedElsewhere])],

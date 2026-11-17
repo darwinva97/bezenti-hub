@@ -14,6 +14,7 @@ export * from "./hubEnvironments.ts";
 export * from "./hubRunsNoAgents.ts";
 export * from "./sandboxImage.ts";
 export * from "./vaults.ts";
+export * from "./grants.ts";
 export * from "./secretProviderScopes.ts";
 export * from "./vaultTemplates.ts";
 export * from "./sshInstall.ts";

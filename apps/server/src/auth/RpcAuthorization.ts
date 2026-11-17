@@ -137,6 +137,10 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.vaultsThreadEnvironment]: AuthOrchestrationReadScope,
   // Vaults ticket 03: names of scopes and providers to read (who may: Vaults, SecretProviderScopes).
   [WS_METHODS.vaultsProviderScopes]: AuthAccessReadScope,
+  // Grants: loans to read (changes are CLIENT_GUARDED_RPC_SCOPES'); who may is AccessPolicy's.
+  [WS_METHODS.grantsListGiven]: AuthAccessReadScope,
+  [WS_METHODS.grantsListReceived]: AuthAccessReadScope,
+  [WS_METHODS.grantsTargets]: AuthAccessReadScope,
   [WS_METHODS.secretProvidersImpact]: AuthAccessReadScope,
   [WS_METHODS.secretProvidersScopesList]: AuthAccessReadScope,
   // Delivery logs hold request bodies, so they need the same scope as the URL.

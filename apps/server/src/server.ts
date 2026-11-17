@@ -200,6 +200,8 @@ import * as DedicatedHost from "./environments/DedicatedHost.ts";
 import * as SandboxImage from "./sandboxes/SandboxImage.ts";
 import * as SandboxImageHttp from "./sandboxes/http.ts";
 import * as VaultsHttp from "./vaults/http.ts";
+import * as Grants from "./grants/Grants.ts";
+import * as GrantsHttp from "./grants/http.ts";
 import * as Vaults from "./vaults/Vaults.ts";
 import * as EffectiveVaults from "./vaults/EffectiveVaults.ts";
 import * as SecretDelivery from "./vaults/SecretDelivery.ts";
@@ -549,6 +551,8 @@ const layerAuth = Layer.mergeAll(
   layerIdentity,
   // Secret providers' scopes and «Test connection» (Vaults ticket 03), over the same reads.
   SecretProviderScopes.layer.pipe(Layer.provide(layerProviderReads), Layer.provide(AuditLog.layer)),
+  // Grants: loans of a resource to a Space (personal machines today).
+  Grants.layer.pipe(Layer.provide(AuditLog.layer)),
   // The Sandboxes' base image: built on this Hub, one build at a time.
   SandboxImage.layer,
   // CLIProxyAPI, run by the Hub on loopback (`T3CODE_AI_GATEWAY`), and the AI accounts it gets
@@ -839,6 +843,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(HubEnvironmentsHttp.layer),
       Layer.provide(SandboxImageHttp.layer),
       Layer.provide(VaultsHttp.layer.pipe(Layer.provide(MasterKeyBackup.layer))),
+      Layer.provide(GrantsHttp.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),

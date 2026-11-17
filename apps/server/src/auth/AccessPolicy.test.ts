@@ -193,6 +193,15 @@ const allowedToGrace = vault(null, { allowedUsers: ["grace"] });
 const allowedToGracesPersonal = vault(null, { allowedSpaces: [personalOf("grace")] });
 const allowedToArchivedAcme = vault(null, { allowedSpaces: [archivedOrganization] });
 
+// Grants: Grace's machine lent to Acme, or to Linus's Personal space.
+const toAcme: AccessPolicy.GrantResource = {
+  kind: "grant",
+  lenderUserId: UserId.make("grace"),
+  target: organization,
+  targetKnown: true,
+};
+const toLinus: AccessPolicy.GrantResource = { ...toAcme, target: personalOf("linus") };
+
 const allow = AccessPolicy.allow;
 const deny = AccessPolicy.deny;
 
@@ -1863,6 +1872,141 @@ const rows: ReadonlyArray<Row> = [
     owner,
     "aiUsage.viewSpace",
     AccessPolicy.installation,
+    deny("wrong-resource"),
+  ],
+  // Grants: Grace (a Member of Acme, with a Personal space) lends her machine.
+  [
+    "a User lends their machine to an Organization they are in",
+    member,
+    "grant.give",
+    toAcme,
+    allow,
+  ],
+  [
+    "a User lends to the Personal space of someone they share a Space with",
+    member,
+    "grant.give",
+    toLinus,
+    allow,
+  ],
+  [
+    "nobody lends to a Space they cannot name",
+    member,
+    "grant.give",
+    { ...toAcme, targetKnown: false },
+    deny("not-a-member"),
+  ],
+  [
+    "nobody lends someone else's machine, not even the Owner",
+    owner,
+    "grant.give",
+    toAcme,
+    deny("not-yours"),
+  ],
+  ["an Admin does not lend a Member's machine", admin, "grant.give", toAcme, deny("not-yours")],
+  [
+    "a machine is not lent to its owner's own Personal space",
+    member,
+    "grant.give",
+    { ...toAcme, target: personalOf("grace") },
+    deny("wrong-resource"),
+  ],
+  [
+    "nothing is lent into an archived Organization",
+    member,
+    "grant.give",
+    { ...toAcme, target: archivedOrganization },
+    deny("space-archived"),
+  ],
+  [
+    "a disabled lender lends nothing",
+    { ...member, inactive: true },
+    "grant.give",
+    toAcme,
+    deny("user-inactive"),
+  ],
+  ["the lender revokes their Grant", member, "grant.revoke", toAcme, allow],
+  ["the lender cancels a waiting Grant", member, "grant.cancel", toAcme, allow],
+  ["the lender changes its limits", member, "grant.setLimits", toAcme, allow],
+  ["the lender sees the Grants they gave", member, "grant.viewGiven", toAcme, allow],
+  [
+    "an Admin of the destination does not revoke it",
+    admin,
+    "grant.revoke",
+    toAcme,
+    deny("not-yours"),
+  ],
+  ["an Admin of the destination accepts or rejects it", admin, "grant.decide", toAcme, allow],
+  [
+    "a Member of the destination does not decide",
+    member,
+    "grant.decide",
+    toAcme,
+    deny("role-not-allowed"),
+  ],
+  [
+    "the Owner does not decide in an Organization they are not an Admin of",
+    owner,
+    "grant.decide",
+    toAcme,
+    deny("not-a-member"),
+  ],
+  [
+    "a Personal space's User decides on Grants to it",
+    principal("linus", { permissions: ["personalSpace.create"] }),
+    "grant.decide",
+    toLinus,
+    allow,
+  ],
+  [
+    "the Owner decides on Grants to their own Personal space",
+    owner,
+    "grant.decide",
+    { ...toLinus, target: personalOf("owner") },
+    allow,
+  ],
+  [
+    "nobody else decides on a Grant to a Personal space, the Owner included",
+    owner,
+    "grant.decide",
+    toLinus,
+    deny("not-your-personal-space"),
+  ],
+  [
+    "no Grant is accepted into an archived Organization",
+    admin,
+    "grant.decide",
+    { ...toAcme, target: archivedOrganization },
+    deny("space-archived"),
+  ],
+  [
+    "an archived Organization still returns a Grant",
+    admin,
+    "grant.return",
+    { ...toAcme, target: archivedOrganization },
+    allow,
+  ],
+  ["a Member does not return a Grant", member, "grant.return", toAcme, deny("role-not-allowed")],
+  ["a Member sees the Grants their Space received", member, "grant.viewReceived", toAcme, allow],
+  [
+    "a Guest does not see the Grants their Space received",
+    guest,
+    "grant.viewReceived",
+    toAcme,
+    deny("role-not-allowed"),
+  ],
+  [
+    "an outsider sees nothing of another Space's Grants",
+    outsider,
+    "grant.viewReceived",
+    toAcme,
+    deny("not-a-member"),
+  ],
+  [
+    "Grant actions are decided on a Grant",
+    member,
+    "grant.give",
+    organization,
     deny("wrong-resource"),
   ],
 ];

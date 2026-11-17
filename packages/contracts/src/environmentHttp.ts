@@ -87,6 +87,7 @@ import {
   VaultRevealRequest,
   VaultRevealResult,
 } from "./vaults.ts";
+import { Grant, GrantAcceptRequest, GrantGiveRequest } from "./grants.ts";
 import {
   ChangeHubEnvironmentModeRequest,
   EnvironmentJoinApproveRequest,
@@ -241,6 +242,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "sandbox_image_failed",
   "master_key_failed",
   "vaults_failed",
+  "grants_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -344,6 +346,7 @@ export const EnvironmentResourceNotFoundReason = Schema.Literals([
   "join_request_not_found",
   "ssh_install_run_not_found",
   "secret_not_found",
+  "grant_not_found",
 ]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 
@@ -1564,6 +1567,35 @@ class EnvironmentVaultsHttpApi extends HttpApiGroup.make("vaults")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+// Giving and accepting a loan: HTTP so a machine's, which opens the lender's machine to another
+// Space, can carry a strong factor. Conflict: the loan's state, its limits or the machine refuse it.
+const EnvironmentGrantsErrors = [
+  EnvironmentHttpForbiddenError,
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+  EnvironmentRateLimitedError,
+  EnvironmentResourceNotFoundError,
+  EnvironmentHttpConflictError,
+] as const;
+
+class EnvironmentGrantsHttpApi extends HttpApiGroup.make("grants")
+  .add(
+    HttpApiEndpoint.post("give", "/api/grants/give", {
+      headers: OptionalBearerHeaders,
+      payload: GrantGiveRequest,
+      success: Grant,
+      error: EnvironmentGrantsErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("accept", "/api/grants/accept", {
+      headers: OptionalBearerHeaders,
+      payload: GrantAcceptRequest,
+      success: Grant,
+      error: EnvironmentGrantsErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
@@ -1579,4 +1611,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentHubEnvironmentsHttpApi)
   .add(EnvironmentSandboxImageHttpApi)
   .add(EnvironmentVaultsHttpApi)
+  .add(EnvironmentGrantsHttpApi)
   .add(EnvironmentWebhooksHttpApi) {}

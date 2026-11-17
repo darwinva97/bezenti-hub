@@ -103,6 +103,11 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.secretProvidersScopesAllow]: AuthSettingsWriteScope,
   [WS_METHODS.vaultsSpaceDefaultsSet]: AuthAccessWriteScope,
   [WS_METHODS.vaultsProjectChoicesSet]: AuthAccessWriteScope,
+  // Grants: who may is the Hub's (AccessPolicy `grant.*`); lending changes who reaches a resource.
+  [WS_METHODS.grantsReject]: AuthAccessWriteScope,
+  [WS_METHODS.grantsCancel]: AuthAccessWriteScope,
+  [WS_METHODS.grantsEnd]: AuthAccessWriteScope,
+  [WS_METHODS.grantsSetLimits]: AuthAccessWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

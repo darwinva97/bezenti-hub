@@ -170,6 +170,12 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "provider_scope.delete": "Deleted a provider scope",
   "provider_scope.allow": "Changed which Vaults use a provider scope",
   "identity.issue": "Signed a workload identity token",
+  "grant.give": "Lent a resource",
+  "grant.accept": "Accepted a loan",
+  "grant.reject": "Rejected a loan",
+  "grant.cancel": "Cancelled a loan offer",
+  "grant.end": "Ended a loan",
+  "grant.limits.change": "Changed a loan's limits",
 };
 
 export const INSTALLATION_PERMISSION_LABELS: Record<InstallationPermission, string> = {

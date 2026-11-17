@@ -41,6 +41,8 @@ import * as HubPreviewRoute from "../preview/hubPreviewRoute.ts";
 import type { PreviewOriginPattern } from "../preview/PreviewOrigin.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as VaultsHttp from "../vaults/http.ts";
+import * as Grants from "../grants/Grants.ts";
+import * as GrantsHttp from "../grants/http.ts";
 import * as Vaults from "../vaults/Vaults.ts";
 import * as IdentityIssuer from "../identity/IdentityIssuer.ts";
 import * as IdentityKeys from "../identity/IdentityKeys.ts";
@@ -105,6 +107,7 @@ class AuthTestApi extends HttpApi.make("environment")
   .add(EnvironmentHttpApi.groups.environments)
   .add(EnvironmentHttpApi.groups.sandboxImage)
   .add(EnvironmentHttpApi.groups.vaults)
+  .add(EnvironmentHttpApi.groups.grants)
   .add(EnvironmentHttpApi.groups.projects)
   .add(EnvironmentHttpApi.groups.orchestration)
   .add(EnvironmentHttpApi.groups.pullRequests)
@@ -269,6 +272,7 @@ const makeLayerServices = (
       Layer.mergeAll(
         Vaults.layer,
         SecretProviderScopes.layer,
+        Grants.layer,
         // Delivery, and the masking of what was delivered (spec 5 ticket 05), under everything.
         // Where each machine writes Secret files: the Hub machine's own only when a test gives one.
         SecretDelivery.layer.pipe(
@@ -404,6 +408,7 @@ export const serveAuthHttpWith = Effect.fn(function* (
     Layer.provide(HubEnvironmentsHttp.layer),
     Layer.provide(SandboxImageHttp.layer),
     Layer.provide(VaultsHttp.layer.pipe(Layer.provide(MasterKeyBackup.layer))),
+    Layer.provide(GrantsHttp.layer),
     Layer.provide(ProjectHttp.layer),
     Layer.provide(OrchestrationHttp.layer),
     Layer.provide(PullRequestHttp.layer),

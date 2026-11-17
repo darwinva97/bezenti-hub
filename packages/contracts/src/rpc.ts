@@ -466,6 +466,17 @@ import {
   VaultProviderScopes,
   VaultProviderScopesInput,
 } from "./secretProviderScopes.ts";
+import {
+  Grant,
+  GrantError,
+  GrantList,
+  GrantListGivenInput,
+  GrantListReceivedInput,
+  GrantRefInput,
+  GrantSetLimitsInput,
+  GrantTargets,
+  GrantTargetsInput,
+} from "./grants.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
@@ -622,6 +633,15 @@ export const WS_METHODS = {
   // Vaults ticket 03: the Scopes a Vault's editors may add Provider entries through; Secret
   // providers' scopes, «Test connection» and what deleting one breaks (the Owner's).
   vaultsProviderScopes: "vaults.providerScopes",
+  // Grants: lists, targets and the changes that need no strong factor. Giving and accepting go
+  // over HTTP (`/api/grants/give`, `/api/grants/accept`), which can carry one.
+  grantsListGiven: "grants.listGiven",
+  grantsListReceived: "grants.listReceived",
+  grantsTargets: "grants.targets",
+  grantsReject: "grants.reject",
+  grantsCancel: "grants.cancel",
+  grantsEnd: "grants.end",
+  grantsSetLimits: "grants.setLimits",
   secretProvidersTest: "secretProviders.test",
   secretProvidersImpact: "secretProviders.impact",
   secretProvidersScopesList: "secretProviders.scopes.list",
@@ -2139,6 +2159,43 @@ const WsSecretsVaultTargetsRpc = Rpc.make(WS_METHODS.secretsVaultTargets, {
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
 });
 
+const GrantRpcError = Schema.Union([GrantError, EnvironmentAuthorizationError]);
+const WsGrantsListGivenRpc = Rpc.make(WS_METHODS.grantsListGiven, {
+  payload: GrantListGivenInput,
+  success: GrantList,
+  error: GrantRpcError,
+});
+const WsGrantsListReceivedRpc = Rpc.make(WS_METHODS.grantsListReceived, {
+  payload: GrantListReceivedInput,
+  success: GrantList,
+  error: GrantRpcError,
+});
+const WsGrantsTargetsRpc = Rpc.make(WS_METHODS.grantsTargets, {
+  payload: GrantTargetsInput,
+  success: GrantTargets,
+  error: GrantRpcError,
+});
+const WsGrantsRejectRpc = Rpc.make(WS_METHODS.grantsReject, {
+  payload: GrantRefInput,
+  success: Grant,
+  error: GrantRpcError,
+});
+const WsGrantsCancelRpc = Rpc.make(WS_METHODS.grantsCancel, {
+  payload: GrantRefInput,
+  success: Grant,
+  error: GrantRpcError,
+});
+const WsGrantsEndRpc = Rpc.make(WS_METHODS.grantsEnd, {
+  payload: GrantRefInput,
+  success: Grant,
+  error: GrantRpcError,
+});
+const WsGrantsSetLimitsRpc = Rpc.make(WS_METHODS.grantsSetLimits, {
+  payload: GrantSetLimitsInput,
+  success: Grant,
+  error: GrantRpcError,
+});
+
 const VaultRpcError = Schema.Union([VaultError, EnvironmentAuthorizationError]);
 const WsVaultsListRpc = Rpc.make(WS_METHODS.vaultsList, {
   payload: VaultListInput,
@@ -2368,6 +2425,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsVaultsProjectChoicesSetRpc,
   WsVaultsThreadEnvironmentRpc,
   WsVaultsProviderScopesRpc,
+  WsGrantsListGivenRpc,
+  WsGrantsListReceivedRpc,
+  WsGrantsTargetsRpc,
+  WsGrantsRejectRpc,
+  WsGrantsCancelRpc,
+  WsGrantsEndRpc,
+  WsGrantsSetLimitsRpc,
   WsSecretProvidersTestRpc,
   WsSecretProvidersImpactRpc,
   WsSecretProvidersScopesListRpc,

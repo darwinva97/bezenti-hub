@@ -99,7 +99,25 @@ export interface VaultResource {
   readonly allowedUsers: ReadonlyArray<UserId>;
 }
 
+/**
+ * A Grant (a loan of a resource to a Space), as its lender or its destination acts on it. The
+ * lender is the resource's owner: a User's personal machine today.
+ */
+export interface GrantResource {
+  readonly kind: "grant";
+  /** The User who owns the lent resource; null when no User does (nobody lends it). */
+  readonly lenderUserId: UserId | null;
+  readonly target: SpaceResource;
+  /**
+   * For `grant.give`: whether the lender may name this destination (a Space they work in, the
+   * Personal space of someone they share a Space with, any Personal space for the Owner), so no
+   * one learns of Spaces they do not see.
+   */
+  readonly targetKnown?: boolean;
+}
+
 export type Resource =
+  | GrantResource
   | VaultResource
   | SpaceResource
   | InstallationResource
@@ -234,7 +252,23 @@ export type Action =
    * the Owner anywhere, an Organization's Admins in theirs, archived or not (it is history). A
    * User's own usage needs no action: it is theirs.
    */
-  | "aiUsage.viewSpace";
+  | "aiUsage.viewSpace"
+  // Grants (`GrantResource`; see `decideGrant`).
+  /** Lend one's resource to a Space; decided on the resource's owner and the destination. */
+  | "grant.give"
+  /** Take back a waiting Grant before it is decided. */
+  | "grant.cancel"
+  /** Take back an active Grant. */
+  | "grant.revoke"
+  | "grant.setLimits"
+  /** See a Grant one gave, with its state and the borrower's use (never its Threads). */
+  | "grant.viewGiven"
+  /** Accept or reject a Grant to a Space: its Admins, a Personal space's User. */
+  | "grant.decide"
+  /** Give back an active Grant to a Space: whoever decides there. */
+  | "grant.return"
+  /** See an active Grant one's Space received: whoever works there (not its Guests). */
+  | "grant.viewReceived";
 
 /** Actions that read or manage rather than add something to the Space. */
 const NON_CREATING: ReadonlySet<Action> = new Set([
@@ -663,8 +697,74 @@ const decideVaultChoice = (principal: Principal, space: SpaceResource): Decision
   return inOrganization(principal, space, ADMIN_ONLY);
 };
 
+const GRANT_ACTIONS: ReadonlySet<Action> = new Set([
+  "grant.give",
+  "grant.cancel",
+  "grant.revoke",
+  "grant.setLimits",
+  "grant.viewGiven",
+  "grant.decide",
+  "grant.return",
+  "grant.viewReceived",
+]);
+
+/** The lender's side of a Grant: only the resource's owner, the Owner included (no bypass). */
+const LENDER_ACTIONS: ReadonlySet<Action> = new Set([
+  "grant.give",
+  "grant.cancel",
+  "grant.revoke",
+  "grant.setLimits",
+  "grant.viewGiven",
+]);
+
+/**
+ * Grants. The lender acts on what they lend and nothing else: the Owner lends only their own
+ * resources and decides only where they would decide anyway. A Grant to an Organization is decided
+ * and returned by its Admins; to a Personal space, by its User. Nothing new enters an archived or
+ * frozen Space, but it can always be given back.
+ */
+const decideGrant = (principal: Principal, action: Action, grant: GrantResource): Decision => {
+  const { target } = grant;
+  if (LENDER_ACTIONS.has(action)) {
+    if (grant.lenderUserId === null || grant.lenderUserId !== principal.userId) {
+      return deny("not-yours");
+    }
+    if (action !== "grant.give") return allow;
+    if (target.kind === "personal" && target.personalOwnerUserId === principal.userId) {
+      // A personal machine already serves its owner in their own Personal space.
+      return deny("wrong-resource");
+    }
+    if (target.archived) return deny("space-archived");
+    if (target.frozen) return deny("space-frozen");
+    return grant.targetKnown === true ? allow : deny("not-a-member");
+  }
+  if (action === "grant.decide") {
+    if (target.archived) return deny("space-archived");
+    if (target.frozen) return deny("space-frozen");
+  }
+  // The Owner holds no Installation permissions of their own, yet runs their Personal space.
+  if (
+    principal.isOwner &&
+    target.kind === "personal" &&
+    target.personalOwnerUserId === principal.userId
+  ) {
+    return allow;
+  }
+  if (action === "grant.viewReceived") {
+    return target.kind === "personal"
+      ? inPersonalSpace(principal, target)
+      : inOrganization(principal, target, ROLES_THAT_CREATE_PROJECTS);
+  }
+  return runsSpace(principal, target);
+};
+
 export function decide(principal: Principal, action: Action, resource: Resource): Decision {
   if (principal.inactive === true) return deny("user-inactive");
+  if (GRANT_ACTIONS.has(action) || resource.kind === "grant") {
+    return GRANT_ACTIONS.has(action) && resource.kind === "grant"
+      ? decideGrant(principal, action, resource)
+      : deny("wrong-resource");
+  }
   if (VAULT_ACTIONS.has(action) || resource.kind === "vault") {
     return VAULT_ACTIONS.has(action) && resource.kind === "vault"
       ? decideVault(principal, action, resource)

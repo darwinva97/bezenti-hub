@@ -92,6 +92,11 @@ const AI_GATEWAY_KEYS = {
   unscoped:
     "Local CLI keys: AiGatewayKeys answers the session's own person only (never an agent, the Hub's shell or a one-Space session); a User lists and revokes their own keys, the Owner everyone's (another's answers like a missing one); a key is made only for a Space the User works in (AccessPolicy `aiAccount.use`); only `create` returns the key, once",
 };
+/** Grants name no Thread or Project: Grants decides each by AccessPolicy `grant.*`. */
+const GRANTS = {
+  unscoped:
+    "Grants: AccessPolicy `grant.*` for the session's User in Grants (the lender's side on the resource's owner, the destination's on its Space); a loan the User sees from neither side answers like a missing one; names, states and limits only, never a credential",
+};
 const INSTALLATION_ACCESS = Object.fromEntries(
   INSTALLATION_RPC_METHODS.map((method) => [method, "installation"]),
 ) as Readonly<Record<InstallationRpcMethod, "installation">>;
@@ -151,6 +156,13 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.vaultsThreadEnvironment]: "thread",
   // Vaults ticket 03: the scopes a Vault's editors may use, decided by Vaults (`vault.edit`).
   [WS_METHODS.vaultsProviderScopes]: VAULTS,
+  [WS_METHODS.grantsListGiven]: GRANTS,
+  [WS_METHODS.grantsListReceived]: GRANTS,
+  [WS_METHODS.grantsTargets]: GRANTS,
+  [WS_METHODS.grantsReject]: GRANTS,
+  [WS_METHODS.grantsCancel]: GRANTS,
+  [WS_METHODS.grantsEnd]: GRANTS,
+  [WS_METHODS.grantsSetLimits]: GRANTS,
   [WS_METHODS.projectsCreateFromThread]: "thread",
   // An app acts inside its Thread's live session, so it is its creator's, like a message.
   [WS_METHODS.mcpAppsCallTool]: "owned",

@@ -7,6 +7,7 @@ import {
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useClientSettings } from "../hooks/useSettings";
 import { getProjectOrderKey } from "@t3tools/client-runtime/state/project-grouping";
+import { useProjectsInCurrentSpace, useThreadsInCurrentSpace } from "../state/currentSpace";
 import { useProjects, useVisibleThreadShells } from "../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
@@ -54,8 +55,10 @@ export const selectCommandPaletteClientSettings = (settings: ClientSettings) => 
 });
 
 export function useSortedProjectGroups(environmentLabelById: ReadonlyMap<EnvironmentId, string>) {
-  const projects = useProjects();
-  const threads = useVisibleThreadShells();
+  // Only the current Space's Projects, to search and to start a Thread in (ticket 19).
+  const allProjects = useProjects();
+  const projects = useProjectsInCurrentSpace(allProjects);
+  const threads = useThreadsInCurrentSpace(useVisibleThreadShells(), allProjects);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const clientSettings = useClientSettings(selectCommandPaletteClientSettings);
   const primaryEnvironmentId = usePrimaryEnvironmentId();

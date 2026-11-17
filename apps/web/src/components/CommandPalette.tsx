@@ -138,6 +138,7 @@ import {
   useVisibleThreadShells,
   waitForProject,
 } from "../state/entities";
+import { useProjectsInCurrentSpace, useThreadsInCurrentSpace } from "../state/currentSpace";
 import { visibleLinkedThreads } from "@t3tools/client-runtime/state/threads";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -464,7 +465,10 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const paletteRouteTarget = useThreadRouteTarget();
-  const projects = useProjects();
+  // The palette offers only the current Space's Projects and Threads (ticket 19); a folder is
+  // still matched against every Project, so adding one that exists elsewhere finds it.
+  const allProjects = useProjects();
+  const projects = useProjectsInCurrentSpace(allProjects);
   const referenceThreadRef =
     pathname === "/pull-requests"
       ? environments.some((environment) => environment.serverConfig !== null)
@@ -497,7 +501,9 @@ function OpenCommandPaletteDialog(props: {
     await copyThreadReference(activeThreadReferenceCopyTarget);
   };
   // Side chats and subagents open inside their parent, so opening a project never lands on one.
-  const threads = useVisibleThreadShells().filter((thread) => !isSidebarHiddenThread(thread));
+  const threads = useThreadsInCurrentSpace(useVisibleThreadShells(), allProjects).filter(
+    (thread) => !isSidebarHiddenThread(thread),
+  );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
   const { changeThemeItem, changeAppearanceItem, themeEditorItem } = useCommandPaletteThemeItems();
@@ -1803,7 +1809,7 @@ function OpenCommandPaletteDialog(props: {
     if (cwd.length === 0) return;
 
     const existing = findProjectByPath(
-      projects.filter((project) => project.environmentId === input.environmentId),
+      allProjects.filter((project) => project.environmentId === input.environmentId),
       cwd,
     );
     if (existing) {

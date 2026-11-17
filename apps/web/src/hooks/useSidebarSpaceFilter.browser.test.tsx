@@ -19,66 +19,52 @@ const hub = EnvironmentId.make("hub");
 const personal = SpaceId.make("personal:grace");
 const acme = SpaceId.make("org-acme");
 
-const view = {
-  userId: UserId.make("grace"),
-  personalSpaceId: personal,
-  canCreateOrganization: false,
-  spaces: [
-    { id: personal, kind: "personal", name: "Personal", role: null, isOwn: true },
-    { id: acme, kind: "organization", name: "Acme", role: "member", isOwn: false },
-  ],
-} as unknown as SpaceDirectoryView;
+const viewOf = (isOwner: boolean) =>
+  ({
+    userId: UserId.make("grace"),
+    personalSpaceId: personal,
+    canCreateOrganization: true,
+    isOwner,
+    spaces: [
+      { id: personal, kind: "personal", name: "Personal", role: null, isOwn: true },
+      { id: acme, kind: "organization", name: "Acme", role: "member", isOwn: false },
+    ],
+  }) as unknown as SpaceDirectoryView;
 
 const project = (id: string, spaceId?: SpaceId) =>
   ({ environmentId: hub, id, ...(spaceId === undefined ? {} : { spaceId }) }) as never;
-const thread = (
-  id: string,
-  projectId: string,
-  options: { spaceId?: SpaceId; parentThreadId?: string } = {},
-) =>
+const thread = (id: string, projectId: string, spaceId?: SpaceId) =>
   ({
     environmentId: hub,
     id: ThreadId.make(id),
     projectId,
-    ...(options.spaceId === undefined ? {} : { spaceId: options.spaceId }),
-    lineage: {
-      parentThreadId: options.parentThreadId ?? null,
-      relationshipToParent: options.parentThreadId === undefined ? null : "subagent",
-      rootThreadId: ThreadId.make(options.parentThreadId ?? id),
-    },
+    ...(spaceId === undefined ? {} : { spaceId }),
   }) as never;
 
-const projects = [project("p-acme", acme), project("p-personal", personal)];
+// `p-old` and its Thread are from before Spaces: the Owner's Personal space.
+const projects = [project("p-acme", acme), project("p-personal", personal), project("p-old")];
 const threads = [
   thread("t-acme", "p-acme"),
-  thread("t-sub", "p-acme", { parentThreadId: "t-acme" }),
   thread("t-personal", "p-personal"),
-  thread("t-own", "p-personal", { spaceId: acme }),
+  thread("t-own", "p-personal", acme),
+  thread("t-old", "p-old"),
 ];
 
 async function listed(input: {
   readonly currentSpaceId: SpaceId | null;
-  readonly showAllSpaces?: boolean;
-  readonly open?: string;
-  readonly threads?: typeof threads;
+  readonly isOwner?: boolean;
 }) {
   const previous = useCurrentSpace.getState();
   useCurrentSpace.setState({
     environmentId: hub,
-    view,
+    view: viewOf(input.isOwner ?? false),
     currentSpaceId: input.currentSpaceId,
     loadFailed: false,
-    showAllSpaces: input.showAllSpaces ?? false,
   });
   vi.mocked(useProjects).mockReturnValue(projects);
-  vi.mocked(useQuietThreadShells).mockReturnValue(input.threads ?? threads);
+  vi.mocked(useQuietThreadShells).mockReturnValue(threads);
   function Probe() {
-    const filtered = useSidebarSpaceFilter({
-      openThreadEnvironmentId: input.open === undefined ? null : hub,
-      openThreadId: input.open === undefined ? null : ThreadId.make(input.open),
-      openDraftEnvironmentId: null,
-      openDraftProjectId: null,
-    });
+    const filtered = useSidebarSpaceFilter();
     return (
       <div data-testid="listed">
         {filtered.threads.map((candidate) => candidate.id).join(",")}|
@@ -93,55 +79,31 @@ async function listed(input: {
 }
 
 describe("useSidebarSpaceFilter", () => {
-  it("lists the current Space's Threads, by own Space first and else the Project's", async () => {
-    expect(await listed({ currentSpaceId: acme })).toBe("t-acme,t-sub,t-own|p-acme");
+  it("lists only the current Space's Projects and Threads", async () => {
+    expect(await listed({ currentSpaceId: acme })).toBe("t-acme,t-own|p-acme");
     expect(await listed({ currentSpaceId: personal })).toBe("t-personal|p-personal");
   });
 
-  it("keeps the open Thread, and the row of an open subagent, from another Space", async () => {
-    expect(await listed({ currentSpaceId: personal, open: "t-acme" })).toBe(
-      "t-acme,t-personal|p-acme,p-personal",
+  it("lists rows from before Spaces in the Owner's Personal space only", async () => {
+    expect(await listed({ currentSpaceId: personal, isOwner: true })).toBe(
+      "t-personal,t-old|p-personal,p-old",
     );
-    expect(await listed({ currentSpaceId: personal, open: "t-sub" })).toBe(
-      "t-acme,t-sub,t-personal|p-acme,p-personal",
-    );
-  });
-
-  it("keeps a whole chain of subagent parents, and a Thread whose Project is not loaded", async () => {
-    const nested = [
-      thread("a", "p-acme"),
-      thread("b", "p-acme", { parentThreadId: "a" }),
-      thread("c", "p-acme", { parentThreadId: "b" }),
-      thread("t-lost", "p-gone", { spaceId: acme }),
-      thread("t-personal", "p-personal"),
-    ];
-    expect(await listed({ currentSpaceId: personal, open: "c", threads: nested })).toBe(
-      "a,b,c,t-personal|p-acme,p-personal",
-    );
-    expect(await listed({ currentSpaceId: personal, open: "t-lost", threads: nested })).toBe(
-      "t-lost,t-personal|p-personal",
-    );
+    expect(await listed({ currentSpaceId: acme, isOwner: true })).toBe("t-acme,t-own|p-acme");
   });
 
   it("keeps the Projects array when only Threads change", async () => {
     const seen: unknown[] = [];
     useCurrentSpace.setState({
       environmentId: hub,
-      view,
+      view: viewOf(false),
       currentSpaceId: personal,
       loadFailed: false,
-      showAllSpaces: false,
     });
     vi.mocked(useProjects).mockReturnValue(projects);
     vi.mocked(useQuietThreadShells).mockReturnValue(threads);
     function Probe() {
       const [tick, setTick] = useState(0);
-      const filtered = useSidebarSpaceFilter({
-        openThreadEnvironmentId: null,
-        openThreadId: null,
-        openDraftEnvironmentId: null,
-        openDraftProjectId: null,
-      });
+      const filtered = useSidebarSpaceFilter();
       seen.push(filtered.projects);
       return (
         <button type="button" onClick={() => setTick(tick + 1)}>
@@ -156,9 +118,9 @@ describe("useSidebarSpaceFilter", () => {
     expect(new Set(seen).size).toBe(1);
   });
 
-  it("filters nothing without a current Space or with All Spaces", async () => {
-    const everything = "t-acme,t-sub,t-personal,t-own|p-acme,p-personal";
-    expect(await listed({ currentSpaceId: null })).toBe(everything);
-    expect(await listed({ currentSpaceId: acme, showAllSpaces: true })).toBe(everything);
+  it("filters nothing without a current Space", async () => {
+    expect(await listed({ currentSpaceId: null })).toBe(
+      "t-acme,t-personal,t-own,t-old|p-acme,p-personal,p-old",
+    );
   });
 });

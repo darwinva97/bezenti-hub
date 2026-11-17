@@ -53,6 +53,11 @@ import { useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
 import { selectSpace } from "../../state/spaces";
 import { useCreateOrganization, useSpaceChoices } from "../../state/use-space-choices";
+import {
+  useProjectsInCurrentSpaces,
+  useSpaceProjectIds,
+  useThreadsInCurrentSpaces,
+} from "../../state/space-scope";
 import { buildHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -153,8 +158,10 @@ function ThreadNavigationSidebarPane(
 
   const insets = useSafeAreaInsets();
   const { fabClearance, fabSize } = useAndroidControlSizing();
-  const projects = useProjects();
-  const threads = useNavigationThreadShells();
+  // Each Hub's current Space only, from the list to search and Settled (ticket 19).
+  const allProjects = useProjects();
+  const projects = useProjectsInCurrentSpaces(allProjects);
+  const threads = useThreadsInCurrentSpaces(useNavigationThreadShells(), allProjects);
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const spaceChoices = useSpaceChoices();
@@ -299,6 +306,7 @@ function ThreadNavigationSidebarPane(
     titleRegenerationEnvironmentIds,
   } = listEnvironments;
   const resolveProviderInstance = useThreadRowProviderInstanceResolver(providersByEnvironmentId);
+  const spaceProjectIds = useSpaceProjectIds();
   const pendingOrder = usePendingThreadOrder();
   const {
     layout: threadListV2Layout,
@@ -307,6 +315,7 @@ function ThreadNavigationSidebarPane(
     olderSettledShelf,
   } = useThreadListV2({
     threads,
+    spaceProjectIds,
     pendingTasks,
     environmentId: options.selectedEnvironmentId,
     projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,

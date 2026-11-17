@@ -301,9 +301,14 @@ Only callers with no User at all act as the Owner: work before an Owner exists,
 `t3 project`, and server-made effects. A scheduled task records its creator
 (`owner_user_id`), only they change or run it, and its runs act as them; tasks from
 before Users keep running as the server. A Thread joins its Project's Space, and a
-Project from before Spaces counts as the Owner's Personal space, so a client's
-requested Space applies only to new Projects and to Threads in unknown Projects.
-Clients send their current Space only to the environment it came from. Archived
+Project from before Spaces counts as the Owner's Personal space. A client's
+requested Space places new Projects and Threads in unknown Projects; for a
+Thread in a known Project it must be that Project's Space, or the claim is
+refused (`space-mismatch`, checked after visibility so it reveals nothing).
+Callers that name no Space (agents, forks, the CLI) get the Project's. Clients
+send their current Space only to the environment it came from, and list, search
+and offer Projects of that Space alone (`client-runtime` `spaceFilter`), so
+that refusal only meets a stale client. Archived
 Organizations and frozen Personal spaces take nothing new, even from the Owner.
 
 Rows from before Spaces keep `NULL` in both columns and count as the Owner's

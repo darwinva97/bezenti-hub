@@ -5,7 +5,6 @@ import {
   UserId,
   type SpaceDirectoryView,
 } from "@t3tools/contracts";
-import { showAllSpacesStorageKey } from "@t3tools/client-runtime/spaces/space-filter";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
@@ -76,13 +75,11 @@ const projects = [project("acme-site", acme), project("diary", personal)];
 
 async function renderSidebar(input: { readonly view: SpaceDirectoryView | null }) {
   const previous = useCurrentSpace.getState();
-  window.localStorage.removeItem(showAllSpacesStorageKey(userId));
   useCurrentSpace.setState({
     environmentId: hub,
     view: input.view,
     currentSpaceId: input.view === null ? null : acme,
     loadFailed: false,
-    showAllSpaces: false,
   });
   vi.mocked(useProjects).mockReturnValue(projects);
   const screen = await render(
@@ -110,26 +107,15 @@ async function listedProjects(screen: Awaited<ReturnType<typeof render>>) {
 }
 
 describe("sidebar Space filter", () => {
-  it("lists only the current Space's projects, and every Space with All Spaces on", async () => {
+  it("lists only the current Space's projects, with no way to list every Space", async () => {
     await using sidebar = await renderSidebar({ view });
     const { screen } = sidebar;
 
     expect(await listedProjects(screen)).toEqual({ acme: true, personal: false });
-
-    await userEvent.click(screen.getByRole("button", { name: "All Spaces" }));
-    expect(screen.getByRole("button", { name: "All Spaces" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(await listedProjects(screen)).toEqual({ acme: true, personal: true });
-    expect(window.localStorage.getItem(showAllSpacesStorageKey(userId))).toBe("1");
-
-    await userEvent.click(screen.getByRole("button", { name: "All Spaces" }));
-    expect(await listedProjects(screen)).toEqual({ acme: true, personal: false });
-    expect(window.localStorage.getItem(showAllSpacesStorageKey(userId))).toBeNull();
+    expect(screen.getByRole("button", { name: "All Spaces" }).query()).toBeNull();
   });
 
-  it("does not filter, and offers no toggle, without Spaces", async () => {
+  it("does not filter without Spaces", async () => {
     await using sidebar = await renderSidebar({ view: null });
     const { screen } = sidebar;
 

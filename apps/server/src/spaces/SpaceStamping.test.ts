@@ -108,8 +108,20 @@ it.effect("puts a Thread in a Project from before Spaces into the Owner's Person
     const projectId = ProjectId.make("project:legacy");
     const acme = SpaceId.make("org-acme");
 
-    yield* threads.dispatch(threadCreate("owner", { projectId, spaceId: acme }));
+    // Ticket 19: a client that names its current Space starts Threads only in that Space's
+    // Projects; one that names none (an agent, a fork) gets the Project's Space.
+    const mismatched = yield* threads
+      .dispatch(threadCreate("owner-elsewhere", { projectId, spaceId: acme }))
+      .pipe(Effect.flip);
+    expect(SpaceDirectory.spaceRefusalMessage(mismatched)).toBe(
+      "This Project is in another Space. Switch to its Space to start a Thread in it.",
+    );
+    yield* threads.dispatch(
+      threadCreate("owner", { projectId, spaceId: SpaceId.make("personal:owner") }),
+    );
     expect(stampOf(dispatched[0])).toEqual(["personal:owner", "owner"]);
+    yield* threads.dispatch(threadCreate("owner-agent", { projectId }));
+    expect(stampOf(dispatched[1])).toEqual(["personal:owner", "owner"]);
     // Grace's Organization does not make the Owner's Project hers, and a Space she cannot see
     // answers like a missing one.
     const refused = yield* threads
@@ -130,6 +142,6 @@ it.effect("puts a Thread in a Project from before Spaces into the Owner's Person
       )
       .pipe(Effect.flip);
     expect(SpaceDirectory.spaceRefusalMessage(archived)).toBe("Space org-old does not exist.");
-    expect(dispatched).toHaveLength(1);
+    expect(dispatched).toHaveLength(2);
   }).pipe(Effect.provide(makeLayer(dispatched)));
 });

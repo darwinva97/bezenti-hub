@@ -23,7 +23,8 @@ import {
   deriveProviderInstanceEntries,
   type ProviderInstanceEntry,
 } from "../providerInstances";
-import { useVisibleThreadShells } from "../state/entities";
+import { useThreadsInCurrentSpace } from "../state/currentSpace";
+import { useProjects, useVisibleThreadShells } from "../state/entities";
 import {
   useEnvironmentProviders,
   useEnvironments,
@@ -99,7 +100,8 @@ export function useCommandPaletteThreadItems(input: {
 }) {
   const { activeThread, threadSearchQuery } = input;
   const navigate = useNavigate();
-  const threads = useVisibleThreadShells();
+  // Threads, and so message matches, of the current Space only (ticket 19).
+  const threads = useThreadsInCurrentSpace(useVisibleThreadShells(), useProjects());
   const { projectEnvironmentLocationById } = useEnvironmentLookups();
   const providerEntryByEnvironmentAndInstanceId = useProviderEntryByEnvironmentAndInstanceId();
   const messageSearch = useConnectedThreadSearch(threadSearchQuery);

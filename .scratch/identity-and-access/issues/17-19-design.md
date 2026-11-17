@@ -106,3 +106,9 @@ Una fila con todo a 0 solo recupera un Space vacío. Si hay `vaults_allowed`, `d
 ## Fuera de alcance
 
 Topes y Steward (plans-and-limits), modos de registro (keycloak), archivar/borrar o nombrar Admins por el creador, herramienta MCP de Organizations, Grants, owned-resources/06 (`registerOwn`), privacidad del Owner.
+
+## Cómo quedó 19 (cambios respecto al diseño)
+
+- Search y Settled **no** llevan `spaceId` nuevo al servidor ni capability. En el cliente, un Thread no tiene Space propio (los shells no lo traen) y el servidor pone cada Thread en el Space de su Project. Por eso basta con limitar por Projects: los Threads listados, los resultados de búsqueda (solo cuentan los Threads listados), y los `projectIds` de los conteos de Settled ya antiguos (web y móvil). La Scratch Project no se cuela: sus Threads también toman el Space del Project.
+- Regla compartida en `packages/client-runtime/src/spaces/spaceFilter.ts`: `legacySpaceIdOf` (las filas sin Space son del Personal space del Owner), `filterThreadsBySpace`/`filterProjectsBySpace` sin excepciones para lo abierto, y `spaceToFollow`. Web: `useFollowOpenSpace` en la barra lateral. Móvil: `state/space-scope.ts`, por Hub, en la lista, la paleta, el selector de Project de un Thread nuevo, Settled y el cambio al abrir un Thread o borrador.
+- Servidor: `claimCreation` rechaza con `space-mismatch` si se envía `spaceId` y no coincide con el Space del Project. Se comprueba después de la visibilidad.

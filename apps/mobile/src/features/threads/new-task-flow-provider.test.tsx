@@ -62,6 +62,10 @@ vi.mock("../../state/orchestration", () => ({ orchestrationEnvironment: {} }));
 vi.mock("../../state/threads", () => ({ olderSettledThreads: {}, threadFamilies: {} }));
 vi.mock("../../state/pull-requests", () => ({ composerPullRequests: {} }));
 vi.mock("../../state/olderSettledShelf", () => ({ useOlderSettledCount: () => 0 }));
+vi.mock("../../state/space-scope", () => ({
+  useProjectsInCurrentSpaces: (projects: unknown) => projects,
+  useThreadsInCurrentSpaces: (threads: unknown) => threads,
+}));
 vi.mock("../../state/project-grouping", () => ({
   useMobileProjectGroupingSettings: () => ({ sidebarProjectGroupingMode: "none" }),
 }));

@@ -17,6 +17,7 @@ import {
 import { AsyncResult, Atom } from "effect/reactivity";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useProjects } from "../../state/entities";
+import { useFollowOpenSpace } from "../../state/space-scope";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { rootNavigationRef } from "../../lib/rootNavigation";
 import { threadSelectionDeferral } from "../layout/deferred-navigation";
@@ -109,6 +110,11 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       candidate.environmentId === initialProjectRef.environmentId &&
       candidate.id === initialProjectRef.projectId,
   );
+  useFollowOpenSpace({
+    environmentId: project?.environmentId ?? null,
+    threadId: null,
+    projectId: project?.id ?? null,
+  });
   // A project can drop out of the list and come back while its catalog stays ready. The checkout
   // keeps the last project this route resolved, so that gap reads the same checkout.
   const [resolvedProject, setResolvedProject] = useState<Pick<

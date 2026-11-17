@@ -80,6 +80,7 @@ vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => harness.checkout }));
 vi.mock("../../state/entities", () => ({ useProjects: () => useSnapshot().projects }));
+vi.mock("../../state/space-scope", () => ({ useFollowOpenSpace: () => undefined }));
 vi.mock("../../state/workspace", () => ({
   useWorkspaceState: () => ({ state: useSnapshot().catalog }),
 }));

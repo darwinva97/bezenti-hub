@@ -1,5 +1,5 @@
 import type { OlderSettledScope } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { useMemo, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
@@ -28,6 +28,8 @@ function useKeySet(newlineSeparatedKeys: string): ReadonlySet<string> {
 
 type LayoutInput = Parameters<typeof buildThreadListV2Items>[0];
 
+const NO_SPACES: ReadonlyMap<EnvironmentId, ReadonlySet<ProjectId>> = new Map();
+
 /**
  * The React Compiler drops unread dependencies, so pass the expired-grace version through
  * this call to keep inbox updates tied to its subscription.
@@ -49,6 +51,8 @@ export function useThreadListV2(input: {
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs: LayoutInput["projectRefs"];
   readonly searchQuery: string;
+  /** Each Hub's current-Space Projects (`useSpaceProjectIds`); Hubs absent are not limited. */
+  readonly spaceProjectIds?: ReadonlyMap<EnvironmentId, ReadonlySet<ProjectId>>;
   /** Threads that match the search by content, keyed like `threadSearchMatchKey`. */
   readonly searchMatches: ReadonlyMap<string, unknown>;
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
@@ -114,15 +118,18 @@ export function useThreadListV2(input: {
     input.queuedThreadKeys,
     workingShelfEnabled,
   ]);
-  // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
+  // Older settled threads load in pages; the shelf lists them only as far as they are loaded,
+  // and only from each Hub's current Space (ticket 19).
+  const spaceProjectIds = input.spaceProjectIds ?? NO_SPACES;
   const scopes = useMemo(
     () =>
       olderSettledScopes({
         environmentId: input.environmentId,
         projectRefs: input.projectRefs,
         settlementEnvironmentIds: input.settlementEnvironmentIds,
+        spaceProjectIds,
       }),
-    [input.environmentId, input.projectRefs, input.settlementEnvironmentIds],
+    [input.environmentId, input.projectRefs, input.settlementEnvironmentIds, spaceProjectIds],
   );
   const olderSettledShelf = useOlderSettledShelf({
     scopes,
@@ -250,13 +257,21 @@ function olderSettledScopes(input: {
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs: LayoutInput["projectRefs"];
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
+  /** The Projects of the current Space on each Hub that has Spaces. */
+  readonly spaceProjectIds: ReadonlyMap<EnvironmentId, ReadonlySet<ProjectId>>;
 }): ReadonlyArray<OlderSettledScope> {
   const environmentIds =
     input.environmentId === null ? [...input.settlementEnvironmentIds] : [input.environmentId];
   return environmentIds.flatMap((environmentId): ReadonlyArray<OlderSettledScope> => {
-    if (input.projectRefs == null) return [{ environmentId, projectIds: null }];
+    const inSpace = input.spaceProjectIds.get(environmentId);
+    if (input.projectRefs == null) {
+      if (inSpace === undefined) return [{ environmentId, projectIds: null }];
+      return inSpace.size === 0 ? [] : [{ environmentId, projectIds: [...inSpace] }];
+    }
     const projectIds = input.projectRefs.flatMap((ref) =>
-      ref.environmentId === environmentId ? [ref.projectId] : [],
+      ref.environmentId === environmentId && (inSpace === undefined || inSpace.has(ref.projectId))
+        ? [ref.projectId]
+        : [],
     );
     return projectIds.length === 0 ? [] : [{ environmentId, projectIds }];
   });

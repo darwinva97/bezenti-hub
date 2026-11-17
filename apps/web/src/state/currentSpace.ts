@@ -9,7 +9,13 @@ import {
   type ThreadRoleSubject,
   threadRolePermissions,
 } from "@t3tools/client-runtime/spaces/role-permissions";
-import { showAllSpacesStorageKey } from "@t3tools/client-runtime/spaces/space-filter";
+import {
+  filterProjectsBySpace,
+  filterThreadsBySpace,
+  legacySpaceIdOf,
+  type SpaceFilterProject,
+  type SpaceFilterThread,
+} from "@t3tools/client-runtime/spaces/space-filter";
 import {
   chooseCurrentSpace,
   createOrganization,
@@ -44,22 +50,12 @@ function storeSpace(view: SpaceDirectoryView, spaceId: SpaceId) {
   }
 }
 
-function readStoredShowAllSpaces(view: SpaceDirectoryView): boolean {
-  try {
-    return window.localStorage.getItem(showAllSpacesStorageKey(view.userId)) === "1";
-  } catch {
-    return false;
-  }
-}
-
 interface CurrentSpaceState {
   readonly environmentId: EnvironmentId | null;
   readonly view: SpaceDirectoryView | null;
   readonly currentSpaceId: SpaceId | null;
   /** The last load failed; the previous Spaces and choice stay in place. */
   readonly loadFailed: boolean;
-  /** «All Spaces»: the sidebar lists every Space instead of only the current one. Kept per User. */
-  readonly showAllSpaces: boolean;
 }
 
 export const useCurrentSpace = create<CurrentSpaceState>(() => ({
@@ -67,21 +63,7 @@ export const useCurrentSpace = create<CurrentSpaceState>(() => ({
   view: null,
   currentSpaceId: null,
   loadFailed: false,
-  showAllSpaces: false,
 }));
-
-export function setShowAllSpaces(showAll: boolean) {
-  const { view } = useCurrentSpace.getState();
-  if (view !== null) {
-    try {
-      if (showAll) window.localStorage.setItem(showAllSpacesStorageKey(view.userId), "1");
-      else window.localStorage.removeItem(showAllSpacesStorageKey(view.userId));
-    } catch {
-      // Without storage the choice lasts until reload.
-    }
-  }
-  useCurrentSpace.setState({ showAllSpaces: showAll });
-}
 
 /** Null when the User has no Space to work in yet. */
 export function selectSpace(spaceId: SpaceId | null) {
@@ -104,7 +86,6 @@ export async function loadSpaces(environmentId: EnvironmentId): Promise<void> {
       view: null,
       currentSpaceId: null,
       loadFailed: false,
-      showAllSpaces: false,
     });
     return;
   }
@@ -113,12 +94,7 @@ export async function loadSpaces(environmentId: EnvironmentId): Promise<void> {
     return;
   }
   const previous = useCurrentSpace.getState().currentSpaceId;
-  useCurrentSpace.setState({
-    environmentId,
-    view,
-    loadFailed: false,
-    showAllSpaces: readStoredShowAllSpaces(view),
-  });
+  useCurrentSpace.setState({ environmentId, view, loadFailed: false });
   selectSpace(chooseCurrentSpace(view, previous ?? readStoredSpace(view)));
 }
 
@@ -170,4 +146,44 @@ export function readThreadRolePermissions(
 ) {
   const state = useCurrentSpace.getState();
   return threadRolePermissions(state.environmentId === environmentId ? state.view : null, thread);
+}
+
+/**
+ * The Projects of the current Space (and of environments without Spaces), as the sidebar lists
+ * them: what a new Thread may be started in, from every entry point.
+ */
+export function projectsInCurrentSpace<P extends SpaceFilterProject>(
+  projects: readonly P[],
+  state: Pick<
+    CurrentSpaceState,
+    "environmentId" | "view" | "currentSpaceId"
+  > = useCurrentSpace.getState(),
+): readonly P[] {
+  return filterProjectsBySpace({
+    spaceId: state.currentSpaceId,
+    environmentId: state.environmentId,
+    legacySpaceId: legacySpaceIdOf(state.view),
+    projects,
+  });
+}
+
+/** `projectsInCurrentSpace` for render. */
+export function useProjectsInCurrentSpace<P extends SpaceFilterProject>(
+  projects: readonly P[],
+): readonly P[] {
+  const environmentId = useCurrentSpace((state) => state.environmentId);
+  const view = useCurrentSpace((state) => state.view);
+  const currentSpaceId = useCurrentSpace((state) => state.currentSpaceId);
+  return projectsInCurrentSpace(projects, { environmentId, view, currentSpaceId });
+}
+
+/** The Threads of the current Space (and of environments without Spaces), for render. */
+export function useThreadsInCurrentSpace<T extends SpaceFilterThread>(
+  threads: readonly T[],
+  projects: readonly SpaceFilterProject[],
+): readonly T[] {
+  const environmentId = useCurrentSpace((state) => state.environmentId);
+  const spaceId = useCurrentSpace((state) => state.currentSpaceId);
+  const legacySpaceId = useCurrentSpace((state) => legacySpaceIdOf(state.view));
+  return filterThreadsBySpace({ spaceId, environmentId, legacySpaceId, threads, projects });
 }

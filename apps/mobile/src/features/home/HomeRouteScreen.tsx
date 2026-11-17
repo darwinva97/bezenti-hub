@@ -38,6 +38,7 @@ import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { openSettings } from "../settings/settings-navigation";
 import { selectSpace } from "../../state/spaces";
 import { useCreateOrganization, useSpaceChoices } from "../../state/use-space-choices";
+import { useProjectsInCurrentSpaces, useThreadsInCurrentSpaces } from "../../state/space-scope";
 import { useSelectWorkspaceTab } from "../workspace/useSelectWorkspaceTab";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 
@@ -50,12 +51,14 @@ export function HomeRouteScreen() {
   const { layout, panes, primarySidebarSearchQuery, setPrimarySidebarSearchQuery, startNewTask } =
     useAdaptiveWorkspaceLayout();
   const selectDetail = useSelectWorkspaceDetail();
-  const projects = useProjects();
+  // Each Hub's current Space only, from the list to search and Settled (ticket 19).
+  const allProjects = useProjects();
+  const projects = useProjectsInCurrentSpaces(allProjects);
   // Stop rebuilding the streaming thread list while Thread covers Home.
   const visible = useHomeRouteVisible();
-  const threads = useAtomValueWhileVisible(
-    environmentThreadShells.navigationThreadShellsAtom,
-    visible,
+  const threads = useThreadsInCurrentSpaces(
+    useAtomValueWhileVisible(environmentThreadShells.navigationThreadShellsAtom, visible),
+    allProjects,
   );
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();

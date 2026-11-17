@@ -2,6 +2,7 @@ import type { AnyRouter } from "@tanstack/react-router";
 
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { createNewThreadHandler, resolveDefaultProjectRef } from "../hooks/useHandleNewThread";
+import { projectsInCurrentSpace } from "../state/currentSpace";
 import { readProjects, readThreadShell } from "../state/entities";
 import {
   armNewThreadTab,
@@ -27,7 +28,7 @@ export async function startNewThreadInNewTab(router: AnyRouter): Promise<boolean
     activeDraftThread,
     activeThread: activeThread ?? undefined,
     defaultProjectRef: resolveDefaultProjectRef(
-      readProjects(),
+      projectsInCurrentSpace(readProjects()),
       useUiStateStore.getState().projectOrder,
     ),
     handleNewThread: createNewThreadHandler(router),

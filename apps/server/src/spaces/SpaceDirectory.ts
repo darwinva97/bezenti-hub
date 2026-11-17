@@ -124,6 +124,9 @@ const deniedMessage = (action: string, reason: string): string | undefined => {
   if (action === "project.move" && reason === "space-frozen") {
     return "Nothing moves into a removed User's Personal space.";
   }
+  if (reason === "space-mismatch") {
+    return "This Project is in another Space. Switch to its Space to start a Thread in it.";
+  }
   if (reason === "personal-space-read-only") {
     return "This is someone else's Personal space: you can read it but not change anything in it.";
   }
@@ -303,7 +306,7 @@ export interface CreationClaim {
   readonly actorUserId?: UserId | undefined;
   /** The client's current Space. */
   readonly spaceId?: SpaceId | undefined;
-  /** A Thread's Project, whose Space wins over the requested one. */
+  /** A Thread's Project: its Space is the Thread's, and a different requested one is refused. */
   readonly projectId?: ProjectId | undefined;
 }
 
@@ -1163,6 +1166,12 @@ const make = Effect.gen(function* () {
       { concurrency: "unbounded" },
     );
     yield* requireAllowedInSpace(principal, claim.action, spaceId, space);
+    // Ticket 19: a client sends its current Space, and starts Threads only in that Space's
+    // Projects. Checked after the Project's Space is known to be visible, so it reveals nothing;
+    // callers that name no Space (agents, forks, the CLI) get the Project's.
+    if (claim.spaceId !== undefined && claim.spaceId !== spaceId) {
+      return yield* new SpaceAccessDeniedError({ action: claim.action, reason: "space-mismatch" });
+    }
     return { spaceId, ownerUserId: actor } satisfies CreationStamp;
   });
 

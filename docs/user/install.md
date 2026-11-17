@@ -271,11 +271,13 @@ into the Hub this way; the audit log records who invited whom. Archiving or
 deleting an organization and naming its Admins stay with the Owner, who sees
 every organization, also the ones they did not create.
 
-The sidebar lists only the projects and threads of the current Space. The thread
-you have open stays listed even if it belongs to another Space, and the current
-Space does not change by itself. Turn on **All Spaces** next to the sidebar
-search to list every Space at once; the choice is remembered per person in the
-browser. Without Spaces, such as on a local install, the sidebar lists everything.
+Everything you do from the sidebar stays in the current Space: the projects and
+threads it lists, search, Settled, and the projects you can start a new thread
+in, from the button, the command palette or a shortcut. To see another Space,
+switch to it in the selector. Opening a thread or a draft of another Space, from
+a link, a notification or the browser's history, switches the current Space to
+its own. The mobile app does the same for each Hub. Without Spaces, such as on a
+local install, the sidebar lists everything.
 
 You see the projects and threads of your Personal space and of every
 organization you belong to, whoever created them, and nothing else. Work in an

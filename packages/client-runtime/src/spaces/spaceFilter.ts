@@ -1,9 +1,7 @@
 // Which Projects and Threads a client lists for the current Space. The Space selector decides where
-// new things go; this rule also decides what the sidebar shows. Pure, so clients share it.
-import type { SpaceId, UserId } from "@t3tools/contracts";
-
-/** Where a User's «All Spaces» choice is kept, next to their current Space. */
-export const showAllSpacesStorageKey = (userId: UserId) => `t3code:all-spaces:v1:${userId}`;
+// new things go; this rule also decides what the sidebar, search and Settled show, and nothing of
+// another Space is ever listed beside it (ticket 19). Pure, so clients share it.
+import type { SpaceDirectoryView, SpaceId } from "@t3tools/contracts";
 
 export interface SpaceFilterProject {
   readonly environmentId: string;
@@ -19,48 +17,64 @@ export interface SpaceFilterThread {
   readonly spaceId?: SpaceId | null | undefined;
 }
 
-/** A Thread's Space is its own, else its Project's; null when neither is known. */
+/**
+ * The Space of rows from before Spaces (no Space on the row or its Project): the Owner's Personal
+ * space, as the server counts them. Only the Owner is sent such rows, so for anyone else it is
+ * none.
+ */
+export function legacySpaceIdOf(
+  view: Pick<SpaceDirectoryView, "isOwner" | "personalSpaceId"> | null,
+): SpaceId | null {
+  return view?.isOwner === true ? view.personalSpaceId : null;
+}
+
+/** A Thread's Space is its own, else its Project's, else the legacy Space; null when none. */
 export function threadSpaceId(
   thread: Pick<SpaceFilterThread, "spaceId">,
   project: Pick<SpaceFilterProject, "spaceId"> | undefined,
+  legacySpaceId: SpaceId | null = null,
 ): SpaceId | null {
-  return thread.spaceId ?? project?.spaceId ?? null;
+  return thread.spaceId ?? project?.spaceId ?? legacySpaceId;
 }
-
-/** The Space to filter by, or null to show everything: no current Space, or «All Spaces» is on. */
-export function effectiveSpaceFilter(input: {
-  readonly currentSpaceId: SpaceId | null;
-  readonly showAllSpaces: boolean;
-}): SpaceId | null {
-  return input.showAllSpaces ? null : input.currentSpaceId;
-}
-
-export const projectKeyOf = (environmentId: string, projectId: string) =>
-  `${environmentId}:${projectId}`;
-
-const matches = (spaceId: SpaceId, candidate: SpaceId | null) =>
-  candidate === null || candidate === spaceId;
 
 /**
- * Keeps the Threads of `spaceId`; Threads of other environments or of unknown Space stay, and so
- * do the open Thread and its ancestors. A Thread's Project need not be loaded. Arrays that lose
- * nothing come back as they were.
+ * The Space to switch to when the User opens a Thread, Project or draft of another Space (a link,
+ * a notification, the browser's history), so the sidebar follows instead of mixing Spaces. Null
+ * to stay: it is current already, unknown, or not one of the User's Spaces.
  */
-export function filterThreadsBySpace<
-  T extends SpaceFilterThread,
-  P extends SpaceFilterProject,
->(input: {
+export function spaceToFollow(input: {
+  readonly view: { readonly spaces: ReadonlyArray<{ readonly id: SpaceId }> } | null;
+  readonly currentSpaceId: SpaceId | null;
+  readonly openSpaceId: SpaceId | null;
+}): SpaceId | null {
+  const { view, currentSpaceId, openSpaceId } = input;
+  if (view === null || openSpaceId === null || openSpaceId === currentSpaceId) return null;
+  return view.spaces.some((space) => space.id === openSpaceId) ? openSpaceId : null;
+}
+
+const projectKeyOf = (environmentId: string, projectId: string) => `${environmentId}:${projectId}`;
+
+interface SpaceScope {
+  /** The current Space; null shows everything (no Spaces here, or none chosen yet). */
   readonly spaceId: SpaceId | null;
-  /** The environment whose Spaces `spaceId` belongs to. */
+  /** The environment whose Spaces `spaceId` belongs to; others are left alone. */
   readonly environmentId: string | null;
-  readonly threads: readonly T[];
-  readonly projects: readonly P[];
-  readonly openThreads: ReadonlyArray<{
-    readonly environmentId: string;
-    readonly threadId: string;
-  }>;
-}): readonly T[] {
-  const { spaceId, environmentId, threads, projects, openThreads } = input;
+  /** Where rows from before Spaces belong (`legacySpaceIdOf`). */
+  readonly legacySpaceId: SpaceId | null;
+}
+
+/**
+ * Keeps the Threads of `spaceId`, by their own Space, else their Project's (which need not be
+ * loaded), else the legacy Space. Threads of other environments stay. Arrays that lose nothing
+ * come back as they were.
+ */
+export function filterThreadsBySpace<T extends SpaceFilterThread, P extends SpaceFilterProject>(
+  input: SpaceScope & {
+    readonly threads: readonly T[];
+    readonly projects: readonly P[];
+  },
+): readonly T[] {
+  const { spaceId, environmentId, legacySpaceId, threads, projects } = input;
   if (spaceId === null || environmentId === null) return threads;
   const projectByKey = new Map<string, P>();
   for (const project of projects) {
@@ -69,22 +83,18 @@ export function filterThreadsBySpace<
   const kept = threads.filter(
     (thread) =>
       thread.environmentId !== environmentId ||
-      matches(
-        spaceId,
-        threadSpaceId(
-          thread,
-          projectByKey.get(projectKeyOf(thread.environmentId, thread.projectId)),
-        ),
-      ) ||
-      openThreads.some(
-        (open) => open.environmentId === thread.environmentId && open.threadId === thread.id,
-      ),
+      threadSpaceId(
+        thread,
+        projectByKey.get(projectKeyOf(thread.environmentId, thread.projectId)),
+        legacySpaceId,
+      ) === spaceId,
   );
   return kept.length === threads.length ? threads : kept;
 }
 
-const projectInSpace = (project: SpaceFilterProject, spaceId: SpaceId, environmentId: string) =>
-  project.environmentId !== environmentId || matches(spaceId, project.spaceId ?? null);
+const projectInSpace = (project: SpaceFilterProject, scope: SpaceScope & { spaceId: SpaceId }) =>
+  project.environmentId !== scope.environmentId ||
+  (project.spaceId ?? scope.legacySpaceId) === scope.spaceId;
 
 // One slot each: the sidebar renders on every shell update, and these inputs rarely change, so the
 // same arrays and sets come back until they do.
@@ -95,26 +105,20 @@ let projectsSlot: {
 } | null = null;
 
 /**
- * Keeps the Projects in `spaceId` (or of unknown Space or another environment), plus the ones in
- * `keepProjectKeys`, such as the open Thread's. Same result array for the same inputs.
+ * Keeps the Projects in `spaceId` (and those of other environments). Same result array for the
+ * same inputs.
  */
-export function filterProjectsBySpace<P extends SpaceFilterProject>(input: {
-  readonly spaceId: SpaceId | null;
-  readonly environmentId: string | null;
-  readonly projects: readonly P[];
-  readonly keepProjectKeys: readonly string[];
-}): readonly P[] {
-  const { spaceId, environmentId, projects, keepProjectKeys } = input;
+export function filterProjectsBySpace<P extends SpaceFilterProject>(
+  input: SpaceScope & { readonly projects: readonly P[] },
+): readonly P[] {
+  const { spaceId, environmentId, legacySpaceId, projects } = input;
   if (spaceId === null || environmentId === null) return projects;
-  const key = `${spaceId}\0${environmentId}\0${keepProjectKeys.join("\n")}`;
+  const key = `${spaceId}\0${environmentId}\0${legacySpaceId ?? ""}`;
   if (projectsSlot?.projects === projects && projectsSlot.key === key) {
     return projectsSlot.result as readonly P[];
   }
-  const keep = new Set(keepProjectKeys);
-  const kept = projects.filter(
-    (project) =>
-      projectInSpace(project, spaceId, environmentId) ||
-      keep.has(projectKeyOf(project.environmentId, project.id)),
+  const kept = projects.filter((project) =>
+    projectInSpace(project, { spaceId, environmentId, legacySpaceId }),
   );
   const result = kept.length === projects.length ? projects : kept;
   projectsSlot = { projects, key, result };
@@ -127,19 +131,17 @@ let inSpaceSlot: {
   readonly result: ReadonlySet<string>;
 } | null = null;
 
-/** Keys of the Projects actually in `spaceId`; null when nothing is filtered. */
-export function inSpaceProjectKeys(input: {
-  readonly spaceId: SpaceId | null;
-  readonly environmentId: string | null;
-  readonly projects: readonly SpaceFilterProject[];
-}): ReadonlySet<string> | null {
-  const { spaceId, environmentId, projects } = input;
+/** Keys of the Projects in `spaceId` (other environments' included); null when nothing is filtered. */
+export function inSpaceProjectKeys(
+  input: SpaceScope & { readonly projects: readonly SpaceFilterProject[] },
+): ReadonlySet<string> | null {
+  const { spaceId, environmentId, legacySpaceId, projects } = input;
   if (spaceId === null || environmentId === null) return null;
-  const key = `${spaceId}\0${environmentId}`;
+  const key = `${spaceId}\0${environmentId}\0${legacySpaceId ?? ""}`;
   if (inSpaceSlot?.projects === projects && inSpaceSlot.key === key) return inSpaceSlot.result;
   const result = new Set(
     projects
-      .filter((project) => projectInSpace(project, spaceId, environmentId))
+      .filter((project) => projectInSpace(project, { spaceId, environmentId, legacySpaceId }))
       .map((project) => projectKeyOf(project.environmentId, project.id)),
   );
   inSpaceSlot = { projects, key, result };

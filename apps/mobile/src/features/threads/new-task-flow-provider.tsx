@@ -24,6 +24,7 @@ import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
 import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
+import { useProjectsInCurrentSpaces, useThreadsInCurrentSpaces } from "../../state/space-scope";
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
@@ -223,15 +224,17 @@ export function NewTaskFlowProvider(
     routeDraftId?: string;
   }>,
 ) {
+  // A new Thread starts only in a Project of its Hub's current Space (ticket 19).
   const projects = useProjects();
-  const threads = useThreadShells();
+  const spaceProjects = useProjectsInCurrentSpaces(projects);
+  const threads = useThreadsInCurrentSpaces(useThreadShells(), projects);
   const { savedConnectionsById } = useSavedRemoteConnections();
   const groupingSettings = useMobileProjectGroupingSettings();
   const { enabled: legacyPlanModeEnabled } = useLegacyPlanModeState();
 
   const projectScopes = sortHomeProjectScopes({
     scopes: buildHomeProjectScopes({
-      projects,
+      projects: spaceProjects,
       environmentId: null,
       projectGroupingMode: groupingSettings.sidebarProjectGroupingMode,
     }),
@@ -305,11 +308,11 @@ export function NewTaskFlowProvider(
     updateNewTaskFlowState(flowKey, { ...readFlow(), ...patch });
   const selectedEnvironmentId =
     selectedEnvironmentIdOverride !== null &&
-    projects.some((project) => project.environmentId === selectedEnvironmentIdOverride)
+    spaceProjects.some((project) => project.environmentId === selectedEnvironmentIdOverride)
       ? selectedEnvironmentIdOverride
-      : (projects[0]?.environmentId ?? null);
+      : (spaceProjects[0]?.environmentId ?? null);
   const projectsForEnvironment = pipe(
-    projects,
+    spaceProjects,
     Arr.filter((project) => project.environmentId === selectedEnvironmentId),
   );
 

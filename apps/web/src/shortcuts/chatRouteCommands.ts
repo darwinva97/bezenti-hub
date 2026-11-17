@@ -21,6 +21,7 @@ import { selectProjectGroupingSettings } from "@t3tools/client-runtime/state/pro
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
+import { projectsInCurrentSpace } from "../state/currentSpace";
 import { readProjects, readThreadShell } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
@@ -82,7 +83,7 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
       activeDraftThread,
       activeThread: activeThread ?? undefined,
       defaultProjectRef: resolveDefaultProjectRef(
-        readProjects(),
+        projectsInCurrentSpace(readProjects()),
         useUiStateStore.getState().projectOrder,
       ),
       handleNewThread,
@@ -91,7 +92,7 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
   // Grouped like the sidebar, so the shortcut and the New thread button agree.
   const readProjectGroups = () =>
     buildSidebarProjectSnapshots({
-      projects: readProjects(),
+      projects: projectsInCurrentSpace(readProjects()),
       groupScratchProjects: true,
       settings: selectProjectGroupingSettings(getClientSettings()),
       primaryEnvironmentId: appAtomRegistry.get(primaryEnvironmentIdAtom),

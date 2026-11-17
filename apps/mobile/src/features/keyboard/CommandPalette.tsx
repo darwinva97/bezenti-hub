@@ -48,6 +48,7 @@ import {
   useThreadShell,
   useVisibleThreadShells,
 } from "../../state/entities";
+import { useProjectsInCurrentSpaces, useThreadsInCurrentSpaces } from "../../state/space-scope";
 import { useThreadSearch } from "../../state/queries";
 import { requestThreadMessageJump } from "../threads/threadMessageJump";
 import { threadEnvironment } from "../../state/threads";
@@ -225,8 +226,10 @@ export function CommandPalette(props: {
   const { themeVariables } = useAppearancePreferences();
   const selectDetail = useSelectWorkspaceDetail();
   const runCommand = props.onCommand;
-  const projects = useProjects();
-  const threads = useVisibleThreadShells();
+  // Only each Hub's current Space, as the thread list shows (ticket 19).
+  const allProjects = useProjects();
+  const projects = useProjectsInCurrentSpaces(allProjects);
+  const threads = useThreadsInCurrentSpaces(useVisibleThreadShells(), allProjects);
   const activeThreadRef = parseActiveThreadPath(props.pathname);
   const activeThread = useThreadShell(activeThreadRef);
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });

@@ -231,6 +231,9 @@ vi.mock("../state/entities", () => {
   };
 });
 vi.mock("../state/olderSettledShelf", () => ({ readUnloadedThreadCount: () => 0 }));
+vi.mock("../state/currentSpace", () => ({
+  useProjectsInCurrentSpace: (projects: unknown) => projects,
+}));
 vi.mock("../state/presentation", () => ({
   environmentSummaries: { connectedEnvironmentIdsAtom: "connected-environment-ids" },
 }));

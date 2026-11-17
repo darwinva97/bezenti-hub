@@ -65,7 +65,6 @@ import {
   CheckIcon,
   ChevronDownIcon,
   FolderIcon,
-  LayersIcon,
   ListFilterIcon,
   PlusIcon,
   SettingsIcon,
@@ -150,8 +149,8 @@ import {
   useAllEnvironmentProjectSnapshotsReady,
   useServerConfigs,
 } from "../state/entities";
-import { setShowAllSpaces } from "../state/currentSpace";
 import { useSidebarSpaceFilter } from "../hooks/useSidebarSpaceFilter";
+import { useFollowOpenSpace } from "../hooks/useFollowOpenSpace";
 import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
@@ -934,12 +933,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const routeThreadRef = resolveActiveThreadRouteRef(routeTarget, routeDraftThread);
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
-  // Only the current Space's Projects and Threads are listed, apart from the open one.
-  const spaceFilter = useSidebarSpaceFilter({
-    openThreadEnvironmentId: routeThreadRef?.environmentId ?? null,
-    openThreadId: routeThreadRef?.threadId ?? null,
-    openDraftEnvironmentId: routeDraftThread?.environmentId ?? null,
-    openDraftProjectId: routeDraftThread?.projectId ?? null,
+  // Only the current Space's Projects and Threads are listed (ticket 19).
+  const spaceFilter = useSidebarSpaceFilter();
+  // What the route opens from another Space makes that Space current instead of being listed.
+  useFollowOpenSpace({
+    threadRef: routeThreadRef,
+    draft:
+      routeDraftThread === null || routeDraftThread === undefined
+        ? null
+        : { environmentId: routeDraftThread.environmentId, projectId: routeDraftThread.projectId },
   });
   const {
     projects,
@@ -3036,27 +3038,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
-              spaceScope={
-                spaceFilter.canToggleAllSpaces ? (
-                  <SidebarHeaderIconButton
-                    label="All Spaces"
-                    tooltip={
-                      spaceFilter.showAllSpaces
-                        ? "Showing every Space. Click to show only the current Space"
-                        : "Showing the current Space. Click to show every Space"
-                    }
-                    aria-pressed={spaceFilter.showAllSpaces}
-                    data-active={spaceFilter.showAllSpaces}
-                    onClick={() => {
-                      clearSelection();
-                      setShowAllSpaces(!spaceFilter.showAllSpaces);
-                      scrollSidebarToTop(sidebarContentRef.current);
-                    }}
-                  >
-                    <LayersIcon />
-                  </SidebarHeaderIconButton>
-                ) : null
-              }
               projectScope={
                 <Combobox
                   items={projectScopeItems}

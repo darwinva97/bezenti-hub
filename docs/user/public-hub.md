@@ -50,7 +50,7 @@ T3 Code reads the client's address and whether it used HTTPS from
 `X-Forwarded-For` and `X-Forwarded-Proto` (or `Forwarded`), but only when the
 request comes from a trusted proxy. From anyone else those headers are ignored.
 The client's address is what sign-in back-off counts against and what
-**Settings → Access → Your sessions** shows, so with a proxy T3 Code does not
+**User settings → Sessions** shows, so with a proxy T3 Code does not
 trust, every visitor looks like the proxy.
 
 ## Caddy

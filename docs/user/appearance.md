@@ -1,6 +1,6 @@
 # Appearance and themes
 
-On web and desktop, open **Settings → Appearance** to choose a theme and follow the system
+On web and desktop, open **User settings → Appearance** to choose a theme and follow the system
 appearance or stay in light or dark mode. To use different themes for light and dark mode, select
 the corresponding preview within each theme. Appearance preferences are saved separately on each
 device or browser.
@@ -9,9 +9,9 @@ On web and desktop, use **Change theme** in the command palette to select a them
 Press **Cmd+Option+A** on macOS or **Ctrl+Alt+A** on Windows/Linux to open the theme picker directly.
 Use **Change appearance** in the command palette to choose System, Light, or Dark independently of
 the theme. **Cmd+Option+Shift+A** on macOS or **Ctrl+Alt+Shift+A** on Windows/Linux cycles through
-those modes. Customize these shortcuts under **Settings → Keybindings**.
+those modes. Customize these shortcuts under **User settings → Keybindings**.
 
-On mobile, open **Settings → Appearance**. Mobile has its own themes and text,
+On mobile, open **User settings → Appearance**. Mobile has its own themes and text,
 code, and terminal preferences. It does not follow environment themes or defaults.
 
 On Android 12 or newer, choose the **Material You** theme in Appearance to use colors from
@@ -31,7 +31,7 @@ applies to the web and desktop clients.
 
 ## Math
 
-Turn on **Render math** in **Settings → Appearance** to typeset LaTeX in messages and Markdown
+Turn on **Render math** in **User settings → Appearance** to typeset LaTeX in messages and Markdown
 previews on web, desktop, and mobile. It reads `$…$`, `$$…$$`, `\(…\)`, and `\[…\]`, outside of code.
 Fenced `math` blocks also render. Formulas work in tables, including absolute-value bars.
 Dollar amounts such as `$5 and $10` stay text; write `\$` to keep any other dollar sign literal.
@@ -81,7 +81,7 @@ What an agent can and cannot do:
   anyone's appearance. A proposal that would be hard to read (a dark theme on a mid-grey or light
   background, or an accent that disappears on the background) is refused.
 
-To go back at any time, use **Undo** on the card, choose another theme in **Settings → Appearance**,
+To go back at any time, use **Undo** on the card, choose another theme in **User settings → Appearance**,
 or press **Cmd+Option+A** on macOS or **Ctrl+Alt+A** on Windows/Linux to open the theme picker.
 
 ### Custom CSS
@@ -120,7 +120,7 @@ If the CSS makes T3 Code unusable, two ways out work without seeing the page:
 Environment themes and defaults come from the server serving your web app or the desktop app's
 main local environment. Additional connections do not use them.
 
-Select a published theme in **Settings → Appearance** to follow its palette as the server updates
+Select a published theme in **User settings → Appearance** to follow its palette as the server updates
 it. **Duplicate** makes an independent copy you can edit. A saved custom theme with the same ID
 takes precedence. If the server stops publishing the selected theme, T3 Code falls back to its
 standard theme.

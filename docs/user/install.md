@@ -106,7 +106,7 @@ Nix manages both the desktop app and the bundled
 ### The `t3` command
 
 The desktop app includes the `t3` command-line tool. To run it from any
-terminal, open **Settings → About** and choose **Install** next to
+terminal, open **User settings → About** and choose **Install** next to
 **t3 command**. On macOS and Linux it adds a `t3` link to a folder on your
 `PATH`; on Windows it adds the app's command folder to your `PATH`. Open a new
 terminal afterwards. **Remove** takes it off again. If you already have `t3`
@@ -114,7 +114,7 @@ from npm, it stays as it is.
 
 ### Windows Subsystem for Linux
 
-Choose a WSL distro in **Settings → Sharing & access** to run agents and projects
+Choose a WSL distro in **User settings → Machines → This computer → Network** to run agents and projects
 there. Install the provider CLIs inside that distro. T3 Code installs its own
 server runtime there automatically; the first launch after an app update can
 take longer.
@@ -140,14 +140,14 @@ Install T3 Code from the
 The phone connects to a server on another machine. Follow
 [remote access](./remote-access.md) to link it with a pairing URL.
 
-Store links and QR codes are also available in **Settings → About → Mobile app**
+Store links and QR codes are also available in **User settings → About → Mobile app**
 on web and desktop. The store apps work with both stable and Nightly servers. Test builds are optional:
 
 - **iPhone and iPad:** TestFlight is invite-only.
 - **Android:** download an APK from the
   [Android beta releases](https://github.com/pingdotgg/t3code/releases?q=android-beta-).
 
-If the app crashes during launch, open Settings → Diagnostics on the next launch
+If the app crashes during launch, open User settings → Machines → ‹machine› → Diagnostics on the next launch
 that succeeds. It lists startup crashes from the last 7 days with the error and
 component stack that store crash reports leave out. Copy the report and paste it
 into a GitHub issue. Error messages can quote values from the app, so read it over
@@ -155,7 +155,7 @@ before sharing.
 
 ## Providers
 
-Open **Settings → Providers** in the web or desktop app, select the environment,
+Open **User settings → Machines → ‹machine› → Providers** in the web or desktop app, select the environment,
 and enable the provider you want. Installation, login, and configuration belong
 to that environment's machine, even when you connect from a phone or another
 computer.
@@ -170,7 +170,7 @@ computer.
 | OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                                                                                  |
 | Antigravity | Install and sign in with Google from T3 Code's provider settings.                                                                                         |
 | Pi          | Install [Pi](./providers-pi.md#set-up-pi) with Node.js 22.19 or newer, then run `pi` and `/login`.                                                        |
-| Muse Code   | Install [Muse Code](https://dev.meta.ai/docs/muse-code) on the server, run `muse login`, then enable it in Settings → Providers.                          |
+| Muse Code   | Install [Muse Code](https://dev.meta.ai/docs/muse-code) on the server, run `muse login`, then enable it in User settings → Machines → ‹machine› → Providers.                          |
 | fx          | Install [fx](https://fx.sh) with `curl -fsSL https://fx.sh/setup.sh \| bash`, then run `fx login`.                                                        |
 
 Provider CLIs must be on the server's `PATH`. If T3 Code cannot find one, set its
@@ -180,7 +180,7 @@ Cursor's executable is `cursor-agent`, although its login command is
 managed runtimes without a `PATH` entry.
 
 T3 Code warns when a provider version has known compatibility problems with your
-release. Check **Settings → Providers** on that environment for the recommended
+release. Check **User settings → Machines → ‹machine› → Providers** on that environment for the recommended
 version or range. When its package manager supports installing a specific version,
 you can install the recommendation there. Otherwise use the provider's installer
 on the environment's machine. An unlisted version is unverified.
@@ -210,10 +210,9 @@ again says it was already used.
 Once the Owner exists, opening the server's address in any signed-out browser
 goes straight to sign-in; no pairing link or code is needed. A passkey works
 only on the address you registered it on, so create the account from the address
-you plan to keep using. Sign out from **Settings → Access**.
+you plan to keep using. Sign out from **User settings → Account**.
 
-For devices without passkeys, add a password under **Settings → Access → Your
-account**. You choose a sign-in name there too. The Owner must first set up an
+For devices without passkeys, add a password under **User settings → Account**. You choose a sign-in name there too. The Owner must first set up an
 authenticator app (1Password, Google Authenticator and similar) in the same
 section, and then signs in with the password plus the app's six-digit code.
 Adding, changing or removing a password or authenticator app asks you to
@@ -225,7 +224,7 @@ while before you can try again.
 
 A browser sign-in lasts 30 days and renews each time you use it, so a device
 you use regularly stays signed in. Tokens for apps, outside agents and scripts
-last 30 days from when they were issued. **Settings → Access → Your sessions** lists your
+last 30 days from when they were issued. **User settings → Sessions** lists your
 browsers, devices and outside agents; revoke any of them there and its open
 connections close at once. The Owner sees and can revoke every User's sessions.
 
@@ -252,6 +251,21 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Claude](./providers-claude.md), [OpenCode](./providers-opencode.md),
 [Antigravity](./providers-antigravity.md), [Kiro](./providers-kiro.md),
 [Pi](./providers-pi.md), [Muse Code](./providers-muse.md), and [fx](./providers-fx.md).
+
+### The four settings modals
+
+Settings are four modals, each for one thing you own or govern:
+
+- **User settings** is yours: Account, Sessions, Appearance, your Vault, AI accounts and Machines.
+- **Space settings** is for the Space you are in: Members, Invitations, its Vault, AI accounts, Machines, Scheduled tasks and Archive.
+- **Project settings** is for one project: name, Vaults, machine, defaults and Actions.
+- **Platform** is the Owner's, for the whole Hub: Users, Audit log, Master key, AI gateway, Sandboxes, Hub machine, Hub defaults and Labs. Nobody else sees it.
+
+Open them from the footer of the sidebar (your name opens User settings), the Space selector
+(**Space settings**, and **Platform** for the Owner), a project's menu in the sidebar
+(**Project settings**), the command palette, or the shortcuts in [Keybindings](./keybindings.md):
+`mod+,` opens User settings. On the desktop app, **Settings…** in the app menu does the same.
+Old bookmarks and links to the previous Settings page still land on the right section.
 
 ### Spaces and organizations
 
@@ -296,7 +310,7 @@ selector reminds you of this while your Personal space is the current Space.
 Nothing in a Personal space is shared with anyone else: no invitations, no guest
 links; to share work, it has to move to an organization.
 
-Everyone also has their own **vault**, under **Settings → Vaults → Mine**: secrets
+Everyone also has their own **vault**, under **User settings → Vault**: secrets
 and variables for your own agents, without asking the Owner. Its **default** group
 reaches every thread of your Personal space, and only those: a thread of yours in an
 organization never receives it. You create, rename and delete your other groups,
@@ -306,7 +320,7 @@ changes nothing there; nobody else sees it at all.
 
 ### Disabling and removing people
 
-In **Users and permissions** the Owner can **Disable** a person: they are signed
+In **Platform → Users** the Owner can **Disable** a person: they are signed
 out everywhere at once (browsers, the desktop and mobile apps, outside agents and
 `t3` tokens), their pending reset links, pairing codes and invitations stop
 working, their running agent turns stop, their scheduled tasks pause (the Owner
@@ -331,8 +345,8 @@ cannot be disabled or removed.
 
 ### Audit log
 
-The Owner can see who did what in the sensitive actions: open **Audit log**
-from the Space selector, or from **Settings → Access**. It lists invitations
+The Owner can see who did what in the sensitive actions: open **Platform → Audit log**,
+which the Space selector's **Platform** entry also opens. It lists invitations
 created, accepted and revoked, Role changes, people removed or leaving an
 organization, reset links, people disabled, turned
 back on or removed, organizations archived, restored and deleted, projects
@@ -371,7 +385,7 @@ Every secret the Hub stores (sign-in keys, provider and source-control
 credentials, the SSH key kept for updates) is encrypted with a master key kept
 in its own file, `master.key` in the Hub's state folder. A copy of the disk or
 of a backup without that file reveals none of them, and without it they are
-lost and everyone signs in again. Until you back it up, **Settings → Access**
+lost and everyone signs in again. Until you back it up, **Platform → Master key**
 warns «Back up the master key»: **Download master key backup** asks for your
 passkey (or password and code) and saves it, then asks you to type the first 8
 characters of the key from the saved file; the warning clears only then. From
@@ -394,7 +408,7 @@ makes a new key over encrypted secrets.
 
 ### Vaults: Variables and sealed Secrets
 
-**Settings → Vaults** holds what your agents receive as environment variables. Each
+The **Vault** sections (**User settings → Vault**, **Space settings → Vault**) hold what your agents receive as environment variables. Each
 owner has one Vault: the Owner's own, and one per organization. A Vault is made of
 **groups**: its **default** group, which every thread of its space receives and which
 is never deleted or renamed, and named groups an organization's admins (or the Owner)
@@ -427,7 +441,7 @@ matters.
 
 ### Read secrets from a provider: Provider scopes
 
-**Settings → Secrets** lists the secret providers the Hub can read: 1Password, and OpenBao or
+The Owner's secret providers page (at `/settings/secrets` while `T3CODE_FEATURE_SECRETS` is on) lists the secret providers the Hub can read: 1Password, and OpenBao or
 HashiCorp Vault (see [Connect OpenBao](#connect-openbao-or-hashicorp-vault)).
 **Test connection** checks that the Hub can sign in. It never shows a secret.
 
@@ -472,7 +486,7 @@ API. It signs in by itself and keeps its token only in memory.
 
    On a KV v1 mount the policy path has no `data/`: `path "legacy/acme/*"`.
 
-2. **Settings → Secrets → Add provider**, kind **OpenBao / HashiCorp Vault**:
+2. On that page, **Add provider**, kind **OpenBao / HashiCorp Vault**:
    - **Address**: `https://…`. Plain `http://` works only to `localhost` (`bao server -dev`).
      With several nodes, point it at the active node or the load balancer: the Hub does not
      follow a redirect to another host.
@@ -646,8 +660,8 @@ it lives. Keep lifetimes short.
 To add someone to an organization, switch to it in the Space selector, choose
 **Invite people**, pick a Role and press **Create invite link**. Admins invite
 Members and Guests; only the Owner invites Admins. Copy the link and send it over
-any chat app: it is shown only once, works once and expires after 7 days. The same
-dialog lists every invitation with its status (pending, accepted, expired or
+any chat app: it is shown only once, works once and expires after 7 days. **Space settings → Invitations**
+lists every invitation with its status (pending, accepted, expired or
 revoked) and has **Revoke** for pending ones.
 
 Opening the link shows the organization, the Role and who invited you, and tells
@@ -661,24 +675,24 @@ organization, not in the Owner's setup.
 
 ### Manage members
 
-Switch to the organization and choose **Organization settings** in the Space
-selector. Everyone in it sees who belongs and with which Role. Admins change
+Switch to the organization and choose **Space settings** in the Space
+selector, then **Members**. Everyone in it sees who belongs and with which Role. Admins change
 Members' and Guests' Roles and remove them; only the Owner names Admins, changes
 them or removes them. Whoever is removed or leaves loses access at once, on every
 open device, and what they created stays in the organization. To come back they
-need a new invitation. **Leave organization** at the bottom of the dialog lets
+need a new invitation. **Leave organization** in **Space settings → General** lets
 anyone but the Owner leave.
 
 An Admin needs a passkey, or a password together with an authenticator app.
 Someone made Admin who signs in with only a password stays a Member until they
 add an app: the sidebar shows **Set up an authenticator app to become Admin**,
-which opens **Settings → Access**. Someone with a passkey is an Admin at once,
+which opens **User settings → Account**. Someone with a passkey is an Admin at once,
 signs in with the passkey, and their password works only once they add an app.
 Invitations an Admin made end when they are removed or are no longer an Admin,
 and so do the guest links they created.
 
 Someone who can't sign in anymore can ask the Owner for a reset link: **Reset
-link** next to their name in **Organization settings** creates one. It works once
+link** next to their name in **Space settings → Members** creates one. It works once
 and expires after an hour. Opening it lets them register a new passkey, or choose
 **Set a new password instead**; either way their old passkeys, password and
 authenticator app stop working and every device is signed out. Anyone holding the
@@ -686,7 +700,7 @@ link can take over the account, so send it only to them.
 
 ### Archive, restore or delete an organization
 
-The Owner can pause an organization: in **Organization settings**, **Archive
+The Owner can pause an organization: in **Space settings → General**, **Archive
 organization** hides it from its Members at once, on every open device, stops its
 running threads and keeps its scheduled tasks from running. Nothing new starts in
 it, not even from the Owner. The Owner still sees it in the Space selector under
@@ -703,7 +717,7 @@ used, and machines lent to it run nothing until it is restored.
 
 ### Move a project to another Space
 
-In **Settings → Projects**, a project you may move shows **Move to another Space**
+In **Project settings**, a project you may move shows **Move to another Space**
 with a **Move to…** list of the Spaces it can go to. You need to be an Admin where
 the project is (or its owner, for your Personal space) and an Admin where it goes.
 The Owner can move any project, except into or out of someone else's Personal
@@ -755,8 +769,7 @@ connection out to the Hub, so you open no ports, and it reconnects by itself
 after a reboot or network drop. `t3 status` shows its Hub and whether it is
 connected; `t3 leave` removes it from the Hub.
 
-In the desktop app you can do the same without a terminal: in **Settings →
-Environments**, under **This app**, turn on **Use this computer as an
+In the desktop app you can do the same without a terminal: in **User settings → Machines → This computer**, under **This app**, turn on **Use this computer as an
 Environment**, enter the Hub's address and choose **Join**. The approval page
 opens in your browser; once you approve, the app shows who approved it: choose
 **Register as theirs** if that is you (or **Not me**), and it starts this computer's
@@ -768,7 +781,7 @@ with the app. With **Keep running when the window is closed** on, closing the
 window keeps the app, and this computer's Environment, running; quit the app to
 stop it. **Leave** removes this computer from the Hub.
 
-In **Settings → Environments**, **Machines on this Hub** lists every machine
+In **User settings → Machines**, **Machines on this Hub** lists every machine
 with its status (online, reconnecting or offline; a Sandbox is running, stopped,
 starting or failed to start), how it is used (Sandbox of a Space, dedicated to a
 Space, or someone's personal machine), when it was last seen, its
@@ -777,7 +790,7 @@ changes its name; **Remove** disconnects it at once and its credential stops
 working, so a lost machine loses access immediately. The Hub machine itself is
 always listed and cannot be removed. Joining, renaming and removing are recorded
 in the audit log. On mobile, the Owner sees the same list, read-only, under
-**Settings → Environments**, with each machine's use, Space and status.
+**User settings → Machines**, with each machine's use, Space and status.
 
 ### Run Threads on a joined machine
 
@@ -807,7 +820,7 @@ the T3 home. The first Thread there clones it from the Project's `origin` remote
 on the Hub; a Project without one must already be checked out on the machine.
 New worktrees can't be made on a joined machine yet, so start such Threads in
 the Project's checkout (moving a Thread that has one, below, makes it there). Each machine uses the provider sign-ins it already has.
-**Settings → Environments** counts the Threads running on each machine.
+**User settings → Machines** counts the Threads running on each machine.
 
 After each turn the machine uploads the turn's checkpoint, with your uncommitted
 changes, to the Hub, which keeps its own git repository per Project. Turn and
@@ -874,7 +887,7 @@ To run Sandboxes, the Hub's machine needs:
 
 Each Sandbox has CPU, memory, process and disk limits: the Owner sets the
 defaults (2 CPUs, 4 GiB of memory, 4096 processes, 20 GiB of disk to begin with)
-and a Space's own in **Settings → Environments → Sandboxes**, which also shows
+and a Space's own in **Platform → Sandboxes**, which also shows
 each Sandbox's status, uptime, use and image, and lets the Owner start, stop
 and restart it; a Space's Admins see their Sandbox there too. A Space whose
 Sandbox runs only on a dedicated machine has a row there too, where the Owner
@@ -907,7 +920,7 @@ server of the Hub's own version. Build it on the Hub's machine with:
 t3 sandbox image build
 ```
 
-or, as the Owner, with **Build image** in **Settings → Environments → Sandbox
+or, as the Owner, with **Build image** in **Platform → Sandboxes
 image**, which shows the build's output as it runs and why it failed if it
 did. The first build downloads a few gigabytes and takes several minutes;
 later ones reuse most of it. A Hub that started before the image existed runs
@@ -928,14 +941,14 @@ of T3 Code pins, each checked against a checksum kept in T3 Code itself, on the 
 address, where only the Hub reaches it. Nothing to install or configure. A machine joined to a
 Hub never runs one.
 
-**Settings → AI gateway** shows whether it is running, its version and uptime as they change.
+**Platform → AI gateway** shows whether it is running, its version and uptime as they change.
 When a T3 Code update pins a newer release, **Update to …** starts it beside the current one
 and switches once it answers; **Roll back to …** returns to the one before, and stays there
 until you update again. Both are recorded in the audit log. In the desktop app, and on a Hub
 run from source (`vp run dev`), the gateway is off until you choose **Turn on** there;
 `T3CODE_AI_GATEWAY=managed` or `off` decides instead, on any Hub.
 
-Everyone can add AI accounts of their own in **Settings → AI accounts**, under **Mine**: an API
+Everyone can add AI accounts of their own in **User settings → AI accounts**, under **Mine**: an API
 key, a direct credential, or a subscription you sign in to (one sign-in at a time on the Hub; a
 new subscription stays off until you check who it signed in as). Your own accounts serve only
 your Threads in your Personal space, first, before anything the Owner allowed you there; nobody
@@ -982,7 +995,7 @@ picker for that organization's Threads, and can make it a Project's
 organizations never see it. New Threads never land on it unless someone picks
 it or the Project prefers it.
 
-In **Settings → Environments** the organization's Admins (and the Owner)
+In **User settings → Machines** the organization's Admins (and the Owner)
 rename and remove its dedicated machines, and **Change use** makes one their
 own personal machine again, or dedicates it to another organization they also
 run. Your own personal machine's **Change use** dedicates it to an organization
@@ -1029,7 +1042,7 @@ Every listed port is shown in the dialog as reachable by the borrowing Spaces.
 They reach it as if from the machine itself, which can get past a firewall or
 an allow-list by IP address. Only list ports you would show the internet.
 
-**Lend.** In **Settings → Environments**, choose **Lend…** on the machine,
+**Lend.** In **User settings → Machines**, choose **Lend…** on the machine,
 pick the Space and the limits, and confirm. A loan to a Space where you also
 decide (an organization you run) starts at once and asks for your passkey or
 authenticator code. Any other loan waits for that Space to accept it.
@@ -1045,7 +1058,7 @@ authenticator code. Any other loan waits for that Space to accept it.
   capped (see below).
 
 **Accept.** An Admin of the organization, or the owner of the Personal space,
-sees the loan under **Settings → Environments → Loans** with the machine, its
+sees the loan under **User settings → Machines → Loans** with the machine, its
 lender and its limits, and accepts it with their passkey or authenticator code.
 A password alone cannot accept a machine. The acceptance warns: «<Lender>
 controls this machine and can see everything that runs on it: files,
@@ -1066,8 +1079,7 @@ raise the limit. If the machine itself runs almost out of disk, the lent
 Sandboxes stop and no new turn starts on them, while the owner's own work goes
 on.
 
-**Take it back, or give it back.** The lender's **Take back** (in **Settings →
-Environments → Loans**) or the Space's **Give back** ends the loan at once: no new turn
+**Take it back, or give it back.** The lender's **Take back** (in **User settings → Machines → Loans**) or the Space's **Give back** ends the loan at once: no new turn
 starts on that machine for the Space. Turns already running are stopped and
 get up to two minutes to save their last checkpoint; changes made by hand
 since the last turn may be lost. Then the Sandbox and its files are deleted
@@ -1080,7 +1092,7 @@ Removing the machine from the Hub ends all its loans the same way.
 
 Instead of running `t3 join` on a server yourself, an organization's Admins (for the
 organizations they run) and the Owner can let the Hub do it. In
-**Settings → Environments**, **Add over SSH** asks for the machine's host, port and user (not
+**User settings → Machines**, **Add over SSH** asks for the machine's host, port and user (not
 `root`), a private key (with its passphrase, if it has one) or the Hub's own SSH agent, the
 organization to dedicate it to, its name, and the Hub's address as that machine reaches it.
 

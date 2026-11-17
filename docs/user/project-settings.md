@@ -1,33 +1,28 @@
 # Settings and project overrides
 
-On web and desktop, the "Applying settings for …" sentence at the top of Settings pages picks
-the project and environment a change applies to. Pages that only hold device preferences, such as
-Appearance, don't show it. They start at **All projects** and **All environments**
-and stay selected as you move between categories or search for a setting.
+A project's own settings are in **Project settings**: open it from the project's menu in the
+sidebar, the command palette, or the `settings.project` shortcut. Settings for every project are
+**Platform → Hub defaults**, which only the Owner opens. Preferences saved on this device, such as
+appearance, are in **User settings**, and a machine's own settings are on its page under
+**User settings → Machines**.
 
-Preferences saved on this device, such as appearance, confirmations and browser profiles, always
-show and ignore the selection. Everything else is stored on a server. Choose one environment to
-edit its settings, or leave **All environments** to edit every connected environment at once.
-Offline environments keep their current values; this is a bulk edit, not a synced global default.
+Preferences saved on this device, such as confirmations and browser profiles, are not shared.
+Everything else is stored on a server: on a machine's page for that machine, or in Hub defaults
+for every machine.
 
-Choose a project to override settings for it on the selected environments. A layers icon beside
+Project settings override a setting for that project. A layers icon beside
 each server row's title shows where the value comes from: the built-in default, the environment,
-or a project override. Click it to see that chain on every selected environment. An override can
-be reset to inherit again. Settings that cannot be overridden by a project are shown read-only
-while a project is selected.
-
-When the selected environments disagree, the control shows **Mixed** in place of a value and the
-layers icon turns amber. Picking a value applies it to every selected environment.
+or a project override. Click it to see that chain on every machine. An override can
+be reset to inherit again. Settings that a project cannot override are not offered there.
 
 Changing an environment value never touches a project's own override. When projects override the
 setting you are editing, the layers icon counts them and the chain lists each one with its value:
 click a project to jump to it, or **Reset all** to make those projects follow the environment
 again.
 
-Providers and diagnostics are per machine: they show one environment at a time, the primary
-one until you pick another. Every other setting fans out to the selection.
+Providers and diagnostics are per machine: each machine's page shows its own.
 
-With a project selected, a provider's switch in **Settings → Providers** turns it on or off for
+With a project selected, a provider's switch in **User settings → Machines → ‹machine› → Providers** turns it on or off for
 that project only, in either direction: a provider off on the machine can be used in one project,
 and one on everywhere can be kept out of another. That project's model pickers follow the switch,
 and no new turn there can start on a provider it turned off, including queued messages and
@@ -40,7 +35,7 @@ and a project. The filter stays available in server-setting pages. With **All pr
 the server-setting pages, such as Threads, Source control and Worktrees, edit the selected
 environments' defaults. Choosing a project edits its overrides on the selected
 environments. Use **Use defaults** in a page to remove that page's project overrides.
-Open **Settings → Projects** to rename the project across its selected
+Open **Project settings** to rename the project across its selected
 connected checkouts and see where those checkouts live.
 Settings that are environment-wide stay read-only while a project is selected. When selected
 targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
@@ -52,19 +47,19 @@ Pinned projects come first in the project pickers: the project picker on a new t
 new-thread list, the command palette, the sidebar project filter, and mobile. In the boring sidebar, pinned projects get the top
 folders, even with no active threads. Pin or unpin a project from its row in any of those lists,
 or press the thread pin shortcut (`mod+shift+p` by default) on the highlighted row. **Pin
-project** in the command palette and **Settings → Projects** work too. A list keeps its order
+project** in the command palette and **Project settings** work too. A list keeps its order
 while it is open, so a new pin moves up the next time you open it.
 
-Archive a project you are done with in **Settings → Projects**. It leaves the project pickers.
+Archive a project you are done with in **Project settings**. It leaves the project pickers.
 Its threads, settings, and files stay as they are, and archived projects still show in the
 Settings project list, marked **Archived**. Choose one there and select **Unarchive** to bring it
-back. On mobile, both are in **Settings → Projects → Organize**.
+back. On mobile, both are in **Project settings → Organize**.
 
 A project on several machines must have every machine connected to pin or archive it.
 
 ## Worktree branch names
 
-In **Settings → Worktrees → Worktree branch naming**, choose a static prefix,
+In **Platform → Hub defaults → Worktrees → Worktree branch naming**, choose a static prefix,
 a model-selected semantic prefix such as `feat/` or `fix/`, or custom instructions
 for the complete name. The static prefix defaults to `t3/`; a trailing slash is
 optional, and an empty prefix adds nothing. Invalid characters in a static prefix
@@ -78,7 +73,7 @@ branch name remains.
 
 ## Scheduled tasks on mobile
 
-Open **Settings → Scheduled tasks** to create scheduled tasks or manage existing
+Open **Space settings → Scheduled tasks** to create scheduled tasks or manage existing
 ones across your connected environments. Use the settings filter to narrow the
 list by environment or project. Each task runs on the environment you choose,
 using its project, model, and workspace settings. Fixed-time schedules use that
@@ -96,7 +91,7 @@ Leaving an edited form asks before discarding unsaved changes.
 
 ## Webhook automations
 
-In **Settings → Scheduled tasks**, choose **On webhook**
+In **Space settings → Scheduled tasks**, choose **On webhook**
 as a task's schedule to run it whenever another service calls its URL, such as
 GitHub on a new pull request or a CI job that failed. After you save the task,
 the editor shows the URL on the address you are connected over; it works
@@ -176,7 +171,7 @@ built-in default. Leave a setting on **Inherit** to let the next tier decide.
 Browser access changes apply when an agent session next starts.
 
 New worktrees initialize git submodules recursively. If that step is slow because the repository
-declares many nested submodules, set **Submodules** in **Settings → Worktrees** under Advanced (with the project
+declares many nested submodules, set **Submodules** in **Platform → Hub defaults → Worktrees** under Advanced (with the project
 selected to override it there) to **Top level only** to stop at the ones the repository declares
 itself, or **Skip** to leave them for a setup script. It resolves in the same order as the
 workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
@@ -185,13 +180,13 @@ applies when the project and environment are both on **Inherit**.
 ## Worktree location
 
 New worktrees go in the `worktrees` folder of the T3 home directory. To put them somewhere else,
-such as another drive, set **Settings → Worktrees → Worktree location** to an absolute path like
+such as another drive, set **Platform → Hub defaults → Worktrees → Worktree location** to an absolute path like
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
 are, and cleanup covers both the default folder and the custom one.
 
 ## Storage cleanup
 
-Open **Settings → Worktrees → Cleanup** to enable automatic cleanup on one machine or all connected
+Open **Platform → Hub defaults → Worktrees → Cleanup** to enable automatic cleanup on one machine or all connected
 environments. Policies are off by default and run on the server at startup, when changed, and
 hourly. Offline machines keep their existing policies.
 
@@ -242,7 +237,7 @@ from the icon palette, derived from the saved project name. For example, `Nebula
 
 In Source control, enable **Automatically pull** to keep the default-branch checkout up to date
 with its configured upstream. Choose an environment to set the default or a project to override it.
-On mobile, use **Settings → Source control** to change selected environment defaults or project overrides.
+On mobile, use **User settings → Machines → ‹machine› → Source control** to change selected environment defaults or project overrides.
 
 T3 Code only pulls when it can fast-forward and the checkout has no changed files, untracked files,
 or local commits. It skips checkouts on another branch or without an upstream. If a checkout has

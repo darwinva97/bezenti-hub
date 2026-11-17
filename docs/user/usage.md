@@ -2,7 +2,7 @@
 
 Open **Usage** from the sidebar or the command palette, or press `mod+u` on web and
 desktop when the terminal is not focused. Customize `usage.open` in
-**Settings → Keybindings**.
+**User settings → Keybindings**.
 
 On mobile, choose **Usage** in the workspace navigation.
 
@@ -30,7 +30,7 @@ This includes headless T3 sessions and desktop usage across machines; the same a
 once across connected environments. Without any of these, T3 shows a
 notice instead of incomplete local totals. T3 does not estimate missing tokens from conversation text.
 On macOS without a T3 sign-in, choose **Enable Cursor usage** on Usage to allow T3 to read your
-existing CLI login from Keychain. You can turn it off in **Settings → Providers → Usage providers**. macOS may ask
+existing CLI login from Keychain. You can turn it off in **User settings → Machines → ‹machine› → Providers → Usage providers**. macOS may ask
 you to allow access on the server Mac.
 
 Usage includes each configured account's history, including disabled accounts. Custom homes follow
@@ -147,7 +147,7 @@ current model's limits without leaving the conversation. The result opens above 
 closes when you dismiss it or send your next message. It uses the same snapshot as **Usage → Limits**, so it does not run the agent or refresh
 anything. The command is offered only for providers that appear under **Usage → Limits**.
 
-To keep them in view on web and desktop, turn on **Usage limits** in **Settings → Appearance → Thread details**, or right-click the thread details card.
+To keep them in view on web and desktop, turn on **Usage limits** in **User settings → Appearance → Thread details**, or right-click the thread details card.
 The bottom of the thread details card then shows how much is left in each limit window of the
 current provider account. Some windows, such as a weekly Opus limit, count only one model. Hover a
 row to see when it resets and your pace. Turn on **Context window** to also show the thread's
@@ -175,7 +175,7 @@ using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
 ## Connect a CLIProxyAPI hub
 
-To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**. Choose the
+To see pooled accounts, open **User settings → Machines → ‹machine› → Providers → Usage providers → Add hub**. Choose the
 environment that will connect to the hub and enter its URL and management key.
 
 The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an
@@ -199,4 +199,4 @@ press `C`, `T`, or `L` for Cost, Tokens, or Limits while not typing in a field.
 Use `Ctrl+Shift+1/2/3/4` (`Cmd+Shift+1/2/3/4` on macOS) for the past
 24 hours, 7 days, 30 days, or 90 days. Period shortcuts do nothing on Limits.
 Press `Escape` to return to the previous page. Customize these shortcuts in
-**Settings → Keybindings**.
+**User settings → Keybindings**.

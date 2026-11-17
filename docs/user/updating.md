@@ -5,8 +5,7 @@ desktop app, the web app, the mobile app, and the server do not contact
 upstream's release feeds, and there is no update button for T3 Code itself.
 Provider CLIs still update as before; see **Update providers** below.
 
-**Settings → About** shows the version you are running. **Settings →
-Environments** shows the version of each connected server.
+**User settings → About** shows the version you are running. **User settings → Machines** shows the version of each connected server.
 
 ## Install a new version
 
@@ -39,7 +38,7 @@ threads, settings, and project files are kept.
 
 Restarting a server interrupts active agents and terminal commands.
 
-**Settings → Maintenance → Continue threads after restarts** is on by default.
+**User settings → Machines → ‹machine› → Maintenance → Continue threads after restarts** is on by default.
 It resumes supported active threads after an update, crash, or machine
 restart. Changes are saved to connected environments that support this setting;
 update older servers first. If a supported environment was offline or has a
@@ -82,7 +81,7 @@ error, then reinstall the version that last worked.
 
 ## Update providers
 
-**Settings → Providers** shows provider updates for the selected environment.
+**User settings → Machines → ‹machine› → Providers** shows provider updates for the selected environment.
 **Update all** updates every outdated provider on every connected environment
 at once. Hover it to see which providers it will update. Providers that only
 offer a manual update command are not included.
@@ -100,6 +99,6 @@ Provider updates do not restart running chats. An existing session can keep
 using the previous CLI until it ends. If discovery fails, check the provider
 status and refresh it again.
 
-On a phone, open **Settings → Environments** and select an environment to
+On a phone, open **User settings → Machines** and select an environment to
 refresh provider status and update supported providers. Provider update checks
-and restart continuation preferences are in **Settings → Maintenance**.
+and restart continuation preferences are in **User settings → Machines → ‹machine› → Maintenance**.

@@ -3,9 +3,9 @@
 T3 Code includes third-party software and adapted assets. To read their license and attribution
 notices:
 
-- On web and desktop, open **Settings → About**, find **Open source licenses** under **Legal**,
+- On web and desktop, open **User settings → About**, find **Open source licenses** under **Legal**,
   and select **View licenses**.
-- On mobile, open **Settings → About T3 Code → Open source licenses**.
+- On mobile, open **User settings → About T3 Code → Open source licenses**.
 
 The page lists the version when available, license identifier, and the parts of T3 Code that include
 or use the item. This also covers optional device tools that T3 Code installs on demand instead of

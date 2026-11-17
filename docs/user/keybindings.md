@@ -1,11 +1,11 @@
 # Keybindings
 
-Customize shortcuts in **Settings → Keybindings** on web and desktop. That page
+Customize shortcuts in **User settings → Keybindings** on web and desktop. That page
 also lists the command IDs and defaults available in your version.
 
 ## Composer controls
 
-In **Settings → Chat → Send shortcut**, choose whether Enter sends, requires
+In **User settings → Chat → Send shortcut**, choose whether Enter sends, requires
 `mod+Enter` for multiline prompts, or always requires `mod+Enter`. `Shift+Enter`
 inserts a new line. This applies to the web and desktop composer at desktop widths.
 
@@ -13,7 +13,7 @@ inserts a new line. This applies to the web and desktop composer at desktop widt
 `mod+Enter` to do the opposite for one message, even when the send shortcut
 requires a modifier. `mod+Alt+Enter` sends, keeps that thread running in the
 background, and opens a fresh new-thread composer. In a new thread, `mod+Enter`
-does the same. Change these shortcuts in **Settings → Keybindings** under
+does the same. Change these shortcuts in **User settings → Keybindings** under
 **Composer: Opposite Queue or Steer Action**, **Composer: Start in Background**,
 or **Composer: Send and Start New Thread**. These bindings take priority over the
 send shortcut. Click the send button to use the configured follow-up behavior.
@@ -50,7 +50,7 @@ in Settings.
 
 With a PR open in the right panel or on the Pull requests page, use `mod+shift+c`
 to copy its URL and `mod+shift+k` to copy its number with a `#` prefix.
-Both shortcuts can be changed in Settings. Search for “Copy Link or Thread”
+Both shortcuts can be changed in **User settings → Keybindings**. Search for “Copy Link or Thread”
 or “Copy Number”. They copy the selected PR and leave terminal input alone.
 Without a PR, `mod+shift+c` copies the thread itself, which pastes into a
 composer as a thread chip.
@@ -77,7 +77,7 @@ In a new thread, `Cmd+Shift+H` moves the draft to the next machine.
 
 In the composer, Return sends and `Shift+Return` inserts a new line. `Cmd+Return`
 also sends. To make Return insert a new line instead, change the Return key
-behavior in Settings → Keyboard.
+behavior in User settings → Keyboard.
 
 ## Edit the configuration file
 
@@ -141,7 +141,7 @@ Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
 the browser's own tab shortcuts. In the desktop app `ctrl+tab` and `ctrl+shift+tab` also
 switch tabs. `mod+w` stays with the terminal and right panel, so it does not close tabs. In the
 tab strip, arrow keys move between tabs, Enter opens one and Delete closes it. Change these under
-**Thread Tab** in Settings → Keybindings.
+**Thread Tab** in User settings → Keybindings.
 
 ## Find in the current thread
 
@@ -160,7 +160,7 @@ a shortcut.
 ## Commands with special behavior
 
 `thread.stop` interrupts the running turn in the focused thread. It has no default
-shortcut; assign one in **Settings → Keybindings**.
+shortcut; assign one in **User settings → Keybindings**.
 
 `thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
 bottom of the sidebar, such as unpin, settle, snooze, archive, or discarding a
@@ -177,6 +177,20 @@ through the pages you have visited, like a browser's back and forward buttons.
 `chat.newLocal` skips that chooser. Both use your
 [new-thread defaults](./thread-sidebar.md#start-a-thread). `chat.newWithoutProject`
 (`mod+alt+n`) starts a thread [without a project](./thread-sidebar.md#start-without-a-project).
+
+## Open a settings modal
+
+Four commands open the settings modals:
+
+| Command | Opens | Default |
+| --- | --- | --- |
+| `settings.user` | User settings | `mod+,` |
+| `settings.space` | Space settings, for the current Space | none |
+| `settings.project` | Project settings, for the project in context | none |
+| `settings.platform` | Platform, which only the Owner opens | none |
+
+Assign a key to the ones you want in **User settings → Keybindings**. On the desktop app,
+**Settings…** in the app menu (`CmdOrCtrl+,`) opens User settings too.
 
 ## Reserved shortcuts
 
@@ -201,6 +215,6 @@ Use `Cmd+Q` on macOS or `Ctrl+Q` on Windows and Linux. In the default **Hold** m
 hold for 1.2 seconds or press twice within 500 milliseconds. Holding requires
 keyboard repeat; if repeat is disabled, use two presses or the application menu.
 
-Change **Settings → General → Confirmations → Quit shortcut** to **Direct** for a
+Change **User settings → General → Confirmations → Quit shortcut** to **Direct** for a
 single press or **Double press** for two presses only. Choosing **Quit** from the
 application menu always quits immediately.

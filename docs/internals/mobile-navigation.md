@@ -28,9 +28,10 @@ split views too. The one native signal the router uses is the card native Back
 is popping. The workspace navigator reports it, and a selection never reuses
 that card.
 
-Beside the list, Settings pages share one native screen whose content swaps,
-like the system Settings app. A route per page would pop and push the column,
-and would unmount its header configuration, which hides the navigation bar.
+Beside the list, Settings pages are root routes: User, Space, Project and Platform each open
+an index of sections, and they share the workspace columns and header, like the system
+Settings app. A route per page that replaced the column would unmount its header
+configuration, which hides the navigation bar.
 
 ## UIKit constraints
 

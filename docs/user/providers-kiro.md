@@ -11,8 +11,8 @@ custom agents, steering, hooks, and MCP configuration.
    [installation guide](https://kiro.dev/docs/getting-started/installation/) lists other options.
 2. Run `kiro-cli login` once in a terminal. Kiro Pro and higher plans can instead set an API key as
    `KIRO_API_KEY` in the Kiro provider's environment variables (on a Hub that runs on AI accounts,
-   add it in **Settings → AI accounts** as a direct Kiro credential instead).
-3. Open **Settings → Providers**, enable Kiro, and refresh it.
+   add it in **User settings → AI accounts** as a direct Kiro credential instead).
+3. Open **User settings → Machines → ‹machine› → Providers**, enable Kiro, and refresh it.
 
 If `kiro-cli` is not on the server's `PATH`, set its **Binary path**. On macOS and Linux, the
 installer usually puts it in `~/.local/bin`. T3 Code starts Kiro's CLI V3 engine, so a Kiro CLI

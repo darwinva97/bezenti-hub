@@ -2,7 +2,7 @@
 
 License notices are generated independently for the client that ships them:
 
-- The web build emits `third-party-licenses.json` beside `index.html`. The Settings page loads that
+- The web build emits `third-party-licenses.json` beside `index.html`. User settings → About → Licenses loads that
   static file, so the same artifact works in the Hub's web app, the client bundled with `npx t3`, and
   desktop.
 - The mobile Metro config generates an ignored virtual module before each development, native, or

@@ -13,19 +13,18 @@ you sign in in your browser, with your passkey or your password (and code).
 No pairing code is needed.
 
 - **Desktop:** the desktop app connects to one Hub. Unless this computer is
-  your Hub, first turn off **Settings → Environments → This app → Local
+  your Hub, first turn off **User settings → Machines → This computer → Local
   environment** (the app restarts). Then select **Add Hub** under **Hub**, enter
   its address (for example `hub.example.com`) and select **Sign in in browser**.
   Your default browser opens the Hub's sign-in page; after you sign in, select
   **Continue** and return to T3 Code. To run this computer's agents for that
   Hub, join it as a machine instead (`t3 join`, see
   [Join a machine to your Hub](./install.md#join-a-machine-to-your-hub)).
-- **Mobile:** open **Settings → Environments → Add**, enter the Hub's address
+- **Mobile:** open **User settings → Machines → Add**, enter the Hub's address
   and tap the checkmark. The Hub's sign-in page opens inside the app; sign in,
   tap **Continue**, and the app takes over.
 
-The app acts as you, with your access, and appears in **Settings → Access →
-Your sessions** on the Hub, where you can revoke it. Removing the Hub from the
+The app acts as you, with your access, and appears in **User settings → Sessions** on the Hub, where you can revoke it. Removing the Hub from the
 app also signs that device out of it. On mobile, the thread list's filter menu
 has a **Space** section for each Hub: new projects and threads you start there
 go to that Space. A thread someone else started is read-only: you can read it,
@@ -44,7 +43,7 @@ mobile, still pairs as described below.
 
 Use direct pairing when the other device can reach the host's network address.
 
-On a desktop host, open **Settings → Sharing & access**, enable **Network access**,
+On a desktop host, open **User settings → Machines → This computer → Network**, enable **Network access**,
 then create a pairing link using an address the other device can reach. Changing
 network access restarts the desktop app. You can turn it off in the same place.
 
@@ -75,8 +74,8 @@ t3 pair
 ```
 
 Scan the QR code on your phone or paste the pairing URL into **Add environment**
-in the receiving app. Connection settings are under **Settings → Environments**
-on web and desktop and **Settings → Environments** on mobile. A loopback address
+in the receiving app. Connection settings are under **User settings → Machines**
+on web and desktop and **User settings → Machines** on mobile. A loopback address
 such as `127.0.0.1` reaches only the device opening the link.
 
 On a computer with the desktop app, you can open the printed `t3code://pair`
@@ -123,8 +122,8 @@ later route, T3 Code checks the earlier ones when your network changes, when you
 return to the app, and every minute, and moves back as soon as one works.
 
 On web and desktop, select the route count under the machine's name in
-**Settings → Environments** to see its routes. Drag a route to change the order,
-or remove it. On mobile, open the machine under **Settings → Environments** and
+**User settings → Machines** to see its routes. Drag a route to change the order,
+or remove it. On mobile, open the machine under **User settings → Machines** and
 choose **Edit**.
 
 Open **Permissions** next to **Routes** in web or desktop, or **Your permissions**
@@ -137,7 +136,7 @@ permissions.
 ### Tailscale HTTPS
 
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale
-HTTPS** in **Settings → Sharing & access**. Turn it off there to remove that route.
+HTTPS** in **User settings → Machines → This computer → Network**. Turn it off there to remove that route.
 
 To start a command-line server with Tailscale HTTPS:
 
@@ -174,7 +173,7 @@ scheme uses HTTP, so include `https://` when your server uses HTTPS.
 
 ## Desktop-managed SSH
 
-In the desktop app, open **Settings → Environments → Add environment**, choose
+In the desktop app, open **User settings → Machines → Add environment**, choose
 **SSH**, and enter a host or SSH alias such as `user@example.com`. T3 Code starts
 or reuses a server there and opens the port forward for you. Projects, provider
 credentials, and agent work stay on the remote machine.
@@ -195,8 +194,7 @@ the connection stops a server that T3 Code launched; a server that was already
 running is left alone.
 
 Each desktop app keeps one session on the host for its SSH connection and reuses
-it when it reconnects. Revoke sessions you no longer use in **Settings →
-Sharing & access** on the host, or on a headless host with `t3 auth session list` and
+it when it reconnects. Revoke sessions you no longer use in **User settings → Machines → This computer → Network** on the host, or on a headless host with `t3 auth session list` and
 `t3 auth session revoke <id>`. A desktop that can still sign in over SSH pairs
 again on its next connect.
 
@@ -288,7 +286,7 @@ threads on an environment through its MCP server. See
 
 ## Manage or revoke access
 
-On the host, **Settings → Access → Your sessions** lists your own sessions and
+On the host, **User settings → Sessions** lists your own sessions and
 pairing links; the Owner sees every User's. Revoking an unused link prevents new
 pairings; revoking a session removes that device's access and closes its open
 connections. A device paired with a link signs in as the User who created the
@@ -347,7 +345,7 @@ screenshots, logs, or bug reports.
 ## Using the Desktop App as a Remote Only
 
 If a computer should only drive work running elsewhere, turn off its local environment. In the
-desktop app, open **Settings → Environments** and switch off **Local
+desktop app, open **User settings → Machines** and switch off **Local
 environment**. T3 Code restarts without a local server: no local agents or terminals run, WSL
 backends stay off, and other devices can no longer connect to this computer. Your projects,
 history, and saved connections are kept, and you keep working through pairing or SSH.

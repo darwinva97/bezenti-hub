@@ -9,7 +9,7 @@ belong to, and you choose what it may do on top of that.
 
 ## Get the MCP URL
 
-In **Settings → Environments**, open a saved environment's menu and choose
+In **User settings → Machines**, open a saved environment's menu and choose
 **Copy MCP URL**. The URL is the environment's address followed by `/mcp`, for
 example:
 
@@ -46,7 +46,7 @@ Only approve a sign-in you just started. If the browser is not signed in to the
 Hub, the page asks you to **Sign in** first, then shows the request again. The
 page says which account approves (“acting as …”): the agent acts as that User.
 To approve from a browser that is not yours, choose **Use a pairing code
-instead** and enter a code from **Settings → Sharing & access**; the agent then
+instead** and enter a code from **User settings → Machines → This computer → Network**; the agent then
 acts as whoever created the code. A browser signed in as you only accepts a
 code you created, so it never approves as someone else. On the Hub, `t3 auth pairing create --user
 <sign-in name>` creates one for that User, and without `--user` for the Owner.
@@ -128,7 +128,7 @@ only their Spaces. A User who is disabled or removed cannot be chosen.
 
 ## Remove an agent
 
-Approved agents appear in your sessions under **Settings → Sharing & access**,
+Approved agents appear in your sessions under **User settings → Machines → This computer → Network**,
 like your other clients. Revoke one there to cut off its access immediately; the
 Owner can revoke anyone's. A sign-in lasts 30 days; after that the agent asks
 you to approve it again.

@@ -20,6 +20,7 @@ import {
   useVisibleThreadShells,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
+import { useCurrentSpace, useProjectsInCurrentSpace } from "../state/currentSpace";
 
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
@@ -33,7 +34,7 @@ function ChatIndexRouteView() {
   return <IndexDraftLanding />;
 }
 
-function IndexDraftLanding() {
+export function IndexDraftLanding() {
   const projects = useProjects();
   const threads = useVisibleThreadShells();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
@@ -44,9 +45,13 @@ function IndexDraftLanding() {
   const startedAttemptRef = useRef<number | null>(null);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
+  // Only the current Space's Projects: a draft in another Space's would switch the Space back
+  // (ticket 19). Until the Spaces have loaded there is no current Space, so nothing starts yet.
+  const spacesLoaded = useCurrentSpace((state) => state.environmentId !== null);
+  const projectsInSpace = useProjectsInCurrentSpace(projects);
   const mostRecentProject =
     sortScopedProjectsForSidebar(
-      projects.filter((project) => project.archivedAt == null),
+      spacesLoaded ? projectsInSpace.filter((project) => project.archivedAt == null) : [],
       threads,
       "updated_at",
     )[0] ?? null;
@@ -87,7 +92,7 @@ function IndexDraftLanding() {
     ) : null;
   }
   // A pending environment cannot prove the workspace is empty.
-  return bootstrapped ? <NoProjectsHero /> : null;
+  return bootstrapped && spacesLoaded ? <NoProjectsHero /> : null;
 }
 
 function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {

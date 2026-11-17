@@ -39,6 +39,10 @@ deleted Organization ends every live loan to it with `target-gone` and every one
 the same commit (its credential stops there) and its socket after it. Removing the machine itself
 ends its loans with `resource-gone`.
 
+A loan to an archived (or frozen) Organization, or to the Personal space of a turned-off User,
+stays `active` and unused: its Sandbox runs no turn and takes no Thread (`spaceRefusalOf` answers
+`space-closed`, the same guard every session opened on it passes), and serves again once restored.
+
 ## Who
 
 `decideGrant` in [AccessPolicy](../../apps/server/src/auth/AccessPolicy.ts):

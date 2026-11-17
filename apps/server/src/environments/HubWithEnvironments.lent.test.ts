@@ -571,4 +571,81 @@ describe("Hub con Environments: a machine lent to Spaces", () => {
         assert.equal(detail.via, "organization.delete");
       }).pipe(Effect.scoped),
   );
+
+  it.live(
+    "while its borrowing Organization is archived no turn starts on the lent Sandbox nor is a Thread placed there; restored, it serves again (owned-resources 10)",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* lentToAcmeAndGlobex();
+        const { hub } = t;
+        const sandbox = t.acmeLaunch.joined.environmentId;
+        const threadId = ThreadId.make("thread:acme-archived");
+        yield* acmeThreadOn(t, threadId);
+        const refusal = () =>
+          spaceRefusalOf(sandbox, t.acme, threadId).pipe(
+            Effect.provideService(SqlClient.SqlClient, hub.server.sql),
+            Effect.orDie,
+          );
+        const placed = () =>
+          hub
+            .service(EnvironmentRegistry.EnvironmentRegistry)
+            .chooseForThread({
+              userId: t.owner,
+              requested: sandbox,
+              projectId: t.acmeProject,
+              providerInstanceId: INSTANCE,
+            })
+            .pipe(
+              Effect.map(() => "placed"),
+              Effect.catch((error) =>
+                Effect.succeed(
+                  error._tag === "ThreadEnvironmentUnavailableError" ? error.reason : error._tag,
+                ),
+              ),
+            );
+        assert.isUndefined(yield* refusal());
+        const lifecycle = hub.service(OrganizationLifecycle.OrganizationLifecycle);
+        yield* lifecycle.archive(t.owner, t.acme).pipe(Effect.orDie);
+        // The loan stays active, unused.
+        const [grant] = yield* hub.server.sql<{ readonly state: string }>`
+          SELECT state FROM grants WHERE grant_id = ${t.acmeGrant}
+        `;
+        assert.equal(grant?.state, "active");
+        assert.equal(yield* refusal(), "space-closed");
+        assert.include(
+          (yield* openSessionRefusal(hub, sandbox, threadId)).join(" "),
+          "ProviderAdapterProtocolError",
+        );
+        assert.notEqual(yield* placed(), "placed");
+        // Globex's loan is not touched.
+        assert.isUndefined(
+          yield* spaceRefusalOf(t.globexLaunch.joined.environmentId, t.globex, undefined).pipe(
+            Effect.provideService(SqlClient.SqlClient, hub.server.sql),
+            Effect.orDie,
+          ),
+        );
+        yield* lifecycle.restore(t.owner, t.acme).pipe(Effect.orDie);
+        assert.isUndefined(yield* refusal());
+        assert.equal(yield* placed(), "placed");
+
+        // The same for a loan to a User's Personal space while that User is turned off (the
+        // Sandbox rebound here by hand: only the rule is read).
+        const personal = `personal:${t.grace}`;
+        yield* hub.server.sql`
+          UPDATE environments SET space_id = ${personal} WHERE environment_id = ${sandbox}
+        `;
+        const personalRefusal = () =>
+          spaceRefusalOf(sandbox, personal, undefined).pipe(
+            Effect.provideService(SqlClient.SqlClient, hub.server.sql),
+            Effect.orDie,
+          );
+        assert.isUndefined(yield* personalRefusal());
+        yield* hub.server.sql`
+          UPDATE users SET disabled_at = '2026-01-02T00:00:00.000Z' WHERE user_id = ${t.grace}
+        `;
+        assert.equal(yield* personalRefusal(), "space-closed");
+        yield* hub.server.sql`UPDATE users SET disabled_at = NULL WHERE user_id = ${t.grace}`;
+        assert.isUndefined(yield* personalRefusal());
+      }).pipe(Effect.scoped),
+  );
 });

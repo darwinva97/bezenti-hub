@@ -64,7 +64,9 @@ export type SpaceRefusal =
   | "undedicated"
   | "unknown-machine"
   /** A Sandbox on a lent machine whose loan ended (or whose host or lender is gone). */
-  | "lent-ended";
+  | "lent-ended"
+  /** A lent Sandbox whose borrowing Space is archived or frozen, or whose User is turned off. */
+  | "space-closed";
 
 export const SPACE_REFUSAL_MESSAGES: Readonly<Record<SpaceRefusal, string>> = {
   "other-space": "This Thread is no longer in its machine's Space. Move it to another Environment.",
@@ -76,6 +78,8 @@ export const SPACE_REFUSAL_MESSAGES: Readonly<Record<SpaceRefusal, string>> = {
   "unknown-machine": "The Hub does not know this Thread's machine. Move it to another Environment.",
   "lent-ended":
     "The machine this Thread ran on is no longer lent to its Space. Move it to another Environment.",
+  "space-closed":
+    "This Thread's Space is archived or its User is turned off: nothing runs on the machine lent to it until it is back.",
 };
 
 /**
@@ -98,6 +102,7 @@ export const spaceRefusalOf = Effect.fn("spaceRefusalOf")(function* (
     readonly revoked: number;
     readonly usable: number;
     readonly lentLive: number;
+    readonly targetOpen: number;
   }>`
     SELECT e.kind AS kind, e.mode AS mode, e.space_id AS "spaceId",
       e.revoked_at IS NOT NULL AS revoked,
@@ -109,6 +114,16 @@ export const spaceRefusalOf = Effect.fn("spaceRefusalOf")(function* (
           AND host.mode = 'personal'
           AND lender.disabled_at IS NULL AND lender.removed_at IS NULL
       )) AS "lentLive",
+      (e.mode <> 'lent' OR (
+        NOT EXISTS (
+          SELECT 1 FROM spaces s WHERE s.space_id = e.space_id
+            AND (s.archived_at IS NOT NULL OR s.frozen_at IS NOT NULL OR s.deleting_at IS NOT NULL)
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM users pu WHERE e.space_id = 'personal:' || pu.user_id
+            AND (pu.disabled_at IS NOT NULL OR pu.removed_at IS NOT NULL)
+        )
+      )) AS "targetOpen",
       COALESCE(u.removed_at IS NULL AND u.disabled_at IS NULL AND (
         u.is_owner = 1
         OR ${spaceId} = 'personal:' || u.user_id
@@ -130,6 +145,8 @@ export const spaceRefusalOf = Effect.fn("spaceRefusalOf")(function* (
   if (row.mode === "lent" && (row.revoked === 1 || row.lentLive !== 1)) {
     return "lent-ended" as const;
   }
+  // A loan to an archived Organization or a turned-off User stays active, unused (Grants spec).
+  if (row.mode === "lent" && row.targetOpen !== 1) return "space-closed" as const;
   if (row.revoked === 1) return "revoked" as const;
   if (row.kind === "hub") return undefined;
   if (row.kind === "sandbox" || row.mode === "dedicated") {

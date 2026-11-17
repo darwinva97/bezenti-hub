@@ -6,6 +6,7 @@
  */
 import {
   CommandId,
+  type EnvironmentId,
   type SpaceDirectoryView,
   type SpaceId,
   type ThreadId,
@@ -27,6 +28,7 @@ import {
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
+import * as GrantEnding from "../grants/GrantEnding.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -206,12 +208,43 @@ const make = Effect.gen(function* () {
           });
           // Its AI account allowances, and the keys made for its Space (spec 4 ticket 11).
           yield* AiAccountReachLoss.forgetSpace(sql, AuditLog.userActor(actor), spaceId);
-          return gone.valueIds;
+          // Every loan to it ends (`target-gone`) and every loan it gave (`lender-gone`); a lent
+          // machine's Sandbox for it is closed in this commit (owned-resources 10).
+          const ended = [
+            ...(yield* GrantEnding.endGone(
+              sql,
+              AuditLog.userActor(actor),
+              { target: spaceId },
+              "organization.delete",
+            )),
+            ...(yield* GrantEnding.endGone(
+              sql,
+              AuditLog.userActor(actor),
+              { lender: { kind: "organization", id: spaceId } },
+              "organization.delete",
+            )),
+          ];
+          const closed: Array<EnvironmentId> = [];
+          if (Option.isSome(environments)) {
+            for (const grant of ended) {
+              if (grant.lentEnvironmentId === null) continue;
+              const lent = yield* environments.value
+                .closeLentSandbox(grant.grantId)
+                .pipe(Effect.mapError(storageError));
+              if (Option.isSome(lent)) closed.push(lent.value);
+            }
+          }
+          return { valueIds: gone.valueIds, closed };
         }),
       )
       .pipe(Effect.mapError(storageError));
+    if (Option.isSome(environments)) {
+      yield* Effect.forEach(forgotten.closed, environments.value.lentSandboxClosed, {
+        discard: true,
+      });
+    }
     if (Option.isSome(vaultValues)) {
-      yield* VaultReachLoss.removeValues(sql, vaultValues.value, forgotten);
+      yield* VaultReachLoss.removeValues(sql, vaultValues.value, forgotten.valueIds);
     }
     yield* spaces.removeArchivedOrganization({ actor, spaceId }).pipe(Effect.mapError(refusal));
     return yield* viewOf(actor);

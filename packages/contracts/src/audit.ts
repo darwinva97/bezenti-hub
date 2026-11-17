@@ -306,8 +306,18 @@ export const AUDIT_DETAIL_KEYS = {
   ],
   "grant.accept": ["resourceKind", "resourceId", "resourceName", "lenderId", "targetSpaceId"],
   "grant.reject": ["resourceKind", "resourceId", "resourceName", "lenderId", "targetSpaceId"],
-  "grant.cancel": ["resourceKind", "resourceId", "resourceName", "lenderId", "targetSpaceId"],
-  /** `reason` (revoked, returned, resource-gone…) and the `side` that ended it. */
+  "grant.cancel": [
+    "resourceKind",
+    "resourceId",
+    "resourceName",
+    "lenderId",
+    "targetSpaceId",
+    "via",
+  ],
+  /**
+   * `reason` (revoked, returned, resource-gone…) and the `side` that ended it; `via` the removal
+   * (`user.remove`, `organization.delete`) when a side of it is gone.
+   */
   "grant.end": [
     "resourceKind",
     "resourceId",
@@ -316,6 +326,7 @@ export const AUDIT_DETAIL_KEYS = {
     "targetSpaceId",
     "reason",
     "side",
+    "via",
   ],
   "grant.limits.change": ["resourceKind", "resourceId", "cpus", "memoryBytes", "pids", "diskBytes"],
 } as const satisfies Record<AuditAction, ReadonlyArray<string>>;

@@ -36,6 +36,7 @@ import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import { boundSpaceOf, lentSandboxRefusalOf, spaceRefusalOf } from "../sandboxes/sandboxSpace.ts";
+import * as OrganizationLifecycle from "../spaces/OrganizationLifecycle.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as EnvironmentRegistry from "./EnvironmentRegistry.ts";
 import { listEnvironments } from "./environments.testkit.ts";
@@ -535,5 +536,39 @@ describe("Hub con Environments: a machine lent to Spaces", () => {
         assert.equal(yield* checkOf(hub, launch.credential), "credential-unknown");
       }
     }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "deleting a borrowing Organization ends its loan (target-gone) and closes its Sandbox; the other loan goes on (owned-resources 10)",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* lentToAcmeAndGlobex();
+        const { hub } = t;
+        const lifecycle = hub.service(OrganizationLifecycle.OrganizationLifecycle);
+        yield* lifecycle.archive(t.owner, t.acme).pipe(Effect.orDie);
+        yield* lifecycle.delete(t.owner, t.acme).pipe(Effect.orDie);
+        const rows = yield* hub.server.sql<{
+          readonly grantId: string;
+          readonly state: string;
+          readonly reason: string | null;
+        }>`SELECT grant_id AS "grantId", state, end_reason AS reason FROM grants`;
+        const byId = new Map(rows.map((row) => [row.grantId, [row.state, row.reason]]));
+        assert.deepEqual(byId.get(t.acmeGrant), ["ended", "target-gone"]);
+        assert.deepEqual(byId.get(t.globexGrant), ["active", null]);
+        // What its Sandbox holds reaches nothing from then on; Globex's still connects.
+        assert.equal(yield* checkOf(hub, t.acmeLaunch.credential), "credential-unknown");
+        assert.equal(
+          yield* checkOf(hub, t.globexLaunch.credential),
+          t.globexLaunch.joined.environmentId,
+        );
+        const audited = yield* hub.server.sql<{ readonly detail: string }>`
+          SELECT detail_json AS detail FROM audit_log
+          WHERE action = 'grant.end' AND target_id = ${t.acmeGrant}
+        `;
+        assert.equal(audited.length, 1);
+        const detail = JSON.parse(audited[0]!.detail) as Record<string, unknown>;
+        assert.equal(detail.reason, "target-gone");
+        assert.equal(detail.via, "organization.delete");
+      }).pipe(Effect.scoped),
   );
 });

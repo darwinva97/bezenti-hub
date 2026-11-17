@@ -31,6 +31,14 @@ only from the state it read (a concurrent change loses with Â«changed meanwhileÂ
 there (`grant.give`, `grant.accept`, `grant.reject`, `grant.cancel`, `grant.end` with `reason` and
 `side`, `grant.limits.change`), never with a credential.
 
+A side that is gone ends its loans in the removal's own transaction
+([GrantEnding](../../apps/server/src/grants/GrantEnding.ts), whatever the resource's kind): a
+deleted Organization ends every live loan to it with `target-gone` and every one it gave with
+`lender-gone`. `pending` and `active` loans end, an `offered` one is cancelled, each audited by the
+`system` side with `via` (`organization.delete`). A machine's Sandbox for an ended loan is closed in
+the same commit (its credential stops there) and its socket after it. Removing the machine itself
+ends its loans with `resource-gone`.
+
 ## Who
 
 `decideGrant` in [AccessPolicy](../../apps/server/src/auth/AccessPolicy.ts):

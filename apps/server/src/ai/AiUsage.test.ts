@@ -226,6 +226,77 @@ live("a stream the client leaves counts once, with unknown tokens", () =>
   }),
 );
 
+live("a stream the client leaves after its last event keeps its tokens (ticket 16)", () =>
+  Effect.gen(function* () {
+    const setup = yield* hub;
+    yield* acmeSetup(setup);
+    const { key } = yield* setup.thread(setup.people.member, setup.acmeId);
+    // The answer is complete, but the upstream has not closed it yet when the client leaves:
+    // an SDK that stops reading at its last event, before the end of the body.
+    setup.flag("fake-stream-tail-hold");
+    const leaveAfter = (path: string, body: unknown, last: string) =>
+      Effect.promise(async () => {
+        const controller = new AbortController();
+        const response = await fetch(`http://127.0.0.1:${setup.port}${path}`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let seen = "";
+        while (!seen.includes(last)) {
+          const read = await reader.read();
+          if (read.done) break;
+          seen += decoder.decode(read.value, { stream: true });
+        }
+        controller.abort();
+        return seen.includes(last);
+      });
+    assert.isTrue(
+      yield* leaveAfter(
+        "/api/ai/anthropic/v1/messages",
+        messages("claude-sonnet-5-5", { stream: true }),
+        "message_stop",
+      ),
+    );
+    assert.isTrue(
+      yield* leaveAfter(
+        "/api/ai/openai/v1/responses",
+        { model: "deepseek-chat", input: "hi", stream: true },
+        "response.completed",
+      ),
+    );
+    assert.isTrue(
+      yield* leaveAfter(
+        "/api/ai/openai/v1/chat/completions",
+        { model: "deepseek-chat", messages: [], stream: true },
+        "[DONE]",
+      ),
+    );
+    yield* stored(setup, 3);
+    setup.flag("fake-stream-tail-hold", false);
+    const rows = yield* setup.server.sql<{
+      readonly inputTokens: number | null;
+      readonly outputTokens: number | null;
+    }>`SELECT input_tokens AS "inputTokens", output_tokens AS "outputTokens" FROM ai_usage
+      ORDER BY at, usage_id`;
+    assert.deepEqual(
+      rows.map((row) => [row.inputTokens, row.outputTokens]),
+      [
+        [11, 7],
+        [11, 7],
+        [11, 7],
+      ],
+    );
+    const owner = yield* summaryAs(setup, setup.ownerId);
+    assert.equal(owner.totals.unknownRequests, 0);
+    assert.equal(owner.totals.inputTokens, 33);
+    assert.equal(owner.totals.outputTokens, 21);
+  }),
+);
+
 live("an answer without usage counts as a request with unknown tokens", () =>
   Effect.gen(function* () {
     const setup = yield* hub;

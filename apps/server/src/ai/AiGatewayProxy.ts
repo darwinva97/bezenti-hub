@@ -597,14 +597,16 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
             ),
           ),
           Stream.filter((chunk) => chunk.length > 0),
-          // Tokens only from an answer that ended: one cut off counts the request, not its tokens.
+          // Tokens only from a whole answer: one that ended, or whose last event went through
+          // before the body was cut (a client that stops reading there, ticket 16). One cut off
+          // earlier counts the request, not its tokens.
           Stream.ensuring(
             Effect.suspend(() =>
               record({
                 account,
                 status: response.status,
                 failovers,
-                usage: finished ? tap.usage() : null,
+                usage: finished || tap.answered() ? tap.usage() : null,
               }),
             ),
           ),

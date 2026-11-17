@@ -265,6 +265,7 @@ if (mode === "decoy") {
     // only acct-<id>/<model> of a provisioned account is served. Files beside the config steer
     // it: fake-quota-<id> (429 quoting an email and a key), fake-error-<id> (400 quoting them),
     // fake-stream-hold (a stream waits for fake-stream-release after its first event),
+    // fake-stream-tail-hold (after its last event, before it ends),
     // fake-stream-error (an error event quoting them mid-stream).
     const aiUrl = new URL(request.url, "http://fake.invalid");
     const geminiCall = /^\/v1beta\/models\/(.+):(generateContent|streamGenerateContent)$/u.exec(aiUrl.pathname);
@@ -348,6 +349,10 @@ if (mode === "decoy") {
           // Like OpenAI: the usage chunk only for a client that asked for it.
           if (body.stream_options?.include_usage === true) event({ id: "chat_1", object: "chat.completion.chunk", model, choices: [], usage: { prompt_tokens: 11, completion_tokens: 7 } });
           response.write("data: [DONE]" + String.fromCharCode(10, 10));
+        }
+        if (fs.existsSync(path.join(dir, "fake-stream-tail-hold"))) {
+          const until = Date.now() + 15000;
+          while (!response.destroyed && !fs.existsSync(path.join(dir, "fake-stream-release")) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 25));
         }
         response.end();
       }).catch(() => send(response, 500, { error: "fake failed" }));

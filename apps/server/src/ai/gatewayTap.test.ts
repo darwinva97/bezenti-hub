@@ -71,6 +71,32 @@ describe("the AI gateway's response tap", () => {
     assert.deepEqual([tap.usage().inputTokens, tap.usage().outputTokens], [8, 6]);
   });
 
+  it("knows a streamed answer is whole at its last event, not at words quoted inside it", () => {
+    const feed = (sse: boolean, text: string) => {
+      const tap = makeResponseTap({ sse, prefix: "acct-abc" });
+      // Chunks only: the body is cut before its end, as when a client stops reading.
+      tap.chunk(encoder.encode(text));
+      return tap.answered();
+    };
+    const sse = (...values: ReadonlyArray<unknown>) =>
+      values
+        .map((value) => `data: ${typeof value === "string" ? value : JSON.stringify(value)}\n\n`)
+        .join("");
+    const quoted = {
+      type: "content_block_delta",
+      delta: { type: "text_delta", text: '{"type":"message_stop"} [DONE] "finishReason":"STOP"' },
+    };
+    assert.isFalse(feed(true, sse({ type: "message_start" }, quoted)));
+    assert.isTrue(feed(true, sse({ type: "message_start" }, { type: "message_stop" })));
+    assert.isTrue(feed(true, sse({ choices: [] }, "[DONE]")));
+    assert.isTrue(feed(true, sse({ type: "response.completed", response: { usage: {} } })));
+    assert.isTrue(feed(true, sse({ candidates: [{ finishReason: "STOP" }] })));
+    assert.isFalse(feed(true, sse({ candidates: [{ content: {} }] })));
+    assert.isTrue(feed(false, `[${JSON.stringify({ candidates: [{ finishReason: "STOP" }] })}]`));
+    // A plain answer has no last event: only its end makes it whole.
+    assert.isFalse(feed(false, JSON.stringify({ type: "message_stop" })));
+  });
+
   it("reads token counts only as whole, safe, non-negative numbers", () => {
     const tap = makeResponseTap({ sse: false, prefix: "acct-abc" });
     run(

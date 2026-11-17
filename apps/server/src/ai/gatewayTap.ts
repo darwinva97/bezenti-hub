@@ -68,10 +68,45 @@ const usageInTail = (tail: string): unknown => {
   return undefined;
 };
 
+/** Words an answer's last event carries; a match is then checked on the parsed value. */
+const LAST_EVENT_HINT = /\[DONE\]|message_stop|response\.(?:completed|incomplete)|finishReason/u;
+
+/**
+ * Whether one streamed value is the answer's last word: Claude's `message_stop`, OpenAI's `[DONE]`
+ * or `response.completed`/`incomplete`, a Gemini candidate with its `finishReason`. Its tokens are
+ * all in by then (each shape sends them before or with it).
+ */
+const isLastEvent = (data: string, value: unknown) => {
+  if (data.trim() === "[DONE]") return true;
+  if (value === null || typeof value !== "object") return false;
+  const event = value as Record<string, unknown>;
+  if (
+    event.type === "message_stop" ||
+    event.type === "response.completed" ||
+    event.type === "response.incomplete"
+  ) {
+    return true;
+  }
+  return (
+    Array.isArray(event.candidates) &&
+    event.candidates.some(
+      (candidate) =>
+        candidate !== null &&
+        typeof candidate === "object" &&
+        typeof (candidate as Record<string, unknown>).finishReason === "string",
+    )
+  );
+};
+
 export interface ResponseTap {
   readonly chunk: (bytes: Uint8Array) => Uint8Array;
   readonly end: () => Uint8Array;
   readonly usage: () => GatewayUsage;
+  /**
+   * A streamed answer's last event went through (ticket 16): its tokens are complete even if the
+   * body is cut before it ends, as when a client stops reading at that event.
+   */
+  readonly answered: () => boolean;
 }
 
 /**
@@ -89,6 +124,7 @@ export const makeResponseTap = (input: {
   const prefix = `${input.prefix}/`;
   const strip = (text: string) => text.split(prefix).join("");
   let usage = EMPTY_USAGE;
+  let answered = false;
   let pending = "";
   // SSE: the blank line after a dropped event goes with it.
   let dropBlank = false;
@@ -106,7 +142,8 @@ export const makeResponseTap = (input: {
   const sseLine = (raw: string): string | undefined => {
     const line = strip(raw);
     const data = /^data:\s?(.*?)\r?$/u.exec(line)?.[1];
-    if (data === undefined || !/usage|"error"/iu.test(data)) {
+    const lastHint = data !== undefined && LAST_EVENT_HINT.test(data);
+    if (data === undefined || (!lastHint && !/usage|"error"/iu.test(data))) {
       if (dropBlank && line.replace(/\r$/u, "") === "") {
         dropBlank = false;
         return undefined;
@@ -116,6 +153,7 @@ export const makeResponseTap = (input: {
     }
     dropBlank = false;
     const value = parseJsonText(data);
+    if (lastHint && isLastEvent(data, value)) answered = true;
     if (value === undefined) {
       return /"error"/u.test(data)
         ? `data: ${JSON.stringify({ error: { message: "The AI gateway failed." } })}`
@@ -180,6 +218,7 @@ export const makeResponseTap = (input: {
           const text = strip(pending.slice(elementStart, index + 1));
           const value = parseJsonText(text);
           if (value !== undefined) usage = mergeUsage(usage, value);
+          if (isLastEvent(text, value)) answered = true;
           out += value === undefined ? text : safeValue(text, value);
           emitted = index + 1;
           elementStart = -1;
@@ -237,5 +276,7 @@ export const makeResponseTap = (input: {
       const whole = total <= USAGE_COPY_LIMIT ? parseJsonText(copy) : usageInTail(tail);
       return whole === undefined ? usage : mergeUsage(usage, whole);
     },
+    // A plain JSON object has no last event: only its end says it is whole.
+    answered: () => answered,
   };
 };

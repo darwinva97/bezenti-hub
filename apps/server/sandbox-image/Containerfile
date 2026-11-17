@@ -53,10 +53,27 @@ RUN set -eu; \
 # (Pi's) is an `echo`. Codex and Pi have no install script. clis/package.json's `allowScripts`
 # allows those two and denies the rest, as npm 12 requires (npm refuses `--allow-scripts` on a
 # project's `rebuild`). Only the two files are copied: nothing else of that directory gets in.
+#
+# npm treats a failed download of an OPTIONAL package (the platform binaries of Claude Code, Codex,
+# OpenCode and Grok) as «skip it»: `npm ci` still exits 0, and the build would fail only later at
+# `--version`, with a misleading message. So the network gets generous retries and timeouts, and the
+# install is repeated (up to 3 times) until every locked optional package that applies to this
+# build's platform (os linux, this CPU, glibc or no libc field) is present in node_modules; if not,
+# the step fails here and says which. The list comes from the lockfile, so nothing is kept by hand.
+# The lockfile's integrity hashes and --ignore-scripts stay in force on every attempt.
+ENV NPM_CONFIG_FETCH_RETRIES=5 \
+    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000 \
+    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
+    NPM_CONFIG_FETCH_TIMEOUT=600000
 COPY clis/package.json clis/package-lock.json /opt/t3/clis/
 RUN set -eu; \
     cd /opt/t3/clis; \
-    npm ci --omit=dev --ignore-scripts --no-audit --no-fund; \
+    missing_optional='const l = require("./package-lock.json").packages, fs = require("fs"); const m = Object.entries(l).filter(([k, v]) => k && v.optional && (v.os || []).includes("linux") && (v.cpu || []).includes(process.arch) && (!v.libc || v.libc.includes("glibc")) && !fs.existsSync(k + "/package.json")).map(([k]) => k.replace(/^node_modules\//, "")); if (m.length) { console.error("Missing optional native packages after npm ci: " + m.join(", ")); process.exit(1); }'; \
+    attempt=1; \
+    until npm ci --omit=dev --ignore-scripts --no-audit --no-fund && node -e "$missing_optional"; do \
+      if [ "$attempt" -ge 3 ]; then echo "npm ci did not install every native optional package after $attempt attempts (a download failed; check the network)" >&2; exit 1; fi; \
+      attempt=$((attempt + 1)); echo "Retrying npm ci (attempt $attempt of 3)" >&2; rm -rf node_modules; \
+    done; \
     npm rebuild --foreground-scripts @anthropic-ai/claude-code opencode-ai; \
     for bin in claude codex opencode pi grok; do ln -s "/opt/t3/clis/node_modules/.bin/${bin}" "/usr/local/bin/${bin}"; done; \
     npm cache clean --force; rm -rf /root/.npm; \

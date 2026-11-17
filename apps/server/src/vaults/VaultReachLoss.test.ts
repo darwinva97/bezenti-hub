@@ -340,9 +340,11 @@ it.effect("removing a User takes back every Vault allowed to them; disabling kee
         allowed: true,
       })
       .pipe(h.asOwner);
-    yield* h.vaults
-      .setSpaceDefaults({ spaceId: gracesSpace, vaultIds: [toPersonal] })
-      .pipe(h.asOwner);
+    // A default the Owner chose there before owned-resources 04 (only Grace chooses now).
+    yield* sql`
+      INSERT INTO space_default_vaults (space_id, group_id, position)
+      VALUES (${gracesSpace}, ${toPersonal}, 0)
+    `;
     // A Project of hers in that Space, which chose it.
     const at = "2026-11-01T00:00:00.000Z";
     yield* sql`

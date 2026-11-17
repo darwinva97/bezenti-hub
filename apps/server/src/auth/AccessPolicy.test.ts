@@ -212,6 +212,10 @@ const vault = (
 const mainVault = vault(null, { isDefault: true });
 const orgDefault = vault(organization, { isDefault: true });
 const globexMember = principal("gina", { roles: [[OTHER_ORG, "member"]] });
+/** Ana, a User of no Organization, and her own personal Vault's groups (owned-resources 04). */
+const ana = principal("ana");
+const anasGroup = vault(null, { ownerUser: "ana" });
+const anasDefault = vault(null, { ownerUser: "ana", isDefault: true });
 const globexGuest = principal("otto", { roles: [[OTHER_ORG, "guest"]] });
 const ownersVault = vault(null);
 const orgVault = vault(organization);
@@ -1546,6 +1550,59 @@ const rows: ReadonlyArray<Row> = [
   ["Owner's own Vault: not an Admin's", admin, "vault.view", ownersVault, deny("owner-only")],
   ["a Vault action on a Space", owner, "vault.view", organization, deny("wrong-resource")],
   ["a Space action on a Vault", owner, "space.view", orgVault, deny("wrong-resource")],
+  // Owned-resources 04: every User's personal Vault is theirs alone; the Owner reads names and
+  // Variables, never edits; nobody else sees it. Provider and identity entries stay the Owner's,
+  // never in someone else's Vault.
+  ...(
+    [
+      ["vault.view", allow],
+      ["vault.readVariables", allow],
+      ["vault.edit", allow],
+      ["vault.manage", allow],
+      ["vault.dangerousName", allow],
+      ["vault.providerEntry", deny("owner-only")],
+      ["vault.identityEntry", deny("owner-only")],
+    ] as const
+  ).map(([action, decision]): Row => [
+    `Ana: ${action} on her own named group`,
+    ana,
+    action,
+    anasGroup,
+    decision,
+  ]),
+  ["Ana edits her own `default`", ana, "vault.edit", anasDefault, allow],
+  ["Ana never manages her `default`", ana, "vault.manage", anasDefault, deny("default-group")],
+  ...(["vault.view", "vault.readVariables"] as const).map((action): Row => [
+    `the Owner: ${action} on Ana's`,
+    owner,
+    action,
+    anasGroup,
+    allow,
+  ]),
+  ...(
+    [
+      "vault.edit",
+      "vault.manage",
+      "vault.dangerousName",
+      "vault.providerEntry",
+      "vault.identityEntry",
+    ] as const
+  ).map((action): Row => [
+    `the Owner: no ${action} on Ana's`,
+    owner,
+    action,
+    anasGroup,
+    deny("personal-space-read-only"),
+  ]),
+  ...([admin, member, outsider] as const).flatMap((actor) =>
+    (["vault.view", "vault.readVariables", "vault.edit"] as const).map((action): Row => [
+      `${actor.userId}: no ${action} on Ana's`,
+      actor,
+      action,
+      anasGroup,
+      deny("not-yours"),
+    ]),
+  ),
   // Spec 5 ticket 03: the Owner's own Vaults reach whom the Owner allowed them to. Whoever works
   // in an allowed Space, or is an allowed User, sees the names; an Admin edits the secrets only
   // while the Vault reaches nothing but Organizations they run.
@@ -1696,7 +1753,15 @@ const rows: ReadonlyArray<Row> = [
   ]),
   // Choosing a Space's defaults and its Projects' adds and removes.
   ["Owner chooses an Organization's Vaults", owner, "vault.choose", organization, allow],
-  ["Owner chooses a Personal space's Vaults", owner, "vault.choose", personalOf("grace"), allow],
+  // Owned-resources 04: a Personal space's groups are its User's to choose; the Owner reads.
+  [
+    "Owner does not choose another's Personal space's Vaults",
+    owner,
+    "vault.choose",
+    personalOf("grace"),
+    deny("personal-space-read-only"),
+  ],
+  ["Owner chooses their own Personal space's", owner, "vault.choose", personalOf("owner"), allow],
   ["an Admin chooses Acme's Vaults", admin, "vault.choose", organization, allow],
   ["a Member does not", member, "vault.choose", organization, deny("role-not-allowed")],
   ["a Guest does not", guest, "vault.choose", organization, deny("role-not-allowed")],
@@ -1715,11 +1780,25 @@ const rows: ReadonlyArray<Row> = [
     deny("space-archived"),
   ],
   [
-    "a Personal space's User does not choose its Vaults",
+    "a Personal space's User chooses its Vaults",
     personalCreator,
     "vault.choose",
     personalOf("grace"),
-    deny("owner-only"),
+    allow,
+  ],
+  [
+    "nobody else chooses in someone's Personal space",
+    admin,
+    "vault.choose",
+    personalOf("grace"),
+    deny("not-your-personal-space"),
+  ],
+  [
+    "nobody chooses in a frozen Personal space",
+    personalCreator,
+    "vault.choose",
+    frozenPersonal,
+    deny("space-frozen"),
   ],
   ["choosing is decided on a Space", owner, "vault.choose", orgVault, deny("wrong-resource")],
   // Dedicated machines (owned-resources 07): the Owner or an Organization's Admins give one to it,

@@ -475,3 +475,21 @@ it.effect("an agent on a machine that does not serve the Thread's Space lists no
     assert.deepStrictEqual(yield* t.delivery.turnNames(threadId), []);
   }),
 );
+
+it.effect(
+  "in a Personal space, the card offers its User their own groups (owned-resources 04)",
+  () =>
+    Effect.gen(function* () {
+      const t = yield* hub;
+      const personal = SpaceId.make(`personal:${t.grace}`);
+      const threadId = yield* t.thread("thread-grace-personal", t.grace, personal);
+      assert.deepStrictEqual(yield* t.targetNames(t.grace, threadId), ["default"]);
+      // Nobody else's, the Owner included, is offered there.
+      const ownersThread = yield* t.thread(
+        "thread-owner-personal",
+        t.ownerId,
+        SpaceId.make(`personal:${t.ownerId}`),
+      );
+      assert.deepStrictEqual(yield* t.targetNames(t.grace, ownersThread), []);
+    }),
+);

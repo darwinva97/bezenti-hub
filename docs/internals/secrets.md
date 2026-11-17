@@ -234,6 +234,12 @@ No door answers a Secret's value (owned-resources 01, ADR 0012).
   entries of all its groups without reading Secrets; its Members and Guests see names and
   descriptions. Workload identity entries and names that change how tools run stay the Owner's. A
   group one cannot see answers like a missing one.
+- **A User's own Vault** (owned-resources 04; migration 143 and `Users.insertUserCredentials` give
+  every User not removed a `default`): its User manages it, edits it, confirms names that change
+  how tools run in it, and alone chooses their Personal space's groups (`vault.choose`). The Owner
+  sees its names and Variables (`vault.view`, `vault.readVariables`) and nothing more
+  (`personal-space-read-only`); nobody else sees it (`not-yours`). Provider and workload identity
+  entries never go into it. Its groups reach that Personal space alone, never an Organization.
 - **Secret links and copies** are gone (owned-resources 03): sharing a group with another Space is
   a Grant (`../grants/`).
 - **Names** (`secretNameRisk` in contracts, compared uppercased): `^[A-Z_][A-Z0-9_]{0,127}$`,

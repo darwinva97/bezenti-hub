@@ -256,11 +256,14 @@ export type Action =
    * owner's managers (owned-resources 03); never on a `default` group.
    */
   | "vault.manage"
-  /** Set a secret whose name changes how tools run (`secretNameRisk`): the Owner, confirmed. */
+  /**
+   * Set a name that changes how tools run (`secretNameRisk`), confirmed: the Owner, and a User in
+   * their own Vault (owned-resources 04).
+   */
   | "vault.dangerousName"
   /**
-   * Choose a Space's default Vaults and its Projects' adds and removes, decided on the Space
-   * (spec 5 ticket 03): the Owner, an Organization's Admins.
+   * Choose a Space's default groups and its Projects' adds and removes, decided on the Space: a
+   * Personal space's User; an Organization's Admins and the Owner (owned-resources 04).
    */
   | "vault.choose"
   /**
@@ -682,6 +685,21 @@ const VAULT_ACTIONS: ReadonlySet<Action> = new Set([
  */
 const decideVault = (principal: Principal, action: Action, vault: VaultResource): Decision => {
   if (action === "vault.manage" && vault.isDefault) return deny("default-group");
+  // Owned-resources 04: a User's own Vault is theirs alone (Provider and identity entries stay the
+  // Owner's); the Owner reads its names and Variables; nobody else sees it.
+  if (vault.owner.kind === "user" && !vault.owner.isInstallationOwner) {
+    if (vault.owner.userId === principal.userId) {
+      return action === "vault.providerEntry" || action === "vault.identityEntry"
+        ? deny("owner-only")
+        : allow;
+    }
+    if (principal.isOwner) {
+      return action === "vault.view" || action === "vault.readVariables"
+        ? allow
+        : deny("personal-space-read-only");
+    }
+    return deny("not-yours");
+  }
   if (principal.isOwner) return allow;
   if (action === "vault.identityEntry" || action === "vault.dangerousName") {
     return deny("owner-only");
@@ -753,11 +771,16 @@ const decideAllowedVault = (
 };
 
 /**
- * Spec 5 ticket 03: which Vaults a Space and its Projects receive. The Owner chooses anywhere,
- * a Personal space included (its User only sees the names); an Organization's Admins choose in
- * it while it is open.
+ * Which groups a Space and its Projects receive: a Personal space's User there (the Owner only
+ * reads someone else's, owned-resources 04); an Organization's Admins and the Owner while it is open.
  */
 const decideVaultChoice = (principal: Principal, space: SpaceResource): Decision => {
+  // Owned-resources 04: a Personal space's groups are its User's to choose; the Owner reads.
+  if (space.kind === "personal") {
+    if (space.frozen) return deny("space-frozen");
+    if (space.personalOwnerUserId === principal.userId) return allow;
+    return principal.isOwner ? deny("personal-space-read-only") : deny("not-your-personal-space");
+  }
   if (principal.isOwner) return allow;
   if (space.kind !== "organization") return deny("owner-only");
   if (space.archived) return deny("space-archived");

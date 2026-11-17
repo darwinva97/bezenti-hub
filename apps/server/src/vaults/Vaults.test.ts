@@ -213,21 +213,29 @@ it.effect("every owner has a `default` group nobody deletes, renames or archives
     const setup = yield* hub;
     const { vaults, as, ownerId, people, acmeId } = setup;
     const listed = yield* vaults.list.pipe(as(ownerId));
-    // The Owner's own first, `default` first; then each Organization's, its `default` first.
+    // The Owner's own first; then each Organization's `default`, and every User's, which the
+    // Owner only reads (owned-resources 04).
+    assert.equal(listed.groups[0]?.id, setup.main);
+    assert.isTrue(listed.groups.every((group) => group.isDefault && group.name === "default"));
     assert.deepEqual(
-      listed.groups.map((group) => [
-        group.name,
-        group.isDefault,
-        group.owner.kind === "user" ? "Owner" : group.ownerName,
-      ]),
+      listed.groups
+        .filter((group) => group.owner.kind === "organization")
+        .map((group) => group.ownerName),
+      ["Acme", "Globex"],
+    );
+    const others = listed.groups.filter(
+      (group) => group.owner.kind === "user" && group.id !== setup.main,
+    );
+    assert.deepEqual(
+      others.map((group) => [group.ownerName, group.canEdit, group.canManage]).toSorted(),
       [
-        ["default", true, "Owner"],
-        ["default", true, "Acme"],
-        ["default", true, "Globex"],
+        ["ada", false, false],
+        ["grace", false, false],
+        ["gus", false, false],
+        ["linus", false, false],
       ],
     );
-    assert.equal(listed.groups[0]?.id, setup.main);
-    const acmeDefault = listed.groups[1]!;
+    const acmeDefault = listed.groups.find((group) => group.ownerName === "Acme")!;
     assert.deepEqual(acmeDefault.owner, { kind: "organization", spaceId: acmeId });
     for (const [who, group] of [
       [ownerId, setup.main],
@@ -327,15 +335,17 @@ it.effect(
       // Its entries: added, replaced and deleted without reading.
       const seen = yield* vaults.list.pipe(as(admin.id));
       assert.deepEqual(
-        seen.groups.map((group) => [group.name, group.canEdit, group.canManage]),
+        seen.groups.map((group) => [group.name, group.ownerName, group.canEdit, group.canManage]),
         [
-          ["default", true, false],
-          ["Acme secrets", true, true],
+          // Her own Vault's `default` (owned-resources 04), then Acme's.
+          ["default", "ada", true, false],
+          ["default", "Acme", true, false],
+          ["Acme secrets", "Acme", true, true],
         ],
       );
       assert.deepEqual(
         seen.owners.map((owner) => owner.name),
-        ["Acme"],
+        ["ada", "Acme"],
       );
       const added = yield* vaults
         .putEntry({ vaultId: acme.id, name: "ADMIN_TOKEN", value: Redacted.make(ADMIN_WRITES) })
@@ -399,8 +409,12 @@ it.effect(
       // Globex's Admin sees Globex's only.
       const theirs = yield* vaults.list.pipe(as(people.otherAdmin.id));
       assert.deepEqual(
-        theirs.groups.map((group) => group.name),
-        ["default", "Globex secrets"],
+        theirs.groups.map((group) => [group.name, group.ownerName]),
+        [
+          ["default", "gus"],
+          ["default", "Globex"],
+          ["Globex secrets", "Globex"],
+        ],
       );
     }),
 );
@@ -1614,4 +1628,95 @@ it.effect(
         ["Acme"],
       );
     }),
+);
+
+// Owned-resources 04: every User's own Vault.
+
+it.effect("a User's own Vault is theirs alone; the Owner reads its names and Variables", () =>
+  Effect.gen(function* () {
+    const setup = yield* hub;
+    const { vaults, as, ownerId, people } = setup;
+    const grace = people.member.id;
+    const [mineRow] = yield* setup.server.sql<{ readonly groupId: string }>`
+      SELECT group_id AS "groupId" FROM vault_groups
+      WHERE owner_kind = 'user' AND owner_id = ${grace} AND is_default = 1
+    `;
+    const graceDefault = VaultGroupId.make(mineRow!.groupId);
+    // She adds a Secret and a Variable, and a group of her own; she never removes `default`.
+    yield* vaults
+      .putEntry({ vaultId: graceDefault, name: "GRACE_TOKEN", value: Redacted.make(ACME_OWN) })
+      .pipe(as(grace));
+    yield* vaults
+      .putEntry({
+        vaultId: graceDefault,
+        name: "GRACE_REGION",
+        value: Redacted.make("eu-west-1"),
+        class: "variable",
+      })
+      .pipe(as(grace));
+    const side = yield* vaults.create({ name: "Side project", owner: mine(grace) }).pipe(as(grace));
+    assert.deepEqual([side.canEdit, side.canManage], [true, true]);
+    assert.equal(
+      yield* reasonOf(vaults.remove({ vaultId: graceDefault }).pipe(as(grace))),
+      "default-group",
+    );
+    // A name that changes how tools run: hers, once she confirms.
+    assert.equal(
+      yield* reasonOf(
+        vaults
+          .putEntry({ vaultId: graceDefault, name: "NODE_OPTIONS", value: Redacted.make("--x=1") })
+          .pipe(as(grace)),
+      ),
+      "confirm-dangerous",
+    );
+    yield* vaults
+      .putEntry({
+        vaultId: graceDefault,
+        name: "NODE_OPTIONS",
+        value: Redacted.make("--max-old-space-size=4096"),
+        confirmDangerous: true,
+      })
+      .pipe(as(grace));
+
+    // The Owner reads its names and Variables, and changes nothing.
+    const asOwner = yield* vaults.listEntries({ vaultId: graceDefault }).pipe(as(ownerId));
+    assert.deepEqual(
+      asOwner.entries.map((entry) => [entry.name, entry.value ?? null]),
+      [
+        ["GRACE_REGION", "eu-west-1"],
+        ["GRACE_TOKEN", null],
+        ["NODE_OPTIONS", null],
+      ],
+    );
+    assert.deepEqual([asOwner.group.canEdit, asOwner.group.canManage], [false, false]);
+    assert.isFalse(mentionsAValue(JSON.stringify(asOwner)));
+    assert.equal(
+      yield* reasonOf(
+        vaults
+          .putEntry({ vaultId: graceDefault, name: "OWNERS", value: Redacted.make("x".repeat(9)) })
+          .pipe(as(ownerId)),
+      ),
+      "forbidden",
+    );
+    assert.equal(
+      yield* reasonOf(vaults.update({ vaultId: side.id, name: "Owner's now" }).pipe(as(ownerId))),
+      "forbidden",
+    );
+    assert.equal(
+      yield* reasonOf(vaults.create({ name: "For Grace", owner: mine(grace) }).pipe(as(ownerId))),
+      "forbidden",
+    );
+    // Nobody else sees it, her Organization's Admin included.
+    for (const who of [people.admin.id, people.guest.id, people.otherAdmin.id]) {
+      assert.equal(
+        yield* reasonOf(vaults.listEntries({ vaultId: graceDefault }).pipe(as(who))),
+        "not-found",
+      );
+      const theirs = yield* vaults.list.pipe(as(who));
+      assert.notInclude(
+        theirs.groups.map((group) => group.id),
+        graceDefault,
+      );
+    }
+  }),
 );

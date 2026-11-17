@@ -59,7 +59,7 @@ const nameHint = (name: string, isOwner: boolean) => {
     case "dangerous":
       return isOwner
         ? "It changes how the agent's tools run or whom they trust: confirm to save it."
-        : "It changes how the agent's tools run or whom they trust: only the Owner sets it.";
+        : "It changes how the agent's tools run or whom they trust: only the Owner sets it, or a User in their own Vault.";
     default:
       return null;
   }
@@ -548,6 +548,9 @@ function VaultSection(props: {
       return savedMessage(entry.name, verb, result.warnings);
     });
   const owner = vaultOwnerLine(vault, { userId: props.userId });
+  // A name that changes how tools run: the Owner's, and a User's in their own Vault (04).
+  const confirmsDangerous =
+    props.isOwner || (vault.owner.kind === "user" && vault.owner.userId === props.userId);
   return (
     <SettingsSection id={`vault-${vault.id}`} title={vault.name}>
       <SettingsRow
@@ -593,7 +596,7 @@ function VaultSection(props: {
             key={entry.id}
             vault={vault}
             canEdit={canEdit}
-            isOwner={props.isOwner}
+            isOwner={confirmsDangerous}
             entry={entry}
             onChange={(input) => change(entry, input)}
             onDelete={() =>
@@ -610,6 +613,7 @@ function VaultSection(props: {
         <AddSecretForm
           vaultName={vault.name}
           isOwner={props.isOwner}
+          confirmsDangerous={confirmsDangerous}
           entries={props.entries}
           onAdd={(name, value, options) =>
             act(async () => {
@@ -863,6 +867,8 @@ function EntryRow(props: {
 function AddSecretForm(props: {
   readonly vaultName: string;
   readonly isOwner: boolean;
+  /** The Owner, or a User in their own Vault (owned-resources 04). */
+  readonly confirmsDangerous: boolean;
   readonly entries: ReadonlyArray<VaultEntry>;
   readonly onAdd: (
     name: string,
@@ -891,7 +897,7 @@ function AddSecretForm(props: {
     Number.isFinite(ttlSeconds) &&
     ttlSeconds >= IDENTITY_TTL_MIN_SECONDS &&
     ttlSeconds <= IDENTITY_TTL_MAX_SECONDS;
-  const hint = nameHint(name, props.isOwner);
+  const hint = nameHint(name, props.confirmsDangerous);
   const dangerous = isDangerous(name);
   // A template's text holds names only: checked and previewed here, as `[NAME]`, never a value.
   const parsed = isTemplate && value.length > 0 ? parseTemplate(value) : null;
@@ -903,7 +909,7 @@ function AddSecretForm(props: {
     secretNameRisk(name) === "gateway" ||
     problem !== null ||
     (isIdentity && !ttlValid) ||
-    (dangerous && (!props.isOwner || !confirmed));
+    (dangerous && (!props.confirmsDangerous || !confirmed));
   return (
     <form
       aria-label={`Add a secret to ${props.vaultName}`}
@@ -1079,7 +1085,7 @@ function AddSecretForm(props: {
       ) : null}
       {isVariable ? <CredentialWarning name={name} value={value} /> : null}
       {hint === null ? null : <span className="text-xs text-destructive">{hint}</span>}
-      {dangerous && props.isOwner ? (
+      {dangerous && props.confirmsDangerous ? (
         <ConfirmDangerous checked={confirmed} onChange={setConfirmed} />
       ) : null}
     </form>

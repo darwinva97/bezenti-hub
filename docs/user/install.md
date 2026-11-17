@@ -296,6 +296,14 @@ selector reminds you of this while your Personal space is the current Space.
 Nothing in a Personal space is shared with anyone else: no invitations, no guest
 links; to share work, it has to move to an organization.
 
+Everyone also has their own **vault**, under **Settings → Vaults → Mine**: secrets
+and variables for your own agents, without asking the Owner. Its **default** group
+reaches every thread of your Personal space, and only those: a thread of yours in an
+organization never receives it. You create, rename and delete your other groups,
+and choose which of them your Personal space and its projects receive. The Owner
+sees the names in your vault and its Variables' values, never a Secret's, and
+changes nothing there; nobody else sees it at all.
+
 ### Disabling and removing people
 
 In **Users and permissions** the Owner can **Disable** a person: they are signed

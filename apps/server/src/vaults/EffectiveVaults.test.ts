@@ -9,6 +9,7 @@ import {
   ThreadId,
   UserId,
   type VaultError,
+  VaultGroupId,
   VaultThreadEnvironmentInput,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
@@ -859,5 +860,54 @@ it.effect("names are checked again when the set is computed, whoever wrote them"
     assert.deepEqual(h.names(set), ["GIT_SSH_COMMAND", "SHARED_KEY"]);
     assert.isTrue(set.variables.find((variable) => variable.name === "GIT_SSH_COMMAND")?.dangerous);
     assert.isFalse(set.variables.find((variable) => variable.name === "SHARED_KEY")?.dangerous);
+  }),
+);
+
+// Owned-resources 04: every User's own Vault reaches their Personal space alone.
+
+it.effect("a User's own `default` reaches their Personal space, never an Organization's", () =>
+  Effect.gen(function* () {
+    const h = yield* hub;
+    const [mine] = yield* h.server.sql<{ readonly groupId: string }>`
+      SELECT group_id AS "groupId" FROM vault_groups
+      WHERE owner_kind = 'user' AND owner_id = ${h.grace.id} AND is_default = 1
+    `;
+    yield* h.vaults
+      .putEntry({
+        vaultId: VaultGroupId.make(mine!.groupId),
+        name: "GRACE_OWN",
+        value: Redacted.make("graces-personal-value-7"),
+      })
+      .pipe(h.as(h.grace.id));
+    const personal = SpaceId.make(`personal:${h.grace.id}`);
+    const inPersonal = yield* h.thread("thread:grace-personal", h.grace.id, personal, null);
+    const inAcme = yield* h.thread("thread:grace-acme", h.grace.id, h.acmeId, null);
+    assert.deepEqual(
+      h.names(yield* h.effective.forThread({ threadId: inPersonal, actingUserId: h.grace.id })),
+      ["GRACE_OWN"],
+    );
+    assert.deepEqual(
+      h.names(yield* h.effective.forThread({ threadId: inAcme, actingUserId: h.grace.id })),
+      [],
+    );
+    // Nor can anyone else's choice bring it into Acme.
+    assert.equal(
+      yield* reasonOf(
+        h.vaults
+          .setSpaceDefaults({ spaceId: h.acmeId, vaultIds: [VaultGroupId.make(mine!.groupId)] })
+          .pipe(h.as(h.ada.id)),
+      ),
+      "not-allowed",
+    );
+    // She chooses her Personal space's groups; the Owner only reads them.
+    const choices = yield* h.vaults.choices({ spaceId: personal }).pipe(h.as(h.grace.id));
+    assert.isTrue(choices.canChoose);
+    assert.deepEqual(choices.fixedDefaults, [VaultGroupId.make(mine!.groupId)]);
+    assert.equal(
+      yield* reasonOf(
+        h.vaults.setSpaceDefaults({ spaceId: personal, vaultIds: [] }).pipe(h.as(h.ownerId)),
+      ),
+      "forbidden",
+    );
   }),
 );

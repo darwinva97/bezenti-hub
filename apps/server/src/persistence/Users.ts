@@ -256,6 +256,8 @@ const make = Effect.gen(function* () {
   const insertUserCredentials = SqlSchema.void({
     Request: CreateUserInput,
     execute: Effect.fn("UserRepository.insertUserCredentials")(function* (input) {
+      // Every User's Vault starts with its `default` group (owned-resources 04).
+      yield* VaultGroups.ensureDefault(sql, { ownerKind: "user", ownerId: input.userId });
       if (input.passkey !== null) {
         yield* sql`
           INSERT INTO user_passkeys (

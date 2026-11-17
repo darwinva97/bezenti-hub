@@ -514,7 +514,16 @@ const make = Effect.gen(function* () {
       WHERE space_id = ${spaceId} AND deleting_at IS NULL AND frozen_at IS NULL
     `.pipe(Effect.map((rows) => (rows[0]?.n ?? 0) > 0));
 
-  /** In a write's transaction: the group exists and its Organization is not being deleted. */
+  /** Whether a User may still own what they write: not removed. */
+  const userTakesVaults = (userId: string) =>
+    sql<{ readonly n: number }>`
+      SELECT COUNT(*) AS n FROM users WHERE user_id = ${userId} AND removed_at IS NULL
+    `.pipe(Effect.map((rows) => (rows[0]?.n ?? 0) > 0));
+
+  /**
+   * In a write's transaction: the group exists and its owner is still there (an Organization not
+   * being deleted, a User not removed).
+   */
   const stillWritable = (vaultId: string) =>
     sql<{ readonly ownerKind: string; readonly ownerId: string }>`
       SELECT owner_kind AS "ownerKind", owner_id AS "ownerId" FROM vault_groups
@@ -523,11 +532,12 @@ const make = Effect.gen(function* () {
       Effect.flatMap(([row]) =>
         row === undefined
           ? fail("not-found", NOT_FOUND)
-          : row.ownerKind !== "organization"
-            ? Effect.void
-            : Effect.flatMap(spaceTakesVaults(row.ownerId), (alive) =>
-                alive ? Effect.void : fail("not-found", NOT_FOUND),
-              ),
+          : Effect.flatMap(
+              row.ownerKind === "organization"
+                ? spaceTakesVaults(row.ownerId)
+                : userTakesVaults(row.ownerId),
+              (alive) => (alive ? Effect.void : fail("not-found", NOT_FOUND)),
+            ),
       ),
     );
 
@@ -696,7 +706,7 @@ const make = Effect.gen(function* () {
         if (!can("vault.dangerousName", resource)) {
           return yield* fail(
             "dangerous-name",
-            `${name} changes how the agent's tools run or whom they trust: only the Owner sets it.`,
+            `${name} changes how the agent's tools run or whom they trust: only the Owner sets it, or a User in their own Vault.`,
           );
         }
         if (confirmed !== true) {
@@ -933,10 +943,7 @@ const make = Effect.gen(function* () {
       );
   });
 
-  /**
-   * The owners the caller may create groups for: their own User (from owned-resources 04; the
-   * Owner already), and each open Organization they manage the groups of.
-   */
+  /** The owners the caller may create groups for: themselves, and each open Organization they manage. */
   const ownerOptions = Effect.fn("Vaults.ownerOptions")(function* (who: {
     readonly userId: UserId;
     readonly can: Can;
@@ -2103,8 +2110,8 @@ const make = Effect.gen(function* () {
     fail(
       "forbidden",
       space.kind === "personal"
-        ? "Only the Owner chooses the Vaults of a Personal space."
-        : "Only the Owner and the Organization's Admins choose its Vaults.",
+        ? "Only its User chooses the groups of a Personal space."
+        : "Only the Owner and the Organization's Admins choose its groups.",
     );
 
   const notAllowedHere = (vaultId: string) =>
@@ -2275,8 +2282,9 @@ const make = Effect.gen(function* () {
 });
 
 /**
- * Every owner has its `default` group (owned-resources 03): the Owner and every Organization not
- * being deleted. Made with them (VaultGroups.ensureDefault); this catches any made before.
+ * Every owner has its `default` group (owned-resources 03, 04): every User not removed and
+ * every Organization not being deleted. Made with them (VaultGroups.ensureDefault); this catches
+ * the rest.
  */
 const ensureDefaultGroups = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -2284,7 +2292,7 @@ const ensureDefaultGroups = Effect.gen(function* () {
     readonly ownerKind: "user" | "organization";
     readonly ownerId: string;
   }>`
-    SELECT 'user' AS "ownerKind", user_id AS "ownerId" FROM users WHERE is_owner = 1
+    SELECT 'user' AS "ownerKind", user_id AS "ownerId" FROM users WHERE removed_at IS NULL
     UNION ALL
     SELECT 'organization', space_id FROM spaces
     WHERE kind = 'organization' AND deleting_at IS NULL

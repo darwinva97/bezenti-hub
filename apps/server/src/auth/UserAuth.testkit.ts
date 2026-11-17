@@ -96,6 +96,7 @@ import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolv
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import * as VaultGroups from "../vaults/VaultGroups.ts";
 
 class AuthTestApi extends HttpApi.make("environment")
   .add(EnvironmentHttpApi.groups.auth)
@@ -706,6 +707,8 @@ export const addMember = Effect.fn(function* (
     INSERT INTO users (user_id, display_name, is_owner, created_at)
     VALUES (${member.id}, ${member.displayName}, 0, '2026-01-01T00:00:00.000Z')
   `;
+  // As the Hub makes a User: with their Vault's `default` group (owned-resources 04).
+  yield* VaultGroups.ensureDefault(server.sql, { ownerKind: "user", ownerId: member.id });
   const memberSession = yield* server.sessions.issue({
     method: "browser-session-cookie",
     subject: EnvironmentAuth.USER_SIGN_IN_SUBJECT,

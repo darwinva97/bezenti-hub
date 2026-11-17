@@ -126,6 +126,8 @@ import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
+import { SettingsInvitationsRouteScreen } from "./features/settings/SettingsInvitationsRouteScreen";
+import { SettingsMembersRouteScreen } from "./features/settings/SettingsMembersRouteScreen";
 import {
   SettingsPlatformRouteScreen,
   SettingsSpaceRouteScreen,
@@ -238,6 +240,16 @@ const SETTINGS_SCREENS = {
     screen: SettingsPlatformRouteScreen,
     linking: "settings/platform",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Platform" },
+  }),
+  SettingsMembers: createNativeStackScreen({
+    screen: SettingsMembersRouteScreen,
+    linking: "settings/space/members",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Members" },
+  }),
+  SettingsInvitations: createNativeStackScreen({
+    screen: SettingsInvitationsRouteScreen,
+    linking: "settings/space/invitations",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Invitations" },
   }),
   SettingsEnvironments: createNativeStackScreen({
     screen: SettingsEnvironmentsRouteScreen,

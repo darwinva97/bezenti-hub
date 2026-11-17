@@ -1,4 +1,5 @@
 import {
+  canRevokeInvitation,
   createInvitation,
   INVITATION_STATUS_LABELS,
   invitationLink,
@@ -11,6 +12,7 @@ import {
   issueMemberResetLink,
   leaveOrganization,
   listMembers,
+  memberRoleChoices,
   removeMember,
   resetLink,
 } from "@t3tools/client-runtime/spaces/memberships";
@@ -370,10 +372,7 @@ function MemberRow({
   readonly onRemove: () => void;
   readonly onResetLink: () => void;
 }) {
-  const roles = assignableRoles.includes(member.role)
-    ? assignableRoles
-    : [member.role, ...assignableRoles];
-  const memberRoleItems = roleItems(roles);
+  const memberRoleItems = roleItems(memberRoleChoices(member, assignableRoles));
   return (
     <li className="flex items-center justify-between gap-2 text-sm">
       <span className="min-w-0 truncate">
@@ -692,8 +691,7 @@ function InvitationsSection({
                 {SPACE_ROLE_LABELS[invitation.role]} · {INVITATION_STATUS_LABELS[invitation.status]}{" "}
                 · <span className="text-muted-foreground">{describeInvitation(invitation)}</span>
               </span>
-              {invitation.status === "pending" &&
-              (invitation.role !== "admin" || assignableRoles.includes("admin")) ? (
+              {canRevokeInvitation(invitation, assignableRoles) ? (
                 <Button
                   disabled={busy}
                   size="xs"

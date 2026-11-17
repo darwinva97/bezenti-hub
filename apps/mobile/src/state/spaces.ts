@@ -38,7 +38,7 @@ export function useLoadSpaces(connections: ReadonlyArray<SavedRemoteConnection>)
   }, [connections]);
 }
 
-async function reloadSpaces(connection: SavedRemoteConnection): Promise<void> {
+export async function reloadSpaces(connection: SavedRemoteConnection): Promise<void> {
   if (connection.bearerToken === null) return;
   const load = await runtime.runPromise(
     fetchRemoteSpaceDirectory({

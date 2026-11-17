@@ -41,6 +41,9 @@ export const SETTINGS_MODAL_TARGETS: Readonly<Record<SettingsModalId, SettingsPa
 /** Where the web's Platform modal lives for what mobile has no screen for. */
 export const PLATFORM_BROWSER_PATH = "/settings/platform/users";
 
+/** Where the web's Space modal lives, for archiving, restoring and deleting an Organization. */
+export const spaceBrowserPath = (spaceId: string) => `/settings/space/${spaceId}/general`;
+
 export interface SettingsModalPage {
   readonly target: SettingsPageTarget;
   readonly label: string;
@@ -93,6 +96,20 @@ const PAGES: Readonly<Record<SettingsModalId, readonly SettingsModalPage[]>> = {
   ],
   space: [
     {
+      target: "SettingsMembers",
+      label: "Members",
+      icon: "person.2",
+      sectionId: "members",
+      needsServer: true,
+    },
+    {
+      target: "SettingsInvitations",
+      label: "Invitations",
+      icon: "person.badge.plus",
+      sectionId: "invitations",
+      needsServer: true,
+    },
+    {
       target: "SettingsScheduledTasks",
       label: "Scheduled tasks",
       icon: "clock",
@@ -136,6 +153,8 @@ const PAGES: Readonly<Record<SettingsModalId, readonly SettingsModalPage[]>> = {
 export interface SettingsModalContext {
   readonly principal: SettingsPrincipal;
   readonly space: SpaceSettingsSubject | null;
+  /** The Space the Space entry is about, when the Hub's directory names one. */
+  readonly spaceId?: string | null;
   readonly device: { readonly ios: boolean; readonly navigationCustomization: boolean };
 }
 
@@ -185,10 +204,10 @@ export function visibleSettingsModals(context: SettingsModalContext) {
   });
 }
 
-/** The page of the Hub's web app that holds what mobile does not have, or null without a Hub. */
-export function platformBrowserUrl(hubHttpBaseUrl: string | null): string | null {
+/** A page of the Hub's web app, for what mobile does not have; null without a Hub. */
+export function hubBrowserUrl(hubHttpBaseUrl: string | null, path: string): string | null {
   if (hubHttpBaseUrl === null) return null;
-  return `${hubHttpBaseUrl.replace(/\/+$/, "")}${PLATFORM_BROWSER_PATH}`;
+  return `${hubHttpBaseUrl.replace(/\/+$/, "")}${path}`;
 }
 
 /**

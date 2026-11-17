@@ -3,6 +3,8 @@ export const SETTINGS_PAGE_TARGETS = [
   "SettingsUser",
   "SettingsSpace",
   "SettingsPlatform",
+  "SettingsMembers",
+  "SettingsInvitations",
   "SettingsEnvironments",
   "SettingsThreads",
   "SettingsAbout",

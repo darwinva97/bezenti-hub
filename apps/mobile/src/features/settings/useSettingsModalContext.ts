@@ -22,6 +22,7 @@ export function useSettingsModalContext(): SettingsModalContext {
       hasUser: view !== null,
     },
     space: spaceSubject(view?.spaces ?? null, selection?.currentSpaceId ?? null),
+    spaceId: selection?.currentSpaceId ?? null,
     device: {
       ios: Platform.OS === "ios",
       navigationCustomization: navigationCustomizationAvailable(),

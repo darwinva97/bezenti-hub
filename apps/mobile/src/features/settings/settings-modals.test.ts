@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  platformBrowserUrl,
+  hubBrowserUrl,
+  PLATFORM_BROWSER_PATH,
   settingsModalPages,
+  spaceBrowserPath,
   spaceSubject,
   visibleSettingsModals,
   type SettingsModalContext,
@@ -52,23 +54,33 @@ describe("which Settings entries a viewer sees", () => {
   });
 
   it("keeps Scheduled tasks and Archive for the viewer's own Space", () => {
-    const organization = spaceSubject(
-      [{ id: "org", kind: "organization", isOwn: false, canInvite: false }],
-      "org",
-    );
     const othersPersonal = spaceSubject(
       [{ id: "theirs", kind: "personal", isOwn: false, canInvite: false }],
       "theirs",
     );
-    expect(targets("space", context(MEMBER, organization))).toEqual([
-      "SettingsScheduledTasks",
-      "SettingsArchive",
-    ]);
     expect(targets("space", context(OWNER, othersPersonal))).toEqual([]);
   });
 
   it("falls back to the viewer's own Personal space without a directory", () => {
     expect(targets("space", context(MEMBER))).toEqual([
+      "SettingsScheduledTasks",
+      "SettingsArchive",
+    ]);
+  });
+
+  it("gives an Organization's Member Members, and Invitations only to who may invite", () => {
+    const spaces = [
+      { id: "plain", kind: "organization", isOwn: false, canInvite: false },
+      { id: "run", kind: "organization", isOwn: false, canInvite: true },
+    ] as const;
+    expect(targets("space", context(MEMBER, spaceSubject(spaces, "plain")))).toEqual([
+      "SettingsMembers",
+      "SettingsScheduledTasks",
+      "SettingsArchive",
+    ]);
+    expect(targets("space", context(MEMBER, spaceSubject(spaces, "run")))).toEqual([
+      "SettingsMembers",
+      "SettingsInvitations",
       "SettingsScheduledTasks",
       "SettingsArchive",
     ]);
@@ -87,11 +99,14 @@ describe("which Settings entries a viewer sees", () => {
   });
 });
 
-describe("opening Platform in the browser", () => {
+describe("opening the Hub in the browser", () => {
   it("points at the Hub's public URL", () => {
-    expect(platformBrowserUrl("https://hub.example.com/")).toBe(
+    expect(hubBrowserUrl("https://hub.example.com/", PLATFORM_BROWSER_PATH)).toBe(
       "https://hub.example.com/settings/platform/users",
     );
-    expect(platformBrowserUrl(null)).toBeNull();
+    expect(hubBrowserUrl("https://hub.example.com", spaceBrowserPath("space-1"))).toBe(
+      "https://hub.example.com/settings/space/space-1/general",
+    );
+    expect(hubBrowserUrl(null, PLATFORM_BROWSER_PATH)).toBeNull();
   });
 });

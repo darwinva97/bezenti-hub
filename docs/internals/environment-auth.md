@@ -315,7 +315,7 @@ Rows from before Spaces keep `NULL` in both columns and count as the Owner's
 Personal space; the migration cannot backfill them because the Owner may not
 exist yet. A trigger on `users` creates each User's Personal space
 (`personal:<userId>`) with the row, so no account path has to remember it, and
-its User always uses it: no permission gates it (migration 150 dropped the old
+its User always uses it: no permission gates it (migration 137 dropped the old
 `personalSpace.create` grants). The Owner grants and revokes the remaining
 Installation permissions (`installation_permissions` rows) over HTTP
 (`/api/installation/users`, which also needs the `access:read`/`access:write`

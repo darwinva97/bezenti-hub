@@ -8,7 +8,7 @@
 
 Spec: ../spec.md
 
-- [ ] Migración: `spaces.steward_user_id` y `spaces.steward_offer_user_id` (solo Organizations); las existentes, con el Owner como Steward. Nota (identity-and-access 18): `spaces.created_by_user_id` (migración 151) ya guarda quién creó cada Organization desde el ticket 18; el Steward inicial es esa columna, y el Owner solo donde es NULL (las de antes).
+- [ ] Migración: `spaces.steward_user_id` y `spaces.steward_offer_user_id` (solo Organizations); las existentes, con el Owner como Steward. Nota (identity-and-access 18): `spaces.created_by_user_id` (migración 138) ya guarda quién creó cada Organization desde el ticket 18; el Steward inicial es esa columna, y el Owner solo donde es NULL (las de antes).
 - [ ] `SpaceDirectory.createOrganization` pone al creador como Steward en la misma operación que su membership `admin`.
 - [ ] `Plans.limitsForSpace` usa el Plan del Steward para una Organization (sin límites si es el Owner). Las máquinas de una Organization (`../../owned-resources/`) cuentan contra `max_own_machines` del Plan de su Steward.
 - [ ] Oferta, aceptar, rechazar y cancelar como métodos de servicio; solo un Admin de la Organization puede recibirla; una oferta a la vez. Aceptar comprueba el límite de Organizations del que acepta (el ticket 03 añade el límite; aquí se deja el punto de llamada).

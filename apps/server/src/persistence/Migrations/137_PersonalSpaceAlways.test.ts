@@ -10,7 +10,7 @@ const AT = "2026-11-17T00:00:00.000Z";
 it.effect("forgets `personalSpace.create` grants and keeps every other permission", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 123 });
+    yield* runMigrations({ toMigrationInclusive: 136 });
     yield* sql`
       INSERT INTO users (user_id, display_name, login_name, is_owner, created_at)
       VALUES ('owner', 'Owner', 'owner', 1, ${AT}), ('grace', 'Grace', 'grace', 0, ${AT})
@@ -20,7 +20,7 @@ it.effect("forgets `personalSpace.create` grants and keeps every other permissio
       VALUES ('grace', 'personalSpace.create', 'owner', ${AT}),
         ('grace', 'environments.registerOwn', 'owner', ${AT})
     `;
-    yield* runMigrations({ toMigrationInclusive: 150 });
+    yield* runMigrations({ toMigrationInclusive: 137 });
     const rows = yield* sql<{ readonly permission: string }>`
       SELECT permission FROM installation_permissions WHERE user_id = 'grace'
     `;

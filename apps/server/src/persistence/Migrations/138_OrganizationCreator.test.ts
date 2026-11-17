@@ -10,7 +10,7 @@ const AT = "2026-11-17T00:00:00.000Z";
 it.effect("leaves the creator of Organizations from before unknown", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 150 });
+    yield* runMigrations({ toMigrationInclusive: 137 });
     yield* sql`
       INSERT INTO users (user_id, display_name, login_name, is_owner, created_at)
       VALUES ('owner', 'Owner', 'owner', 1, ${AT})
@@ -19,7 +19,7 @@ it.effect("leaves the creator of Organizations from before unknown", () =>
       INSERT INTO spaces (space_id, kind, name, created_at)
       VALUES ('acme', 'organization', 'Acme', ${AT})
     `;
-    yield* runMigrations({ toMigrationInclusive: 151 });
+    yield* runMigrations({ toMigrationInclusive: 138 });
     const rows = yield* sql<{ readonly spaceId: string; readonly createdBy: string | null }>`
       SELECT space_id AS "spaceId", created_by_user_id AS "createdBy" FROM spaces ORDER BY space_id
     `;

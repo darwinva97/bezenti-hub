@@ -1,10 +1,10 @@
 # Diseño: tickets 17, 18 y 19 (identity-and-access)
 
-Rama `feat/identity-17-19` sobre `public-hub-1` (9a564c4c76). Aprobado por el team lead con las decisiones de abajo. Migraciones: **150** (17) y **151** (18).
+Rama `feat/identity-17-19` sobre `public-hub-1` (9a564c4c76). Aprobado por el team lead con las decisiones de abajo. Migraciones: **137** (17) y **138** (18), los siguientes números libres al integrar (antes 150 y 151).
 
 ## Decisiones (team lead)
 
-1. Steward: columna nullable `spaces.created_by_user_id` (migración 151), rellena para las Organizations creadas desde 18, NULL en las que ya existen. También se escribe la entrada de auditoría `organization.create`. Nota en `../../plans-and-limits/issues/02`.
+1. Steward: columna nullable `spaces.created_by_user_id` (migración 138), rellena para las Organizations creadas desde 18, NULL en las que ya existen. También se escribe la entrada de auditoría `organization.create`. Nota en `../../plans-and-limits/issues/02`.
 2. Riesgo de Invitations con 18: aceptado; se documenta en `docs/user/install.md`. Se mantiene la regla «el Admin pendiente no invita sin TOTP o passkey», con su test.
 3. Nombres de Organization: se rechaza crear (o renombrar) una con el mismo nombre que otra, sin distinguir mayúsculas, quitando espacios a los lados y juntando los repetidos. Solo duplicados exactos; no es un sistema contra suplantaciones.
 4. Los Personal spaces ocultos que vuelven a aparecer con 17: aceptado. El Owner corre antes del deploy la consulta de abajo.
@@ -50,13 +50,13 @@ Una fila con todo a 0 solo recupera un Space vacío. Si hay `vaults_allowed`, `d
 
 - `inPersonalSpace`: dueño → Allow. Se quita la comprobación del permiso (y el comentario de l.423). No cambia: Owner en solo lectura, «nadie ve uno ajeno», frozen/inactive.
 - `InstallationPermission` (`packages/contracts/src/spaces.ts:13`) queda en `["environments.registerOwn"]`. Se actualizan `PERMISSIONS` en `UsersDialog.tsx:34`, `INSTALLATION_PERMISSION_LABELS` (`spaceDirectory.ts:175`) y el comentario de `chooseCurrentSpace`.
-- **Migración 150** `DELETE FROM installation_permissions WHERE permission = 'personalSpace.create'`. El CHECK de la 090 se deja como está: plans-and-limits borra la tabla entera después (spec l.96), así que reconstruirla no compensa. Las entradas antiguas de la auditoría se siguen leyendo: `AuditDetail` es un Record de strings.
+- **Migración 137** `DELETE FROM installation_permissions WHERE permission = 'personalSpace.create'`. El CHECK de la 090 se deja como está: plans-and-limits borra la tabla entera después (spec l.96), así que reconstruirla no compensa. Las entradas antiguas de la auditoría se siguen leyendo: `AuditDetail` es un Record de strings.
 - Toggle «Use their Personal space»: **se elimina** (no se deja inerte). `setPermission` con el valor viejo pasa a ser un 400 por esquema.
 - Personal spaces que el Owner había apagado: **vuelven a aparecer con su contenido** para su dueño. Con ellos se reactivan los Vaults y AI accounts que el Owner permitió a ese Personal space, y su Sandbox puede arrancar en el Hub. Antes del deploy, el Owner corre en prod una consulta de solo lectura: Users sin el permiso que tienen Projects/Threads, o Vaults/AI accounts permitidos a `personal:<id>`.
 - DoorRules: sin cambios (`installationUsers.setPermission` sigue siendo OWNER).
 - Docs: `docs/user/install.md` §«Personal spaces and Installation permissions» (l.274-281; de paso se corrige que «Register their own Environments… changes nothing yet», que ya no es verdad) y `docs/internals/environment-auth.md:313-317, 339`.
 
-**Red-first.** AccessPolicy.test: las filas `personalCreator`/`ada` (l.44, 112, 282, 1355) pasan a «el dueño sin permisos: Allow en view/thread/project/move»; inactive → Deny. Spaces.test: un invitado recién aceptado y un User quitado de su última Organization listan su Personal space. Test de la migración 150 (borra `personalSpace.create` y deja `registerOwn`). Ajustar `AuditLog.test.ts:217` y `AiGatewayKeys.localCli.test.ts:166`.
+**Red-first.** AccessPolicy.test: las filas `personalCreator`/`ada` (l.44, 112, 282, 1355) pasan a «el dueño sin permisos: Allow en view/thread/project/move»; inactive → Deny. Spaces.test: un invitado recién aceptado y un User quitado de su última Organization listan su Personal space. Test de la migración 137 (borra `personalSpace.create` y deja `registerOwn`). Ajustar `AuditLog.test.ts:217` y `AiGatewayKeys.localCli.test.ts:166`.
 
 ## 18 · Cualquier User crea Organizations (seguridad)
 
@@ -98,7 +98,7 @@ Una fila con todo a 0 solo recupera un Space vacío. Si hay `vaults_allowed`, `d
 
 1. Spec, historias 19, 34 y 35 → quedan sustituidas. Añadir una nota en `spec.md` que apunte a 17 y 18.
 2. Ticket 17 («el Owner lo ve en solo lectura») contra el mapa «Privacidad» (el Owner ve consumo, no contenido) → se mantiene lo actual; lo cambia platform-privacy.
-3. Plans-and-limits (l.23, 94): «las Organizations existentes → Steward Owner» asignaría mal las que creen otros Users después de 18 → decidido: columna `spaces.created_by_user_id` (151) y nota en plans-and-limits/02.
+3. Plans-and-limits (l.23, 94): «las Organizations existentes → Steward Owner» asignaría mal las que creen otros Users después de 18 → decidido: columna `spaces.created_by_user_id` (138) y nota en plans-and-limits/02.
 4. Ticket 18 pide «Create organization en móvil», pero esa UI no existe → se construye nueva (entra en el alcance).
 5. Ticket 19 dice «sin depender del cliente», pero hoy el servidor reasigna en silencio → rechazar solo cuando se envía `spaceId`.
 6. `install.md` describe `registerOwn` como inerte y no lo es → se corrige al reescribir la sección.

@@ -9,7 +9,6 @@ const SETTINGS_HUB_WIDE_PATHS: ReadonlySet<string> = new Set([
   "/settings/threads",
   "/settings/browser",
   "/settings/worktrees",
-  "/settings/keybindings",
   "/settings/projects",
   "/settings/labs",
 ]);

@@ -5,7 +5,12 @@ import { isSecretsFeatureEnabled } from "../env";
 
 export const Route = createFileRoute("/_chat/settings/secrets")({
   beforeLoad: () => {
-    if (!isSecretsFeatureEnabled) throw redirect({ to: "/settings/general", replace: true });
+    if (!isSecretsFeatureEnabled)
+      throw redirect({
+        to: "/settings/user/$section",
+        params: { section: "general" },
+        replace: true,
+      });
   },
   component: SecretsSettingsPanel,
 });

@@ -13,16 +13,17 @@ import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import type { ResolvedSettingsScope } from "./settingsScope";
+import {
+  MOVED_SECTION_ANCHORS,
+  OLD_SETTINGS_PATHS,
+  SETTINGS_MODAL_LABELS,
+  findSettingsSection,
+} from "./settingsModals";
 
+/** The pages that still live in the old Settings nav; the rest moved into a modal. */
 export type SettingsPath =
   | "/settings/projects"
-  | "/settings/general"
   | "/settings/diagnostics"
-  | "/settings/appearance"
-  | "/settings/chat"
-  | "/settings/diffs"
-  | "/settings/keybindings"
-  | "/settings/snap-shot"
   | "/settings/providers"
   | "/settings/ai-gateway"
   | "/settings/ai-accounts"
@@ -38,7 +39,6 @@ export type SettingsPath =
   | "/settings/vaults"
   | "/settings/maintenance"
   | "/settings/labs"
-  | "/settings/about"
   | "/settings/archived";
 
 export type SettingsSearchScope =
@@ -49,10 +49,16 @@ export type SettingsSearchScope =
   | "checkout"
   | "connections";
 
-export interface SettingsSearchItem {
+/** Where a setting lives: a page of the old nav, or a section of a modal. */
+export type SettingsSearchLocation =
+  | { readonly to: SettingsPath; readonly modal?: undefined; readonly section?: undefined }
+  | { readonly modal: "user"; readonly section: string; readonly to?: undefined };
+
+export type SettingsSearchItem = SettingsSearchItemBase & SettingsSearchLocation;
+
+interface SettingsSearchItemBase {
   readonly id: string;
   readonly title: string;
-  readonly to: SettingsPath;
   readonly targetId?: string;
   readonly searchTerms?: ReadonlyArray<string>;
   readonly scope?: SettingsSearchScope;
@@ -85,12 +91,6 @@ export interface SettingsSearchAvailability {
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/diagnostics": "Diagnostics",
   "/settings/projects": "Projects",
-  "/settings/general": "General",
-  "/settings/appearance": "Appearance",
-  "/settings/chat": "Chat",
-  "/settings/diffs": "Diffs & pull requests",
-  "/settings/keybindings": "Keybindings",
-  "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Providers",
   "/settings/ai-gateway": "AI gateway",
   "/settings/ai-accounts": "AI accounts",
@@ -106,7 +106,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/vaults": "Vaults",
   "/settings/maintenance": "Maintenance",
   "/settings/labs": "Labs",
-  "/settings/about": "About",
   "/settings/archived": "Archive",
 };
 
@@ -115,17 +114,6 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   readonly heading: string | null;
   readonly paths: ReadonlyArray<SettingsPath>;
 }> = [
-  {
-    heading: null,
-    paths: [
-      "/settings/general",
-      "/settings/appearance",
-      "/settings/chat",
-      "/settings/diffs",
-      "/settings/keybindings",
-      "/settings/snap-shot",
-    ],
-  },
   {
     heading: "Agents",
     paths: [
@@ -153,7 +141,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   },
   {
     heading: null,
-    paths: ["/settings/maintenance", "/settings/labs", "/settings/about", "/settings/archived"],
+    paths: ["/settings/maintenance", "/settings/labs", "/settings/archived"],
   },
 ];
 
@@ -194,7 +182,8 @@ const KEYBINDING_SEARCH_ITEMS = STATIC_KEYBINDING_COMMANDS.toSorted((left, right
   return {
     id: keybindingSearchAnchorId(command),
     title: commandLabel(command),
-    to: "/settings/keybindings" as const,
+    modal: "user" as const,
+    section: "keybindings" as const,
     searchTerms: [command, ...defaultKeys],
     secondary: true,
     ...(defaultKeys.length === 0 ? { targetId: "keybindings" } : {}),
@@ -325,14 +314,16 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "color-scheme",
     title: "Color scheme",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["appearance light dark system mode"],
     targetId: "appearance",
   },
   {
     id: "theme",
     title: "Themes",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["appearance colors palette custom import"],
     targetId: "appearance",
   },
@@ -340,32 +331,37 @@ export const SETTINGS_SEARCH_ITEMS = [
     // Prefixed because the slider control already owns the `appearance-contrast` id.
     id: "setting-appearance-contrast",
     title: "Contrast",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["colors borders interface"],
   },
   {
     // Prefixed because the slider control already owns the `glass-opacity` id.
     id: "setting-glass-opacity",
     title: "Glass opacity",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["transparent transparency solid menus dialogs composer"],
   },
   {
     id: "diff-color-scheme",
     title: "Diff colors",
-    to: "/settings/diffs",
+    modal: "user",
+    section: "diffs",
     searchTerms: ["red green blue orange additions deletions changes counts palette colorblind"],
   },
   {
     id: "chat-width",
     title: "Chat width",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["wide full width column layout messages composer monitor"],
   },
   {
     id: "thread-details-items",
     title: "Thread details",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: [
       "customize show hide panel card environment editor scripts branch pull request git changes servers automations lineage usage limits 5 hour weekly quota tokens context window",
     ],
@@ -373,85 +369,99 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "effort-display",
     title: "Effort display",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["reasoning effort thinking bars graph word label level composer"],
   },
   {
     id: "math-rendering",
     title: "Render math",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["latex tex katex equations formulas markdown"],
   },
   {
     id: "panel-animations",
     title: "Panel animations",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
   },
   {
     id: "environment-identification",
     title: "Environment identification",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["dev nightly latest channel artwork pill label hide none"],
     targetId: "appearance-interface",
   },
   {
     id: "interface-font",
     title: "Interface font",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["typography family size system sans"],
   },
   {
     id: "prompt-font",
     title: "Prompt font",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["typography family size composer input"],
   },
   {
     id: "code-font",
     title: "Code font",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["typography family size monospace code blocks diffs file previews"],
   },
   {
     id: "terminal-font",
     title: "Terminal font",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["typography family size monospace output"],
   },
   {
     id: "separate-fonts",
     title: "Separate fonts",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["typography advanced prompt code terminal font family size individually"],
   },
   {
     id: "font-smoothing",
     title: "Font smoothing",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["typography text grayscale anti aliasing macos thin"],
     macOnly: true,
   },
   {
     id: "word-wrap",
     title: "Word wrap",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
     searchTerms: ["long lines code blocks diffs file previews"],
   },
   {
     id: "composer-context",
     title: "Composer context",
-    to: "/settings/appearance",
+    modal: "user",
+    section: "appearance",
   },
   {
     id: "project-grouping",
     title: "Project grouping",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["combine matching repositories environments sidebar"],
   },
   {
     id: "project-order",
     title: "Project order",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["sort projects sidebar manual created recent"],
   },
   {
@@ -477,7 +487,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "working-shelf",
     title: "Working section",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["hide fold running monitoring threads inbox sidebar shelf"],
   },
   {
@@ -550,19 +561,22 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "thread-notifications",
     title: "Thread notifications",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["notification sound alert completion input approval desktop"],
   },
   {
     id: "in-app-notifications",
     title: "In-app notifications",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["notification toast popup completion input approval failure"],
   },
   {
     id: "time-format",
     title: "Time format",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["timestamp clock locale system browser os 12 hour 24 hour"],
   },
   {
@@ -575,49 +589,57 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "hide-whitespace-changes",
     title: "Hide whitespace changes",
-    to: "/settings/diffs",
+    modal: "user",
+    section: "diffs",
     searchTerms: ["diff ignore spaces edits default"],
   },
   {
     id: "default-diff-file-state",
     title: "Default diff file state",
-    to: "/settings/diffs",
+    modal: "user",
+    section: "diffs",
     searchTerms: ["collapsed expanded collapse expand files pull request pr code tab"],
   },
   {
     id: "diff-layout",
     title: "Diff layout",
-    to: "/settings/diffs",
+    modal: "user",
+    section: "diffs",
     searchTerms: ["stacked split side by side unified inline view"],
   },
   {
     id: "proactive-panels",
     title: "Open pull requests and changes panels proactively",
-    to: "/settings/diffs",
+    modal: "user",
+    section: "diffs",
     searchTerms: ["proactive automatically open diff pull request pr right panel agent completion"],
   },
   {
     id: "skills-in-slash-menu",
     title: "Show skills in slash menu",
-    to: "/settings/chat",
+    modal: "user",
+    section: "chat",
     searchTerms: ["command menu dollar $ slash /"],
   },
   {
     id: "composer-rich-text",
     title: "Rich text composer",
-    to: "/settings/chat",
+    modal: "user",
+    section: "chat",
     searchTerms: ["composer rich text tiptap bold italic markdown styled wysiwyg"],
   },
   {
     id: "send-shortcut",
     title: "Send shortcut",
-    to: "/settings/chat",
+    modal: "user",
+    section: "chat",
     searchTerms: ["enter return command ctrl multiline prompt new line composer"],
   },
   {
     id: "follow-up-behavior",
     title: "Follow-up behavior",
-    to: "/settings/chat",
+    modal: "user",
+    section: "chat",
     searchTerms: ["queue steer running turn send default behavior composer"],
   },
   {
@@ -678,25 +700,29 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "unpin-confirmation",
     title: "Unpin confirmation",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["ask before thread pinned section"],
   },
   {
     id: "archive-confirmation",
     title: "Archive confirmation",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["ask before thread second click inline action"],
   },
   {
     id: "delete-confirmation",
     title: "Delete confirmation",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["ask before thread chat history"],
   },
   {
     id: "quit-confirmation",
     title: "Quit shortcut",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["confirmation desktop app exit direct hold double click press twice"],
     desktopOnly: true,
   },
@@ -717,20 +743,23 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "app-version",
     title: "Version",
-    to: "/settings/about",
+    modal: "user",
+    section: "about",
     searchTerms: ["about release build"],
   },
   {
     id: "cli-command",
     title: "t3 command",
-    to: "/settings/about",
+    modal: "user",
+    section: "about",
     searchTerms: ["cli terminal shell path install command line"],
     desktopOnly: true,
   },
   {
     id: "mobile-app",
     title: "Mobile app",
-    to: "/settings/about",
+    modal: "user",
+    section: "about",
     searchTerms: ["phone tablet iPhone iPad iOS Android App Store Google Play QR"],
   },
   {
@@ -750,7 +779,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "open-source-licenses",
     title: "Open source licenses",
-    to: "/settings/about",
+    modal: "user",
+    section: "about",
   },
   {
     id: "legacy-plan-mode",
@@ -767,7 +797,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "keybindings",
     title: "Keybindings",
-    to: "/settings/keybindings",
+    modal: "user",
+    section: "keybindings",
     searchTerms: ["keyboard shortcuts hotkeys commands bindings json"],
   },
   ...KEYBINDING_SEARCH_ITEMS,
@@ -775,12 +806,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "snap-shot-enabled",
     title: "SnapShots",
     searchTerms: ["window capture screenshot"],
-    to: "/settings/snap-shot",
+    modal: "user",
+    section: "snap-shot",
   },
   {
     id: "snap-shot-accessibility",
     title: "Include app text",
-    to: "/settings/snap-shot",
+    modal: "user",
+    section: "snap-shot",
     targetId: "snap-shot-enabled",
     searchTerms: [
       "capture accessibility data text UI structure elements privacy omit agent context",
@@ -789,25 +822,29 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "snap-shot-shortcut",
     title: "Capture shortcut",
-    to: "/settings/snap-shot",
+    modal: "user",
+    section: "snap-shot",
     targetId: "snap-shot-enabled",
   },
   {
     id: "snap-shot-sound",
     title: "Capture sound",
-    to: "/settings/snap-shot",
+    modal: "user",
+    section: "snap-shot",
     targetId: "snap-shot-enabled",
   },
   {
     id: "snap-shot-flash",
     title: "Capture flash",
-    to: "/settings/snap-shot",
+    modal: "user",
+    section: "snap-shot",
     targetId: "snap-shot-enabled",
   },
   {
     id: "snap-shot-animations",
     title: "Capture animations",
-    to: "/settings/snap-shot",
+    modal: "user",
+    section: "snap-shot",
     targetId: "snap-shot-enabled",
   },
   {
@@ -940,7 +977,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "pull-request-links-open-in-app",
     title: "Open pull requests in T3 Code",
-    to: "/settings/diffs",
+    modal: "user",
+    section: "diffs",
     searchTerms: [
       `pr commit links ${SOURCE_CONTROL_HOST_LABELS} browser external click default pull request view panel`,
     ],
@@ -1175,12 +1213,6 @@ const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id,
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
   "/settings/diagnostics": "environment",
   "/settings/projects": "project",
-  "/settings/general": null,
-  "/settings/appearance": null,
-  "/settings/chat": null,
-  "/settings/diffs": null,
-  "/settings/snap-shot": null,
-  "/settings/keybindings": null,
   "/settings/providers": null,
   "/settings/ai-gateway": null,
   "/settings/ai-accounts": null,
@@ -1196,39 +1228,56 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/scheduled-tasks": null,
   "/settings/maintenance": null,
   "/settings/labs": null,
-  "/settings/about": null,
   "/settings/archived": "project-defaults",
 };
 
-const RENAMED_SETTINGS_PATHS: Readonly<Record<string, SettingsPath>> = {
-  "/settings/integrations": "/settings/browser",
-  "/settings/storage": "/settings/maintenance",
-  "/settings/beta": "/settings/labs",
-};
-const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
-  "/settings/general",
-  "/settings/appearance",
+// Pages of the old nav whose rows moved elsewhere; a link to one follows its anchor.
+const SPLIT_LEGACY_PATHS: ReadonlySet<string> = new Set([
   "/settings/source-control",
   "/settings/connections",
-  ...Object.keys(RENAMED_SETTINGS_PATHS),
 ]);
-// Section anchors that moved but are not search results themselves.
-const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
-  "authorized-clients": "/settings/access",
-  "legacy-features": "/settings/labs",
-  "text-generation": "/settings/threads",
-  about: "/settings/about",
-};
+
+/** The URL path of the page or modal section a setting lives on. */
+export function settingsItemPath(item: SettingsSearchLocation): string {
+  return item.modal === undefined ? item.to : `/settings/${item.modal}/${item.section}`;
+}
+
+/** The router destination of the page or modal section a setting lives on. */
+export function settingsItemDestination(
+  item: SettingsSearchLocation,
+):
+  | { readonly to: SettingsPath }
+  | { readonly to: "/settings/user/$section"; readonly params: { readonly section: string } } {
+  return item.modal === undefined
+    ? { to: item.to }
+    : { to: "/settings/user/$section", params: { section: item.section } };
+}
+
+/** The label of the page or modal section a setting lives on. */
+export function settingsItemSectionLabel(item: SettingsSearchLocation): string {
+  if (item.modal === undefined) return SETTINGS_SECTION_LABELS[item.to];
+  return findSettingsSection(item.modal, item.section)?.label ?? item.section;
+}
+
+/** «User · Appearance» for a setting in a modal, «Settings · Providers» for an old page. */
+export function settingsItemBreadcrumb(item: SettingsSearchLocation): string {
+  const prefix = item.modal === undefined ? "Settings" : SETTINGS_MODAL_LABELS[item.modal];
+  return `${prefix} · ${settingsItemSectionLabel(item)}`;
+}
 
 /** Where an old settings link now lives. Its anchor finds the page its row moved to. */
-export function movedSettingsPath(pathname: string, hash: string): SettingsPath | null {
-  if (!SPLIT_SETTINGS_PATHS.has(pathname)) return null;
+export function resolveOldSettingsUrl(pathname: string, hash: string): string | null {
+  const moved = OLD_SETTINGS_PATHS[pathname];
+  if (moved === undefined && !SPLIT_LEGACY_PATHS.has(pathname)) return null;
   const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;
   const anchored = hash
     ? (items.find((item) => item.id === hash) ?? items.find((item) => item.targetId === hash))
     : undefined;
   const to =
-    anchored?.to ?? MOVED_SECTION_ANCHORS[hash] ?? RENAMED_SETTINGS_PATHS[pathname] ?? null;
+    (anchored ? settingsItemPath(anchored) : undefined) ??
+    MOVED_SECTION_ANCHORS[hash] ??
+    moved ??
+    null;
   return to === pathname ? null : to;
 }
 
@@ -1240,7 +1289,7 @@ export function getSettingsSearchTargetScope(targetId: string) {
   return item
     ? {
         title: item.title,
-        scope: item.scope ?? SETTINGS_CATEGORY_SCOPES[item.to],
+        scope: item.scope ?? (item.modal === undefined ? SETTINGS_CATEGORY_SCOPES[item.to] : null),
         ...(item.requiresThreadAutoSettlement ? { requiresThreadAutoSettlement: true } : {}),
       }
     : null;
@@ -1320,7 +1369,9 @@ export function filterAvailableSettingsSearchItems(
       (!item.localEnvironmentOnly || !availability.localEnvironmentDisabled) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
-      (availability.actsForInstallation !== false || !SETTINGS_OWNER_ONLY_PATHS.has(item.to)),
+      (availability.actsForInstallation !== false ||
+        item.modal !== undefined ||
+        !SETTINGS_OWNER_ONLY_PATHS.has(item.to)),
   );
 }
 
@@ -1351,7 +1402,7 @@ export function searchSettings(
       const title = normalizeSearchText(item.title);
       const fields = [
         title,
-        normalizeSearchText(SETTINGS_SECTION_LABELS[item.to]),
+        normalizeSearchText(settingsItemSectionLabel(item)),
         ...(item.searchTerms ?? []).map(normalizeSearchText),
       ];
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];

@@ -1,11 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { GeneralSettingsPanel } from "../components/settings/SettingsPanels";
-
-function SettingsGeneralRoute() {
-  return <GeneralSettingsPanel />;
-}
-
-export const Route = createFileRoute("/_chat/settings/general")({
-  component: SettingsGeneralRoute,
-});
+// Moved into User settings; the settings route redirects old links.
+export const Route = createFileRoute("/_chat/settings/general")({});

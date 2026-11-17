@@ -247,7 +247,13 @@ import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
-import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
+import {
+  settingsForThisPlatform,
+  settingsItemBreadcrumb,
+  settingsItemDestination,
+  settingsItemPath,
+  settingsItemSectionLabel,
+} from "./settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
 import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/command";
@@ -1608,11 +1614,12 @@ function OpenCommandPaletteDialog(props: {
   actionItems.push({
     kind: "action",
     value: "action:settings",
-    searchTerms: ["settings", "preferences", "configuration", "keybindings"],
-    title: "Open settings",
+    searchTerms: ["settings", "preferences", "configuration", "keybindings", "user"],
+    title: "Open user settings",
     icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "settings.user",
     run: async () => {
-      await navigate({ to: "/settings" });
+      await navigate({ to: "/settings/user/$section", params: { section: "general" } });
     },
   });
 
@@ -1680,16 +1687,16 @@ function OpenCommandPaletteDialog(props: {
   ).map((item) => ({
     kind: "action",
     value: `setting:${item.id}`,
-    searchTerms: [item.title, SETTINGS_SECTION_LABELS[item.to], ...(item.searchTerms ?? [])],
+    searchTerms: [item.title, settingsItemSectionLabel(item), ...(item.searchTerms ?? [])],
     title: item.title,
-    description: `Settings · ${SETTINGS_SECTION_LABELS[item.to]}`,
+    description: settingsItemBreadcrumb(item),
     ...(item.secondary ? { secondary: true } : {}),
     icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({
-        to: item.to,
+        ...settingsItemDestination(item),
         hash: item.targetId ?? item.id,
-        replace: pathname === item.to,
+        replace: pathname === settingsItemPath(item),
         hashScrollIntoView: false,
       });
     },

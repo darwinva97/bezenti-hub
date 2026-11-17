@@ -7,16 +7,16 @@ import { SettingsSidebarNav } from "./SettingsSidebarNav";
 
 vi.mock("./useAvailableSettingsSearchItems", () => ({
   useAvailableSettingsSearchItems: () => [
-    { id: "theme", title: "Theme", to: "/settings/appearance" },
+    { id: "theme", title: "Theme", modal: "user", section: "appearance" },
   ],
 }));
 
 it("ignores composing keys in the search", async () => {
   await using screen = await render(
     <SidebarProvider defaultOpen>
-      <SettingsSidebarNav pathname="/settings/general" />
+      <SettingsSidebarNav pathname="/settings/user/general" />
     </SidebarProvider>,
-    { router: "/settings/general" },
+    { router: "/settings/user/general" },
   );
   const search = page.getByRole("combobox", { name: "Search settings" });
   await search.fill("theme");
@@ -33,12 +33,12 @@ it("ignores composing keys in the search", async () => {
     const event = new KeyboardEvent("keydown", { ...composition, bubbles: true, cancelable: true });
     await act(() => search.element().dispatchEvent(event));
     expect(event.defaultPrevented, JSON.stringify(composition)).toBe(false);
-    expect(screen.router?.state.location.pathname).toBe("/settings/general");
+    expect(screen.router?.state.location.pathname).toBe("/settings/user/general");
     await expect.element(search).toHaveValue("theme");
   }
 
   await userEvent.keyboard("{Enter}");
   await vi.waitFor(() =>
-    expect(screen.router?.state.location.pathname).toBe("/settings/appearance"),
+    expect(screen.router?.state.location.pathname).toBe("/settings/user/appearance"),
   );
 });

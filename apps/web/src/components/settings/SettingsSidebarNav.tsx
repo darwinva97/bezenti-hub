@@ -4,27 +4,21 @@ import {
   BotIcon,
   NetworkIcon,
   CalendarClockIcon,
-  FileDiffIcon,
   FlaskConicalIcon,
   FolderTreeIcon,
   GitBranchIcon,
   GlobeIcon,
-  InfoIcon,
   KeyRoundIcon,
-  KeyboardIcon,
-  MessageSquareTextIcon,
   MessagesSquareIcon,
-  PaletteIcon,
   PanelsTopLeftIcon,
   SearchIcon,
   ServerIcon,
-  Settings2Icon,
   ShieldCheckIcon,
   SmartphoneIcon,
+  UserIcon,
   VaultIcon,
   WrenchIcon,
   XIcon,
-  createLucideIcon,
 } from "lucide-react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
@@ -44,39 +38,30 @@ import {
   searchSettings,
   revealSettingsSearchTarget,
   SETTINGS_SECTION_LABELS,
+  settingsItemDestination,
+  settingsItemPath,
+  settingsItemSectionLabel,
   settingsNavGroupsFor,
   type SettingsPath,
   type SettingsSearchItem,
 } from "./settingsSearch";
+import {
+  SETTINGS_MODAL_SECTIONS,
+  settingsModalForPathname,
+  visibleSettingsSections,
+} from "./settingsModals";
+import { useSettingsVisibility } from "./useSettingsVisibility";
 import { useAvailableSettingsSearchItems } from "./useAvailableSettingsSearchItems";
 import { validateSettingsScopeSearch } from "./settingsScope";
 import { useSettingsSectionNavigation } from "./useSettingsSectionNavigation";
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
 import { usePrimaryActsForInstallation } from "../../environments/primary";
 
-const SnapShotIcon = createLucideIcon("snap-shot", [
-  [
-    "path",
-    {
-      d: "M8 3H6a3 3 0 0 0-3 3v2M16 3h2a3 3 0 0 1 3 3v2M21 16v2a3 3 0 0 1-3 3h-2M8 21H6a3 3 0 0 1-3-3v-2",
-      key: "capture-frame",
-    },
-  ],
-  ["rect", { width: "10", height: "8", x: "7", y: "8", rx: "2", key: "window" }],
-  ["circle", { cx: "12", cy: "12", r: "1.5", key: "lens" }],
-]);
-
 const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
 > = {
-  "/settings/general": Settings2Icon,
   "/settings/diagnostics": WrenchIcon,
-  "/settings/appearance": PaletteIcon,
-  "/settings/chat": MessageSquareTextIcon,
-  "/settings/diffs": FileDiffIcon,
   "/settings/projects": PanelsTopLeftIcon,
-  "/settings/keybindings": KeyboardIcon,
-  "/settings/snap-shot": SnapShotIcon,
   "/settings/providers": BotIcon,
   "/settings/ai-gateway": NetworkIcon,
   "/settings/ai-accounts": KeyRoundIcon,
@@ -92,23 +77,105 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/vaults": VaultIcon,
   "/settings/maintenance": WrenchIcon,
   "/settings/labs": FlaskConicalIcon,
-  "/settings/about": InfoIcon,
   "/settings/archived": ArchiveIcon,
 };
 
 // Detail pages without a nav entry highlight the page that links to them.
 const SETTINGS_DETAIL_PAGE_PARENTS: Readonly<Record<string, SettingsPath>> = {
   "/settings/diagnostics": "/settings/maintenance",
-  "/settings/open-source-licenses": "/settings/about",
 };
+
+type SettingsNavTarget =
+  | { readonly to: SettingsPath }
+  | { readonly to: "/settings/user/$section"; readonly params: { readonly section: string } };
+
+interface SettingsNavEntry {
+  /** The path that makes it the open section. */
+  readonly key: string;
+  readonly label: string;
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly target: SettingsNavTarget;
+  /** Moving to another modal adds a history entry; moving between sections replaces it. */
+  readonly replace: boolean;
+}
+
+interface SettingsNavGroup {
+  readonly heading: string | null;
+  readonly entries: ReadonlyArray<SettingsNavEntry>;
+}
+
+const userSectionTarget = (section: string): SettingsNavTarget => ({
+  to: "/settings/user/$section",
+  params: { section },
+});
+
+// The old pages not yet in a modal stay one click away from User settings, and the other way
+// round, until their tickets move them. The last ticket removes both entries.
+const USER_SETTINGS_ENTRY: SettingsNavEntry = {
+  key: "/settings/user",
+  label: "User settings",
+  icon: UserIcon,
+  target: userSectionTarget("general"),
+  replace: false,
+};
+const MORE_SETTINGS_ENTRY: SettingsNavEntry = {
+  key: "/settings/connections",
+  label: "More settings",
+  icon: ServerIcon,
+  target: { to: "/settings/connections" },
+  replace: false,
+};
+
+function legacyNavGroups(actsForInstallation: boolean): ReadonlyArray<SettingsNavGroup> {
+  return [
+    { heading: null, entries: [USER_SETTINGS_ENTRY] },
+    ...settingsNavGroupsFor(actsForInstallation).map((group) => ({
+      heading: group.heading,
+      entries: group.paths.map((to) => ({
+        key: to,
+        label: SETTINGS_SECTION_LABELS[to],
+        icon: SETTINGS_SECTION_ICONS[to],
+        target: { to },
+        replace: true,
+      })),
+    })),
+  ];
+}
+
+function userNavGroups(
+  visibility: ReturnType<typeof useSettingsVisibility>,
+): ReadonlyArray<SettingsNavGroup> {
+  const groups: SettingsNavEntry[][] = [];
+  let previousGroup: number | null = null;
+  for (const section of visibleSettingsSections("user", visibility)) {
+    if (section.group !== previousGroup) groups.push([]);
+    previousGroup = section.group;
+    groups.at(-1)?.push({
+      key: `/settings/user/${section.id}`,
+      label: section.label,
+      icon: section.icon,
+      target: userSectionTarget(section.id),
+      replace: true,
+    });
+  }
+  return [
+    ...groups.map((entries) => ({ heading: null, entries })),
+    { heading: null, entries: [MORE_SETTINGS_ENTRY] },
+  ];
+}
+
+const USER_SECTION_ICONS: Readonly<Record<string, ComponentType<{ className?: string }>>> =
+  Object.fromEntries(SETTINGS_MODAL_SECTIONS.user.map((section) => [section.id, section.icon]));
 
 // Attached only to the highlighted result, so it runs whenever the highlight lands on a row.
 function scrollResultIntoView(row: HTMLElement | null) {
   row?.scrollIntoView({ block: "nearest" });
 }
 
-function SettingsSectionIcon({ to }: { to: SettingsPath }) {
-  const Icon = SETTINGS_SECTION_ICONS[to];
+function SettingsSectionIcon({ item }: { item: SettingsSearchItem }) {
+  const Icon =
+    item.modal === undefined ? SETTINGS_SECTION_ICONS[item.to] : USER_SECTION_ICONS[item.section];
+  if (Icon === undefined) return null;
   return <Icon className="size-4 shrink-0 text-(--sidebar-icon-color)" />;
 }
 
@@ -118,13 +185,22 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const currentHash = useLocation({ select: (location) => location.hash });
   const currentSearch = useLocation({ select: (location) => location.search });
   const scopeSearch = validateSettingsScopeSearch(currentSearch);
-  const activePath = SETTINGS_DETAIL_PAGE_PARENTS[pathname] ?? pathname;
+  const modal = settingsModalForPathname(pathname);
+  // A section's subpages keep it open: its key is the first segments of the path.
+  const activePath =
+    modal === null
+      ? (SETTINGS_DETAIL_PAGE_PARENTS[pathname] ?? pathname)
+      : pathname.split("/").slice(0, 4).join("/");
+  const visibility = useSettingsVisibility();
   // A Member of a Hub does not see the pages only its Owner changes.
-  const navGroups = settingsNavGroupsFor(usePrimaryActsForInstallation());
-  const navPaths = navGroups.flatMap((group) => group.paths);
+  const actsForInstallation = usePrimaryActsForInstallation();
+  const navGroups =
+    modal === null ? legacyNavGroups(actsForInstallation) : userNavGroups(visibility);
+  const navEntries = navGroups.flatMap((group) => group.entries);
   const sectionNavigation = useSettingsSectionNavigation(
-    navPaths.find((to) => activePath === to || activePath.startsWith(`${to}/`)) ??
-      navPaths[0] ??
+    navEntries.find((entry) => activePath === entry.key || activePath.startsWith(`${entry.key}/`))
+      ?.key ??
+      navEntries[0]?.key ??
       "",
   );
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -132,7 +208,10 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   // Below md the nav is an icon rail; searching expands it over the page.
   const [compactSearchOpen, setCompactSearchOpen] = useState(false);
   const [activeResultIndex, setActiveResultIndex] = useState(0);
-  const searchableItems = useAvailableSettingsSearchItems(scopeSearch);
+  // Each modal searches only its own sections.
+  const searchableItems = useAvailableSettingsSearchItems(scopeSearch).filter(
+    (item) => (item.modal ?? null) === (modal === "user" ? "user" : null),
+  );
   const results = searchSettings(query, searchableItems);
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
@@ -183,11 +262,11 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     if (compactSearchOpen) searchInputRef.current?.focus();
   }, [compactSearchOpen]);
 
-  const handleSectionClick = (to: SettingsPath) => {
+  const handleSectionClick = (entry: SettingsNavEntry) => {
     void navigate({
-      to,
+      ...entry.target,
       hash: "",
-      replace: true,
+      replace: entry.replace,
       hashScrollIntoView: false,
     });
   };
@@ -201,12 +280,12 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     setCompactSearchOpen(false);
     const targetId = item.targetId ?? item.id;
     revealSettingsSearchTarget(targetId);
-    if (pathname === item.to && currentHash.replace(/^#/, "") === targetId) {
+    if (pathname === settingsItemPath(item) && currentHash.replace(/^#/, "") === targetId) {
       scrollToSettingsTarget(targetId);
       return;
     }
     void navigate({
-      to: item.to,
+      ...settingsItemDestination(item),
       hash: targetId,
       replace: true,
       hashScrollIntoView: false,
@@ -337,13 +416,13 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                       onMouseMove={() => setActiveResultIndex(index)}
                       onClick={() => handleSearchResultClick(item)}
                     >
-                      <SettingsSectionIcon to={item.to} />
+                      <SettingsSectionIcon item={item} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium text-sidebar-foreground">
                           {item.title}
                         </span>
                         <span className="block truncate text-2xs text-sidebar-muted-foreground/75">
-                          {SETTINGS_SECTION_LABELS[item.to]}
+                          {settingsItemSectionLabel(item)}
                         </span>
                       </span>
                     </SidebarMenuButton>
@@ -390,25 +469,26 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                         </h3>
                       ) : null}
                       <SidebarMenu role="presentation">
-                        {group.paths.map((to) => {
-                          const Icon = SETTINGS_SECTION_ICONS[to];
-                          const isActive = activePath === to || activePath.startsWith(`${to}/`);
+                        {group.entries.map((entry) => {
+                          const Icon = entry.icon;
+                          const isActive =
+                            activePath === entry.key || activePath.startsWith(`${entry.key}/`);
                           return (
-                            <SidebarMenuItem key={to} role="presentation">
+                            <SidebarMenuItem key={entry.key} role="presentation">
                               <SidebarMenuButton
-                                data-settings-section={to}
+                                data-settings-section={entry.key}
                                 role="treeitem"
-                                tabIndex={sectionNavigation.tabIndexFor(to)}
+                                tabIndex={sectionNavigation.tabIndexFor(entry.key)}
                                 aria-selected={isActive}
                                 aria-current={isActive ? "page" : undefined}
                                 isActive={isActive}
-                                onClick={() => handleSectionClick(to)}
+                                onClick={() => handleSectionClick(entry)}
                               >
                                 <Icon />
                                 <span
                                   className={cn("truncate", !compactSearchOpen && "max-md:sr-only")}
                                 >
-                                  {SETTINGS_SECTION_LABELS[to]}
+                                  {entry.label}
                                 </span>
                               </SidebarMenuButton>
                             </SidebarMenuItem>

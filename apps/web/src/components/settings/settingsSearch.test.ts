@@ -12,11 +12,11 @@ import {
   getSettingsSearchTargetScope,
   getThreadAutoSettlementSearchAvailability,
   isSettingsSearchScopeAvailable,
-  movedSettingsPath,
   searchSettings,
   SETTINGS_NAV_GROUPS,
   SETTINGS_OWNER_ONLY_PATHS,
   SETTINGS_SEARCH_ITEMS,
+  settingsItemPath,
   settingsNavGroupsFor,
   sourceControlHostSearchItems,
   sourceControlHostSettingsSearchId,
@@ -32,7 +32,8 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
     id: "word-wrap",
     title: "Word wrap",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
     searchTerms: ["long lines in code previews"],
   },
   {
@@ -50,12 +51,14 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
     id: "provider-updates",
     title: "Update checks",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
   },
   {
     id: "automatic-updates",
     title: "Automatic updates",
-    to: "/settings/general",
+    modal: "user",
+    section: "general",
   },
 ];
 
@@ -123,14 +126,14 @@ describe("searchSettings", () => {
       hasThreadAutoSettlement: true,
     };
     const pages = (items: ReadonlyArray<SettingsSearchItem>) =>
-      new Set(items.map((item) => item.to));
+      new Set(items.map((item) => settingsItemPath(item)));
     const forOwner = pages(filterAvailableSettingsSearchItems(availability));
     const forMember = pages(
       filterAvailableSettingsSearchItems({ ...availability, actsForInstallation: false }),
     );
     for (const path of SETTINGS_OWNER_ONLY_PATHS) expect(forMember.has(path)).toBe(false);
     expect(forOwner.has("/settings/providers")).toBe(true);
-    expect(forMember.has("/settings/appearance")).toBe(true);
+    expect(forMember.has("/settings/user/appearance")).toBe(true);
     const memberNav = settingsNavGroupsFor(false).flatMap((group) => group.paths);
     expect(memberNav).not.toContain("/settings/providers");
     expect(memberNav).not.toContain("/settings/maintenance");
@@ -176,7 +179,8 @@ describe("searchSettings", () => {
     expect(searchSettings("mod+b")[0]?.id).toBe("keybinding-sidebar.toggle");
     expect(searchSettings("copy link")[0]).toMatchObject({
       id: "keybinding-thread.copyReference",
-      to: "/settings/keybindings",
+      modal: "user",
+      section: "keybindings",
     });
   });
 
@@ -336,32 +340,5 @@ describe("source control host search items", () => {
     expect(searchSettings("ghes").map((item) => item.id)).toContain(
       sourceControlHostSettingsSearchId("github"),
     );
-  });
-});
-
-describe("movedSettingsPath", () => {
-  it("sends old links to the page their row moved to", () => {
-    expect(movedSettingsPath("/settings/general", "text-generation-model")).toBe(
-      "/settings/threads",
-    );
-    expect(movedSettingsPath("/settings/connections", "authorized-clients")).toBe(
-      "/settings/access",
-    );
-    expect(movedSettingsPath("/settings/source-control", "worktree-branch-naming")).toBe(
-      "/settings/worktrees",
-    );
-    expect(movedSettingsPath("/settings/appearance", "diff-color-scheme")).toBe("/settings/diffs");
-    expect(movedSettingsPath("/settings/connections", "network-access")).toBe("/settings/access");
-    expect(movedSettingsPath("/settings/storage", "storage-worktrees")).toBe("/settings/worktrees");
-    expect(movedSettingsPath("/settings/storage", "")).toBe("/settings/maintenance");
-    expect(movedSettingsPath("/settings/integrations", "devices")).toBe("/settings/devices");
-    expect(movedSettingsPath("/settings/beta", "")).toBe("/settings/labs");
-  });
-
-  it("leaves current pages alone", () => {
-    expect(movedSettingsPath("/settings/general", "time-format")).toBeNull();
-    expect(movedSettingsPath("/settings/projects", "project-defaults")).toBeNull();
-    expect(movedSettingsPath("/settings/connections", "remote-environments")).toBeNull();
-    expect(movedSettingsPath("/settings/appearance", "theme")).toBeNull();
   });
 });

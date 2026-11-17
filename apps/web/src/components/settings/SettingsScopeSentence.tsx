@@ -27,6 +27,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { useOptionalSettingsScope } from "./SettingsScopeContext";
+import { settingsModalForPathname } from "./settingsModals";
 import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope";
 import {
   ALL_ENVIRONMENTS_VALUE,
@@ -43,15 +44,9 @@ import {
 } from "./settingsScopeAxis";
 
 export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
-  "/settings/general",
-  "/settings/appearance",
-  "/settings/chat",
-  "/settings/diffs",
-  "/settings/snap-shot",
   "/settings/connections",
   // Network access and authorized clients belong to the environment serving this app.
   "/settings/access",
-  "/settings/about",
 ]);
 
 interface SettingsScopeMenuProps {
@@ -66,7 +61,14 @@ export function SettingsScopeSentence() {
   const scope = useOptionalSettingsScope();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { environments } = useEnvironments();
-  if (scope === null || SETTINGS_DEVICE_ONLY_PATHS.has(pathname)) return null;
+  // A modal fixes its own object, so it has no scope to choose.
+  if (
+    scope === null ||
+    SETTINGS_DEVICE_ONLY_PATHS.has(pathname) ||
+    settingsModalForPathname(pathname) !== null
+  ) {
+    return null;
+  }
   const props: SettingsScopeMenuProps = {
     value: scope.search,
     singleEnvironment: scope.singleEnvironment,

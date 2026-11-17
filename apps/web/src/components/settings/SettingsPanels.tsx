@@ -1761,7 +1761,7 @@ export function AboutSettingsPanel() {
           description="Notices for dependencies, assets, and optional tools used by T3 Code."
           control={
             <Button
-              render={<Link to="/settings/open-source-licenses" />}
+              render={<Link to="/settings/user/about/licenses" />}
               size="sm"
               variant="outline"
             >

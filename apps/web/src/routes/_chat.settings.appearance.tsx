@@ -1,11 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { AppearanceSettingsPanel } from "../components/settings/AppearanceSettingsPanel";
-
-function SettingsAppearanceRoute() {
-  return <AppearanceSettingsPanel />;
-}
-
-export const Route = createFileRoute("/_chat/settings/appearance")({
-  component: SettingsAppearanceRoute,
-});
+// Moved into User settings; the settings route redirects old links.
+export const Route = createFileRoute("/_chat/settings/appearance")({});

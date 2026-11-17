@@ -25,8 +25,12 @@ import {
   getSettingsSearchTargetScope,
   getThreadAutoSettlementSearchAvailability,
   isSettingsSearchScopeAvailable,
-  movedSettingsPath,
+  resolveOldSettingsUrl,
 } from "../components/settings/settingsSearch";
+import {
+  SETTINGS_MODAL_LABELS,
+  settingsModalForPathname,
+} from "../components/settings/settingsModals";
 
 function RestoreDeviceDefaultsButton({ onRestored }: { onRestored: () => void }) {
   const { changedSettingLabels, restoreDefaults } = useSettingsRestore(onRestored);
@@ -116,16 +120,17 @@ function SettingsContentLayout() {
       ? environment?.environmentId
       : JSON.stringify(search);
   const [restoreSignal, setRestoreSignal] = useState(0);
+  const modal = settingsModalForPathname(location.pathname);
 
   return (
-    <AppRouteModal label="Settings">
+    <AppRouteModal label={modal === null ? "Settings" : `${SETTINGS_MODAL_LABELS[modal]} settings`}>
       <div className="relative flex min-h-0 flex-1">
         <SettingsSidebarNav pathname={location.pathname} />
         <div {...contentArea} className="flex min-h-0 min-w-0 flex-1 flex-col">
           <header className="flex h-12 shrink-0 items-center gap-3 border-b ps-5 pe-2">
             <SettingsBreadcrumb pathname={location.pathname} />
             <div className="ms-auto flex shrink-0 items-center gap-1">
-              {location.pathname === "/settings/general" ? (
+              {location.pathname === "/settings/user/general" ? (
                 <RestoreDeviceDefaultsButton
                   onRestored={() => setRestoreSignal((value) => value + 1)}
                 />
@@ -134,11 +139,15 @@ function SettingsContentLayout() {
             </div>
           </header>
           <div key={`${contentScopeKey}:${restoreSignal}`} className="min-h-0 flex flex-1 flex-col">
-            <InstallationSettingsBoundary pathname={location.pathname}>
-              <SettingsScopeBoundary pathname={location.pathname}>
-                <Outlet />
-              </SettingsScopeBoundary>
-            </InstallationSettingsBoundary>
+            {modal === null ? (
+              <InstallationSettingsBoundary pathname={location.pathname}>
+                <SettingsScopeBoundary pathname={location.pathname}>
+                  <Outlet />
+                </SettingsScopeBoundary>
+              </InstallationSettingsBoundary>
+            ) : (
+              <Outlet />
+            )}
           </div>
         </div>
       </div>
@@ -177,11 +186,14 @@ export const Route = createFileRoute("/_chat/settings")({
   validateSearch: validateSettingsRouteSearch,
   search: { middlewares: [retainSettingsScope] },
   beforeLoad: async ({ location }) => {
-    if (location.pathname === "/settings") {
-      throw redirect({ to: "/settings/general", replace: true });
+    const moved = resolveOldSettingsUrl(location.pathname, location.hash);
+    if (moved) {
+      const hash = location.hash.replace(/^#/, "");
+      throw redirect({
+        href: `${moved}${location.searchStr}${hash ? `#${hash}` : ""}`,
+        replace: true,
+      });
     }
-    const moved = movedSettingsPath(location.pathname, location.hash);
-    if (moved) throw redirect({ to: moved, search: true, hash: true, replace: true });
   },
   component: SettingsRouteLayout,
 });

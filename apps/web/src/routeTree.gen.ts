@@ -58,6 +58,9 @@ import { Route as ChatSettingsAccessRouteImport } from './routes/_chat.settings.
 import { Route as ChatSettingsAboutRouteImport } from './routes/_chat.settings.about'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
+import { Route as ChatSettingsUserIndexRouteImport } from './routes/_chat.settings.user.index'
+import { Route as ChatSettingsUserSectionRouteImport } from './routes/_chat.settings.user.$section'
+import { Route as ChatSettingsUserAboutLicensesRouteImport } from './routes/_chat.settings.user.about.licenses'
 
 const WelcomeRoute = WelcomeRouteImport.update({
   id: '/welcome',
@@ -309,6 +312,22 @@ const ChatEnvironmentIdThreadIdRoute =
     path: '/$environmentId/$threadId',
     getParentRoute: () => ChatRoute,
   } as any)
+const ChatSettingsUserIndexRoute = ChatSettingsUserIndexRouteImport.update({
+  id: '/user/',
+  path: '/user/',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
+const ChatSettingsUserSectionRoute = ChatSettingsUserSectionRouteImport.update({
+  id: '/user/$section',
+  path: '/user/$section',
+  getParentRoute: () => ChatSettingsRoute,
+} as any)
+const ChatSettingsUserAboutLicensesRoute =
+  ChatSettingsUserAboutLicensesRouteImport.update({
+    id: '/user/about/licenses',
+    path: '/user/about/licenses',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
@@ -359,6 +378,9 @@ export interface FileRoutesByFullPath {
   '/settings/vaults': typeof ChatSettingsVaultsRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/settings/user/$section': typeof ChatSettingsUserSectionRoute
+  '/settings/user/': typeof ChatSettingsUserIndexRoute
+  '/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
 }
 export interface FileRoutesByTo {
   '/app-sign-in': typeof AppSignInRoute
@@ -409,6 +431,9 @@ export interface FileRoutesByTo {
   '/settings/vaults': typeof ChatSettingsVaultsRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/settings/user/$section': typeof ChatSettingsUserSectionRoute
+  '/settings/user': typeof ChatSettingsUserIndexRoute
+  '/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -461,6 +486,9 @@ export interface FileRoutesById {
   '/_chat/settings/vaults': typeof ChatSettingsVaultsRoute
   '/_chat/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/_chat/settings/user/$section': typeof ChatSettingsUserSectionRoute
+  '/_chat/settings/user/': typeof ChatSettingsUserIndexRoute
+  '/_chat/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -513,6 +541,9 @@ export interface FileRouteTypes {
     | '/settings/vaults'
     | '/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/settings/user/$section'
+    | '/settings/user/'
+    | '/settings/user/about/licenses'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/app-sign-in'
@@ -563,6 +594,9 @@ export interface FileRouteTypes {
     | '/settings/vaults'
     | '/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/settings/user/$section'
+    | '/settings/user'
+    | '/settings/user/about/licenses'
   id:
     | '__root__'
     | '/_chat'
@@ -614,6 +648,9 @@ export interface FileRouteTypes {
     | '/_chat/settings/vaults'
     | '/_chat/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/_chat/settings/user/$section'
+    | '/_chat/settings/user/'
+    | '/_chat/settings/user/about/licenses'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -976,6 +1013,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatEnvironmentIdThreadIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/settings/user/': {
+      id: '/_chat/settings/user/'
+      path: '/user'
+      fullPath: '/settings/user/'
+      preLoaderRoute: typeof ChatSettingsUserIndexRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/user/$section': {
+      id: '/_chat/settings/user/$section'
+      path: '/user/$section'
+      fullPath: '/settings/user/$section'
+      preLoaderRoute: typeof ChatSettingsUserSectionRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/user/about/licenses': {
+      id: '/_chat/settings/user/about/licenses'
+      path: '/user/about/licenses'
+      fullPath: '/settings/user/about/licenses'
+      preLoaderRoute: typeof ChatSettingsUserAboutLicensesRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
   }
 }
 
@@ -1009,6 +1067,9 @@ interface ChatSettingsRouteChildren {
   ChatSettingsThreadsRoute: typeof ChatSettingsThreadsRoute
   ChatSettingsVaultsRoute: typeof ChatSettingsVaultsRoute
   ChatSettingsWorktreesRoute: typeof ChatSettingsWorktreesRoute
+  ChatSettingsUserSectionRoute: typeof ChatSettingsUserSectionRoute
+  ChatSettingsUserIndexRoute: typeof ChatSettingsUserIndexRoute
+  ChatSettingsUserAboutLicensesRoute: typeof ChatSettingsUserAboutLicensesRoute
 }
 
 const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
@@ -1041,6 +1102,9 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsThreadsRoute: ChatSettingsThreadsRoute,
   ChatSettingsVaultsRoute: ChatSettingsVaultsRoute,
   ChatSettingsWorktreesRoute: ChatSettingsWorktreesRoute,
+  ChatSettingsUserSectionRoute: ChatSettingsUserSectionRoute,
+  ChatSettingsUserIndexRoute: ChatSettingsUserIndexRoute,
+  ChatSettingsUserAboutLicensesRoute: ChatSettingsUserAboutLicensesRoute,
 }
 
 const ChatSettingsRouteWithChildren = ChatSettingsRoute._addFileChildren(

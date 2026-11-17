@@ -33,7 +33,9 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
+import { usePrimarySessionState } from "../../environments/primary";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
+import { useCurrentUserName } from "./useCurrentUserName";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SpaceSelector } from "./SpaceSelector";
@@ -218,6 +220,28 @@ function SidebarUtilityItem({
   );
 }
 
+/** The Settings button of a signed-in User carries their name and opens their settings. */
+function SidebarUserSettingsItem({ onClick }: { onClick: () => void }) {
+  const name = useCurrentUserName();
+  return (
+    <SidebarMenuItem className="min-w-0 flex-1">
+      <SidebarMenuButton aria-label={name ? `Settings for ${name}` : "Settings"} onClick={onClick}>
+        <SettingsIcon />
+        <span className="min-w-0 flex-1 truncate">{name ?? "Settings"}</span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+function SidebarSettingsItem({ onClick }: { onClick: () => void }) {
+  const session = usePrimarySessionState();
+  // A pairing-link session has no User, so it has no name to show.
+  if (session.data?.authenticated === true && session.data.userId !== undefined) {
+    return <SidebarUserSettingsItem onClick={onClick} />;
+  }
+  return <SidebarUtilityItem icon={<SettingsIcon />} label="Settings" onClick={onClick} />;
+}
+
 const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
@@ -240,7 +264,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   };
   const handleSettingsClick = () => {
     closeMobileSidebar();
-    void navigate({ to: "/settings" });
+    void navigate({ to: "/settings/user/$section", params: { section: "general" } });
   };
 
   const handleUsageClick = () => {
@@ -266,11 +290,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </SidebarMenuItem>
       ) : (
         <>
-          <SidebarUtilityItem
-            icon={<SettingsIcon />}
-            label="Settings"
-            onClick={handleSettingsClick}
-          />
+          <SidebarSettingsItem onClick={handleSettingsClick} />
           {pullRequestsSupported ? (
             <SidebarUtilityItem
               icon={<PullRequestGlyph.pullRequest />}

@@ -23,12 +23,16 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 
+import * as AiAccounts from "../ai/AiAccounts.ts";
 import * as AiGatewayKeys from "../ai/AiGatewayKeys.ts";
+import * as CommandActor from "../auth/CommandActor.ts";
 import { addMember, joinOrganization } from "../auth/UserAuth.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import { ProviderSessionManagerV2 } from "../orchestration-v2/ProviderSessionManager.ts";
+import * as AiSessionReach from "../orchestration-v2/AiSessionReach.ts";
 import * as InstallationUserService from "../spaces/InstallationUserService.ts";
+import * as MembershipService from "../spaces/MembershipService.ts";
 import * as OrganizationLifecycle from "../spaces/OrganizationLifecycle.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import {
@@ -254,6 +258,59 @@ describe("Hub con Environments: removals drop what an AI account no longer reach
         // Back: the machine is told to end the process.
         yield* laptop.connect;
         yield* laptop.awaitRequest("provider.detach", from);
+      }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "a Member taken out of Acme loses Acme's own account: the process holding its direct key closes (owned-resources 10)",
+    () =>
+      Effect.gen(function* () {
+        const loaded = yield* loadFixture("simple");
+        const seen: Array<SecretEnv | undefined> = [];
+        const hub = yield* makeHub({
+          aiAccounts: true,
+          sandboxAdapters: asCursor(loaded.adapters, seen),
+        });
+        const owner = yield* ownerIdOf(hub);
+        const acme = yield* createOrganization(hub, "Acme");
+        const ada = yield* withAda(hub, acme);
+        // Acme's own account, not an allowance of the Owner's.
+        const account = yield* hub
+          .service(AiAccounts.AiAccounts)
+          .create({
+            name: "Acme Cursor",
+            type: "direct",
+            provider: "cursor",
+            apiKey: Redacted.make(CURSOR_KEY),
+            owner: { kind: "organization", spaceId: acme },
+          })
+          .pipe(CommandActor.actAs(owner), Effect.orDie);
+        yield* startSandbox(hub, acme);
+        const thread = yield* replayedThread(
+          hub,
+          { environmentId: sandboxEnvironmentIdOf(acme) },
+          loaded,
+          { spaceId: acme, ownerUserId: ada, aiAccountId: account.id },
+        );
+        assert.isTrue(
+          seen.some((env) =>
+            (env?.variables ?? []).some((variable) => variable.name === "CURSOR_API_KEY"),
+          ),
+          "her process got Acme's key",
+        );
+        // As «Remove from organization» does it, by the Owner.
+        yield* hub
+          .service(MembershipService.MembershipService)
+          .remove({ actor: owner, spaceId: acme, userId: ada })
+          .pipe(Effect.orDie);
+        // The check a Membership change asks for. This kit builds the orchestration apart, with
+        // its own Space directory, so the change itself does not reach it here; the server
+        // builds one directory for both.
+        yield* hub.service(AiSessionReach.AiSessionReach).request;
+        assert.isTrue(
+          yield* eventually(isClosed(hub, thread.providerSessionId)),
+          "her process holding Acme's key closes",
+        );
       }).pipe(Effect.scoped),
   );
 

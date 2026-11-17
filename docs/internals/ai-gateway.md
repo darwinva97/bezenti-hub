@@ -404,8 +404,11 @@ shown, **never limited**: no quota, cap or block anywhere.
   provider, model, shape, HTTP status, duration, failovers, and tokens (input, output, cache read,
   cache write; null when unknown). No prompt, answer, header or key exists in the record to store
   (`AiUsage.test.ts` greps both tables; `DoorRules.test.ts` keeps the tables to `AiUsage.ts`).
-- **Unknown tokens:** an answer without `usage`, or one that never finished (client left, cut),
-  is counted as a request with unknown tokens (`unknown_requests`), never as zero tokens used. A
+- **Unknown tokens:** an answer without `usage`, or one cut before its last event (client left,
+  cut), is counted as a request with unknown tokens (`unknown_requests`), never as zero tokens
+  used. A streamed answer whose last event went through (`message_stop`, `[DONE]`,
+  `response.completed`/`incomplete`, a Gemini `finishReason`) keeps its tokens even if the body is
+  cut before its end, as when an SDK stops reading there (ticket 16, `ResponseTap.answered`). A
   failed request (status 400 or more) is counted as failed and carries no tokens.
 - **Daily summary** `(day, User, Space, AI account, model)`: kept for good. Per-request rows: 90
   days, swept at start and every day (`AiUsage.sweep`; the Thread's usage reads them, so it covers
@@ -421,6 +424,9 @@ shown, **never limited**: no quota, cap or block anywhere.
 - **Doors:** WS only (`aiUsage.summary`, scope `orchestration:read`). No HttpApi endpoint, raw route
   or MCP tool. Windows are at most 366 days (an impossible date is refused); at most 5000 rows answer (`truncated`, totals still whole).
 - **Settings → AI accounts → Usage** (Owner) and the Thread's panel («AI gateway usage») read it.
+  Both say what they cannot count instead of showing zero (ticket 16, `uncountedUsage`): direct
+  credentials (the Usage tab names those accounts), CLIs on their own login, use outside the Hub. A
+  Thread with no gateway request says so rather than hiding the panel.
 - **Counted as failed (no tokens):** a refusal after authentication (gateway not running, 415, 429
   limits, body too large or not JSON, no model served, all accounts out of quota) with the account
   last tried or none (account and model `''` in the summary; the model is kept only once the plan

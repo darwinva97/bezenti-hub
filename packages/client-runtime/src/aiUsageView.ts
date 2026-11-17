@@ -2,6 +2,7 @@
 import {
   addAiUsageTotals,
   AI_USAGE_NO_TOTALS,
+  type AiUsageScope,
   type AiUsageSummary,
   type AiUsageTotals,
 } from "@t3tools/contracts";
@@ -102,6 +103,36 @@ export function usageNotes(totals: AiUsageTotals): ReadonlyArray<string> {
     notes.push(`${totals.failedRequests} failed`);
   }
   return notes;
+}
+
+/**
+ * What the usage log cannot count, said instead of a silent zero (ticket 16): it only sees requests
+ * through the Hub's AI gateway. `directAccounts` names the AI accounts with a direct credential.
+ */
+export function uncountedUsage(directAccounts: ReadonlyArray<string>): ReadonlyArray<string> {
+  return [
+    directAccounts.length === 0
+      ? "AI accounts with a direct credential: their agents call the provider directly, not through the gateway."
+      : `AI accounts with a direct credential (${directAccounts.join(", ")}): their agents call the provider directly, not through the gateway.`,
+    "CLIs signed in with their own login, on a machine or on your computer, instead of a Hub key.",
+    "Use of the same provider accounts outside this Hub.",
+  ];
+}
+
+/** Under a Thread's gateway usage: what it leaves out. */
+export const THREAD_USAGE_SCOPE_NOTE =
+  "Only requests through the Hub's AI gateway are counted, not a direct credential or a CLI's own login.";
+
+/**
+ * A Thread with no gateway request: said, not hidden, since its agent may still have used AI. Only
+ * the Owner sees every request; anyone else is told it is what they may see.
+ */
+export function threadNoGatewayUsage(scope: AiUsageScope): string {
+  const what =
+    scope === "all"
+      ? "No request of this Thread went through the Hub's AI gateway."
+      : "No request you may see in this Thread went through the Hub's AI gateway.";
+  return `${what} A direct credential or a CLI's own login is not counted here.`;
 }
 
 /** `YYYY-MM-DD`, `days - 1` days before `today` (UTC). */

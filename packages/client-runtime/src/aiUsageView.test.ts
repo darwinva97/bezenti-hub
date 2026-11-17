@@ -2,7 +2,14 @@
 import type { AiUsageSummary } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { dayBefore, formatTokens, groupUsage, usageNotes } from "./aiUsageView.ts";
+import {
+  dayBefore,
+  formatTokens,
+  groupUsage,
+  threadNoGatewayUsage,
+  uncountedUsage,
+  usageNotes,
+} from "./aiUsageView.ts";
 
 const totals = (requests: number, input = 0, output = 0) => ({
   requests,
@@ -94,6 +101,21 @@ describe("formatting", () => {
       "1 request without token counts",
       "2 failed",
     ]);
+  });
+
+  it("says what it cannot count, naming the direct-credential accounts (ticket 16)", () => {
+    const general = uncountedUsage([]);
+    expect(general).toHaveLength(3);
+    expect(general[0]).toContain("direct credential");
+    expect(general[1]).toContain("own login");
+    const named = uncountedUsage(["Grok direct", "Gemini key"]);
+    expect(named[0]).toContain("(Grok direct, Gemini key)");
+  });
+
+  it("says a Thread had no gateway request, as far as the viewer may see", () => {
+    expect(threadNoGatewayUsage("all")).toMatch(/^No request of this Thread went through/u);
+    expect(threadNoGatewayUsage("own")).toMatch(/^No request you may see in this Thread/u);
+    expect(threadNoGatewayUsage("spaces")).toContain("direct credential");
   });
 
   it("counts days back from today, inclusive", () => {

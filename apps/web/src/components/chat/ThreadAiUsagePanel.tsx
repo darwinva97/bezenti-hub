@@ -4,7 +4,13 @@ import { useState } from "react";
 import { aiGatewayEnvironment } from "../../state/aiGateway";
 import { useHubEnvironmentId } from "../../state/hubEnvironment";
 import { useEnvironmentQuery } from "../../state/query";
-import { dayBefore, formatTokens, usageNotes } from "@t3tools/client-runtime/ai-usage-view";
+import {
+  dayBefore,
+  formatTokens,
+  THREAD_USAGE_SCOPE_NOTE,
+  threadNoGatewayUsage,
+  usageNotes,
+} from "@t3tools/client-runtime/ai-usage-view";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 
 /** Per-request rows are kept 90 days (spec 4 ticket 05). */
@@ -13,7 +19,7 @@ const THREAD_USAGE_DAYS = 90;
 /**
  * What this Thread's requests through the Hub's AI gateway cost in tokens. The Hub answers with
  * only what the session may see (the Thread's own User, an Admin of its Space, the Owner); a Thread
- * that never went through the gateway shows nothing.
+ * with no request through the gateway says so, and what is never counted (ticket 16).
  */
 export function ThreadAiUsagePanel(props: { readonly threadId: ThreadId }) {
   const [today] = useState(() => new Date());
@@ -28,8 +34,23 @@ export function ThreadAiUsagePanel(props: { readonly threadId: ThreadId }) {
           input: { threadId: props.threadId, fromDay: dayBefore(today, THREAD_USAGE_DAYS) },
         }),
   );
-  const totals = query.data?.totals;
-  if (totals === undefined || totals.requests === 0) return null;
+  const summary = query.data;
+  if (summary === null) return null;
+  const totals = summary.totals;
+  // Said, not hidden: the agent may have used AI the gateway never saw (ticket 16).
+  if (totals.requests === 0) {
+    return (
+      <ThreadDetailsSection
+        headingId="thread-details-ai-usage-heading"
+        title="AI gateway usage"
+        showHeading={false}
+      >
+        <p className="px-2.5 text-xs text-muted-foreground">
+          {threadNoGatewayUsage(summary.scope)}
+        </p>
+      </ThreadDetailsSection>
+    );
+  }
   const notes = usageNotes(totals);
   const rows: ReadonlyArray<readonly [string, string]> = [
     ["Requests", totals.requests.toLocaleString("en-US")],
@@ -62,6 +83,9 @@ export function ThreadAiUsagePanel(props: { readonly threadId: ThreadId }) {
         {notes.length > 0 ? (
           <span className="col-span-2 px-2.5 pt-1 text-muted-foreground">{notes.join(" · ")}</span>
         ) : null}
+        <span className="col-span-2 px-2.5 pt-1 text-muted-foreground">
+          {THREAD_USAGE_SCOPE_NOTE}
+        </span>
       </div>
     </ThreadDetailsSection>
   );

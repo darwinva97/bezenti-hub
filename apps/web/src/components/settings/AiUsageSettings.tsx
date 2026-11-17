@@ -11,6 +11,7 @@ import {
   dayBefore,
   formatTokens,
   groupUsage,
+  uncountedUsage,
   USAGE_GROUPINGS,
   type UsageGrouping,
   usageNotes,
@@ -30,7 +31,14 @@ const tokens = (totals: AiUsageTotals) =>
  * day, User, Space and AI account. Recorded and shown, never limited. The Hub narrows it to what
  * the session may see; nothing here asks for more.
  */
-export function AiUsageTab({ environmentId }: { readonly environmentId: EnvironmentId }) {
+export function AiUsageTab({
+  environmentId,
+  directAccounts,
+}: {
+  readonly environmentId: EnvironmentId;
+  /** Names of the AI accounts with a direct credential, which this log never sees. */
+  readonly directAccounts: ReadonlyArray<string>;
+}) {
   const [range, setRange] = useState<(typeof RANGES)[number]["value"]>("30");
   const [grouping, setGrouping] = useState<UsageGrouping>("day");
   const [today] = useState(() => new Date());
@@ -155,6 +163,14 @@ export function AiUsageTab({ environmentId }: { readonly environmentId: Environm
           </Table>
         </div>
       )}
+      <div className="flex flex-col gap-1 px-4 pb-3 text-xs text-muted-foreground">
+        <p className="font-medium">Not counted here</p>
+        <ul aria-label="Not counted here" className="list-disc ps-4">
+          {uncountedUsage(directAccounts).map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      </div>
     </SettingsSection>
   );
 }

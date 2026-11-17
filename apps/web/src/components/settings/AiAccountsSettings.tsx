@@ -273,7 +273,12 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
     return (
       <>
         <AiAccountsTabs tab={tab} onTab={setTab} usage={canManage} />
-        <AiUsageTab environmentId={environmentId} />
+        <AiUsageTab
+          environmentId={environmentId}
+          directAccounts={ordered
+            .filter((account) => account.type === "direct")
+            .map((account) => account.name)}
+        />
       </>
     );
   }

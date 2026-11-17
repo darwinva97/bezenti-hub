@@ -51,8 +51,10 @@ export function isSettingsSectionAllowed(
     case "user":
       if (sectionId === "account") return principal.hasUser;
       if (sectionId === "snap-shot") return principal.isDesktop;
-      // Machines lists this computer on the desktop; lists of machines come with owned machines.
-      if (sectionId === "machines") return principal.isDesktop;
+      // What a User owns (their Vault, AI accounts and machines) is theirs: it needs a User.
+      if (sectionId === "vault" || sectionId === "ai-accounts" || sectionId === "machines") {
+        return principal.hasUser;
+      }
       return true;
     case "space":
       return isSpaceSectionAllowed(sectionId, space);

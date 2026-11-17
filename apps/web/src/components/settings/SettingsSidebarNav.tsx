@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent } from "react";
-import { KeyRoundIcon, SearchIcon, ServerIcon, UserIcon, VaultIcon, XIcon } from "lucide-react";
+import { KeyRoundIcon, SearchIcon, ServerIcon, UserIcon, XIcon } from "lucide-react";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 
 import { cn } from "../../lib/utils";
@@ -43,10 +43,7 @@ import { usePrimaryEnvironmentId } from "../../state/environments";
 const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
 > = {
-  "/settings/ai-accounts": KeyRoundIcon,
-  "/settings/connections": ServerIcon,
   "/settings/secrets": KeyRoundIcon,
-  "/settings/vaults": VaultIcon,
 };
 
 interface SettingsNavEntry {
@@ -79,10 +76,10 @@ const USER_SETTINGS_ENTRY: SettingsNavEntry = {
   replace: false,
 };
 const MORE_SETTINGS_ENTRY: SettingsNavEntry = {
-  key: "/settings/connections",
+  key: "/settings/secrets",
   label: "More settings",
   icon: ServerIcon,
-  target: { to: "/settings/connections" },
+  target: { to: "/settings/secrets" },
   replace: false,
 };
 
@@ -139,7 +136,10 @@ function modalNavGroups(
   }
   return [
     ...groups.map((entries) => ({ heading: null, entries })),
-    ...(modal === "user" ? [{ heading: null, entries: [MORE_SETTINGS_ENTRY] }] : []),
+    // The old pages still outside a modal (Secrets, when enabled) stay one click away.
+    ...(modal === "user" && settingsNavGroupsFor(true).length > 0
+      ? [{ heading: null, entries: [MORE_SETTINGS_ENTRY] }]
+      : []),
   ];
 }
 

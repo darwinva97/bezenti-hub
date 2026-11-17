@@ -1,11 +1,19 @@
 import { Link } from "@tanstack/react-router";
 
 import { usePrimaryActsForInstallation } from "../../environments/primary";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { isElectron } from "../../env";
+import {
+  useEnvironments,
+  usePrimaryEnvironment,
+  usePrimaryEnvironmentId,
+} from "../../state/environments";
 import { Button } from "../ui/button";
+import { GrantsSettings } from "./GrantsSettings";
+import { HubEnvironmentsSettings } from "./HubEnvironmentsSettings";
 import { JoinedEnvironmentSetting } from "./JoinedEnvironmentSetting";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { MachineSettings } from "./MachineSettings";
+import { PullRequestRoutingSettings } from "./PullRequestRoutingSettings";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
 /** Platform → Hub machine: the page of the machine that runs this Hub. */
@@ -21,38 +29,66 @@ export function HubMachineSection() {
   return <MachineSettings base={{ kind: "hub" }} />;
 }
 
-/** User → Machines: on the desktop, this computer and what this app does with it. */
+/** Where the saved connections can share pull request credentials: this computer and the ones joined. */
+function UserPullRequestRouting() {
+  const { environments } = useEnvironments();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const routable = [
+    ...(primaryEnvironment ? [primaryEnvironment] : []),
+    ...environments.filter(
+      (environment) =>
+        environment.entry.target._tag !== "PrimaryConnectionTarget" && environment.entry.enabled,
+    ),
+  ].filter((environment) => environment.connection.phase !== "unsupported");
+  return <PullRequestRoutingSettings environments={routable} />;
+}
+
+/**
+ * User → Machines: the User's own machines on the Hub (each linked to its page), and on the
+ * desktop this computer and what this app does with it.
+ */
 export function UserMachinesSection() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const canOpenMachine = usePrimaryActsForInstallation();
   return (
     <SettingsPageContainer>
-      <SettingsSection id="this-computer" title="This computer">
-        <SettingsRow
-          title="Machine settings"
-          description="Providers, source control, devices, maintenance and network access of this computer."
-          control={
-            canOpenMachine && primaryEnvironmentId !== null ? (
-              <Button
-                size="sm"
-                variant="outline"
-                render={
-                  <Link
-                    to="/settings/user/machines/$environmentId/$machineSection"
-                    params={{ environmentId: primaryEnvironmentId, machineSection: "providers" }}
-                  />
-                }
-              >
-                Open
-              </Button>
-            ) : undefined
-          }
-        />
-      </SettingsSection>
-      <SettingsSection id="this-app" title="This app">
-        <LocalEnvironmentSetting />
-        <JoinedEnvironmentSetting />
-      </SettingsSection>
+      <HubEnvironmentsSettings scope={{ kind: "user" }} />
+      {isElectron ? (
+        <>
+          <SettingsSection id="this-computer" title="This computer">
+            <SettingsRow
+              title="Machine settings"
+              description="Providers, source control, devices, maintenance and network access of this computer."
+              control={
+                canOpenMachine && primaryEnvironmentId !== null ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    render={
+                      <Link
+                        to="/settings/user/machines/$environmentId/$machineSection"
+                        params={{
+                          environmentId: primaryEnvironmentId,
+                          machineSection: "providers",
+                        }}
+                      />
+                    }
+                  >
+                    Open
+                  </Button>
+                ) : undefined
+              }
+            />
+          </SettingsSection>
+          <SettingsSection id="this-app" title="This app">
+            <LocalEnvironmentSetting />
+            <JoinedEnvironmentSetting />
+          </SettingsSection>
+        </>
+      ) : null}
+      {/* Grants adds what is lent to and by the User; until its sections exist, it stays here. */}
+      <GrantsSettings />
+      <UserPullRequestRouting />
     </SettingsPageContainer>
   );
 }

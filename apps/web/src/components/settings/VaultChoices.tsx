@@ -246,12 +246,16 @@ function useChoices(environmentId: EnvironmentId, spaceId: SpaceId | null, proje
  * Settings → Vaults → «Default groups»: which groups reaching a Space every Thread of it receives
  * (owned-resources 03). The Space's owner's `default` always; the others when chosen.
  */
-export function SpaceDefaultVaults(props: { readonly environmentId: EnvironmentId }) {
+export function SpaceDefaultVaults(props: {
+  readonly environmentId: EnvironmentId;
+  /** Fixes the Space (a Space settings section), with no choice of another. */
+  readonly spaceId?: SpaceId;
+}) {
   const { environmentId } = props;
   const view = useCurrentSpace((state) => state.view);
   const spaces = view?.spaces ?? [];
   const [spaceId, setSpaceId] = useState<SpaceId | null>(null);
-  const shown = spaceId ?? spaces[0]?.id ?? null;
+  const shown = props.spaceId ?? spaceId ?? spaces[0]?.id ?? null;
   const { choices, setChoices, error, setError } = useChoices(environmentId, shown);
   const save = useAtomCommand(serverEnvironment.setVaultSpaceDefaults, "set default Vaults");
   const [pending, setPending] = useState(false);
@@ -295,26 +299,28 @@ export function SpaceDefaultVaults(props: { readonly environmentId: EnvironmentI
           )
         }
         control={
-          <div className="w-full sm:w-56">
-            <Select
-              items={spaceItems}
-              value={shownListed ? shown : null}
-              onValueChange={(value) => {
-                if (value !== null) setSpaceId(value as SpaceId);
-              }}
-            >
-              <SelectTrigger aria-label="Space for default Vaults">
-                <SelectValue placeholder="Choose a Space" />
-              </SelectTrigger>
-              <SelectPopup>
-                {spaceItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          </div>
+          props.spaceId !== undefined ? undefined : (
+            <div className="w-full sm:w-56">
+              <Select
+                items={spaceItems}
+                value={shownListed ? shown : null}
+                onValueChange={(value) => {
+                  if (value !== null) setSpaceId(value as SpaceId);
+                }}
+              >
+                <SelectTrigger aria-label="Space for default Vaults">
+                  <SelectValue placeholder="Choose a Space" />
+                </SelectTrigger>
+                <SelectPopup>
+                  {spaceItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+          )
         }
       />
       {choices === null ? null : choices.allowed.length === 0 ? (

@@ -13,6 +13,7 @@ import {
   SettingsScopeProvider,
   useSettingsScope,
 } from "../components/settings/SettingsScopeContext";
+import { useCurrentSpace } from "../state/currentSpace";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { SettingsScopeNotice } from "../components/settings/SettingsScopeNotice";
 import { SETTINGS_DEVICE_ONLY_PATHS } from "../components/settings/SettingsScopeSentence";
@@ -212,7 +213,11 @@ export const Route = createFileRoute("/_chat/settings")({
     const hash = location.hash.replace(/^#/, "");
     const project = oldProjectSettingsUrl(location.pathname, search, projectSectionForAnchor(hash));
     if (project) throw redirect({ href: `${project}${hash ? `#${hash}` : ""}`, replace: true });
-    const moved = resolveOldSettingsUrl(location.pathname, location.hash);
+    const moved = resolveOldSettingsUrl(
+      location.pathname,
+      location.hash,
+      new Set(useCurrentSpace.getState().view?.spaces.map((space) => space.id)),
+    );
     if (moved) {
       throw redirect({
         href: `${moved}${location.searchStr}${hash ? `#${hash}` : ""}`,

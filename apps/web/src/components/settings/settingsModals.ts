@@ -173,6 +173,22 @@ const UserMachinesSection = lazy(() =>
   import("./MachinePages").then((module) => ({ default: module.UserMachinesSection })),
 );
 
+const UserVaultSection = lazy(() =>
+  import("./OwnedResourceSections").then((module) => ({ default: module.UserVaultSection })),
+);
+const UserAiAccountsSection = lazy(() =>
+  import("./OwnedResourceSections").then((module) => ({ default: module.UserAiAccountsSection })),
+);
+const SpaceVaultSection = lazy(() =>
+  import("./OwnedResourceSections").then((module) => ({ default: module.SpaceVaultSection })),
+);
+const SpaceAiAccountsSection = lazy(() =>
+  import("./OwnedResourceSections").then((module) => ({ default: module.SpaceAiAccountsSection })),
+);
+const SpaceMachinesSection = lazy(() =>
+  import("./OwnedResourceSections").then((module) => ({ default: module.SpaceMachinesSection })),
+);
+
 const reserved = (
   id: string,
   label: string,
@@ -223,7 +239,7 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       component: SnapShotSection,
       group: 1,
     },
-    reserved("vault", "Vault", VaultIcon, 2),
+    { id: "vault", label: "Vault", icon: VaultIcon, component: UserVaultSection, group: 2 },
     {
       id: "machines",
       label: "Machines",
@@ -231,7 +247,13 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       component: UserMachinesSection,
       group: 2,
     },
-    reserved("ai-accounts", "AI accounts", BotIcon, 2),
+    {
+      id: "ai-accounts",
+      label: "AI accounts",
+      icon: BotIcon,
+      component: UserAiAccountsSection,
+      group: 2,
+    },
     reserved("grants-given", "Grants given", KeyRoundIcon, 2),
     reserved("plan", "Plan & usage", SparklesIcon, 2),
     { id: "about", label: "About", icon: InfoIcon, component: AboutSection, group: 3 },
@@ -252,9 +274,21 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       component: SpaceInvitationsSection,
       group: 0,
     },
-    reserved("vault", "Vault", VaultIcon, 1),
-    reserved("ai-accounts", "AI accounts", BotIcon, 1),
-    reserved("machines", "Machines", ServerIcon, 1),
+    { id: "vault", label: "Vault", icon: VaultIcon, component: SpaceVaultSection, group: 1 },
+    {
+      id: "ai-accounts",
+      label: "AI accounts",
+      icon: BotIcon,
+      component: SpaceAiAccountsSection,
+      group: 1,
+    },
+    {
+      id: "machines",
+      label: "Machines",
+      icon: ServerIcon,
+      component: SpaceMachinesSection,
+      group: 1,
+    },
     reserved("grants-to-accept", "Grants to accept", KeyRoundIcon, 1),
     {
       id: "scheduled-tasks",
@@ -451,6 +485,10 @@ export const OLD_SETTINGS_PATHS: Readonly<Record<string, string>> = {
   // Names older than the modals.
   "/settings/integrations": "/settings/platform/hub-defaults/browser",
   "/settings/storage": "/settings/maintenance",
+  // Owned resources: the User's own sections. An Organization's anchor goes to its Space settings.
+  "/settings/vaults": "/settings/user/vault",
+  "/settings/ai-accounts": "/settings/user/ai-accounts",
+  "/settings/connections": "/settings/user/machines",
   "/settings/beta": "/settings/platform/labs",
 };
 
@@ -459,4 +497,31 @@ export const MOVED_SECTION_ANCHORS: Readonly<Record<string, string>> = {
   "legacy-features": "/settings/platform/labs",
   "text-generation": "/settings/platform/hub-defaults/threads",
   about: "/settings/user/about",
+  "default-vaults": `/settings/space/${CURRENT_SPACE_SEGMENT}/vault`,
+  "hub-environments": "/settings/user/machines",
 };
+
+/** The anchor prefix of an owner's block on each old page of owned resources, and its section. */
+const OWNER_ANCHORS: Readonly<
+  Record<string, { readonly prefix: string; readonly section: "vault" | "ai-accounts" }>
+> = {
+  "/settings/vaults": { prefix: "vault-owner-", section: "vault" },
+  "/settings/ai-accounts": { prefix: "ai-accounts-owner-", section: "ai-accounts" },
+};
+
+/**
+ * An Organization's block of the old Vaults or AI accounts page (`#vault-owner-<Space id>`) is its
+ * Space settings. The User's own block, and an id that is not a Space the directory lists (so
+ * before it has loaded), stay with the page's own redirect to User settings.
+ */
+export function oldOwnerAnchorUrl(
+  pathname: string,
+  hash: string,
+  knownSpaceIds: ReadonlySet<string>,
+): string | null {
+  const anchors = OWNER_ANCHORS[pathname];
+  if (anchors === undefined || !hash.startsWith(anchors.prefix)) return null;
+  const spaceId = hash.slice(anchors.prefix.length);
+  if (!knownSpaceIds.has(spaceId)) return null;
+  return `/settings/space/${encodeURIComponent(spaceId)}/${anchors.section}`;
+}

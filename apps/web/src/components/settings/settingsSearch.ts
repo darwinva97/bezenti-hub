@@ -19,15 +19,12 @@ import {
   OLD_SETTINGS_PATHS,
   SETTINGS_MODAL_LABELS,
   findSettingsSection,
+  oldOwnerAnchorUrl,
   type ProjectSectionId,
 } from "./settingsModals";
 
 /** The pages that still live in the old Settings nav; the rest moved into a modal. */
-export type SettingsPath =
-  | "/settings/ai-accounts"
-  | "/settings/connections"
-  | "/settings/secrets"
-  | "/settings/vaults";
+export type SettingsPath = "/settings/secrets";
 
 export type SettingsSearchScope =
   | "environment"
@@ -83,30 +80,14 @@ export interface SettingsSearchAvailability {
 }
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
-  "/settings/ai-accounts": "AI accounts",
-  "/settings/connections": "Environments",
   "/settings/secrets": "Secrets",
-  "/settings/vaults": "Vaults",
 };
 
 /** Sidebar order. A group without a heading is set apart by space alone. */
 export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   readonly heading: string | null;
   readonly paths: ReadonlyArray<SettingsPath>;
-}> = [
-  {
-    heading: "Agents",
-    paths: ["/settings/ai-accounts"],
-  },
-  {
-    heading: "Connections",
-    paths: [
-      "/settings/connections",
-      "/settings/vaults",
-      ...(isSecretsFeatureEnabled ? (["/settings/secrets"] as const) : []),
-    ],
-  },
-];
+}> = isSecretsFeatureEnabled ? [{ heading: "Connections", paths: ["/settings/secrets"] }] : [];
 
 /** Pages on the Installation as a whole (secrets): only the Owner of a Hub changes them. */
 export const SETTINGS_OWNER_ONLY_PATHS: ReadonlySet<SettingsPath> = new Set<SettingsPath>([
@@ -1337,7 +1318,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "pull-request-routing",
     title: "Pull request sharing",
-    to: "/settings/connections",
+    modal: "user",
+    section: "machines",
     searchTerms: [
       `pull request routing trusted environments shared credentials permissions read actions source control ${SOURCE_CONTROL_HOST_LABELS}`,
     ],
@@ -1367,7 +1349,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "ai-accounts",
     title: "AI accounts",
-    to: "/settings/ai-accounts",
+    modal: "user",
+    section: "ai-accounts",
     searchTerms: ["api key anthropic openai gemini vertex xai openrouter deepseek allow priority"],
   },
   {
@@ -1391,10 +1374,7 @@ export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
 const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const));
 
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
-  "/settings/ai-accounts": null,
-  "/settings/connections": "connections",
   "/settings/secrets": null,
-  "/settings/vaults": null,
 };
 
 // Pages of the old nav whose rows moved elsewhere; a link to one follows its anchor.
@@ -1521,8 +1501,17 @@ export function projectSectionForAnchor(hash: string): ProjectSectionId {
   return anchored?.modal === "project" ? (anchored.section as ProjectSectionId) : "general";
 }
 
+const NO_SPACES: ReadonlySet<string> = new Set();
+
 /** Where an old settings link now lives. Its anchor finds the page its row moved to. */
-export function resolveOldSettingsUrl(pathname: string, hash: string): string | null {
+export function resolveOldSettingsUrl(
+  pathname: string,
+  hash: string,
+  /** The Spaces the directory lists, to tell an Organization's anchor from the User's. */
+  knownSpaceIds: ReadonlySet<string> = NO_SPACES,
+): string | null {
+  const ownerBlock = oldOwnerAnchorUrl(pathname, hash.replace(/^#/, ""), knownSpaceIds);
+  if (ownerBlock !== null) return ownerBlock;
   const moved = OLD_SETTINGS_PATHS[pathname];
   if (moved === undefined && !SPLIT_LEGACY_PATHS.has(pathname)) return null;
   const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;

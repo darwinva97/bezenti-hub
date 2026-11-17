@@ -45,6 +45,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SecretValueArea } from "./SecretValueArea";
+import { ownerInScope, type OwnedResourceScope } from "./ownedResourceScope";
 import { SpaceDefaultVaults, VaultAllowances } from "./VaultChoices";
 import { settle } from "./vaultCommands";
 
@@ -232,16 +233,22 @@ type VaultCommands = ReturnType<typeof useVaultCommands>;
  * Vault of groups, `default` first. No Secret's value is ever shown; Variables' are, Guests
  * excepted. See docs/internals/secrets.md.
  */
-export function VaultsSettings() {
+export function VaultsSettings({ scope }: { readonly scope?: OwnedResourceScope }) {
   const environmentId = usePrimaryEnvironmentId();
   return (
     <SettingsPageContainer>
-      {environmentId === null ? null : <VaultsPage environmentId={environmentId} />}
+      {environmentId === null ? null : <VaultsPage environmentId={environmentId} scope={scope} />}
     </SettingsPageContainer>
   );
 }
 
-function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }) {
+function VaultsPage({
+  environmentId,
+  scope,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly scope: OwnedResourceScope | undefined;
+}) {
   const session = usePrimarySessionState();
   const isOwner = session.data?.authenticated === true && session.data.isOwner === true;
   const userId = session.data?.authenticated === true ? (session.data.userId ?? null) : null;
@@ -302,7 +309,10 @@ function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }
     }
   };
 
-  const sections = listed === null ? [] : vaultSections(listed, { userId });
+  // Under a scope (a modal section) only that owner's Vault; without one, every owner's.
+  const sections = (listed === null ? [] : vaultSections(listed, { userId })).filter(
+    (section) => scope === undefined || ownerInScope(scope, section.owner, userId),
+  );
 
   return (
     <>
@@ -346,7 +356,12 @@ function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }
           />
         ))
       )}
-      <SpaceDefaultVaults environmentId={environmentId} />
+      {scope?.kind === "user" ? null : (
+        <SpaceDefaultVaults
+          environmentId={environmentId}
+          {...(scope === undefined ? {} : { spaceId: scope.spaceId })}
+        />
+      )}
     </>
   );
 }

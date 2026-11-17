@@ -1,7 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { AiAccountsSettingsPanel } from "../components/settings/AiAccountsSettings";
-
-export const Route = createFileRoute("/_chat/settings/ai-accounts")({
-  component: AiAccountsSettingsPanel,
-});
+// Moved into User settings (an Organization's anchors into its Space settings); the settings route
+// redirects old links.
+export const Route = createFileRoute("/_chat/settings/ai-accounts")({});

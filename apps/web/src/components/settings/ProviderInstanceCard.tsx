@@ -1375,7 +1375,11 @@ export function ProviderInstanceCard({
         {refusedAiCredential !== null ? (
           <p role="alert" className="px-4 pt-3 text-xs text-destructive sm:px-5">
             <code>{refusedAiCredential}</code> is an AI credential: add it in{" "}
-            <Link to="/settings/ai-accounts" className="underline underline-offset-2">
+            <Link
+              to="/settings/user/$section"
+              params={{ section: "ai-accounts" }}
+              className="underline underline-offset-2"
+            >
               Settings → AI accounts
             </Link>
             .
@@ -1384,7 +1388,11 @@ export function ProviderInstanceCard({
         {aiCredentialsLeft.length > 0 ? (
           <p className="px-4 pt-3 text-xs text-warning sm:px-5">
             {aiCredentialsLeft.join(", ")} could not be moved into an AI account. Add the key in{" "}
-            <Link to="/settings/ai-accounts" className="underline underline-offset-2">
+            <Link
+              to="/settings/user/$section"
+              params={{ section: "ai-accounts" }}
+              className="underline underline-offset-2"
+            >
               Settings → AI accounts
             </Link>
             , then remove it here.

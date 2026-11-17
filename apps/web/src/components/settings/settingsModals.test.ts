@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   SETTINGS_MODAL_SECTIONS,
   findSettingsSection,
+  oldOwnerAnchorUrl,
   oldProjectSettingsUrl,
   isSettingsSectionVisible,
   visibleSettingsSections,
@@ -80,6 +81,16 @@ const OLD_URLS: ReadonlyArray<readonly [pathname: string, hash: string, to: stri
   ["/settings/access", "audit-log", "/settings/platform/audit-log"],
   ["/settings/connections", "hub-sandboxes", "/settings/platform/sandboxes"],
   ["/settings/connections", "sandbox-image", "/settings/platform/sandboxes"],
+  // Owned resources: the User's own; the Organization's default groups go to its Space settings.
+  ["/settings/vaults", "", "/settings/user/vault"],
+  ["/settings/vaults", "vaults", "/settings/user/vault"],
+  ["/settings/vaults", "default-vaults", "/settings/space/current/vault"],
+  ["/settings/ai-accounts", "", "/settings/user/ai-accounts"],
+  ["/settings/ai-accounts", "ai-accounts", "/settings/user/ai-accounts"],
+  ["/settings/ai-accounts", "ai-accounts-owner-mine", "/settings/user/ai-accounts"],
+  ["/settings/connections", "", "/settings/user/machines"],
+  ["/settings/connections", "hub-environments", "/settings/user/machines"],
+  ["/settings/connections", "pull-request-routing", "/settings/user/machines"],
 ];
 
 /** `/settings/projects` moves the Project from the query into the path; machine and checkout stay. */
@@ -179,6 +190,26 @@ describe("old settings URLs", () => {
     expect(oldProjectSettingsUrl("/settings/threads", { project: "repo" })).toBeNull();
   });
 
+  it.each([
+    ["/settings/vaults", "vault-owner-space-acme", "/settings/space/space-acme/vault"],
+    [
+      "/settings/ai-accounts",
+      "ai-accounts-owner-space-acme",
+      "/settings/space/space-acme/ai-accounts",
+    ],
+    // The User's own block, an unknown id and other pages stay with the page's own redirect.
+    ["/settings/vaults", "vault-owner-user-me", null],
+    ["/settings/ai-accounts", "ai-accounts-owner-mine", null],
+    ["/settings/ai-accounts", "vault-owner-space-acme", null],
+    ["/settings/connections", "vault-owner-space-acme", null],
+  ] as const)("%s#%s is an Organization block: %s", (pathname, hash, to) => {
+    expect(oldOwnerAnchorUrl(pathname, hash, new Set(["space-acme"]))).toBe(to);
+    // The settings route reads the Spaces the directory lists; before it loads, the User's page.
+    expect(resolveOldSettingsUrl(pathname, hash, new Set(["space-acme"]))).toBe(
+      to ?? resolveOldSettingsUrl(pathname, ""),
+    );
+  });
+
   it.each(NOT_MOVED)("leaves %s#%s alone", (pathname, hash) => {
     expect(resolveOldSettingsUrl(pathname, hash)).toBeNull();
   });
@@ -254,7 +285,7 @@ describe("settings modal sections", () => {
     expect(reservedIds).toEqual(["registration", "keycloak", "plans", "terms"]);
   });
 
-  it("shows User settings to everyone, and SnapShots on the desktop only", () => {
+  it("shows User settings to everyone, SnapShots on the desktop only, and what a User owns to Users", () => {
     const ids = (context: SettingsVisibilityContext) =>
       visibleSettingsSections("user", context).map((section) => section.id);
     const everywhere = [
@@ -265,6 +296,9 @@ describe("settings modal sections", () => {
       "chat",
       "diffs",
       "keybindings",
+      "vault",
+      "machines",
+      "ai-accounts",
       "about",
     ];
     expect(ids(OWNER_IN_BROWSER)).toEqual(everywhere);
@@ -278,9 +312,15 @@ describe("settings modal sections", () => {
       "diffs",
       "keybindings",
       "snap-shot",
+      "vault",
       "machines",
+      "ai-accounts",
       "about",
     ]);
+    // A pairing-link session has no User, so nothing of a User's own.
+    expect(ids(PAIRED_IN_BROWSER)).toEqual(
+      expect.not.arrayContaining(["vault", "machines", "ai-accounts"]),
+    );
   });
 });
 
@@ -306,7 +346,7 @@ describe("Space settings sections", () => {
 
   it("gives an Organization its Members, and its Invitations to who may invite", () => {
     // The Owner and an Admin may invite; a Member and a Guest read the list and leave.
-    const shared = ["scheduled-tasks", "archive"];
+    const shared = ["vault", "ai-accounts", "machines", "scheduled-tasks", "archive"];
     expect(ids(ORGANIZATION_ADMIN, OWNER_IN_BROWSER)).toEqual([
       "general",
       "members",
@@ -318,8 +358,9 @@ describe("Space settings sections", () => {
   });
 
   it("gives a Personal space no Members or Invitations, to its User and to the Owner reading it", () => {
-    expect(ids(OWN_PERSONAL)).toEqual(["general", "scheduled-tasks", "archive"]);
-    expect(ids(OTHERS_PERSONAL, OWNER_IN_BROWSER)).toEqual(["general"]);
+    const resources = ["vault", "ai-accounts", "machines"];
+    expect(ids(OWN_PERSONAL)).toEqual(["general", ...resources, "scheduled-tasks", "archive"]);
+    expect(ids(OTHERS_PERSONAL, OWNER_IN_BROWSER)).toEqual(["general", ...resources]);
   });
 
   it("shows nothing before the Space is known", () => {

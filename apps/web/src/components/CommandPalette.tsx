@@ -1190,7 +1190,7 @@ function OpenCommandPaletteDialog(props: {
 
   const openConnectionSettings = () => {
     setOpen(false);
-    void navigate({ to: "/settings/connections" });
+    void navigate({ to: "/settings/user/$section", params: { section: "machines" } });
   };
   const addProjectEntry = resolveAddProjectEntry(
     addProjectEnvironmentOptions,

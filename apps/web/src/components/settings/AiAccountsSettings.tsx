@@ -37,6 +37,7 @@ import { AiUsageTab } from "./AiUsageSettings";
 import { LendAiAccountDialog } from "./LendAiAccountDialog";
 import { MigratedLoansReview } from "./MigratedLoansReview";
 import { LocalCliKeysSection } from "./LocalCliKeysSettings";
+import type { OwnedResourceScope } from "./ownedResourceScope";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
 /** Hidden as typed, and no password manager prompt: it is not a login. */
@@ -144,11 +145,13 @@ type AccountCommands = ReturnType<typeof useAccountCommands>;
  * lend and delete; the Owner also reviews the loans the upgrade narrowed. Others' only by name,
  * provider and status. A key is never shown again once saved, only replaced.
  */
-export function AiAccountsSettingsPanel() {
+export function AiAccountsSettingsPanel({ scope }: { readonly scope?: OwnedResourceScope }) {
   const environmentId = usePrimaryEnvironmentId();
   return (
     <SettingsPageContainer>
-      {environmentId === null ? null : <AiAccountsPage environmentId={environmentId} />}
+      {environmentId === null ? null : (
+        <AiAccountsPage environmentId={environmentId} scope={scope} />
+      )}
     </SettingsPageContainer>
   );
 }
@@ -158,7 +161,13 @@ interface Subject {
   readonly name: string;
 }
 
-function AiAccountsPage({ environmentId }: { readonly environmentId: EnvironmentId }) {
+function AiAccountsPage({
+  environmentId,
+  scope,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly scope: OwnedResourceScope | undefined;
+}) {
   const commands = useAccountCommands();
   const spaceView = useCurrentSpace((state) => state.view);
   // The session may change the Hub's settings at all (settings:write); the Hub decides the rest.
@@ -170,6 +179,13 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
   const [reordering, setReordering] = useState(false);
   const [tab, setTab] = useState<AiAccountsTab>("accounts");
   const manage = mayWrite;
+  // An Organization's section lists only its AI accounts: no keys, usage or what is only usable.
+  const organizationScope = scope?.kind === "organization" ? scope : null;
+  const inScope = (option: AiAccountOwnerOption, mine: boolean) =>
+    scope === undefined ||
+    (scope.kind === "user"
+      ? mine
+      : option.owner.kind === "organization" && option.owner.spaceId === scope.spaceId);
 
   const loadAccounts = useEffectEvent((target: EnvironmentId) =>
     settle(commands.list({ environmentId: target, input: {} })),
@@ -250,7 +266,7 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
 
   const ordered = (accounts ?? []).filter((account) => account.status !== "removing");
   // Everyone's own keys for local CLIs (spec 4 ticket 10).
-  if (tab === "keys") {
+  if (organizationScope === null && tab === "keys") {
     return (
       <>
         <AiAccountsTabs tab={tab} onTab={setTab} usage={canManage} />
@@ -259,7 +275,7 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
     );
   }
   // The Owner's tab: what went through the AI gateway (spec 4 ticket 05).
-  if (canManage && tab === "usage") {
+  if (organizationScope === null && canManage && tab === "usage") {
     return (
       <>
         <AiAccountsTabs tab={tab} onTab={setTab} usage={canManage} />
@@ -301,7 +317,9 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
   };
   return (
     <>
-      <AiAccountsTabs tab={tab} onTab={setTab} usage={canManage} />
+      {organizationScope === null ? (
+        <AiAccountsTabs tab={tab} onTab={setTab} usage={canManage} />
+      ) : null}
       <SettingsSection id="ai-accounts" title="AI accounts">
         <SettingsRow
           title="AI accounts"
@@ -314,42 +332,46 @@ function AiAccountsPage({ environmentId }: { readonly environmentId: Environment
             )
           }
         />
-        {manage && canManage ? (
+        {manage && canManage && organizationScope === null ? (
           <ImportCliproxyForm environmentId={environmentId} commands={commands} onAdded={refresh} />
         ) : null}
       </SettingsSection>
       {/* Grants ticket 02: what the upgrade narrowed, until the Owner lends or dismisses each. */}
-      {canManage ? <MigratedLoansReview environmentId={environmentId} /> : null}
-      {owners.map((option) => (
-        <AiAccountOwnerSection
-          key={option.owner.kind === "user" ? option.owner.userId : option.owner.spaceId}
-          environmentId={environmentId}
-          commands={commands}
-          option={option}
-          mine={option === owners[0] && option.owner.kind === "user"}
-          manage={manage}
-          shared={sharedFor(option.owner)}
-          onAdded={refresh}
-        >
-          {accounts === null ? null : accountsOf(option.owner).length === 0 ? (
-            <p className="px-4 text-sm text-muted-foreground">No AI account yet.</p>
-          ) : (
-            <ul aria-label={`AI accounts of ${option.name}`} className="flex flex-col gap-4">
-              {accountsOf(option.owner).map((account) =>
-                accountItem(account, accountsOf(option.owner)),
-              )}
-            </ul>
-          )}
-        </AiAccountOwnerSection>
-      ))}
-      {usable.length === 0 ? null : (
+      {canManage && organizationScope === null ? (
+        <MigratedLoansReview environmentId={environmentId} />
+      ) : null}
+      {owners
+        .filter((option) => inScope(option, option === owners[0] && option.owner.kind === "user"))
+        .map((option) => (
+          <AiAccountOwnerSection
+            key={option.owner.kind === "user" ? option.owner.userId : option.owner.spaceId}
+            environmentId={environmentId}
+            commands={commands}
+            option={option}
+            mine={option === owners[0] && option.owner.kind === "user"}
+            manage={manage}
+            shared={sharedFor(option.owner)}
+            onAdded={refresh}
+          >
+            {accounts === null ? null : accountsOf(option.owner).length === 0 ? (
+              <p className="px-4 text-sm text-muted-foreground">No AI account yet.</p>
+            ) : (
+              <ul aria-label={`AI accounts of ${option.name}`} className="flex flex-col gap-4">
+                {accountsOf(option.owner).map((account) =>
+                  accountItem(account, accountsOf(option.owner)),
+                )}
+              </ul>
+            )}
+          </AiAccountOwnerSection>
+        ))}
+      {organizationScope !== null || usable.length === 0 ? null : (
         <SettingsSection id="ai-accounts-usable" title="AI accounts you may use">
           <ul aria-label="AI accounts you may use" className="flex flex-col gap-4">
             {usable.map((account) => accountItem(account, usable))}
           </ul>
         </SettingsSection>
       )}
-      {others.length === 0 ? null : (
+      {organizationScope !== null || others.length === 0 ? null : (
         <SettingsSection id="ai-accounts-others" title="Other people's AI accounts">
           <SettingsRow
             title="Name, provider, owner and status only"

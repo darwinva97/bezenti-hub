@@ -144,7 +144,8 @@ describe("searchSettings", () => {
     expect(memberNav).not.toContain("/settings/maintenance");
     expect(memberNav).not.toContain("/settings/ai-gateway");
     // A Member sees the names of the AI accounts they may use.
-    expect(memberNav).toContain("/settings/ai-accounts");
+    expect(memberNav).not.toContain("/settings/ai-accounts");
+    expect(forMember.has("/settings/user/ai-accounts")).toBe(true);
     // Hub defaults are the Owner's, in Platform; they are not in the old nav at all.
     expect(memberNav).not.toContain("/settings/threads");
     expect(settingsNavGroupsFor(true)).toBe(SETTINGS_NAV_GROUPS);

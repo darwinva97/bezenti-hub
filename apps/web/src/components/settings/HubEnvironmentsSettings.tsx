@@ -3,9 +3,10 @@ import {
   shownEnvironmentStatus,
 } from "@t3tools/client-runtime/environment/hub-environments";
 import { type HubEnvironmentSummary, isListedMachine, type SpaceId } from "@t3tools/contracts";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
-import { usePrimarySessionState } from "../../environments/primary";
+import { usePrimaryActsForInstallation, usePrimarySessionState } from "../../environments/primary";
 import {
   changeHubEnvironmentMode,
   fetchHubEnvironments,
@@ -27,6 +28,7 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { LendMachineDialog } from "./GrantsSettings";
+import { machineInScope, sandboxOfScope, type OwnedResourceScope } from "./ownedResourceScope";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { SshInstallDialog } from "./SshInstallDialog";
 import { UsedBySelect } from "./UsedBySelect";
@@ -100,8 +102,10 @@ function describe(
  * dedicate to an Organization they run) and the machines dedicated to their Spaces, which an
  * Admin of that Organization renames, removes and moves to another they run (owned-resources 07).
  */
-export function HubEnvironmentsSettings() {
+export function HubEnvironmentsSettings({ scope }: { readonly scope?: OwnedResourceScope }) {
   const session = usePrimarySessionState();
+  // Opening a machine's page takes whoever acts for the Installation; the others read the list.
+  const canOpen = usePrimaryActsForInstallation();
   const signedIn = session.data?.authenticated === true;
   const isOwner = signedIn && session.data?.isOwner === true;
   // Optional in the session: a session from before the Installation had an Owner names no User.
@@ -151,7 +155,9 @@ export function HubEnvironmentsSettings() {
     (space) =>
       space.kind === "organization" &&
       space.archived !== true &&
-      (isOwner || (space.role === "admin" && space.pendingAdmin !== true)),
+      (isOwner || (space.role === "admin" && space.pendingAdmin !== true)) &&
+      // A Space's section dedicates only to that Space.
+      (scope?.kind !== "organization" || space.id === scope.spaceId),
   );
   // A Space by name, or null when this viewer has none for it; callers say what to show instead.
   const spaceName = (spaceId: string | null | undefined) =>
@@ -200,264 +206,386 @@ export function HubEnvironmentsSettings() {
     setPending(false);
   };
 
+  const machinePage = (environment: HubEnvironmentSummary) =>
+    scope?.kind === "user" ? (
+      <Button
+        aria-label={`Open ${environment.name}`}
+        size="xs"
+        variant="outline"
+        render={
+          <Link
+            to="/settings/user/machines/$environmentId/$machineSection"
+            params={{ environmentId: environment.id, machineSection: "providers" }}
+          />
+        }
+      >
+        Open
+      </Button>
+    ) : scope?.kind === "organization" ? (
+      <Button
+        aria-label={`Open ${environment.name}`}
+        size="xs"
+        variant="outline"
+        render={
+          <Link
+            to="/settings/space/$spaceId/machines/$environmentId/$machineSection"
+            params={{
+              spaceId: scope.spaceId,
+              environmentId: environment.id,
+              machineSection: "providers",
+            }}
+          />
+        }
+      >
+        Open
+      </Button>
+    ) : null;
+  const sandbox = sandboxOfScope(scope ?? { kind: "user" }, environments ?? []);
+
   return (
-    <SettingsSection id="hub-environments" title="Machines on this Hub">
-      {environments === null && error === null ? <SettingsRow title="Loading…" /> : null}
-      {(environments ?? [])
-        // A Space's Sandbox is listed once it has run; until then it is only a choice in the composer.
-        .filter(isListedMachine)
-        .map((environment) => {
-          return (
+    <>
+      {scope?.kind === "organization" ? (
+        <SettingsSection id="space-sandbox" title="Sandbox">
+          {environments === null && error === null ? <SettingsRow title="Loading…" /> : null}
+          {sandbox === undefined ? (
+            environments === null ? null : (
+              <SettingsRow
+                title="No Sandbox yet"
+                description="This Space's Sandbox starts with its first Thread there."
+              />
+            )
+          ) : (
             <SettingsRow
-              key={environment.id}
               title={
                 <span className="flex items-center gap-2">
-                  {environment.name}
+                  {sandbox.name}
                   <EnvironmentStatusBadge
-                    status={shownEnvironmentStatus(environment)}
-                    kind={environment.kind}
+                    status={shownEnvironmentStatus(sandbox)}
+                    kind={sandbox.kind}
                   />
                 </span>
               }
-              description={describe(environment, { userId, isOwner }, spaceName)}
-              control={
-                manages(environment) && environment.kind !== "sandbox" ? (
-                  <div className="flex gap-1">
-                    {lends(environment) ? (
-                      <Button
-                        aria-label={`Lend ${environment.name} to another Space`}
-                        size="xs"
-                        variant="outline"
-                        onClick={() => setLending(environment)}
-                      >
-                        Lend…
-                      </Button>
-                    ) : null}
-                    {changesUse(environment) ? (
-                      <Button
-                        aria-label={`Change who uses ${environment.name}`}
-                        size="xs"
-                        variant="outline"
-                        onClick={() => {
-                          setModeError(null);
-                          setChangingMode({
-                            environment,
-                            use:
-                              environment.mode === "dedicated" && environment.spaceId
-                                ? environment.spaceId
-                                : "personal",
-                          });
-                        }}
-                      >
-                        Change use
-                      </Button>
-                    ) : null}
-                    <Button
-                      aria-label={`Rename ${environment.name}`}
-                      size="xs"
-                      variant="outline"
-                      onClick={() => setRenaming({ id: environment.id, name: environment.name })}
-                    >
-                      Rename
-                    </Button>
-                    {environment.kind === "external" ? (
-                      <Button
-                        aria-label={`Remove ${environment.name}`}
-                        size="xs"
-                        variant="destructive-outline"
-                        onClick={() => setRemoving(environment)}
-                      >
-                        Remove
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null
+              description={
+                <>
+                  {describe(sandbox, { userId, isOwner }, spaceName)}
+                  {sandbox.startError ? (
+                    <>
+                      <br />
+                      {`Its last start failed: ${sandbox.startError}`}
+                    </>
+                  ) : null}
+                </>
               }
             />
-          );
-        })}
-      <SettingsRow
-        title="Add a machine"
-        description="Run `t3 join <this Hub's address>` on it, then approve it here in the browser: it becomes your personal machine. For a machine all of an Organization uses, run `t3 join --dedicated <Organization> <this Hub's address>` and approve it as an Admin of that Organization (or the Owner)."
-      />
-      {organizations.length > 0 ? (
-        <SettingsRow
-          title="Add a machine over SSH"
-          description="Give the Hub a Linux machine's SSH address and key: it installs T3 Code there and dedicates it to an Organization, showing each step."
-          control={
-            <Button size="xs" variant="outline" onClick={() => setAddingOverSsh(true)}>
-              Add over SSH
-            </Button>
-          }
-        />
-      ) : null}
-      {addingOverSsh ? (
-        <SshInstallDialog
-          organizations={organizations}
-          onClose={() => setAddingOverSsh(false)}
-          onInstalled={() =>
-            void fetchHubEnvironments().then(
-              (list) => setEnvironments(list.environments),
-              () => undefined,
-            )
-          }
-        />
-      ) : null}
-      {error ? <SettingsRow title="Something went wrong" description={error} /> : null}
-      {lending !== undefined ? (
-        <LendMachineDialog machine={lending} onClose={() => setLending(undefined)} />
-      ) : null}
-      {renaming !== undefined ? (
-        <Dialog open onOpenChange={(open) => (open ? undefined : setRenaming(undefined))}>
-          <DialogPopup className="sm:max-w-sm">
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                const environment = environments?.find((entry) => entry.id === renaming.id);
-                if (environment === undefined) return;
-                void run(async () => {
-                  const renamed = await renameHubEnvironment(environment.id, renaming.name.trim());
-                  setEnvironments(
-                    (list) =>
-                      list?.map((entry) => (entry.id === renamed.id ? renamed : entry)) ?? null,
-                  );
-                });
-              }}
-            >
-              <DialogHeader>
-                <DialogTitle>Rename environment</DialogTitle>
-              </DialogHeader>
-              <DialogPanel>
-                <label className="text-xs font-medium" htmlFor="hub-environment-name">
-                  Name
-                </label>
-                <Input
-                  id="hub-environment-name"
-                  maxLength={64}
-                  nativeInput
-                  value={renaming.name}
-                  onChange={(event) =>
-                    setRenaming({ id: renaming.id, name: event.currentTarget.value })
+          )}
+          {isOwner ? (
+            <SettingsRow
+              title="All Sandboxes"
+              description="The Hub's full list of Sandboxes, with their limits and image, is under Platform."
+              control={
+                <Button
+                  size="xs"
+                  variant="outline"
+                  render={
+                    <Link to="/settings/platform/$section" params={{ section: "sandboxes" }} />
                   }
-                />
-              </DialogPanel>
-              <DialogFooter>
-                <Button type="button" variant="ghost" onClick={() => setRenaming(undefined)}>
-                  Cancel
+                >
+                  Open Platform → Sandboxes
                 </Button>
-                <Button disabled={pending || renaming.name.trim() === ""} type="submit">
-                  Save
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogPopup>
-        </Dialog>
+              }
+            />
+          ) : null}
+        </SettingsSection>
       ) : null}
-      {changingMode !== undefined ? (
-        <Dialog open onOpenChange={(open) => (open ? undefined : setChangingMode(undefined))}>
-          <DialogPopup className="sm:max-w-sm">
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                const { environment, use } = changingMode;
-                setPending(true);
-                setModeError(null);
-                void changeHubEnvironmentMode(
-                  environment.id,
-                  use === "personal" ? { mode: "personal" } : { mode: "dedicated", spaceId: use },
-                ).then(
-                  (changed) => {
+      <SettingsSection
+        id="hub-environments"
+        title={
+          scope?.kind === "user"
+            ? "Your machines"
+            : scope?.kind === "organization"
+              ? "Machines of this Space"
+              : "Machines on this Hub"
+        }
+      >
+        {environments === null && error === null ? <SettingsRow title="Loading…" /> : null}
+        {(environments ?? [])
+          // A Space's Sandbox is listed once it has run; until then it is only a choice in the composer.
+          .filter(isListedMachine)
+          .filter(
+            (environment) => scope === undefined || machineInScope(scope, environment, userId),
+          )
+          .map((environment) => {
+            return (
+              <SettingsRow
+                key={environment.id}
+                title={
+                  <span className="flex items-center gap-2">
+                    {environment.name}
+                    <EnvironmentStatusBadge
+                      status={shownEnvironmentStatus(environment)}
+                      kind={environment.kind}
+                    />
+                  </span>
+                }
+                description={describe(environment, { userId, isOwner }, spaceName)}
+                control={
+                  (canOpen && scope !== undefined) ||
+                  (manages(environment) && environment.kind !== "sandbox") ? (
+                    <div className="flex gap-1">
+                      {canOpen ? machinePage(environment) : null}
+                      {manages(environment) &&
+                      environment.kind !== "sandbox" &&
+                      lends(environment) ? (
+                        <Button
+                          aria-label={`Lend ${environment.name} to another Space`}
+                          size="xs"
+                          variant="outline"
+                          onClick={() => setLending(environment)}
+                        >
+                          Lend…
+                        </Button>
+                      ) : null}
+                      {manages(environment) &&
+                      environment.kind !== "sandbox" &&
+                      changesUse(environment) ? (
+                        <Button
+                          aria-label={`Change who uses ${environment.name}`}
+                          size="xs"
+                          variant="outline"
+                          onClick={() => {
+                            setModeError(null);
+                            setChangingMode({
+                              environment,
+                              use:
+                                environment.mode === "dedicated" && environment.spaceId
+                                  ? environment.spaceId
+                                  : "personal",
+                            });
+                          }}
+                        >
+                          Change use
+                        </Button>
+                      ) : null}
+                      {manages(environment) && environment.kind !== "sandbox" ? (
+                        <Button
+                          aria-label={`Rename ${environment.name}`}
+                          size="xs"
+                          variant="outline"
+                          onClick={() =>
+                            setRenaming({ id: environment.id, name: environment.name })
+                          }
+                        >
+                          Rename
+                        </Button>
+                      ) : null}
+                      {manages(environment) && environment.kind === "external" ? (
+                        <Button
+                          aria-label={`Remove ${environment.name}`}
+                          size="xs"
+                          variant="destructive-outline"
+                          onClick={() => setRemoving(environment)}
+                        >
+                          Remove
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null
+                }
+              />
+            );
+          })}
+        <SettingsRow
+          title="Add a machine"
+          description={
+            scope?.kind === "user"
+              ? "Run `t3 join <this Hub's address>` on it, then approve it here in the browser: it becomes your personal machine."
+              : scope?.kind === "organization"
+                ? "Run `t3 join --dedicated <Organization> <this Hub's address>` on it and approve it as an Admin of this Organization (or the Owner)."
+                : "Run `t3 join <this Hub's address>` on it, then approve it here in the browser: it becomes your personal machine. For a machine all of an Organization uses, run `t3 join --dedicated <Organization> <this Hub's address>` and approve it as an Admin of that Organization (or the Owner)."
+          }
+        />
+        {scope?.kind !== "user" && organizations.length > 0 ? (
+          <SettingsRow
+            title="Add a machine over SSH"
+            description="Give the Hub a Linux machine's SSH address and key: it installs T3 Code there and dedicates it to an Organization, showing each step."
+            control={
+              <Button size="xs" variant="outline" onClick={() => setAddingOverSsh(true)}>
+                Add over SSH
+              </Button>
+            }
+          />
+        ) : null}
+        {addingOverSsh ? (
+          <SshInstallDialog
+            organizations={organizations}
+            onClose={() => setAddingOverSsh(false)}
+            onInstalled={() =>
+              void fetchHubEnvironments().then(
+                (list) => setEnvironments(list.environments),
+                () => undefined,
+              )
+            }
+          />
+        ) : null}
+        {error ? <SettingsRow title="Something went wrong" description={error} /> : null}
+        {lending !== undefined ? (
+          <LendMachineDialog machine={lending} onClose={() => setLending(undefined)} />
+        ) : null}
+        {renaming !== undefined ? (
+          <Dialog open onOpenChange={(open) => (open ? undefined : setRenaming(undefined))}>
+            <DialogPopup className="sm:max-w-sm">
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const environment = environments?.find((entry) => entry.id === renaming.id);
+                  if (environment === undefined) return;
+                  void run(async () => {
+                    const renamed = await renameHubEnvironment(
+                      environment.id,
+                      renaming.name.trim(),
+                    );
                     setEnvironments(
                       (list) =>
-                        list?.map((entry) => (entry.id === changed.id ? changed : entry)) ?? null,
+                        list?.map((entry) => (entry.id === renamed.id ? renamed : entry)) ?? null,
                     );
-                    setChangingMode(undefined);
-                    setPending(false);
-                  },
-                  (cause: unknown) => {
-                    // A machine with Threads on it says which to move first.
-                    setModeError(errorMessageOf(cause, "That change did not go through."));
-                    setPending(false);
-                  },
-                );
-              }}
-            >
+                  });
+                }}
+              >
+                <DialogHeader>
+                  <DialogTitle>Rename environment</DialogTitle>
+                </DialogHeader>
+                <DialogPanel>
+                  <label className="text-xs font-medium" htmlFor="hub-environment-name">
+                    Name
+                  </label>
+                  <Input
+                    id="hub-environment-name"
+                    maxLength={64}
+                    nativeInput
+                    value={renaming.name}
+                    onChange={(event) =>
+                      setRenaming({ id: renaming.id, name: event.currentTarget.value })
+                    }
+                  />
+                </DialogPanel>
+                <DialogFooter>
+                  <Button type="button" variant="ghost" onClick={() => setRenaming(undefined)}>
+                    Cancel
+                  </Button>
+                  <Button disabled={pending || renaming.name.trim() === ""} type="submit">
+                    Save
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogPopup>
+          </Dialog>
+        ) : null}
+        {changingMode !== undefined ? (
+          <Dialog open onOpenChange={(open) => (open ? undefined : setChangingMode(undefined))}>
+            <DialogPopup className="sm:max-w-sm">
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const { environment, use } = changingMode;
+                  setPending(true);
+                  setModeError(null);
+                  void changeHubEnvironmentMode(
+                    environment.id,
+                    use === "personal" ? { mode: "personal" } : { mode: "dedicated", spaceId: use },
+                  ).then(
+                    (changed) => {
+                      setEnvironments(
+                        (list) =>
+                          list?.map((entry) => (entry.id === changed.id ? changed : entry)) ?? null,
+                      );
+                      setChangingMode(undefined);
+                      setPending(false);
+                    },
+                    (cause: unknown) => {
+                      // A machine with Threads on it says which to move first.
+                      setModeError(errorMessageOf(cause, "That change did not go through."));
+                      setPending(false);
+                    },
+                  );
+                }}
+              >
+                <DialogHeader>
+                  <DialogTitle>{`Who uses ${changingMode.environment.name}`}</DialogTitle>
+                  <DialogDescription>
+                    A personal machine runs only its owner's work. One dedicated to an Organization
+                    runs the work of everyone there, in a Sandbox container. It changes only once no
+                    Thread is on it.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogPanel>
+                  <label className="text-xs font-medium" htmlFor="hub-environment-use">
+                    Used by
+                  </label>
+                  <div className="mt-1">
+                    <UsedBySelect
+                      disabled={pending}
+                      id="hub-environment-use"
+                      onChange={(use) =>
+                        setChangingMode({ environment: changingMode.environment, use })
+                      }
+                      spaces={organizations}
+                      value={changingMode.use}
+                    />
+                  </div>
+                  {leavesSpace(changingMode) ? (
+                    <p className="mt-2 text-sm text-warning-foreground">
+                      {`Work files on ${changingMode.environment.name} for ${spaceName(changingMode.environment.spaceId) ?? "a Space"} will be deleted: its Sandbox's home goes, so no other Space or owner ever sees them.`}
+                    </p>
+                  ) : null}
+                  {modeError !== null ? (
+                    <p className="mt-2 text-sm text-destructive-foreground" role="alert">
+                      {modeError}
+                    </p>
+                  ) : null}
+                </DialogPanel>
+                <DialogFooter>
+                  <Button type="button" variant="ghost" onClick={() => setChangingMode(undefined)}>
+                    Cancel
+                  </Button>
+                  <Button disabled={pending} type="submit">
+                    {leavesSpace(changingMode) ? "Change and delete its files" : "Save"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogPopup>
+          </Dialog>
+        ) : null}
+        {removing !== undefined ? (
+          <Dialog open onOpenChange={(open) => (open ? undefined : setRemoving(undefined))}>
+            <DialogPopup className="sm:max-w-sm">
               <DialogHeader>
-                <DialogTitle>{`Who uses ${changingMode.environment.name}`}</DialogTitle>
+                <DialogTitle>{`Remove ${removing.name}?`}</DialogTitle>
                 <DialogDescription>
-                  A personal machine runs only its owner's work. One dedicated to an Organization
-                  runs the work of everyone there, in a Sandbox container. It changes only once no
-                  Thread is on it.
+                  It disconnects now and its credential stops working. To add it again, run `t3
+                  join` on it.
                 </DialogDescription>
               </DialogHeader>
-              <DialogPanel>
-                <label className="text-xs font-medium" htmlFor="hub-environment-use">
-                  Used by
-                </label>
-                <div className="mt-1">
-                  <UsedBySelect
-                    disabled={pending}
-                    id="hub-environment-use"
-                    onChange={(use) =>
-                      setChangingMode({ environment: changingMode.environment, use })
-                    }
-                    spaces={organizations}
-                    value={changingMode.use}
-                  />
-                </div>
-                {leavesSpace(changingMode) ? (
-                  <p className="mt-2 text-sm text-warning-foreground">
-                    {`Work files on ${changingMode.environment.name} for ${spaceName(changingMode.environment.spaceId) ?? "a Space"} will be deleted: its Sandbox's home goes, so no other Space or owner ever sees them.`}
-                  </p>
-                ) : null}
-                {modeError !== null ? (
-                  <p className="mt-2 text-sm text-destructive-foreground" role="alert">
-                    {modeError}
-                  </p>
-                ) : null}
-              </DialogPanel>
               <DialogFooter>
-                <Button type="button" variant="ghost" onClick={() => setChangingMode(undefined)}>
+                <Button type="button" variant="ghost" onClick={() => setRemoving(undefined)}>
                   Cancel
                 </Button>
-                <Button disabled={pending} type="submit">
-                  {leavesSpace(changingMode) ? "Change and delete its files" : "Save"}
+                <Button
+                  disabled={pending}
+                  variant="destructive"
+                  onClick={() =>
+                    void run(async () => {
+                      const list = await removeHubEnvironment(removing.id);
+                      setEnvironments(list.environments);
+                    })
+                  }
+                >
+                  Remove machine
                 </Button>
               </DialogFooter>
-            </form>
-          </DialogPopup>
-        </Dialog>
-      ) : null}
-      {removing !== undefined ? (
-        <Dialog open onOpenChange={(open) => (open ? undefined : setRemoving(undefined))}>
-          <DialogPopup className="sm:max-w-sm">
-            <DialogHeader>
-              <DialogTitle>{`Remove ${removing.name}?`}</DialogTitle>
-              <DialogDescription>
-                It disconnects now and its credential stops working. To add it again, run `t3 join`
-                on it.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button type="button" variant="ghost" onClick={() => setRemoving(undefined)}>
-                Cancel
-              </Button>
-              <Button
-                disabled={pending}
-                variant="destructive"
-                onClick={() =>
-                  void run(async () => {
-                    const list = await removeHubEnvironment(removing.id);
-                    setEnvironments(list.environments);
-                  })
-                }
-              >
-                Remove machine
-              </Button>
-            </DialogFooter>
-          </DialogPopup>
-        </Dialog>
-      ) : null}
-    </SettingsSection>
+            </DialogPopup>
+          </Dialog>
+        ) : null}
+      </SettingsSection>
+    </>
   );
 }

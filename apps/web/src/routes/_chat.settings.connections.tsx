@@ -1,10 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ConnectionsSettings } from "../components/settings/ConnectionsSettings";
 
-function SettingsConnectionsRoute() {
-  return <ConnectionsSettings view="environments" />;
-}
-
-export const Route = createFileRoute("/_chat/settings/connections")({
-  component: SettingsConnectionsRoute,
-});
+// Moved into User settings (an Organization's anchors into its Space settings); the settings route
+// redirects old links.
+export const Route = createFileRoute("/_chat/settings/connections")({});

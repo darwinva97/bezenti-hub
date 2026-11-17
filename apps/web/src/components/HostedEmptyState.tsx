@@ -38,8 +38,11 @@ export function HostedEmptyState() {
           </EmptyHeader>
           <EmptyContent>
             {localEnvironmentOff ? (
-              <Button render={<Link to="/settings/connections" />} size="sm">
-                Open Environments
+              <Button
+                render={<Link to="/settings/user/$section" params={{ section: "machines" }} />}
+                size="sm"
+              >
+                Open Machines
               </Button>
             ) : (
               <ol className="w-full space-y-4 text-left">
@@ -60,7 +63,10 @@ function PairingSteps() {
         <RunOnComputer command="npx t3 pair" />
       </SetupStep>
       <SetupStep number={2}>
-        <Button render={<Link to="/settings/connections" />} size="sm">
+        <Button
+          render={<Link to="/settings/user/$section" params={{ section: "machines" }} />}
+          size="sm"
+        >
           Add pairing link
         </Button>
       </SetupStep>

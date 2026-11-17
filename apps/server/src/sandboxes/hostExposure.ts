@@ -61,7 +61,10 @@ export const listeningOutsideLoopback = (): ReadonlyArray<HostListener> => [
   ...readListeners("/proc/net/tcp6", ipv6Of),
 ];
 
-/** Why the host's open ports keep a dedicated Sandbox from running, or undefined. */
+/**
+ * Why the host's open ports keep a dedicated or lent Sandbox from running, or undefined: each
+ * `address:port`, and the two ways out (bind it to loopback, or let Sandboxes reach that port).
+ */
 export const hostExposureRefusal = (
   listeners: ReadonlyArray<HostListener>,
   allowedPorts: ReadonlySet<number>,
@@ -69,5 +72,6 @@ export const hostExposureRefusal = (
   const open = listeners.filter((listener) => !allowedPorts.has(listener.port));
   if (open.length === 0) return undefined;
   const named = [...new Set(open.map((listener) => `${listener.address}:${listener.port}`))];
-  return `its Sandbox container could reach this machine's ${named.join(", ")}. Bind those services to 127.0.0.1, or list the ports the Space may reach in T3CODE_DEDICATED_HOST_PORTS (for example 22).`;
+  const ports = [...new Set(open.map((listener) => listener.port))].toSorted((a, b) => a - b);
+  return `its Sandbox containers could reach this machine's ${named.join(", ")}. Either bind those services to 127.0.0.1, or let Sandboxes reach those ports by listing them in T3CODE_SANDBOX_HOST_PORTS (T3CODE_DEDICATED_HOST_PORTS also works), for example T3CODE_SANDBOX_HOST_PORTS=${ports.join(",")}.`;
 };

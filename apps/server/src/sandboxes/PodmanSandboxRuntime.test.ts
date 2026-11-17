@@ -713,4 +713,126 @@ describe.skipIf(!rootlessPodmanAvailable)("the Podman Sandbox runtime", () => {
         );
       }).pipe(Effect.scoped),
   );
+
+  // Grants ticket 08: a personal machine lent to two Spaces runs their Sandboxes under its own
+  // root (`<base dir>-lent-sandboxes`), beside its owner's data and any Hub Sandboxes on it.
+  it.live(
+    "lent Sandboxes read neither each other's home nor their host owner's data, and clash with no Hub Sandbox",
+    () =>
+      Effect.gen(function* () {
+        removeNameClash();
+        const hub = yield* startFakeHub;
+        const base = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-lent-machine-"));
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => NodeFS.rmSync(base, { recursive: true, force: true })),
+        );
+        // The owner's own server's data, as `t3 serve` keeps it on that machine.
+        const ownerData = NodePath.join(base, "t3");
+        NodeFS.mkdirSync(NodePath.join(ownerData, "userdata"), { recursive: true });
+        const ownerFile = NodePath.join(ownerData, "userdata", "state.sqlite");
+        NodeFS.writeFileSync(ownerFile, "owner-only");
+        const scope = yield* Effect.scope;
+        const runtimeAt = (rootDir: string) =>
+          Layer.build(
+            PodmanSandboxRuntime.layer({
+              image,
+              serverCommand: STUB_SERVER,
+              rootDir,
+              namePrefix: run.namePrefix,
+              labels: run.labels,
+            }).pipe(
+              Layer.provide(
+                Layer.succeed(
+                  SandboxHubAddress,
+                  SandboxHubAddress.of({ loopbackUrl: Effect.succeed(hub.url) }),
+                ),
+              ),
+              Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-podman-hub-" })),
+              Layer.provide(NodeServices.layer),
+            ),
+          ).pipe(
+            Effect.map((context) => Context.get(context, SandboxRuntime)),
+            Effect.provideService(Scope.Scope, scope),
+          );
+        const lentRoot = NodePath.join(base, "t3-lent-sandboxes");
+        const lent = yield* runtimeAt(lentRoot);
+        const hubs = yield* runtimeAt(NodePath.join(base, "t3-sandboxes"));
+        const lentSpec = (grant: string, space: string) => ({
+          ...spec(space),
+          sandboxId: `lent-${grant}`,
+          environmentId: EnvironmentId.make(`lent:${grant}`),
+        });
+        for (const [grant, space] of [
+          ["g1", "acme"],
+          ["g2", "globex"],
+        ] as const) {
+          yield* lent.create(lentSpec(grant, space));
+          NodeFS.writeFileSync(NodePath.join(lentRoot, `lent-${grant}`, "whoami"), space);
+          yield* lent.start(`lent-${grant}`);
+        }
+        // A Hub Sandbox for Acme on the same machine, as when the Hub runs there too.
+        yield* hubs.create(spec("acme"));
+        NodeFS.writeFileSync(NodePath.join(base, "t3-sandboxes", "sandbox-acme", "whoami"), "hub");
+        yield* hubs.start("sandbox-acme");
+        const running = podmanResult([
+          "ps",
+          "--filter",
+          `label=io.t3code.test=${run.runId}`,
+          "--format",
+          "{{.Names}}",
+        ]).stdout;
+        for (const name of ["lent-g1", "lent-g2", "sandbox-acme"]) {
+          assert.include(running, `${run.namePrefix}${name}`);
+        }
+
+        yield* execNode(
+          `${run.namePrefix}lent-g1`,
+          `require("node:fs").writeFileSync("/home/sandbox/acme-only", "secret")`,
+        );
+        const seen = JSON.parse(
+          yield* execNode(
+            `${run.namePrefix}lent-g2`,
+            `const fs = require("node:fs");
+             console.log(JSON.stringify({
+               home: fs.readdirSync("/home/sandbox"),
+               otherHome: fs.existsSync(${JSON.stringify(NodePath.join(lentRoot, "lent-g1"))}),
+               ownerData: fs.existsSync(${JSON.stringify(ownerData)}),
+               ownerFile: fs.existsSync(${JSON.stringify(ownerFile)}),
+               hubSandbox: fs.existsSync(${JSON.stringify(NodePath.join(base, "t3-sandboxes"))}),
+             }));`,
+          ),
+        ) as {
+          home: string[];
+          otherHome: boolean;
+          ownerData: boolean;
+          ownerFile: boolean;
+          hubSandbox: boolean;
+        };
+        assert.notInclude(seen.home, "acme-only");
+        assert.deepEqual(
+          { ...seen, home: undefined },
+          {
+            home: undefined,
+            otherHome: false,
+            ownerData: false,
+            ownerFile: false,
+            hubSandbox: false,
+          },
+        );
+        // Deleting a lent Sandbox removes its home and container only.
+        yield* lent.delete("lent-g1");
+        assert.isFalse(NodeFS.existsSync(NodePath.join(lentRoot, "lent-g1")));
+        assert.isTrue(NodeFS.existsSync(NodePath.join(lentRoot, "lent-g2")));
+        assert.isTrue(NodeFS.existsSync(ownerFile));
+        const after = podmanResult([
+          "ps",
+          "--filter",
+          `label=io.t3code.test=${run.runId}`,
+          "--format",
+          "{{.Names}}",
+        ]).stdout;
+        assert.notInclude(after, `${run.namePrefix}lent-g1`);
+        assert.include(after, `${run.namePrefix}sandbox-acme`);
+      }).pipe(Effect.scoped),
+  );
 });

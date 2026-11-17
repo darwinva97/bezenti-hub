@@ -918,8 +918,9 @@ Hub's Sandboxes, so the agents see none of the machine's own files or users.
 `t3 status` shows whether that container is running. The container can reach
 any service the machine listens to on an address other than `127.0.0.1`, so
 it starts only when there is none: bind such services to `127.0.0.1`, or list
-the ports the organization may reach in `T3CODE_DEDICATED_HOST_PORTS` (for
-example `T3CODE_DEDICATED_HOST_PORTS=22`). `t3 status` names any it found.
+the ports the organization may reach in `T3CODE_SANDBOX_HOST_PORTS` (for
+example `T3CODE_SANDBOX_HOST_PORTS=22`; the older `T3CODE_DEDICATED_HOST_PORTS`
+still works). `t3 status` names any it found.
 
 The organization's Admins and Members see it in the composer's **Environment**
 picker for that organization's Threads, and can make it a Project's
@@ -938,6 +939,65 @@ a personal machine dedicated this way stops taking work until you restart its
 server with `t3 serve`, which then runs that work in a Sandbox container. If
 the organization is deleted, the Owner can still rename or remove the machine,
 and it runs nothing.
+
+### Lend your machine to another Space
+
+A personal machine you joined with `t3 join` can also work for someone else:
+an organization you are in, or the Personal space of someone you share a Space
+with (the Owner can lend to anyone's). You keep using it as before; each Space
+you lend it to gets its own Sandbox container on it, with the CPU, memory,
+processes and disk you give it.
+
+**Before lending.** The machine needs rootless Podman and the Sandbox image
+(`t3 sandbox image build` on it), as for a dedicated machine. Its containers can
+reach any service the machine listens to on an address other than
+`127.0.0.1`, so it hosts nothing until each such port is dealt with. Its
+**Lend…** dialog (and `t3 status`) names them, for example:
+
+> its Sandbox containers could reach this machine's 0.0.0.0:22, 0.0.0.0:443,
+> 0.0.0.0:8080. Either bind those services to 127.0.0.1, or let Sandboxes reach
+> those ports by listing them in T3CODE_SANDBOX_HOST_PORTS …
+
+Bind the services that should stay private to `127.0.0.1`. For services that
+are public anyway (SSH, a website), list their ports in the machine's
+environment and restart `t3 serve`:
+
+```bash
+T3CODE_SANDBOX_HOST_PORTS=22,443 t3 serve
+```
+
+Every listed port is shown in the dialog as reachable by the borrowing Spaces.
+They reach it as if from the machine itself, which can get past a firewall or
+an allow-list by IP address. Only list ports you would show the internet.
+
+**Lend.** In **Settings → Environments**, choose **Lend…** on the machine,
+pick the Space and the limits, and confirm. A loan to a Space where you also
+decide (an organization you run) starts at once and asks for your passkey or
+authenticator code. Any other loan waits for that Space to accept it.
+
+**What you accept as the lender:**
+
+- All the Sandboxes on the machine run as your Linux user. If someone breaks
+  out of one, they have your account on that machine, and can reach the other
+  Sandboxes. Lend from a Linux user that holds nothing else.
+- Their traffic leaves from your machine's address and can reach your network.
+- CPU, memory and process limits apply only where the machine's cgroups
+  delegate them; the dialog says which ones don't. Disk is measured, not
+  capped (see below).
+
+**Accept.** An Admin of the organization, or the owner of the Personal space,
+sees the loan under **Settings → Loans → Waiting** with the machine, its
+lender and its limits, and accepts it with their passkey or authenticator code.
+A password alone cannot accept a machine. The acceptance warns: «<Lender>
+controls this machine and can see everything that runs on it: files,
+processes, the Secrets turns receive and each Thread's AI gateway key.» Only
+accept machines of people you trust that much.
+
+Once accepted, the machine appears for that Space's Admins and Members in the
+composer's **Environment** picker, marked as lent, and can be a Project's
+**Preferred environment**. New Threads never land on it unless someone picks
+it. Guests and other Spaces never see it. The lender sees the Sandbox's state
+and use, never its Threads.
 
 ### Add a machine over SSH
 

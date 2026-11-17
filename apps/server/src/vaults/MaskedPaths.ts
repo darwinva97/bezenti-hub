@@ -402,6 +402,7 @@ export const HTTP_DOOR_RULES: Record<string, DoorRule> = {
   "environments.approveJoin": none("machines and their status"),
   "environments.denyJoin": none("machines and their status"),
   "environments.self": none("machines and their status"),
+  "environments.selfReport": none("machines and their status"),
   "environments.leave": none("machines and their status"),
   "environments.grantJoin": none("machines and their status"),
   "environments.sshInstallStart": none("machines and their status"),

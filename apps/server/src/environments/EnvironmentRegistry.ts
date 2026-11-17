@@ -14,7 +14,11 @@ import {
   type EnvironmentHelloFrame,
   HUB_MACHINE_ENVIRONMENT_ID,
   isListedMachine,
+  type EnvironmentSelfReport,
   type EnvironmentSelfResult,
+  GrantLimits,
+  type LentSandboxAssignment,
+  SandboxHostReport,
   type HubDedicatedSpaceLimits,
   type HubEnvironmentDedicatedSpace,
   type HubEnvironmentOverview,
@@ -229,6 +233,8 @@ export type CredentialCheck =
       /** A Sandbox's or dedicated machine's Space: the only one its credential reaches. */
       readonly spaceId: SpaceId | null;
       readonly mode: "personal" | "dedicated" | "sandbox";
+      /** A Sandbox on a lent machine (Grants): only its container connects, saying so. */
+      readonly lent: boolean;
     }
   | { readonly _tag: "refused"; readonly reason: EnvironmentCloseReason };
 
@@ -236,7 +242,15 @@ interface EnvironmentRow {
   readonly environmentId: string;
   readonly name: string;
   readonly kind: "hub" | "external" | "sandbox";
-  readonly mode: "personal" | "dedicated" | "sandbox";
+  /** `lent`: a Sandbox on a machine lent to its Space (Grants), `kind = 'sandbox'`. */
+  readonly mode: "personal" | "dedicated" | "sandbox" | "lent";
+  /** A lent Sandbox's Grant and the machine that hosts it. */
+  readonly grantId: string | null;
+  readonly hostEnvironmentId: string | null;
+  /** A lent Sandbox's lender, as the borrowers see it named. */
+  readonly lenderName: string | null;
+  /** A lent Sandbox works while its Grant is active and its host and lender are. */
+  readonly lentLive: number;
   readonly ownerUserId: string | null;
   readonly spaceId: string | null;
   readonly registeredAt: string;
@@ -265,11 +279,35 @@ export interface ReleasedThreads {
 const isSpaceBound = (row: Pick<PolicyRow, "kind" | "mode">) =>
   row.kind === "sandbox" || row.mode === "dedicated";
 
+/**
+ * A Space's Sandbox the Hub runs itself (`sandbox:<Space>`), as opposed to one on a lent machine,
+ * which its host runs and which clients see as that Space's dedicated machine.
+ */
+const isHubSandbox = (row: Pick<PolicyRow, "kind" | "mode">) =>
+  row.kind === "sandbox" && row.mode === "sandbox";
+
 const decodeResources = Schema.decodeUnknownOption(Schema.fromJsonString(EnvironmentHostResources));
 const decodeProviders = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Array(EnvironmentProviderSummary)),
 );
 const encodeResources = Schema.encodeSync(Schema.fromJsonString(EnvironmentHostResources));
+const decodeSandboxHost = Schema.decodeUnknownOption(Schema.fromJsonString(SandboxHostReport));
+const encodeSandboxHost = Schema.encodeSync(Schema.fromJsonString(SandboxHostReport));
+const decodeGrantLimits = Schema.decodeUnknownOption(Schema.fromJsonString(GrantLimits));
+
+/** A lent Sandbox's Environment id: one per Grant, never `sandbox:` (a Hub Sandbox's). */
+const lentEnvironmentIdOf = (grantId: string) => EnvironmentId.make(`lent:${grantId}`);
+
+/** What a lent Sandbox's host last said of it: its state and its home's size. */
+export const LentSandboxDisk = Schema.Struct({
+  state: Schema.String,
+  message: Schema.NullOr(Schema.String),
+  usedBytes: Schema.NullOr(Schema.Number),
+  failures: Schema.Int,
+  measuredAt: Schema.String,
+});
+export type LentSandboxDisk = typeof LentSandboxDisk.Type;
+const encodeLentDisk = Schema.encodeSync(Schema.fromJsonString(LentSandboxDisk));
 const encodeProviders = Schema.encodeSync(
   Schema.fromJsonString(Schema.Array(EnvironmentProviderSummary)),
 );
@@ -526,6 +564,37 @@ export class EnvironmentRegistry extends Context.Service<
       credential: string | undefined,
     ) => Effect.Effect<Option.Option<EnvironmentSelfResult>, EnvironmentStorageError>;
     /**
+     * Grants ticket 08: a personal machine reports whether it can run lent Sandboxes and how each
+     * is doing, and is answered `selfOf` with the Sandboxes of its active Grants (`lent`), a new
+     * credential for each it asked one for. None when its own credential is refused.
+     */
+    readonly reportSelf: (
+      credential: string | undefined,
+      report: EnvironmentSelfReport,
+    ) => Effect.Effect<Option.Option<EnvironmentSelfResult>, EnvironmentStorageError>;
+    /** What the machine last said of hosting Sandboxes; None when it never did. */
+    readonly sandboxHostOf: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<Option.Option<SandboxHostReport>, EnvironmentStorageError>;
+    /**
+     * In the caller's transaction: the Grant's Sandbox on its host becomes an Environment of the
+     * borrowing Space (`lent:<grantId>`), with no credential until its host asks for one.
+     */
+    readonly openLentSandbox: (input: {
+      readonly grantId: string;
+      readonly hostEnvironmentId: EnvironmentId;
+      readonly spaceId: SpaceId;
+    }) => Effect.Effect<EnvironmentId, EnvironmentStorageError>;
+    /**
+     * In the caller's transaction: the Grant's Sandbox is removed and its credentials end. Then,
+     * after the commit, `lentSandboxClosed`.
+     */
+    readonly closeLentSandbox: (
+      grantId: string,
+    ) => Effect.Effect<Option.Option<EnvironmentId>, EnvironmentStorageError>;
+    /** After the commit: its socket closes and its Threads need an environment. */
+    readonly lentSandboxClosed: (environmentId: EnvironmentId) => Effect.Effect<void>;
+    /**
      * «Try again» on a Sandbox that failed to start: a User who may run Threads in its Space starts
      * it. Answers at once with it `starting`; how the start ends shows in the list.
      */
@@ -642,7 +711,21 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
       (
         SELECT sandbox.last_error FROM sandboxes AS sandbox
         WHERE sandbox.environment_id = environments.environment_id
-      ) AS "sandboxError"
+      ) AS "sandboxError",
+      grant_id AS "grantId", host_environment_id AS "hostEnvironmentId",
+      (
+        SELECT lender.display_name FROM grants AS g
+        JOIN users AS lender ON lender.user_id = g.lender_id
+        WHERE g.grant_id = environments.grant_id
+      ) AS "lenderName",
+      (environments.mode <> 'lent' OR EXISTS (
+        SELECT 1 FROM grants AS g
+        JOIN environments AS host ON host.environment_id = environments.host_environment_id
+        JOIN users AS lender ON lender.user_id = host.owner_user_id
+        WHERE g.grant_id = environments.grant_id AND g.state = 'active'
+          AND host.revoked_at IS NULL AND host.mode = 'personal'
+          AND lender.disabled_at IS NULL AND lender.removed_at IS NULL
+      )) AS "lentLive"
     FROM environments WHERE ${sql.and(conditions)}
     ORDER BY kind = 'hub' DESC, registered_at, environment_id
   `;
@@ -725,6 +808,27 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
       lastSeenAtMs: row.lastSeenAt === null ? null : Date.parse(row.lastSeenAt),
       nowMs,
     });
+    // A Sandbox on a lent machine is, to every client, its Space's dedicated machine: its host
+    // runs it, so it is online once connected and nothing starts it for work.
+    if (row.mode === "lent") {
+      return {
+        id: environmentId,
+        name: name ?? row.name,
+        kind: "external",
+        mode: "dedicated",
+        ownerUserId: null,
+        spaceId: row.spaceId === null ? null : SpaceId.make(row.spaceId),
+        status: connection,
+        registeredAt: row.registeredAt,
+        lastSeenAt: row.lastSeenAt,
+        os: row.lastOs,
+        hostname: row.lastHostname,
+        providers: Option.getOrElse(decodeProviders(row.lastProvidersJson), () => []),
+        resources: Option.getOrNull(decodeResources(row.lastResourcesJson)),
+        runningThreadCount: yield* runningThreadCount(environmentId),
+        lent: { grantId: row.grantId ?? "", lenderName: row.lenderName },
+      } satisfies HubEnvironmentSummary;
+    }
     const status: HubEnvironmentSummary["status"] =
       row.kind !== "sandbox"
         ? connection
@@ -802,15 +906,17 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     for (const row of rows) {
       // A Hub machine that runs no Threads is nowhere to run one: it is not offered.
       if (row.kind === "hub" && !hubRunsAgents) continue;
-      // Nor a Sandbox made by a runtime this Hub no longer runs.
-      if (row.kind === "sandbox" && Option.isNone(sandboxes)) continue;
+      // Nor a Sandbox made by a runtime this Hub no longer runs (a lent one's host runs it).
+      if (isHubSandbox(row) && Option.isNone(sandboxes)) continue;
+      // Nor a lent Sandbox whose Grant, host or lender is gone.
+      if (row.mode === "lent" && row.lentLive !== 1) continue;
       const resource = environmentResource(
         row,
         isSpaceBound(row) ? spaceOf(row.spaceId) : undefined,
       );
       if (!AccessPolicy.isAllowed(decide(principal, "environment.view", resource))) continue;
       const spaceName =
-        row.kind === "sandbox" && row.spaceId !== null ? spaceNames.get(row.spaceId) : undefined;
+        isHubSandbox(row) && row.spaceId !== null ? spaceNames.get(row.spaceId) : undefined;
       summaries.push(
         yield* summaryOf(
           row,
@@ -819,7 +925,7 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
         ),
       );
     }
-    const made = new Set(rows.flatMap((row) => (row.kind === "sandbox" ? [row.spaceId] : [])));
+    const made = new Set(rows.flatMap((row) => (isHubSandbox(row) ? [row.spaceId] : [])));
     // Without a runtime that can run them, Sandboxes not made yet are not offered.
     if (Option.isNone(sandboxes)) return { summaries, spaceNames };
     const now = yield* nowIso;
@@ -1282,6 +1388,8 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     }
     if (row.revokedAt !== null) return "credential-revoked" as const;
     if (row.ownerInactive === 1) return "owner-inactive" as const;
+    // A lent Sandbox ends with its Grant, its host or its lender.
+    if (row.mode === "lent" && row.lentLive !== 1) return "credential-revoked" as const;
     // A dedicated machine whose Space was deleted works for nobody until the Owner acts.
     if (row.mode === "dedicated" && row.spaceId !== null) {
       const space = yield* spaces
@@ -1302,7 +1410,8 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
       ownerUserId:
         row.ownerUserId === null || spaceId !== null ? null : UserId.make(row.ownerUserId),
       spaceId,
-      mode: row.kind === "sandbox" ? "sandbox" : row.mode,
+      mode: row.kind === "sandbox" || row.mode === "lent" ? ("sandbox" as const) : row.mode,
+      lent: row.mode === "lent",
     } as const;
   };
 
@@ -1320,9 +1429,11 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     if (named.row.mode === "dedicated" && named.holder === "machine") {
       return { _tag: "refused", reason: "not-sandboxed" } as const;
     }
+    // A Sandbox's credential: a dedicated machine's, or a lent Sandbox's (Grants), for its Space.
     if (
       named.holder === "sandbox" &&
-      (named.row.mode !== "dedicated" || named.sandboxSpaceId !== named.row.spaceId)
+      ((named.row.mode !== "dedicated" && named.row.mode !== "lent") ||
+        named.sandboxSpaceId !== named.row.spaceId)
     ) {
       return { _tag: "refused", reason: "credential-unknown" } as const;
     }
@@ -1455,6 +1566,159 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     },
   );
 
+  /** A new credential for a lent Sandbox; the one it replaces stays valid as a dedicated one's. */
+  const issueLentCredential = Effect.fn("EnvironmentRegistry.issueLentCredential")(function* (
+    environmentId: string,
+    spaceId: string,
+  ) {
+    const credential = formatEnvironmentCredential(
+      hubId,
+      base64UrlEncode(yield* random.randomBytes(32).pipe(Effect.orDie)),
+    );
+    const hash = yield* sha256(credential);
+    const now = yield* DateTime.now;
+    yield* sql`
+      INSERT INTO dedicated_sandbox_credentials (
+        environment_id, space_id, credential_hash, issued_at
+      ) VALUES (${environmentId}, ${spaceId}, ${hash}, ${DateTime.formatIso(now)})
+      ON CONFLICT (environment_id) DO UPDATE SET space_id = excluded.space_id,
+        previous_credential_hash = dedicated_sandbox_credentials.credential_hash,
+        previous_expires_at = ${DateTime.formatIso(
+          DateTime.add(now, { minutes: SANDBOX_CREDENTIAL_OVERLAP_MINUTES }),
+        )},
+        credential_hash = excluded.credential_hash, issued_at = excluded.issued_at
+    `;
+    return credential;
+  });
+
+  const reportSelf: EnvironmentRegistry["Service"]["reportSelf"] = Effect.fn(
+    "EnvironmentRegistry.reportSelf",
+  )(function* (credential, report) {
+    return yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const machine = yield* machineOf(credential);
+          if (Option.isNone(machine)) return Option.none<EnvironmentSelfResult>();
+          const row = machine.value;
+          if ((yield* rowRefusal(row)) !== undefined) return Option.none<EnvironmentSelfResult>();
+          const named = { environmentId: EnvironmentId.make(row.environmentId), name: row.name };
+          const at = yield* nowIso;
+          yield* sql`
+            UPDATE environments SET sandbox_host_json = ${encodeSandboxHost(report.sandboxHost)}
+            WHERE environment_id = ${row.environmentId}
+          `;
+          // Only a personal machine is lent; a dedicated one serves its own Space as before.
+          if (row.kind !== "external" || row.mode !== "personal") {
+            const { mode, spaceId } = validCheck(row);
+            return Option.some({ ...named, mode, spaceId, lent: [] });
+          }
+          for (const sandbox of report.sandboxes) {
+            yield* sql`
+              UPDATE environments SET last_disk_json = ${encodeLentDisk({
+                state: sandbox.state,
+                message: sandbox.message,
+                usedBytes: sandbox.diskUsedBytes,
+                failures: sandbox.diskMeasureFailures,
+                measuredAt: at,
+              })}
+              WHERE grant_id = ${sandbox.grantId} AND host_environment_id = ${row.environmentId}
+                AND mode = 'lent'
+            `;
+          }
+          const assigned = yield* sql<{
+            readonly environmentId: string;
+            readonly grantId: string;
+            readonly spaceId: string;
+            readonly name: string;
+            readonly limitsJson: string;
+          }>`
+            SELECT e.environment_id AS "environmentId", e.grant_id AS "grantId",
+              e.space_id AS "spaceId", e.name AS name, g.limits_json AS "limitsJson"
+            FROM environments e JOIN grants g ON g.grant_id = e.grant_id
+            WHERE e.mode = 'lent' AND e.host_environment_id = ${row.environmentId}
+              AND e.revoked_at IS NULL AND g.state = 'active'
+            ORDER BY e.registered_at, e.environment_id
+          `;
+          const asked = new Set(report.credentialsFor);
+          const lent: Array<LentSandboxAssignment> = [];
+          for (const entry of assigned) {
+            const limits = Option.getOrUndefined(decodeGrantLimits(entry.limitsJson));
+            lent.push({
+              grantId: entry.grantId,
+              environmentId: EnvironmentId.make(entry.environmentId),
+              spaceId: SpaceId.make(entry.spaceId),
+              name: entry.name,
+              limits:
+                limits === undefined
+                  ? NO_LIMITS
+                  : {
+                      cpus: limits.cpus,
+                      memoryBytes: limits.memoryBytes,
+                      pids: limits.pids,
+                      diskBytes: limits.diskBytes,
+                    },
+              ...(asked.has(entry.grantId)
+                ? { credential: yield* issueLentCredential(entry.environmentId, entry.spaceId) }
+                : {}),
+            });
+          }
+          return Option.some({ ...named, mode: "personal" as const, spaceId: null, lent });
+        }),
+      )
+      .pipe(Effect.catchTags({ SqlError: (cause) => Effect.fail(storageError(cause)) }));
+  });
+
+  const sandboxHostOf: EnvironmentRegistry["Service"]["sandboxHostOf"] = Effect.fn(
+    "EnvironmentRegistry.sandboxHostOf",
+  )(function* (environmentId) {
+    const [row] = yield* sql<{ readonly json: string | null }>`
+      SELECT sandbox_host_json AS json FROM environments WHERE environment_id = ${environmentId}
+    `.pipe(Effect.mapError(storageError));
+    return row?.json == null ? Option.none<SandboxHostReport>() : decodeSandboxHost(row.json);
+  });
+
+  const openLentSandbox: EnvironmentRegistry["Service"]["openLentSandbox"] = Effect.fn(
+    "EnvironmentRegistry.openLentSandbox",
+  )(function* (input) {
+    const environmentId = lentEnvironmentIdOf(input.grantId);
+    const [host] = yield* sql<{ readonly name: string }>`
+      SELECT name FROM environments WHERE environment_id = ${input.hostEnvironmentId}
+    `.pipe(Effect.mapError(storageError));
+    // «<machine> (lent)», within a machine name's 64 characters.
+    const name = `${(host?.name ?? "Machine").slice(0, 64 - " (lent)".length).trim()} (lent)`;
+    yield* sql`
+      INSERT INTO environments (
+        environment_id, name, kind, mode, owner_user_id, space_id, credential_hash,
+        registered_at, grant_id, host_environment_id
+      ) VALUES (
+        ${environmentId}, ${name}, 'sandbox', 'lent', NULL, ${input.spaceId}, NULL,
+        ${yield* nowIso}, ${input.grantId}, ${input.hostEnvironmentId}
+      )
+    `.pipe(Effect.mapError(storageError));
+    return environmentId;
+  });
+
+  const closeLentSandbox: EnvironmentRegistry["Service"]["closeLentSandbox"] = Effect.fn(
+    "EnvironmentRegistry.closeLentSandbox",
+  )(function* (grantId) {
+    const environmentId = lentEnvironmentIdOf(grantId);
+    const closed = yield* sql<{ readonly environmentId: string }>`
+      UPDATE environments SET revoked_at = ${yield* nowIso}
+      WHERE environment_id = ${environmentId} AND revoked_at IS NULL
+      RETURNING environment_id AS "environmentId"
+    `.pipe(Effect.mapError(storageError));
+    // What its container holds reaches nothing from the commit on.
+    yield* sql`
+      DELETE FROM dedicated_sandbox_credentials WHERE environment_id = ${environmentId}
+    `.pipe(Effect.mapError(storageError));
+    return closed.length === 0 ? Option.none<EnvironmentId>() : Option.some(environmentId);
+  });
+
+  const lentSandboxClosed: EnvironmentRegistry["Service"]["lentSandboxClosed"] = (environmentId) =>
+    connections
+      .close(environmentId, "credential-revoked")
+      .pipe(Effect.andThen(PubSub.publish(removals, environmentId)), Effect.asVoid);
+
   /** The Space a new or moving Thread works in: its own, else the claimed one, else its Project's. */
   const workSpaceOf = Effect.fn("EnvironmentRegistry.workSpaceOf")(function* (input: {
     readonly projectId: ProjectId;
@@ -1500,6 +1764,8 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
       row !== undefined && isSpaceBound(row) ? yield* workSpaceOf(input) : undefined;
     const usable =
       row !== undefined &&
+      // A lent Sandbox only while its Grant is active and its host and lender are.
+      (existing === undefined || existing.mode !== "lent" || existing.lentLive === 1) &&
       (principal === undefined
         ? input.byHub
         : principal.inactive !== true &&
@@ -1509,7 +1775,7 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     if (row === undefined || !usable) {
       return yield* new ThreadEnvironmentUnavailableError({ environmentId, reason: "not-usable" });
     }
-    if (row.kind === "sandbox" && row.spaceId !== null) {
+    if (isHubSandbox(row) && row.spaceId !== null) {
       if (Option.isNone(sandboxes)) {
         return yield* new ThreadEnvironmentUnavailableError({
           environmentId,
@@ -1537,7 +1803,7 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     }
     const summary = yield* summaryOf(current);
     // A Sandbox not running starts for the work; its providers are known once it ran.
-    const startsForWork = current.kind === "sandbox" && summary.status !== "online";
+    const startsForWork = isHubSandbox(current) && summary.status !== "online";
     if (summary.status !== "online" && !startsForWork) {
       return yield* new ThreadEnvironmentUnavailableError({
         environmentId,
@@ -1697,7 +1963,11 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     principal: AccessPolicy.Principal,
     viewer: UserId,
   ) {
-    const rows = yield* selectRows([sql`kind = 'sandbox'`, sql`revoked_at IS NULL`]);
+    const rows = yield* selectRows([
+      sql`kind = 'sandbox'`,
+      sql`mode = 'sandbox'`,
+      sql`revoked_at IS NULL`,
+    ]);
     const spaceIds = rows.flatMap((row) =>
       row.spaceId === null ? [] : [SpaceId.make(row.spaceId)],
     );
@@ -2007,6 +2277,11 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     removed: Stream.fromPubSub(removals),
     released: Stream.fromPubSub(releases),
     selfOf,
+    reportSelf,
+    sandboxHostOf,
+    openLentSandbox,
+    closeLentSandbox,
+    lentSandboxClosed,
     stopSandbox: Effect.fn("EnvironmentRegistry.stopSandbox")(function* (input) {
       if (Option.isNone(sandboxes)) return;
       yield* sandboxes.value.stop(input).pipe(Effect.mapError(storageError));

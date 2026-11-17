@@ -934,8 +934,8 @@ joined server, but connects nothing of its own:
   Podman cannot firewall that. So, as a Hub runs Podman Sandboxes only when bound to loopback, a
   dedicated machine runs its Sandbox only when nothing of the host listens beyond loopback
   (`/proc/net/tcp*`, [hostExposure](../../apps/server/src/sandboxes/hostExposure.ts)), except its
-  own `/health` port and the ports the Owner names in `T3CODE_DEDICATED_HOST_PORTS` (for example
-  `22`). Otherwise `t3 status` names each `address:port` to bind to 127.0.0.1, and it runs
+  own `/health` port and the ports the Owner names in `T3CODE_SANDBOX_HOST_PORTS` (or the older
+  `T3CODE_DEDICATED_HOST_PORTS`; for example `22`). Otherwise `t3 status` names each `address:port` to bind to 127.0.0.1, and it runs
   nothing. Other machines of its network stay reachable, as from a Hub's Sandbox.
 - **Lifecycle.** It starts and stops with the machine's server. When its server ends for any
   other reason it starts again after 1, 2, 4… seconds (at most 30); more than three ends in ten
@@ -952,6 +952,60 @@ joined server, but connects nothing of its own:
   Sandboxes.
 - **Versions.** Upgrade the Hub and its dedicated machines together: neither side keeps
   compatibility with an older other (a host that gets no Sandbox credential from `/self` waits).
+
+## Lent machines
+
+A User's personal machine lent to other Spaces ([Grants](grants.md), ADR 0010). Its owner keeps
+using it natively; beside its own server, its host
+([LentSandboxHost](../../apps/server/src/environments/LentSandboxHost.ts)) runs one Sandbox per
+active Grant, with the runtime and container rules of a dedicated machine.
+
+**On the Hub.**
+
+- **One Environment per Grant.** Making a machine Grant active (accepting it, or giving it where
+  the lender also decides) inserts `lent:<grantId>` in the same transaction: `kind = 'sandbox'`,
+  `mode = 'lent'`, no owner, the borrowing Space, `grant_id` and `host_environment_id`
+  (migration 136). Never `sandbox:` (a Hub Sandbox, `sandboxSpaceOf`), and every query meaning
+  «a Hub Sandbox» reads `mode = 'sandbox'` (`isHubSandbox`): a lent one is never started for work,
+  idle-stopped or listed in Settings → Sandboxes. Clients see it as the Space's dedicated machine
+  (`kind: external`, `mode: dedicated`) with `lent: { grantId, lenderName }`, so placement never
+  picks it by default and it is online only while connected.
+- **Who.** As any Space-bound Environment (`decideSpaceBound`): used by the Space's Admins and
+  Members for its Threads only; the executor's guard reads its Space (`boundSpaceOf`). It works only
+  while its Grant is active, its host is a personal machine not removed and its lender is active
+  (`lentLive`); otherwise its credential is refused (`credential-revoked`), placement refuses it,
+  and a Thread on it gets `lent-ended`. The AI gateway counts it as isolated: only per-Thread keys.
+- **Credentials.** Its credential lives in `dedicated_sandbox_credentials` keyed by its own
+  Environment id, so `checkCredential` answers it as that Sandbox and that Space alone, and the
+  socket also needs `sandbox` in its hello (`lent`). The machine's own credential connects as the
+  machine and only asks (`/self`, `/self/report`); a Sandbox's never asks.
+- **The host asks.** `POST /api/environments/self/report`, with the machine's own credential,
+  carries `sandboxHost` (ready or why not, which limits its cgroups enforce, the ports its owner
+  lets Sandboxes reach, its CPUs, memory and disk) and each lent Sandbox's state and home size. The
+  answer lists the machine's active Grants (`lent`); only those in `credentialsFor` get a new
+  credential (the replaced one stays valid as a dedicated one's), so a running Sandbox's credential
+  is never rotated under it. `/self` and the executor contract are unchanged: older hosts never
+  call it and lend nothing; a Grant of a machine that never reported is created with «cannot host
+  yet», one that reported `ready: false` is refused with its reason.
+
+**On the machine.**
+
+- Homes under `<base dir>-lent-sandboxes`, one per Grant (`lent-<grantId>`), container
+  `t3-lent-<grantId>`: no clash with a Hub's `t3-sandbox-<Space>` or a dedicated
+  `t3-dedicated-<Space>`, and each runtime only touches containers labelled with its own root.
+- Each round (every 60 s) the host measures each home, reports and follows the answer: a Grant gone
+  takes its Sandbox and home (and any `lent-*` home of no Grant goes); a new one is created with a
+  credential asked for it alone and started with the Grant's limits capped at the machine's CPUs and
+  memory (`fitLimitsToHost`, PIDs included). A Sandbox's server ending restarts it with a fresh
+  credential (1, 2, 4… s, failed after three ends in ten minutes).
+- Nothing runs while the machine cannot host (no rootless Podman or image, a non-loopback port not
+  listed, asked again each round); with its disk almost full (`hostSpaceShortage`) every lent
+  Sandbox stops, keeping its home, and none starts until there is room. Its owner's own work goes on.
+
+**Accepted risks** (shown to both sides): every lent Sandbox runs as the owner's Linux user (an
+escape is that account and the other Sandboxes); egress is not filtered and leaves from the
+owner's address; the owner sees files, processes, Secrets delivered to turns and each Thread's
+gateway key; disk is measured, not capped.
 
 ## Installing over SSH
 

@@ -21,6 +21,8 @@ import {
   type GrantState,
   type GrantTargets,
   type GrantTargetsInput,
+  EnvironmentId,
+  SandboxHostReport,
   SpaceId,
   type UserId,
 } from "@t3tools/contracts";
@@ -36,6 +38,7 @@ import type { SqlError } from "effect/sql/SqlError";
 
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
+import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
 import { invalidLimitsReason } from "../sandboxes/sandboxLimits.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 
@@ -106,6 +109,11 @@ interface GrantRow {
   readonly endedAt: string | null;
   readonly resourceName: string | null;
   readonly lenderName: string | null;
+  /** A machine's: what it last said of hosting Sandboxes. */
+  readonly hostJson: string | null;
+  /** An active machine Grant's Sandbox on the Hub, and what its host last said of it. */
+  readonly lentEnvironmentId: string | null;
+  readonly lentDiskJson: string | null;
 }
 
 const fail = (reason: GrantErrorReason, message: string) =>
@@ -132,6 +140,26 @@ const limitsProblem = (limits: GrantLimits) =>
     },
     UNBOUNDED_HOST,
   );
+
+const decodeHost = Schema.decodeUnknownOption(Schema.fromJsonString(SandboxHostReport));
+const decodeDisk = Schema.decodeUnknownOption(
+  Schema.fromJsonString(EnvironmentRegistry.LentSandboxDisk),
+);
+
+/** A machine Grant's host and Sandbox, as their last reports say. */
+const machineOf = (row: GrantRow) => {
+  const disk =
+    row.lentDiskJson === null ? undefined : Option.getOrUndefined(decodeDisk(row.lentDiskJson));
+  return {
+    host: row.hostJson === null ? null : Option.getOrNull(decodeHost(row.hostJson)),
+    lentEnvironmentId:
+      row.lentEnvironmentId === null ? null : EnvironmentId.make(row.lentEnvironmentId),
+    sandboxState: disk?.state ?? null,
+    sandboxMessage: disk?.message ?? null,
+    diskUsedBytes: disk?.usedBytes ?? null,
+    diskMeasureFailures: disk?.failures ?? 0,
+  };
+};
 
 const limitsDetail = (limits: GrantLimits) => ({
   cpus: limits.cpus,
@@ -161,6 +189,7 @@ const make = Effect.gen(function* () {
   const spaces = yield* SpaceDirectory.SpaceDirectory;
   const audit = yield* AuditLog.AuditLog;
   const random = yield* SecureRandom.SecureRandom;
+  const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
 
   const storage =
     (what: string) =>
@@ -206,7 +235,14 @@ const make = Effect.gen(function* () {
         ELSE NULL END AS "resourceName",
       CASE g.lender_kind
         WHEN 'user' THEN (SELECT display_name FROM users WHERE user_id = g.lender_id)
-        ELSE (SELECT name FROM spaces WHERE space_id = g.lender_id) END AS "lenderName"
+        ELSE (SELECT name FROM spaces WHERE space_id = g.lender_id) END AS "lenderName",
+      CASE g.resource_kind
+        WHEN 'environment' THEN
+          (SELECT sandbox_host_json FROM environments WHERE environment_id = g.resource_id)
+        ELSE NULL END AS "hostJson",
+      (SELECT e.environment_id FROM environments e
+        WHERE e.grant_id = g.grant_id AND e.revoked_at IS NULL) AS "lentEnvironmentId",
+      (SELECT e.last_disk_json FROM environments e WHERE e.grant_id = g.grant_id) AS "lentDiskJson"
     FROM grants g WHERE ${where}
     ORDER BY g.created_at DESC, g.grant_id
   `;
@@ -265,6 +301,7 @@ const make = Effect.gen(function* () {
       createdAt: row.createdAt,
       decidedAt: row.decidedAt,
       endedAt: row.endedAt,
+      ...(row.resourceKind === "environment" ? { machine: machineOf(row) } : {}),
       can: {
         cancel: mayTransition("cancel", row.state) && can("grant.cancel"),
         revoke: mayTransition("end", row.state) && can("grant.revoke"),
@@ -339,6 +376,17 @@ const make = Effect.gen(function* () {
     }
     const problem = limitsProblem(input.limits);
     if (problem !== undefined) return yield* fail("invalid-limits", problem);
+    // A machine that said it cannot host a Sandbox is refused with why; one that never said
+    // (an older one) is lent, and the lists say it cannot host one yet.
+    const host = yield* registry
+      .sandboxHostOf(input.resource.environmentId)
+      .pipe(Effect.catch(storage("read the machine")));
+    if (Option.isSome(host) && !host.value.ready) {
+      return yield* fail(
+        "host-not-ready",
+        `This machine cannot run a Sandbox for another Space now: ${host.value.reason ?? "it did not say why."}`,
+      );
+    }
     const known = yield* targetsOf([{ targetId: input.spaceId }]);
     const target = known.get(input.spaceId);
     if (target === undefined) return yield* fail("not-found", "That Space does not exist.");
@@ -434,7 +482,11 @@ const make = Effect.gen(function* () {
     what: string,
     effect: Effect.Effect<
       A,
-      GrantError | SqlError | AuditLog.AuditLogWriteError | Schema.SchemaError
+      | GrantError
+      | SqlError
+      | AuditLog.AuditLogWriteError
+      | Schema.SchemaError
+      | EnvironmentRegistry.EnvironmentStorageError
     >,
   ) =>
     sql.withTransaction(effect).pipe(
@@ -442,6 +494,7 @@ const make = Effect.gen(function* () {
         SqlError: storage(what),
         AuditLogWriteError: storage(what),
         SchemaError: storage(what),
+        EnvironmentStorageError: storage(what),
       }),
     );
 
@@ -556,6 +609,13 @@ const make = Effect.gen(function* () {
             ${who.userId}, ${startsActive ? at : null}, ${startsActive ? who.userId : null}
           )
         `;
+        if (startsActive) {
+          yield* registry.openLentSandbox({
+            grantId,
+            hostEnvironmentId: input.resource.environmentId,
+            spaceId: input.spaceId,
+          });
+        }
         const record = auditOf(
           {
             grantId,
@@ -612,6 +672,14 @@ const make = Effect.gen(function* () {
           row.state,
           sql`state = ${to}, decided_at = ${at}, decided_by = ${who.userId}`,
         );
+        // An accepted machine runs a Sandbox for the Space, an Environment of its own.
+        if (op === "accept" && row.resourceKind === "environment" && row.targetId !== null) {
+          yield* registry.openLentSandbox({
+            grantId: row.grantId,
+            hostEnvironmentId: EnvironmentId.make(row.resourceId),
+            spaceId: SpaceId.make(row.targetId),
+          });
+        }
         const record = auditOf(row, row.resourceName);
         yield* audit.record({
           actor: AuditLog.userActor(who.userId),
@@ -660,7 +728,7 @@ const make = Effect.gen(function* () {
 
   const end = Effect.fn("Grants.end")(function* (input: GrantRefInput) {
     const who = yield* caller;
-    yield* inTransaction(
+    const closed = yield* inTransaction(
       "end the loan",
       Effect.gen(function* () {
         const { row, can } = yield* visibleRow(input.grantId, who);
@@ -674,9 +742,11 @@ const make = Effect.gen(function* () {
           );
         }
         const reason: GrantEndReason = side === "lender" ? "revoked" : "returned";
-        yield* endRow(row, reason, side, AuditLog.userActor(who.userId), who.userId);
+        return yield* endRow(row, reason, side, AuditLog.userActor(who.userId), who.userId);
       }),
     );
+    // After the commit: a machine's Sandbox is cut off and its Threads need an environment.
+    if (Option.isSome(closed)) yield* registry.lentSandboxClosed(closed.value);
     return yield* reread(input.grantId, who);
   });
 
@@ -694,6 +764,11 @@ const make = Effect.gen(function* () {
       row.state,
       sql`state = 'ended', end_reason = ${reason}, ended_at = ${at}, ended_by = ${by}`,
     );
+    // A machine's Sandbox and its credentials end in the same transaction.
+    const closed =
+      row.resourceKind === "environment"
+        ? yield* registry.closeLentSandbox(row.grantId)
+        : Option.none<EnvironmentId>();
     const record = auditOf(row, row.resourceName);
     yield* audit.record({
       actor: actorOf,
@@ -702,6 +777,7 @@ const make = Effect.gen(function* () {
       target: record.target,
       detail: { ...record.common, reason, side },
     });
+    return closed;
   });
 
   const setLimits = Effect.fn("Grants.setLimits")(function* (input: GrantSetLimitsInput) {

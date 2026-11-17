@@ -6,6 +6,7 @@
 import * as Schema from "effect/Schema";
 
 import { EnvironmentId, makeEntityId, SpaceId } from "./baseSchemas.ts";
+import { SandboxHostReport } from "./hubEnvironments.ts";
 import { AuthReauth } from "./userAccounts.ts";
 
 export const GrantId = makeEntityId("GrantId");
@@ -90,6 +91,20 @@ export const Grant = Schema.Struct({
   createdAt: Schema.String,
   decidedAt: Schema.NullOr(Schema.String),
   endedAt: Schema.NullOr(Schema.String),
+  /**
+   * A lent machine's: what it last said of hosting Sandboxes (null: it never did, as an older
+   * one), and its Sandbox for this Grant while active, as its host reports it. Never its Threads.
+   */
+  machine: Schema.optionalKey(
+    Schema.Struct({
+      host: Schema.NullOr(SandboxHostReport),
+      lentEnvironmentId: Schema.NullOr(EnvironmentId),
+      sandboxState: Schema.NullOr(Schema.String),
+      sandboxMessage: Schema.NullOr(Schema.String),
+      diskUsedBytes: Schema.NullOr(Schema.Number),
+      diskMeasureFailures: Schema.Int,
+    }),
+  ),
   /** What the viewer may do with it now. */
   can: Schema.Struct({
     cancel: Schema.Boolean,

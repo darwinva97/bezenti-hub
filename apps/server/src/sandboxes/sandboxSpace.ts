@@ -40,7 +40,8 @@ export const boundSpaceOf = Effect.fn("boundSpaceOf")(function* (environmentId: 
   const sql = yield* SqlClient.SqlClient;
   const rows = yield* sql<{ readonly spaceId: string }>`
     SELECT space_id AS "spaceId" FROM environments
-    WHERE environment_id = ${environmentId} AND mode = 'dedicated' AND space_id IS NOT NULL
+    WHERE environment_id = ${environmentId} AND mode IN ('dedicated', 'lent')
+      AND space_id IS NOT NULL
   `.pipe(Effect.mapError((cause) => new SpaceCheckUnavailableError({ environmentId, cause })));
   const spaceId = rows[0]?.spaceId;
   return spaceId === undefined ? undefined : SpaceId.make(spaceId);
@@ -52,7 +53,9 @@ export type SpaceRefusal =
   | "owner-left"
   | "revoked"
   | "undedicated"
-  | "unknown-machine";
+  | "unknown-machine"
+  /** A Sandbox on a lent machine whose loan ended (or whose host or lender is gone). */
+  | "lent-ended";
 
 export const SPACE_REFUSAL_MESSAGES: Readonly<Record<SpaceRefusal, string>> = {
   "other-space": "This Thread is no longer in its machine's Space. Move it to another Environment.",
@@ -62,6 +65,8 @@ export const SPACE_REFUSAL_MESSAGES: Readonly<Record<SpaceRefusal, string>> = {
   undedicated:
     "This Thread's machine is not dedicated to any Space now. Move it to another Environment.",
   "unknown-machine": "The Hub does not know this Thread's machine. Move it to another Environment.",
+  "lent-ended":
+    "The machine this Thread ran on is no longer lent to its Space. Move it to another Environment.",
 };
 
 /**
@@ -83,9 +88,18 @@ export const spaceRefusalOf = Effect.fn("spaceRefusalOf")(function* (
     readonly spaceId: string | null;
     readonly revoked: number;
     readonly usable: number;
+    readonly lentLive: number;
   }>`
     SELECT e.kind AS kind, e.mode AS mode, e.space_id AS "spaceId",
       e.revoked_at IS NOT NULL AS revoked,
+      (e.mode <> 'lent' OR EXISTS (
+        SELECT 1 FROM grants g
+        JOIN environments host ON host.environment_id = e.host_environment_id
+        JOIN users lender ON lender.user_id = host.owner_user_id
+        WHERE g.grant_id = e.grant_id AND g.state = 'active' AND host.revoked_at IS NULL
+          AND host.mode = 'personal'
+          AND lender.disabled_at IS NULL AND lender.removed_at IS NULL
+      )) AS "lentLive",
       COALESCE(u.removed_at IS NULL AND u.disabled_at IS NULL AND (
         u.is_owner = 1
         OR ${spaceId} = 'personal:' || u.user_id
@@ -104,6 +118,9 @@ export const spaceRefusalOf = Effect.fn("spaceRefusalOf")(function* (
     WHERE e.environment_id = ${environmentId}
   `.pipe(Effect.mapError((cause) => new SpaceCheckUnavailableError({ environmentId, cause })));
   if (row === undefined) return "unknown-machine" as const;
+  if (row.mode === "lent" && (row.revoked === 1 || row.lentLive !== 1)) {
+    return "lent-ended" as const;
+  }
   if (row.revoked === 1) return "revoked" as const;
   if (row.kind === "hub") return undefined;
   if (row.kind === "sandbox" || row.mode === "dedicated") {

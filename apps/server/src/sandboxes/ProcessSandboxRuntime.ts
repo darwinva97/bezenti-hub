@@ -418,11 +418,12 @@ export const layer = (options: Parameters<typeof make>[0]) =>
  * The process runtime as a Hub runs it (`T3CODE_SANDBOX_RUNTIME=process`): the Hub's own entry
  * point under its own Node, `--dev-url` for a dev Hub. None without an entry point.
  */
-export const forHub = (config: { readonly devUrl: URL | undefined }) => {
+export const forHub = (config: { readonly devUrl: URL | undefined }, rootDir?: string) => {
   const entry = process.argv[1];
   if (entry === undefined) return Option.none();
   return Option.some(
     layer({
+      ...(rootDir === undefined ? {} : { rootDir }),
       launcher: childProcessLauncher({
         command: process.execPath,
         args: [entry],

@@ -91,6 +91,9 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "environments.sandboxLimits": ENVIRONMENTS,
   "environments.sandboxes": ENVIRONMENTS,
   "environments.self": own("the Environment credential of the machine that asks"),
+  "environments.selfReport": own(
+    "the Environment credential of the machine that asks (never a Sandbox's): its own report, and new credentials only for Sandboxes of active Grants of that machine",
+  ),
   "environments.start": ENVIRONMENTS,
   "environments.sshInstallCancel": SSH_INSTALL,
   "environments.sshInstallConfirm": SSH_INSTALL,

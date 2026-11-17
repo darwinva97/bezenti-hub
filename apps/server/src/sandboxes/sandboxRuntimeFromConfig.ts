@@ -23,7 +23,9 @@ import { checkoutOf, configuredSandboxImage } from "./SandboxImage.ts";
 import { SandboxHubAddress } from "./SandboxRuntime.ts";
 
 const SANDBOX_RUNTIME_SETTING = "T3CODE_SANDBOX_RUNTIME";
-/** Ports of a dedicated machine its Sandbox may reach, comma-separated (for example `22`). */
+/** Ports of a machine its Sandboxes (dedicated or lent) may reach, comma-separated (`22,443`). */
+const SANDBOX_HOST_PORTS_SETTING = "T3CODE_SANDBOX_HOST_PORTS";
+/** The older name of the same setting, still read. */
 const DEDICATED_HOST_PORTS_SETTING = "T3CODE_DEDICATED_HOST_PORTS";
 
 const optionalSetting = (name: string) =>
@@ -70,11 +72,16 @@ const detectPodman = (image: string) =>
  * (`src/bin.ts`, a dev Hub) given a dev image (one it did not build: node and git only) mounts
  * {@link devCodeMounts} and runs its source with the image's Node.
  */
-const podmanForHub = (config: { readonly devUrl: URL | undefined }, image: string) => {
+const podmanForHub = (
+  config: { readonly devUrl: URL | undefined },
+  image: string,
+  rootDir?: string,
+) => {
   const entry = process.argv[1];
   const checkout = entry !== undefined && entry.endsWith(".ts") ? checkoutOf(entry) : undefined;
   return PodmanSandboxRuntime.layer({
     image,
+    ...(rootDir === undefined ? {} : { rootDir }),
     ...(checkout === undefined || entry === undefined
       ? {}
       : {
@@ -101,9 +108,30 @@ export interface DedicatedRuntimeRefusal {
 const refused = (message: string, waits = false) =>
   Result.fail<DedicatedRuntimeRefusal>({ message, waits });
 
+/**
+ * The host ports its owner lets Sandboxes reach: `T3CODE_SANDBOX_HOST_PORTS`, and the older
+ * `T3CODE_DEDICATED_HOST_PORTS` too, comma-separated.
+ */
+export const allowedHostPorts = Effect.gen(function* () {
+  const listed = [
+    Option.getOrElse(yield* optionalSetting(SANDBOX_HOST_PORTS_SETTING), () => ""),
+    Option.getOrElse(yield* optionalSetting(DEDICATED_HOST_PORTS_SETTING), () => ""),
+  ].join(",");
+  return new Set(
+    listed
+      .split(",")
+      .map((port) => Number.parseInt(port.trim(), 10))
+      .filter(Number.isFinite),
+  );
+});
+
 export const dedicatedRuntimeFromConfig = Effect.fn("dedicatedRuntimeFromConfig")(function* (
   hubUrl: string,
-  options: { readonly recheck?: boolean } = {},
+  options: {
+    readonly recheck?: boolean;
+    /** Where its homes go; a lent machine's are apart from any other runtime's on it. */
+    readonly rootDir?: string;
+  } = {},
 ) {
   const setting = Option.getOrUndefined(yield* optionalSetting(SANDBOX_RUNTIME_SETTING));
   const config = yield* ServerConfig.ServerConfig;
@@ -112,7 +140,7 @@ export const dedicatedRuntimeFromConfig = Effect.fn("dedicatedRuntimeFromConfig"
     SandboxHubAddress.of({ loopbackUrl: Effect.succeed(hubUrl) }),
   );
   if (setting === "process") {
-    const processRuntime = ProcessSandboxRuntime.forHub(config);
+    const processRuntime = ProcessSandboxRuntime.forHub(config, options.rootDir);
     return Option.isNone(processRuntime)
       ? refused("this server has no entry point to run its Sandbox's server with.")
       : Result.succeed(processRuntime.value.pipe(Layer.provide(address)));
@@ -142,19 +170,14 @@ export const dedicatedRuntimeFromConfig = Effect.fn("dedicatedRuntimeFromConfig"
   }
   // The container reaches every address of this machine but its loopback, and rootless Podman
   // cannot firewall that: nothing may listen there unless the Owner named it.
-  const allowed = new Set(
-    Option.getOrElse(yield* optionalSetting(DEDICATED_HOST_PORTS_SETTING), () => "")
-      .split(",")
-      .map((port) => Number.parseInt(port.trim(), 10))
-      .filter(Number.isFinite),
-  );
+  const allowed = yield* allowedHostPorts;
   const exposed = hostExposureRefusal(
     // This server's own port answers only `/health`.
     listeningOutsideLoopback().filter((listener) => listener.port !== config.port),
     allowed,
   );
   if (exposed !== undefined) return refused(exposed);
-  return Result.succeed(podmanForHub(config, image).pipe(Layer.provide(address)));
+  return Result.succeed(podmanForHub(config, image, options.rootDir).pipe(Layer.provide(address)));
 });
 
 /** Whether rootless Podman is here, as `t3 join --dedicated` checks before asking. */

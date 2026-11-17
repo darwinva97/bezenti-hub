@@ -337,6 +337,62 @@ describe("Grants", () => {
     }),
   );
 
+  it.effect(
+    "a machine that said it cannot host is refused with why; accepting opens its Sandbox",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* hub;
+        const vps = yield* h.machine("ana-vps", h.ana.id);
+        const report = (ready: boolean) =>
+          JSON.stringify({
+            ready,
+            reason: ready
+              ? null
+              : "its Sandbox containers could reach this machine's 0.0.0.0:8080.",
+            limitSupport: { cpus: false, memory: true, pids: true, note: null },
+            reachablePorts: [],
+            hostCpus: 4,
+            hostMemoryBytes: 8 * 1024 ** 3,
+            hostFreeBytes: null,
+            hostTotalBytes: null,
+          });
+        yield* h.server.sql`
+        UPDATE environments SET sandbox_host_json = ${report(false)} WHERE environment_id = ${vps}
+      `;
+        const refused = yield* h.give(h.ana.cookie, vps, `personal:${h.ownerId}`);
+        assert.equal(refused.status, 409);
+        assert.include(refused.body.message, "0.0.0.0:8080");
+        yield* h.server.sql`
+        UPDATE environments SET sandbox_host_json = ${report(true)} WHERE environment_id = ${vps}
+      `;
+        const given = yield* h.give(h.ana.cookie, vps, `personal:${h.ownerId}`);
+        assert.equal(given.status, 200, JSON.stringify(given.body));
+        type Machine = {
+          readonly lentEnvironmentId: string | null;
+          readonly host: { readonly limitSupport: { readonly cpus: boolean } };
+        };
+        // Waiting, it has no Sandbox yet; both sides see what the machine said of itself.
+        const waiting = given.body.machine as Machine;
+        assert.isNull(waiting.lentEnvironmentId);
+        assert.equal(waiting.host.limitSupport.cpus, false);
+        const accepted = yield* h.accept(
+          h.owner,
+          given.body.id as string,
+          yield* passkeyReauth(h.server, h.authenticator),
+        );
+        assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+        assert.equal(
+          (accepted.body.machine as Machine).lentEnvironmentId,
+          `lent:${given.body.id as string}`,
+        );
+        const [row] = yield* h.server.sql<{ readonly spaceId: string; readonly host: string }>`
+        SELECT space_id AS "spaceId", host_environment_id AS host FROM environments
+        WHERE grant_id = ${given.body.id as string} AND mode = 'lent' AND revoked_at IS NULL
+      `;
+        assert.deepEqual(row, { spaceId: `personal:${h.ownerId}`, host: vps });
+      }),
+  );
+
   it.effect("the lender changes limits; nobody else does", () =>
     Effect.gen(function* () {
       const h = yield* hub;

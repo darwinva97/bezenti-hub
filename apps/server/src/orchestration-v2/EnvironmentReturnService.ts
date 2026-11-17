@@ -134,7 +134,8 @@ export const layer: Layer.Layer<
         WHERE thread.deleted_at IS NULL
           AND (environments.revoked_at IS NOT NULL
             OR (${hubMachineGone ? 1 : 0} = 1 AND environments.kind = 'hub')
-            OR (${sandboxesGone ? 1 : 0} = 1 AND environments.kind = 'sandbox'))
+            OR (${sandboxesGone ? 1 : 0} = 1 AND environments.kind = 'sandbox'
+              AND environments.mode = 'sandbox'))
           AND (${environmentId ?? null} IS NULL OR environments.environment_id = ${environmentId ?? null})
       `;
       const released: Array<{

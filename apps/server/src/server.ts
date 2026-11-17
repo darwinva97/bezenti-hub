@@ -197,6 +197,7 @@ import * as EnvironmentRegistry from "./environments/EnvironmentRegistry.ts";
 import * as HubEnvironmentsHttp from "./environments/http.ts";
 import * as SshInstall from "./environments/sshInstall/SshInstall.ts";
 import * as DedicatedHost from "./environments/DedicatedHost.ts";
+import * as LentSandboxHost from "./environments/LentSandboxHost.ts";
 import * as SandboxImage from "./sandboxes/SandboxImage.ts";
 import * as SandboxImageHttp from "./sandboxes/http.ts";
 import * as VaultsHttp from "./vaults/http.ts";
@@ -551,8 +552,6 @@ const layerAuth = Layer.mergeAll(
   layerIdentity,
   // Secret providers' scopes and «Test connection» (Vaults ticket 03), over the same reads.
   SecretProviderScopes.layer.pipe(Layer.provide(layerProviderReads), Layer.provide(AuditLog.layer)),
-  // Grants: loans of a resource to a Space (personal machines today).
-  Grants.layer.pipe(Layer.provide(AuditLog.layer)),
   // The Sandboxes' base image: built on this Hub, one build at a time.
   SandboxImage.layer,
   // CLIProxyAPI, run by the Hub on loopback (`T3CODE_AI_GATEWAY`), and the AI accounts it gets
@@ -583,7 +582,10 @@ const layerAuth = Layer.mergeAll(
   ),
   // Sandboxes only with a runtime that runs them (`T3CODE_SANDBOX_RUNTIME`, or rootless Podman);
   // the Owner's SSH installs register machines with it.
-  SshInstall.layer.pipe(Layer.provideMerge(EnvironmentRegistry.layerFromConfig)),
+  // Grants open and close a lent machine's Sandboxes in the registry (Grants ticket 08).
+  Layer.mergeAll(SshInstall.layer, Grants.layer.pipe(Layer.provide(AuditLog.layer))).pipe(
+    Layer.provideMerge(EnvironmentRegistry.layerFromConfig),
+  ),
 ).pipe(
   Layer.provideMerge(EnvironmentAuth.layer.pipe(Layer.provideMerge(SpaceDirectory.layer))),
   Layer.provideMerge(layerPersistence),
@@ -819,11 +821,16 @@ const layerHubMachineSnapshot = Layer.effect(
 );
 
 // Joined mode serves `/health` and nothing else: no client, sign-in or user WebSocket. A dedicated
-// machine runs no work itself: its Sandbox's server is the one connected to the Hub.
+// machine runs no work itself: its Sandbox's server is the one connected to the Hub. A personal
+// machine (not a server inside a Sandbox) also hosts the Sandboxes of the Spaces it is lent to.
 const layerJoinedRoutes = (joined: JoinedHubState) =>
   JoinedHub.layerHealthRoute.pipe(
     Layer.provide(
-      joined.mode === "dedicated" ? DedicatedHost.layer(joined) : JoinedHub.layer(joined),
+      joined.mode === "dedicated"
+        ? DedicatedHost.layer(joined)
+        : joined.sandboxed === true
+          ? JoinedHub.layer(joined)
+          : Layer.merge(JoinedHub.layer(joined), LentSandboxHost.layer(joined)),
     ),
   );
 

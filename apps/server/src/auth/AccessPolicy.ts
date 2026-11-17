@@ -75,7 +75,8 @@ export interface EnvironmentResource {
   readonly kind: "environment";
   readonly environmentKind: "hub" | "external" | "sandbox";
   /** An external machine's: `dedicated` to `space`, or (the default) `personal` to its owner. */
-  readonly mode?: "personal" | "dedicated" | "sandbox";
+  /** `lent`: a Sandbox on a machine lent to `space` (Grants), decided as a Sandbox. */
+  readonly mode?: "personal" | "dedicated" | "sandbox" | "lent";
   /**
    * Null for the Hub machine and dedicated machines, which belong to the Installation, and for
    * Sandboxes.

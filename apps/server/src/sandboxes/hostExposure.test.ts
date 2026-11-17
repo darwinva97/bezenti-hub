@@ -33,7 +33,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux" || lanAddress ==
       expect(listeners).toContainEqual({ address: lanAddress, port: lanPort });
       expect(listeners.some((listener) => listener.port === loopbackPort)).toBe(false);
       const ours = listeners.filter((listener) => listener.port === lanPort);
-      expect(hostExposureRefusal(ours, new Set())).toContain(`${lanAddress}:${lanPort}`);
+      const refusal = hostExposureRefusal(ours, new Set());
+      // It names each service and both ways out: bind it to loopback, or list its port.
+      expect(refusal).toContain(`${lanAddress}:${lanPort}`);
+      expect(refusal).toContain("127.0.0.1");
+      expect(refusal).toContain(`T3CODE_SANDBOX_HOST_PORTS=${lanPort}`);
       expect(hostExposureRefusal(ours, new Set([lanPort]))).toBeUndefined();
     });
   },

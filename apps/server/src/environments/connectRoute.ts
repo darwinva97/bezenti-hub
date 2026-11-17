@@ -88,7 +88,8 @@ const makeHandler = Effect.fnUntraced(function* (
       }
       // A dedicated machine runs its Space's work only in its Sandbox container, whose server
       // alone holds the credential that connects (`checkCredential`) and says so in its hello.
-      if (check.mode === "dedicated" && hello.value.sandbox === undefined) {
+      // So does a Sandbox on a lent machine (Grants): its host's own server never connects as it.
+      if ((check.mode === "dedicated" || check.lent) && hello.value.sandbox === undefined) {
         return yield* closeWith("not-sandboxed");
       }
       const closeRequested = yield* Deferred.make<EnvironmentCloseReason>();

@@ -229,7 +229,8 @@ const makeLayerServices = (
           AuditLog.layer,
           // The Hub machine runs Threads here unless a test says otherwise (the dev setting). The
           // Owner's SSH installs register machines with it, by the test's policy if it has one.
-          SshInstall.layer.pipe(
+          // Grants open and close a lent machine's Sandboxes in the registry (Grants ticket 08).
+          Layer.mergeAll(SshInstall.layer, Grants.layer).pipe(
             Layer.provideMerge(
               sandboxRuntime === undefined
                 ? EnvironmentRegistry.layerWith(registryOptions)
@@ -272,7 +273,6 @@ const makeLayerServices = (
       Layer.mergeAll(
         Vaults.layer,
         SecretProviderScopes.layer,
-        Grants.layer,
         // Delivery, and the masking of what was delivered (spec 5 ticket 05), under everything.
         // Where each machine writes Secret files: the Hub machine's own only when a test gives one.
         SecretDelivery.layer.pipe(

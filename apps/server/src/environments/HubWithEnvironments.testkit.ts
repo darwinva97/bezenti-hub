@@ -21,6 +21,8 @@ import {
   type ProjectId,
   type ProviderDriverKind,
   type ProviderInstanceId,
+  type EnvironmentSelfReport,
+  type SandboxHostReport,
   type SpaceId,
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -93,6 +95,7 @@ import {
 } from "./joinedHubState.ts";
 import * as DedicatedHost from "./DedicatedHost.ts";
 import * as JoinedHub from "./JoinedHub.ts";
+import * as LentSandboxHost from "./LentSandboxHost.ts";
 import type * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 import type { Authenticator, HubServices, Server } from "../auth/UserAuth.testkit.ts";
 import * as EnvironmentAgent from "./EnvironmentAgent.ts";
@@ -1095,12 +1098,151 @@ export const makeHub = Effect.fn("HubWithEnvironments.makeHub")(function* (
       hostState: Ref.get(hostState),
     };
   });
+  /**
+   * Grants ticket 08: the Owner's personal machine, joined and connected as itself, whose host
+   * also runs the Sandboxes of the Spaces it is lent to (`LentSandboxHost`) through the process
+   * runtime. Rounds come only when the test asks (`round`), each once it was followed.
+   */
+  const lendingHost = Effect.fn("HubWithEnvironments.lendingHost")(function* (input: {
+    readonly name: string;
+    readonly adapters: Layer.Layer<
+      ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+      never,
+      McpProviderSessions.McpProviderSessions
+    >;
+    /** What the host says of itself; ready with room by default. */
+    readonly hostReport?: Effect.Effect<SandboxHostReport>;
+  }) {
+    const joined = yield* joinMachine(server, authenticator, owner, input.name);
+    const hubEnvironmentId = EnvironmentId.make(joined.hubEnvironmentId);
+    const native = yield* startEnvironment({
+      hubUrl: server.url,
+      credential: joined.credential,
+      environmentId: EnvironmentId.make(joined.environmentId),
+      hubEnvironmentId,
+      name: input.name,
+      adapters: input.adapters,
+      connect: true,
+    });
+    const rootDir = yield* FileSystem.FileSystem.pipe(
+      Effect.flatMap((fs) => fs.makeTempDirectoryScoped({ prefix: "t3-lent-" })),
+      Effect.provide(NodeServices.layer),
+      Effect.orDie,
+    );
+    const launches: Array<SandboxLaunchRecord & { readonly exit: Effect.Effect<void> }> = [];
+    const launched = yield* Queue.unbounded<TestEnvironment>();
+    const launcher: ProcessSandboxRuntime.SandboxLauncher = (launch) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const paths = yield* ServerConfig.deriveServerPaths(launch.homePath, undefined, {
+          baseDirIsExplicit: true,
+        });
+        const home = yield* readJoinedHubState(paths.joinedHubPath).pipe(Effect.orDie);
+        if (Option.isNone(home)) return yield* Effect.die("the lent Sandbox has no Hub");
+        const credential = yield* fs
+          .readFileString(path.join(paths.secretsDir, `${ENVIRONMENT_CREDENTIAL_SECRET}.bin`))
+          .pipe(Effect.orDie);
+        const welcomes: Array<EnvironmentWelcomeFrame> = [];
+        const exited = yield* Deferred.make<number | null>();
+        const exitChanged = Deferred.succeed(exited, JoinedHub.SANDBOX_MODE_CHANGED_EXIT).pipe(
+          Effect.asVoid,
+        );
+        launches.push({
+          homePath: launch.homePath,
+          joined: home.value,
+          credential,
+          welcomes,
+          exit: exitChanged,
+        });
+        const environment = yield* startEnvironment({
+          hubUrl: home.value.hubUrl,
+          credential,
+          environmentId: home.value.environmentId,
+          hubEnvironmentId: home.value.hubEnvironmentId,
+          name: home.value.name,
+          adapters: input.adapters,
+          connect: true,
+          baseDir: launch.homePath,
+          sandbox: { runtime: "process" },
+          onWelcome: (welcome) =>
+            Effect.sync(() => void welcomes.push(welcome)).pipe(
+              Effect.andThen(
+                JoinedHub.sandboxedServerRefuses(home.value, welcome) ? exitChanged : Effect.void,
+              ),
+            ),
+          onRefused: (reason) =>
+            reason !== undefined && JoinedHub.SANDBOX_CREDENTIAL_ENDED.has(reason)
+              ? exitChanged
+              : Effect.void,
+        });
+        yield* Queue.offer(launched, environment);
+        return { pid: null, exited: Deferred.await(exited) };
+      }).pipe(Effect.provide(NodeServices.layer));
+    const hubConfig = Context.get(
+      server.services as unknown as Context.Context<ServerConfig.ServerConfig>,
+      ServerConfig.ServerConfig,
+    );
+    const runtime = yield* Layer.build(
+      ProcessSandboxRuntime.layer({ launcher, rootDir }).pipe(
+        Layer.provide(
+          Layer.succeed(
+            SandboxRuntime.SandboxHubAddress,
+            SandboxRuntime.SandboxHubAddress.of({ loopbackUrl: Effect.succeed(server.url) }),
+          ),
+        ),
+        Layer.provide(Layer.succeed(ServerConfig.ServerConfig, hubConfig)),
+        Layer.provide(NodeServices.layer),
+      ),
+    );
+    const rounds = yield* Queue.unbounded<void>();
+    const done = yield* Queue.unbounded<EnvironmentSelfReport>();
+    yield* LentSandboxHost.superviseLentSandboxes({
+      joined: {
+        hubUrl: server.url,
+        hubEnvironmentId,
+        environmentId: native.environmentId,
+        name: input.name,
+        joinedAt: "2026-01-01T00:00:00.000Z",
+      },
+      askHub: LentSandboxHost.reportToHubAt(server.url, joined.credential),
+      hostReport:
+        input.hostReport ??
+        Effect.succeed({
+          ready: true,
+          reason: null,
+          limitSupport: { cpus: false, memory: false, pids: false, note: null },
+          reachablePorts: [],
+          hostCpus: 4,
+          hostMemoryBytes: 8 * 1024 ** 3,
+          hostFreeBytes: 500 * 1024 ** 3,
+          hostTotalBytes: 1000 * 1024 ** 3,
+        }),
+      runtime: Effect.succeedSome(Context.get(runtime, SandboxRuntime.SandboxRuntime)),
+      homesOnDisk: LentSandboxHost.lentHomesIn(rootDir).pipe(Effect.provide(NodeServices.layer)),
+      nextRound: Queue.take(rounds),
+      onRound: (report) => Queue.offer(done, report).pipe(Effect.asVoid),
+    }).pipe(Effect.forkScoped);
+    // The first round runs at once.
+    yield* Queue.take(done);
+    return {
+      native,
+      rootDir,
+      /** Every Sandbox server its host started, in order. */
+      launches,
+      /** The next Sandbox server its host starts. */
+      nextLaunch: Queue.take(launched),
+      /** Runs one round (report, answer, follow) and answers with what it reported. */
+      round: Queue.offer(rounds, undefined).pipe(Effect.andThen(Queue.take(done))),
+    };
+  });
   return {
     server,
     authenticator,
     owner,
     join,
     joinDedicated,
+    lendingHost,
     service: serviceOf(server),
     /** The running server of the Space's Sandbox, once the Hub started it. */
     sandboxOf: sandboxes.environmentOf,

@@ -100,6 +100,7 @@ import {
   EnvironmentJoinStatus,
   EnvironmentJoinStatusRequest,
   EnvironmentLeaveResult,
+  EnvironmentSelfReport,
   EnvironmentSelfResult,
   HubEnvironmentList,
   HubEnvironmentOverview,
@@ -1275,6 +1276,16 @@ class EnvironmentHubEnvironmentsHttpApi extends HttpApiGroup.make("environments"
   .add(
     HttpApiEndpoint.post("self", "/api/environments/self", {
       headers: OptionalBearerHeaders,
+      success: EnvironmentSelfResult,
+      error: EnvironmentTokenExchangeErrors,
+    }),
+  )
+  // A personal machine reports whether it can run lent Sandboxes and how they are, and asks which
+  // it runs (Grants), with its own credential. Old hosts never call it; old Hubs answer 404.
+  .add(
+    HttpApiEndpoint.post("selfReport", "/api/environments/self/report", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentSelfReport,
       success: EnvironmentSelfResult,
       error: EnvironmentTokenExchangeErrors,
     }),

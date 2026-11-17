@@ -80,6 +80,16 @@ export const HubEnvironmentSummary = Schema.Struct({
   providers: Schema.Array(EnvironmentProviderSummary),
   resources: Schema.NullOr(EnvironmentHostResources),
   runningThreadCount: NonNegativeInt,
+  /**
+   * A Sandbox on a machine lent to its Space (Grants): listed as that Space's dedicated machine,
+   * with who lent it, who controls it and sees everything that runs on it. Absent otherwise.
+   */
+  lent: Schema.optionalKey(
+    Schema.Struct({
+      grantId: TrimmedNonEmptyString,
+      lenderName: Schema.NullOr(Schema.String),
+    }),
+  ),
 });
 export type HubEnvironmentSummary = typeof HubEnvironmentSummary.Type;
 
@@ -497,6 +507,21 @@ export const EnvironmentJoinStatus = Schema.Union([
 export type EnvironmentJoinStatus = typeof EnvironmentJoinStatus.Type;
 
 /**
+ * One Sandbox a lent machine runs: its Grant's Environment on the Hub, the borrowing Space, its
+ * limits (the host caps CPU and memory at what it has) and, only when the host asked for it, a new
+ * credential for it, reaching that Space alone.
+ */
+export const LentSandboxAssignment = Schema.Struct({
+  grantId: TrimmedNonEmptyString,
+  environmentId: EnvironmentId,
+  spaceId: SpaceId,
+  name: HubEnvironmentName,
+  limits: SandboxLimits,
+  credential: Schema.optionalKey(Schema.String),
+});
+export type LentSandboxAssignment = typeof LentSandboxAssignment.Type;
+
+/**
  * A machine asks, with its own credential, how the Hub uses it now: a dedicated machine's host
  * follows this, never what it remembers.
  */
@@ -518,8 +543,60 @@ export const EnvironmentSelfResult = Schema.Struct({
    * mode or Space; the machine's own credential stays with its host.
    */
   sandboxCredential: Schema.optionalKey(Schema.String),
+  /**
+   * A personal machine's Sandboxes for the Spaces it is lent to (Grants), each by its Grant.
+   * Absent from older Hubs and on `/self`; answered by `/self/report`.
+   */
+  lent: Schema.optionalKey(Schema.Array(LentSandboxAssignment)),
 });
 export type EnvironmentSelfResult = typeof EnvironmentSelfResult.Type;
+
+/**
+ * Whether a machine can run lent Sandboxes now, as it reports itself: rootless Podman with the
+ * Sandbox image and nothing of the host reachable but the ports its owner listed. Which limits its
+ * cgroups enforce, and its size and free disk for Sandboxes.
+ */
+export const SandboxHostReport = Schema.Struct({
+  ready: Schema.Boolean,
+  reason: Schema.NullOr(Schema.String),
+  limitSupport: Schema.Struct({
+    cpus: Schema.Boolean,
+    memory: Schema.Boolean,
+    pids: Schema.Boolean,
+    note: Schema.NullOr(Schema.String),
+  }),
+  /** Ports of the host its owner let lent Sandboxes reach (`T3CODE_SANDBOX_HOST_PORTS`). */
+  reachablePorts: Schema.Array(Schema.Int),
+  hostCpus: Schema.Number,
+  hostMemoryBytes: Schema.Number,
+  hostFreeBytes: Schema.NullOr(Schema.Number),
+  hostTotalBytes: Schema.NullOr(Schema.Number),
+});
+export type SandboxHostReport = typeof SandboxHostReport.Type;
+
+/** How one lent Sandbox is doing on its host, and its home's size. */
+export const LentSandboxReport = Schema.Struct({
+  grantId: TrimmedNonEmptyString,
+  state: Schema.Literals(["starting", "running", "restarting", "failed", "stopped"]),
+  message: Schema.NullOr(Schema.String),
+  /** Null until measured. */
+  diskUsedBytes: Schema.NullOr(Schema.Number),
+  /** Measurements that failed in a row. */
+  diskMeasureFailures: Schema.Int,
+});
+export type LentSandboxReport = typeof LentSandboxReport.Type;
+
+/**
+ * A personal machine's host reports itself and asks which Sandboxes it runs (`/self/report`):
+ * `credentialsFor` names the Grants whose Sandbox it is about to start, the only ones issued a new
+ * credential, so a running Sandbox's stays valid.
+ */
+export const EnvironmentSelfReport = Schema.Struct({
+  sandboxHost: SandboxHostReport,
+  sandboxes: Schema.Array(LentSandboxReport),
+  credentialsFor: Schema.Array(TrimmedNonEmptyString),
+});
+export type EnvironmentSelfReport = typeof EnvironmentSelfReport.Type;
 
 export const EnvironmentLeaveResult = Schema.Struct({ removed: Schema.Boolean });
 export type EnvironmentLeaveResult = typeof EnvironmentLeaveResult.Type;

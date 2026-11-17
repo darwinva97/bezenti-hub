@@ -54,10 +54,6 @@ const hub = Effect.gen(function* () {
   `;
   const person = Effect.fn(function* (id: string, role?: "admin" | "member" | "guest") {
     const cookie = yield* addMember(server, { id, displayName: id });
-    yield* server.sql`
-      INSERT INTO installation_permissions (user_id, permission, granted_by, granted_at)
-      VALUES (${id}, 'personalSpace.create', ${ownerId}, ${at})
-    `;
     if (role !== undefined) yield* joinOrganization(server, acmeId, id, role);
     return { id: UserId.make(id), cookie };
   });

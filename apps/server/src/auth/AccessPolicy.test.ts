@@ -1961,7 +1961,7 @@ const rows: ReadonlyArray<Row> = [
   ],
   [
     "a Personal space's User decides on Grants to it",
-    principal("linus", { permissions: ["personalSpace.create"] }),
+    principal("linus"),
     "grant.decide",
     toLinus,
     allow,

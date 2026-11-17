@@ -121,6 +121,11 @@ const fail = (reason: GrantErrorReason, message: string) =>
   Effect.fail(new GrantError({ reason, message }));
 
 const NOT_FOUND = "That loan does not exist.";
+/** A Personal space's owner name, when known; nothing for an Organization. */
+const ownerNameOf = (owners: ReadonlyMap<string, string>, spaceId: string) => {
+  const name = owners.get(spaceId);
+  return name === undefined ? {} : { ownerDisplayName: name };
+};
 const decodeLimits = Schema.decodeUnknownEffect(Schema.fromJsonString(GrantLimitsSchema));
 const encodeLimits = Schema.encodeEffect(Schema.fromJsonString(GrantLimitsSchema));
 
@@ -261,6 +266,23 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catch(storage("read the loans' Spaces")));
   });
 
+  /**
+   * Whose each Personal space is, by display name: every Personal space is called «Personal», so
+   * the lists name its owner instead. Only for Spaces the caller already reaches.
+   */
+  const personalOwnersOf = Effect.fn("Grants.personalOwnersOf")(function* (
+    rows: ReadonlyArray<{ readonly targetId: string | null }>,
+  ) {
+    const ids = [...new Set(rows.flatMap((row) => (row.targetId === null ? [] : [row.targetId])))];
+    if (ids.length === 0) return new Map<string, string>();
+    const owners = yield* sql<{ readonly spaceId: string; readonly name: string }>`
+      SELECT s.space_id AS "spaceId", u.display_name AS "name" FROM spaces s
+      JOIN users u ON u.user_id = s.personal_owner_user_id
+      WHERE s.kind = 'personal' AND ${sql.in("s.space_id", ids)}
+    `.pipe(Effect.catch(storage("read whose Personal spaces they are")));
+    return new Map(owners.map((owner) => [owner.spaceId, owner.name]));
+  });
+
   const resourceOf = (row: GrantRow, target: AccessPolicy.SpaceResource) =>
     ({
       kind: "grant",
@@ -271,6 +293,7 @@ const make = Effect.gen(function* () {
   const summaryOf = Effect.fn("Grants.summaryOf")(function* (
     row: GrantRow,
     known: Effect.Success<ReturnType<typeof targetsOf>>,
+    owners: ReadonlyMap<string, string>,
     who: Caller,
   ) {
     const limits = yield* decodeLimits(row.limitsJson).pipe(
@@ -293,6 +316,7 @@ const make = Effect.gen(function* () {
               spaceId: target.resource.id,
               kind: target.resource.kind,
               name: target.name,
+              ...ownerNameOf(owners, target.resource.id),
             },
       state: row.state,
       endReason: row.endReason,
@@ -316,8 +340,9 @@ const make = Effect.gen(function* () {
     who: Caller,
   ) {
     const known = yield* targetsOf(rows);
+    const owners = yield* personalOwnersOf(rows);
     const grants: Array<Grant> = [];
-    for (const row of rows) grants.push(yield* summaryOf(row, known, who));
+    for (const row of rows) grants.push(yield* summaryOf(row, known, owners, who));
     return { grants };
   });
 
@@ -539,6 +564,7 @@ const make = Effect.gen(function* () {
     }
     const ids = yield* knownTargets(who).pipe(Effect.catch(storage("read the Spaces")));
     const known = yield* targetsOf(ids.map((row) => ({ targetId: row.spaceId })));
+    const owners = yield* personalOwnersOf(ids.map((row) => ({ targetId: row.spaceId })));
     const host = yield* registry
       .sandboxHostOf(input.resource.environmentId)
       .pipe(Effect.catch(storage("read the machine")));
@@ -561,6 +587,7 @@ const make = Effect.gen(function* () {
             spaceId: target.resource.id,
             kind: target.resource.kind,
             name: target.name,
+            ...ownerNameOf(owners, target.resource.id),
             startsActive: AccessPolicy.isAllowed(
               AccessPolicy.decide(who.principal, "grant.decide", resource),
             ),

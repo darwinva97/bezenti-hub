@@ -69,6 +69,8 @@ export const GrantSpaceRef = Schema.Struct({
   spaceId: SpaceId,
   kind: Schema.Literals(["organization", "personal"]),
   name: Schema.String,
+  /** A Personal space's owner, by display name: every Personal space has the same `name`. */
+  ownerDisplayName: Schema.optionalKey(Schema.String),
 });
 export type GrantSpaceRef = typeof GrantSpaceRef.Type;
 

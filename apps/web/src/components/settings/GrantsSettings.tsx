@@ -7,6 +7,7 @@ import type {
   EnvironmentGrantLimits,
   EnvironmentId,
   Grant,
+  GrantSpaceRef,
   GrantTarget,
   HubEnvironmentSummary,
   SandboxHostReport,
@@ -48,6 +49,15 @@ const LENDER_RISKS = [
   "Their traffic leaves from this machine's address and can reach your network.",
   "Disk is measured every minute, not capped: a Sandbox can go over its limit between two checks.",
 ];
+
+/**
+ * A loan's Space as people tell them apart: every Personal space is called «Personal», so it is
+ * named by its owner, «Ana (personal)».
+ */
+const spaceLabel = (space: GrantSpaceRef) =>
+  space.kind === "personal" ? `${space.ownerDisplayName ?? space.name} (personal)` : space.name;
+const targetLabel = (grant: Grant, fallback: string) =>
+  grant.target === null ? fallback : spaceLabel(grant.target);
 
 const limitsText = (limits: EnvironmentGrantLimits) =>
   `${limits.cpus} CPUs · ${gib(limits.memoryBytes)} memory · ${limits.pids} processes · ${gib(limits.diskBytes)} disk`;
@@ -231,7 +241,7 @@ export function LendMachineDialog({
                   <SelectPopup>
                     {(targets ?? []).map((entry) => (
                       <SelectItem key={entry.spaceId} value={entry.spaceId}>
-                        {entry.kind === "personal" ? `${entry.name} (personal)` : entry.name}
+                        {spaceLabel(entry)}
                       </SelectItem>
                     ))}
                   </SelectPopup>
@@ -309,7 +319,7 @@ const END_LABELS: Record<NonNullable<Grant["endReason"]>, string> = {
 const loanDescription = (grant: Grant, side: "given" | "received") => {
   const where =
     side === "given"
-      ? `to ${grant.target?.name ?? "a Space"}`
+      ? `to ${targetLabel(grant, "a Space")}`
       : `by ${grant.lender.name ?? "another User"}`;
   const parts = [
     `${STATE_LABELS[grant.state]}${grant.endReason === null ? "" : ` (${END_LABELS[grant.endReason]})`} ${where}`,
@@ -431,7 +441,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
       {waiting.map((grant) => (
         <SettingsRow
           key={grant.id}
-          title={`${grant.resource.name ?? "A machine"} for ${grant.target?.name ?? "your Space"}`}
+          title={`${grant.resource.name ?? "A machine"} for ${targetLabel(grant, "your Space")}`}
           description={
             <>
               {`Waiting for you: lent by ${grant.lender.name ?? "another User"} · ${limitsText(grant.limits)}`}
@@ -467,7 +477,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
       {borrowed.map((grant) => (
         <SettingsRow
           key={grant.id}
-          title={`${grant.resource.name ?? "A machine"} in ${grant.target?.name ?? "your Space"}`}
+          title={`${grant.resource.name ?? "A machine"} in ${targetLabel(grant, "your Space")}`}
           description={
             <>
               {loanDescription(grant, "received")}
@@ -577,7 +587,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
                 {ending.resource.name ?? "this machine"}?
               </DialogTitle>
               <DialogDescription>
-                {`The Threads of ${ending.target?.name ?? "the Space"} on it stop: running turns get up to two minutes to save a checkpoint, and changes made by hand since the last turn may be lost. Its Sandbox and files are then deleted from the machine.`}
+                {`The Threads of ${targetLabel(ending, "the Space")} on it stop: running turns get up to two minutes to save a checkpoint, and changes made by hand since the last turn may be lost. Its Sandbox and files are then deleted from the machine.`}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>

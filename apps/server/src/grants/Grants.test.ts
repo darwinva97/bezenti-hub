@@ -205,6 +205,39 @@ describe("Grants", () => {
     }),
   );
 
+  it.effect("a Personal space is named by its owner in the targets and both loan lists", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const vps = yield* h.machine("owner-vps", h.ownerId);
+      const targets = yield* h.grants
+        .targets({ resource: { kind: "environment", environmentId: vps as never } })
+        .pipe(CommandActor.actAs(h.ownerId));
+      const byId = new Map(targets.targets.map((target) => [target.spaceId as string, target]));
+      // Every Personal space has the same name: only its owner tells them apart.
+      assert.equal(
+        byId.get(`personal:${h.grecia.id}`)?.name,
+        byId.get(`personal:${h.ana.id}`)?.name,
+      );
+      assert.equal(byId.get(`personal:${h.grecia.id}`)?.ownerDisplayName, "grecia");
+      assert.equal(byId.get(`personal:${h.ana.id}`)?.ownerDisplayName, "ana");
+      // An Organization has a name of its own and no owner.
+      assert.isUndefined(byId.get(h.acmeId)?.ownerDisplayName);
+
+      const given = yield* h.give(h.owner, vps, `personal:${h.grecia.id}`);
+      assert.equal(given.status, 200, JSON.stringify(given.body));
+      const mine = yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ownerId));
+      assert.deepEqual(
+        mine.grants.map((grant) => grant.target?.ownerDisplayName),
+        ["grecia"],
+      );
+      const theirs = yield* h.grants.listReceived({}).pipe(CommandActor.actAs(h.grecia.id));
+      assert.deepEqual(
+        theirs.grants.map((grant) => grant.target?.ownerDisplayName),
+        ["grecia"],
+      );
+    }),
+  );
+
   it.effect("a loan where the lender also decides starts active, with a strong factor", () =>
     Effect.gen(function* () {
       const h = yield* hub;

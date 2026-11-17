@@ -340,7 +340,7 @@ it.effect("an Admin's answer is saved in Acme secrets, audited, and the next Thr
     // Names only, the winning Vault's name: never the value.
     const listed = yield* t.delivery.turnNames(next);
     assert.deepStrictEqual(listed, [
-      { name: "STRIPE_KEY", description: "Stripe key", vault: "Acme secrets" },
+      { name: "STRIPE_KEY", description: "Stripe key", vault: "Acme secrets", type: "secret" },
     ]);
     assert.notInclude(JSON.stringify(listed), VALUE);
     // A Globex Thread never lists Acme's names.

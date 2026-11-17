@@ -285,7 +285,10 @@ always sealed: nobody reads it back, not even the Owner (owned-resources 01).
   invitation can leave the Organization; decision 4). `Vaults.shown` is the one place that reads
   one, for rows of class `variable` only. It is the only `value` a WS answer carries
   (`VaultEntry.value`, in `vaults.entries.list|put|link|copy`; `DoorRules.test.ts` holds both).
-  `vaults.threadEnvironment` gives `class`, never a value.
+  `vaults.threadEnvironment` gives `class`, and a Variable's `value` only through
+  `Vaults.variableValue` (the same `vault.readVariables`, so never to a Guest; owned-resources 05),
+  never a Secret's. Audit rows of `secret.edit` carry the entry's `type` and `op` (`add`,
+  `replace`, `rename`, `describe`, `delete`, `to-secret`, `to-variable`), never a value.
 - **`looks-like-credential`** (`looksLikeCredential` in contracts, the same function in the form
   and in the save): a name ending `_TOKEN|_SECRET|_PASSWORD|_KEY|_PAT`; a value starting `ghp_`,
   `github_pat_`, `glpat-`, `sk-`, `xox`, `AKIA` or `-----BEGIN`; a three-part JWT; or 20+
@@ -1080,10 +1083,14 @@ next start (`sweepOrphanValues`).
 credential's own Thread, after the same visibility check as `t3_thread_read` (a Thread its User can
 no longer see answers `thread_not_found`). The names come from `SecretDelivery.turnNames`, the
 names `planTurn` would deliver (the Thread's owner's effective set, a dangerous name only as the
-Owner last set it), each with its description and winning Vault: never a value or an id. A Thread
+Owner last set it), each with its description, winning group and `type` (`secret` | `variable`).
+A Variable of its own value also gives `value` (owned-resources 05: configuration, never masked);
+a Secret, a Provider entry, a template and an identity entry never do, nor any id. A Thread
 without an owner, or whose owner left its Space, lists nothing. The agents' shared instructions
-(`orchestrationInstructions.ts`) say: secrets are environment variables; call `list_secret_names`
-and use `$NAME`; never print values; a missing one is asked with `request_secret` and its `name`.
+(`orchestrationInstructions.ts`) say: Secrets and Variables are environment variables; call
+`list_secret_names`; use `$NAME` for a Secret and never print it; a Variable's value is in the
+answer; a missing secret is asked with `request_secret` and its `name`. The eval case
+`secret-variable-value-from-list` (`evals/mcp-tool-use/cases/secrets.ndjson`) checks it.
 A Thread whose machine does not serve its Space (`servesSpace`, as `plan`) lists nothing.
 `DoorRules.test.ts` checks the MCP service calls nothing of `SecretDelivery` but `turnNames`.
 

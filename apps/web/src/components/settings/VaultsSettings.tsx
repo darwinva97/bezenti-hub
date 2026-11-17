@@ -21,6 +21,8 @@ import {
 import {
   entryActions,
   loadVaultOverview,
+  MAKE_SECRET_WARNING,
+  VAULT_ENTRY_TYPE_HINT,
   vaultActions,
   vaultOwnerLine,
   type VaultOwnerSection,
@@ -788,6 +790,7 @@ function EntryRow(props: {
                 if (dangerous && !window.confirm(`${CONFIRM_DANGEROUS}. Make it a Secret?`)) {
                   return;
                 }
+                if (!window.confirm(MAKE_SECRET_WARNING(entry.name))) return;
                 void props.onChange({ class: "secret", confirmDangerous: dangerous });
               }}
             >
@@ -1078,10 +1081,8 @@ function AddSecretForm(props: {
       ) : DELIVERY_HINT[chosenDelivery].length === 0 ? null : (
         <span className="text-xs text-muted-foreground">{DELIVERY_HINT[chosenDelivery]}</span>
       )}
-      {kind === "secret" ? (
-        <span className="text-xs text-muted-foreground">
-          Never shown again once saved, not even to the Owner: only replaced or deleted.
-        </span>
+      {kind === "secret" || kind === "variable" ? (
+        <span className="text-xs text-muted-foreground">{VAULT_ENTRY_TYPE_HINT[kind]}</span>
       ) : null}
       {isVariable ? <CredentialWarning name={name} value={value} /> : null}
       {hint === null ? null : <span className="text-xs text-destructive">{hint}</span>}

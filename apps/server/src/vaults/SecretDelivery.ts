@@ -24,6 +24,7 @@ import {
   SecretProviderReadError,
   type SpaceId,
   type ThreadId,
+  type VaultEntryClass,
   UserId,
   VaultError,
 } from "@t3tools/contracts";
@@ -215,6 +216,9 @@ export class SecretDelivery extends Context.Service<
         readonly name: string;
         readonly description: string | null;
         readonly vault: string;
+        /** Owned-resources 05: a Secret (use `$NAME`) or a Variable, with its value. */
+        readonly type: VaultEntryClass;
+        readonly value?: string;
       }>,
       VaultError
     >;
@@ -658,9 +662,29 @@ const make = Effect.gen(function* () {
       if (!serves) return [];
     }
     const trusted = yield* ownerSet(set.value.variables.filter((v) => v.dangerous));
-    return set.value.variables
-      .filter((v) => !v.dangerous || trusted.has(v.entryId))
-      .map((v) => ({ name: v.name, description: v.description, vault: v.vaultName }));
+    const listed = set.value.variables.filter((v) => !v.dangerous || trusted.has(v.entryId));
+    // A Variable's own value comes along (it is configuration, never masked); a Secret's never, nor
+    // what a Provider entry, a template or an identity entry would make when a process starts.
+    return yield* Effect.forEach(listed, (v) => {
+      const named = { name: v.name, description: v.description, vault: v.vaultName, type: v.class };
+      const plainVariable =
+        v.class === "variable" &&
+        v.valueId !== null &&
+        v.provider === null &&
+        v.template === null &&
+        v.identity === undefined;
+      if (!plainVariable || v.valueId === null) return Effect.succeed(named);
+      return values.get(v.valueId).pipe(
+        Effect.map(
+          Option.match({
+            onNone: () => named,
+            onSome: (bytes) => ({ ...named, value: new TextDecoder().decode(bytes) }),
+          }),
+        ),
+        // A Variable the store cannot give is listed without its value, never fails the list.
+        Effect.orElseSucceed(() => named),
+      );
+    });
   });
 
   /** The facts of the Thread a token is signed for: from the plan, which the Hub made. */

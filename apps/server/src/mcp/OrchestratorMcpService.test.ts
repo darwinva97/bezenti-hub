@@ -3804,7 +3804,21 @@ describe("OrchestratorMcpService list_secret_names", () => {
                 turnNames: (threadId) =>
                   Effect.sync(() => {
                     asked.push(threadId);
-                    return [{ name: "STRIPE_KEY", description: null, vault: "Acme secrets" }];
+                    return [
+                      {
+                        name: "STRIPE_KEY",
+                        description: null,
+                        vault: "Acme secrets",
+                        type: "secret" as const,
+                      },
+                      {
+                        name: "AWS_REGION",
+                        description: null,
+                        vault: "Acme secrets",
+                        type: "variable" as const,
+                        value: "eu-west-1",
+                      },
+                    ];
                   }),
               }),
             ),
@@ -3829,8 +3843,18 @@ describe("OrchestratorMcpService list_secret_names", () => {
       const listed = yield* run(scopeFor("grace"), true, asked);
       assert.isTrue(listed._tag === "Success");
       if (listed._tag === "Success") {
+        // Owned-resources 05: a Variable carries its value; a Secret only its name and type.
         assert.deepStrictEqual(listed.success, {
-          secrets: [{ name: "STRIPE_KEY", description: null, vault: "Acme secrets" }],
+          secrets: [
+            { name: "STRIPE_KEY", description: null, vault: "Acme secrets", type: "secret" },
+            {
+              name: "AWS_REGION",
+              description: null,
+              vault: "Acme secrets",
+              type: "variable",
+              value: "eu-west-1",
+            },
+          ],
         });
       }
       assert.deepStrictEqual(asked, [own]);

@@ -193,7 +193,7 @@ const RequestSecretTool = Tool.make("request_secret", {
 
 const ListSecretNamesTool = Tool.make("list_secret_names", {
   description:
-    "Names of the secrets this thread has as environment variables, with their Vault. Use $NAME in commands; never print a value. Values are never shown.",
+    "Environment variables this thread has from its Vault: each a secret (use $NAME in commands; never print it; its value is never shown) or a variable (configuration; its value is in the answer).",
   // No `parameters`: Tool.EmptyParams (an empty Struct is not a valid MCP input schema).
   success: OrchestratorMcpListSecretNamesResult,
   failure: OrchestratorMcpFailure,

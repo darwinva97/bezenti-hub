@@ -911,3 +911,48 @@ it.effect("a User's own `default` reaches their Personal space, never an Organiz
     );
   }),
 );
+
+// Owned-resources 05: a Thread's «Secrets» panel shows Variables with their value.
+
+it.effect(
+  "a Thread's panel shows a Variable's value to whoever may read it, never a Secret's",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const config = yield* h.ownersVault("Acme config", [], h.acmeId);
+      yield* h.vaults
+        .putEntry({
+          vaultId: config,
+          name: "REGION",
+          value: Redacted.make("eu-west-1"),
+          class: "variable",
+        })
+        .pipe(h.as(h.ada.id));
+      yield* h.vaults
+        .putEntry({ vaultId: config, name: "API_KEY", value: Redacted.make(VALUES[0]!) })
+        .pipe(h.as(h.ada.id));
+      yield* h.vaults
+        .setSpaceDefaults({ spaceId: h.acmeId, vaultIds: [config] })
+        .pipe(h.as(h.ada.id));
+      const panel = (userId: UserId, threadId: ThreadId) =>
+        h.effective.threadEnvironment({ threadId }, { variableValue: h.vaults.variableValue }).pipe(
+          h.as(userId),
+          Effect.map((shown) =>
+            Object.fromEntries(
+              shown.variables.map((variable) => [variable.name, variable.value ?? null]),
+            ),
+          ),
+        );
+      const graces = yield* h.thread("thread:grace-config", h.grace.id, h.acmeId, null);
+      assert.deepEqual(yield* panel(h.grace.id, graces), { API_KEY: null, REGION: "eu-west-1" });
+      // A Guest reads names only (decision 4 of «Variables y Secrets sellados»).
+      const linus = yield* h.thread("thread:linus-config", h.linus.id, h.acmeId, null);
+      assert.deepEqual(yield* panel(h.linus.id, linus), { API_KEY: null, REGION: null });
+      // Without Vaults' reader, names only.
+      const bare = yield* h.effective
+        .threadEnvironment({ threadId: graces })
+        .pipe(h.as(h.grace.id));
+      assert.isTrue(bare.variables.every((variable) => !("value" in variable)));
+      assert.isFalse(VALUES.some((value) => JSON.stringify(bare).includes(value)));
+    }),
+);

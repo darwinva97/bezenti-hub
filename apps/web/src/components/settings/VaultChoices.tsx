@@ -553,7 +553,7 @@ export function ThreadSecrets(props: {
           <p className="font-medium">Secrets</p>
           <p className="text-xs text-muted-foreground">
             The environment variables your turns, terminals and scripts in this Thread receive, by
-            group and whose Vault it is part of. Values are never shown.
+            group and whose Vault it is part of. Variables show their value; Secrets never do.
           </p>
           {error !== null ? (
             <p className="text-xs text-destructive" role="alert">
@@ -568,7 +568,15 @@ export function ThreadSecrets(props: {
               {threadSecretLines(shown).map((line) => (
                 <li key={line.name} className="flex flex-col">
                   <span>
-                    <code className="font-mono text-xs">{line.name}</code>{" "}
+                    <code className="font-mono text-xs">{line.name}</code>
+                    {line.value === null ? null : (
+                      <code
+                        aria-label={`Value of ${line.name}`}
+                        className="ms-1 rounded bg-muted px-1 font-mono text-xs break-all"
+                      >
+                        {line.value}
+                      </code>
+                    )}{" "}
                     <span className="text-xs text-muted-foreground">from {line.from}</span>
                   </span>
                   {line.winsOver === null ? null : (

@@ -396,9 +396,11 @@ became the Owner's default group and every other vault became a named group of i
 owner, so threads kept receiving the same entries.
 When you add an entry, **Kind** says what it is:
 
-- a **Variable** is configuration, such as `AWS_REGION` or `KUBE_SERVER`. Its value
-  is shown in the list to the Owner, Admins and Members who see the Vault (never to
-  Guests), and it is never hidden in a Thread's history. If a Variable looks like a
+- a **Variable** is configuration, such as `AWS_REGION` or `KUBE_SERVER`. It is
+  visible to everyone who receives its group: its value is shown in the list and in
+  a thread's **Secrets** panel to the Owner, Admins and Members who see it (never to
+  Guests), agents read it from `list_secret_names`, and it is never hidden in a
+  Thread's history. If a Variable looks like a
   credential (a name ending in `_TOKEN` or `_PASSWORD`, a value starting `ghp_` or
   `sk-`...), Settings warns you, but it still saves it.
 - a **Secret** is never shown again once saved: nobody can read it back from the

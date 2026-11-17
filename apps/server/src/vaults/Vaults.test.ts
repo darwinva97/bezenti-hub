@@ -190,15 +190,16 @@ const acmeSecrets = Effect.fn(function* ({ vaults, as, ownerId, acmeId, main }: 
 const dropValueFile = (setup: Hub, entryId: string) =>
   setup.valueFileOf(entryId).pipe(Effect.map((file) => NodeFS.rmSync(file)));
 
-const auditOps = (setup: Hub, name: string) =>
+/** `op:type` of each `secret.edit` row of an entry (owned-resources 05). */
+const auditTypes = (setup: Hub, name: string) =>
   setup.server.sql<{ readonly detail_json: string }>`
     SELECT detail_json FROM audit_log WHERE action = 'secret.edit' AND target_name = ${name}
     ORDER BY audit_id
   `.pipe(
     Effect.map((rows) =>
       rows.map((row) => {
-        const detail = JSON.parse(row.detail_json) as { op: string; class?: string };
-        return detail.class === undefined ? detail.op : `${detail.op}:${detail.class}`;
+        const detail = JSON.parse(row.detail_json) as { op: string; type?: string };
+        return `${detail.op}:${detail.type ?? "none"}`;
       }),
     ),
   );
@@ -543,11 +544,12 @@ it.effect(
       );
       assert.equal(secret.entry.class, "secret");
       assert.notProperty(secret.entry, "value");
-      assert.deepEqual(yield* auditOps(setup, own.name), [
-        "add",
-        "class:variable",
-        "replace",
-        "class:secret",
+      // Owned-resources 05: each with the entry's type after it.
+      assert.deepEqual(yield* auditTypes(setup, own.name), [
+        "add:secret",
+        "to-variable:variable",
+        "replace:variable",
+        "to-secret:secret",
       ]);
     }),
 );
@@ -1114,6 +1116,7 @@ it.effect("only the Owner adds a Provider entry: a sealed Secret, its path for e
       vault: "Acme secrets",
       vaultId: acme.id,
       kind: "provider",
+      type: "secret",
       op: "add",
       provider: FAKE_PROVIDER_LABEL,
     });

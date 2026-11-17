@@ -233,6 +233,46 @@ describe("Settings → Vaults on mobile", () => {
   });
 });
 
+describe("Variables on mobile (owned-resources 05)", () => {
+  it("adds a Variable, said to be visible to whoever receives the group, and shows Variables' values", async () => {
+    const withVariable = [
+      ...entries,
+      {
+        id: "e9",
+        vaultId: "vault-acme",
+        name: "AWS_REGION",
+        description: null,
+        kind: "own",
+        class: "variable",
+        value: "eu-west-1",
+        broken: false,
+        unmasked: false,
+      },
+    ] as unknown as ReadonlyArray<VaultEntry>;
+    mocks.commands.list = vi.fn(() =>
+      ok({ groups: [vault({ canEdit: true })], owners: [], unlinked: [] }),
+    );
+    mocks.commands.entries = vi.fn(() => ok({ entries: withVariable }));
+    mocks.commands.put = vi.fn(() => ok({ entry: withVariable[2], warnings: [] }));
+    await act(async () => root?.render(<VaultsList environmentId={hub} />));
+    await act(async () => {});
+    expect(byLabel("Value of AWS_REGION")?.textContent).toBe("eu-west-1");
+    // A Secret's value is never on screen: none came, none is shown.
+    expect(byLabel("Value of GITHUB_TOKEN")).toBeNull();
+    await click("Add secret");
+    await click("Variable");
+    expect(text()).toContain("Visible to everyone who receives this group.");
+    await type("Secret name", "API_URL");
+    await type("Secret value", "https://api.example.com");
+    await click("Save secret");
+    expect(mocks.commands.put).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ name: "API_URL", class: "variable" }),
+      }),
+    );
+  });
+});
+
 describe("a Thread's Secrets panel on mobile", () => {
   it("lists names, the winning Vault and whom it beats, never a value", async () => {
     mocks.commands.thread = vi.fn(() =>

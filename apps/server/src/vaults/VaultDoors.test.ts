@@ -252,7 +252,11 @@ it.effect(
           yield* call("ws:vaults.choices", v.choices({ spaceId, projectId }));
         }
         for (const threadId of t.threads) {
-          yield* call("ws:vaults.threadEnvironment", t.effective.threadEnvironment({ threadId }));
+          // As the WS door calls it: a Variable's value through Vaults, never a Secret's.
+          yield* call(
+            "ws:vaults.threadEnvironment",
+            t.effective.threadEnvironment({ threadId }, { variableValue: t.vaults.variableValue }),
+          );
         }
         // Writes, each carrying a value or reaching one: allowed or refused, neither answers it.
         const mine = `${who.name.toUpperCase()}_WROTE`;

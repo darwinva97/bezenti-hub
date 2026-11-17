@@ -187,7 +187,43 @@ describe("threadSecretLines", () => {
       ],
     } as unknown as VaultThreadEnvironment;
     expect(threadSecretLines(env)).toEqual([
-      { name: "TOKEN", from: "Mine · Owner (yours)", winsOver: "Acme (Space default)" },
+      {
+        name: "TOKEN",
+        from: "Mine · Owner (yours)",
+        winsOver: "Acme (Space default)",
+        value: null,
+      },
+    ]);
+  });
+});
+
+describe("Variables in a Thread's panel (owned-resources 05)", () => {
+  it("shows a Variable's value and never a Secret's, even if one came along", () => {
+    const env = {
+      variables: [
+        {
+          name: "REGION",
+          vaultId: "v",
+          vaultName: "Acme",
+          source: "space",
+          class: "variable",
+          value: "eu-west-1",
+          shadowed: [],
+        },
+        {
+          name: "API_KEY",
+          vaultId: "v",
+          vaultName: "Acme",
+          source: "space",
+          class: "secret",
+          value: "leaked-by-mistake",
+          shadowed: [],
+        },
+      ],
+    } as unknown as VaultThreadEnvironment;
+    expect(threadSecretLines(env).map((line) => [line.name, line.value])).toEqual([
+      ["REGION", "eu-west-1"],
+      ["API_KEY", null],
     ]);
   });
 });

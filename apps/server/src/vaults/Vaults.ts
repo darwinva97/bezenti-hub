@@ -101,6 +101,14 @@ export class Vaults extends Context.Service<
     readonly deleteEntry: (
       input: VaultEntryDeleteInput,
     ) => Effect.Effect<VaultEntryDeleteResult, VaultError>;
+    /**
+     * A Variable's own value for the acting User, when they may read its group's Variables
+     * (`vault.readVariables`); undefined otherwise, never a Secret's (owned-resources 05).
+     */
+    readonly variableValue: (entry: {
+      readonly vaultId: VaultGroupId;
+      readonly entryId: VaultEntryId;
+    }) => Effect.Effect<string | undefined>;
     /** `vaults.unlinkedNotice.dismiss`: the Owner has read which entries were Secret links. */
     readonly dismissUnlinked: Effect.Effect<VaultUnlinkedDismissResult, VaultError>;
     // Spec 5 ticket 03: allowances and choices. What a Thread receives is EffectiveVaults'.
@@ -452,6 +460,9 @@ const unavailable = Vaults.of({
   putEntry: refuse,
   deleteEntry: refuse,
   dismissUnlinked: Effect.fail(UNAVAILABLE),
+  variableValue: Effect.fn("Vaults.unavailableVariableValue")(function* (_entry: unknown) {
+    return undefined;
+  }),
   allow: refuse,
   choices: refuse,
   setSpaceDefaults: refuse,
@@ -854,7 +865,8 @@ const make = Effect.gen(function* () {
     readonly op: string;
     readonly from?: string;
     readonly dangerous?: boolean;
-    readonly class?: VaultEntryClass;
+    /** Owned-resources 05: what the entry is (after the change). Never its value. */
+    readonly type: VaultEntryClass;
     /** A Provider entry's provider, by its label; never its reference. */
     readonly provider?: string;
     readonly delivery?: VaultEntryDelivery;
@@ -870,8 +882,8 @@ const make = Effect.gen(function* () {
         kind: input.kind,
         op: input.op,
         ...(input.from === undefined ? {} : { from: input.from }),
+        type: input.type,
         ...(input.dangerous === true ? { dangerous: true } : {}),
-        ...(input.class === undefined ? {} : { class: input.class }),
         ...(input.provider === undefined ? {} : { provider: input.provider }),
         ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
       },
@@ -1022,6 +1034,17 @@ const make = Effect.gen(function* () {
       originalName: row.originalName,
     }));
   });
+
+  const variableValue = Effect.fn("Vaults.variableValue")(
+    function* (entry: { readonly vaultId: VaultGroupId; readonly entryId: VaultEntryId }) {
+      const { row } = yield* authorizeVault(entry.vaultId, "vault.readVariables");
+      const found = yield* findEntry(row.vaultId, entry.entryId);
+      if (found.kind !== "own" || classOf(found) !== "variable") return undefined;
+      return yield* readValue(valueIdOf(found));
+    },
+    // Not theirs to read, gone, or unreadable: the panel shows the name alone.
+    Effect.orElseSucceed(() => undefined),
+  );
 
   const dismissUnlinked = Effect.gen(function* () {
     const { userId } = yield* caller;
@@ -1395,6 +1418,7 @@ const make = Effect.gen(function* () {
               entryId,
               name: input.name,
               kind: "provider",
+              type: "secret",
               op: "add",
               dangerous,
               provider: label,
@@ -1444,6 +1468,7 @@ const make = Effect.gen(function* () {
             entryId: existing.entryId,
             name: input.name,
             kind: "provider",
+            type: "secret",
             op: moved ? "reference" : renamed ? "rename" : redelivered ? "delivery" : "describe",
             ...(renamed ? { from: existing.name } : {}),
             ...(redelivered ? { delivery } : {}),
@@ -1571,6 +1596,7 @@ const make = Effect.gen(function* () {
               entryId,
               name: input.name,
               kind: "identity",
+              type: "secret",
               op: "add",
               dangerous,
             });
@@ -1608,6 +1634,7 @@ const make = Effect.gen(function* () {
             entryId: existing.entryId,
             name: input.name,
             kind: "identity",
+            type: "secret",
             op: retargeted ? "identity" : renamed ? "rename" : "describe",
             ...(renamed ? { from: existing.name } : {}),
             dangerous,
@@ -1683,7 +1710,7 @@ const make = Effect.gen(function* () {
               kind: "template",
               op: "add",
               dangerous,
-              class: entryClass,
+              type: entryClass,
               delivery,
             });
           }),
@@ -1725,7 +1752,7 @@ const make = Effect.gen(function* () {
             ...(renamed ? { from: existing.name } : {}),
             ...(redelivered ? { delivery } : {}),
             dangerous,
-            class: entryClass,
+            type: entryClass,
           });
         }),
       )
@@ -1789,7 +1816,7 @@ const make = Effect.gen(function* () {
             kind: "own",
             op: "add",
             dangerous,
-            ...(entryClass === "variable" ? { class: entryClass } : {}),
+            type: entryClass,
           });
         }),
       ).pipe(
@@ -1851,9 +1878,20 @@ const make = Effect.gen(function* () {
             updated_by = ${userId}
           WHERE entry_id = ${entry.entryId}
         `;
-        const edit = { userId, vault: row, entryId: entry.entryId, name: input.name };
+        const edit = {
+          userId,
+          vault: row,
+          entryId: entry.entryId,
+          name: input.name,
+          type: nextClass,
+        };
         if (classChanged) {
-          yield* recordEdit({ ...edit, kind: entry.kind, op: "class", class: nextClass });
+          // Owned-resources 05: `to-secret` (it keeps its value) or `to-variable` (a new one).
+          yield* recordEdit({
+            ...edit,
+            kind: entry.kind,
+            op: nextClass === "secret" ? "to-secret" : "to-variable",
+          });
         }
         if (redelivered) {
           yield* recordEdit({ ...edit, kind: entry.kind, op: "delivery", delivery });
@@ -1897,6 +1935,7 @@ const make = Effect.gen(function* () {
             entryId: entry.entryId,
             name: entry.name,
             kind: entry.kind,
+            type: classOf(entry),
             op: "delete",
           });
           yield* refreshTemplateClasses(row.vaultId);
@@ -2278,6 +2317,7 @@ const make = Effect.gen(function* () {
     putEntry,
     deleteEntry,
     dismissUnlinked,
+    variableValue,
   });
 });
 

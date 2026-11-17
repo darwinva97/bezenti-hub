@@ -723,13 +723,22 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
 ]);
 export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;
 
-/** `list_secret_names` (spec 5 ticket 06): what this Thread's turns receive. Never a value. */
+/**
+ * `list_secret_names` (spec 5 ticket 06, owned-resources 05): what this Thread's turns receive.
+ * A Secret's value never; a Variable's (configuration) comes along.
+ */
 export const OrchestratorMcpListSecretNamesResult = Schema.Struct({
   secrets: Schema.Array(
     Schema.Struct({
       name: Schema.String,
       description: Schema.NullOr(Schema.String),
       vault: Schema.String,
+      type: Schema.optionalKey(Schema.Literals(["secret", "variable"])).annotate({
+        description: "secret: use $NAME, never print it. variable: configuration, its value here.",
+      }),
+      value: Schema.optionalKey(Schema.String).annotate({
+        description: "A variable's value. Never present for a secret.",
+      }),
     }),
   ),
 });

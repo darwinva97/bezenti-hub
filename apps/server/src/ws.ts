@@ -2458,7 +2458,9 @@ export const layerWsRpc = (
         [WS_METHODS.vaultsChoices]: (input) => vaults.choices(input),
         [WS_METHODS.vaultsSpaceDefaultsSet]: (input) => vaults.setSpaceDefaults(input),
         [WS_METHODS.vaultsProjectChoicesSet]: (input) => vaults.setProjectChoice(input),
-        [WS_METHODS.vaultsThreadEnvironment]: (input) => effectiveVaults.threadEnvironment(input),
+        // A Variable's value only as Vaults lets the caller read it (owned-resources 05).
+        [WS_METHODS.vaultsThreadEnvironment]: (input) =>
+          effectiveVaults.threadEnvironment(input, { variableValue: vaults.variableValue }),
         // Vaults ticket 03: a Vault's usable Provider scopes (its editors); Secret providers'
         // scopes, «Test connection» and what a deletion breaks (the Owner, SecretProviderScopes).
         [WS_METHODS.vaultsProviderScopes]: (input) => vaults.providerScopes(input),

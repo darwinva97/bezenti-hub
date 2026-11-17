@@ -3,6 +3,7 @@ import {
   entryActions,
   entryBadges,
   loadVaultOverview,
+  VAULT_ENTRY_TYPE_HINT,
   vaultFailureMessage,
   vaultOwnerLine,
 } from "@t3tools/client-runtime/vaults";
@@ -11,7 +12,12 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, VaultEntry, VaultGroupSummary } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  VaultEntry,
+  VaultEntryClass,
+  VaultGroupSummary,
+} from "@t3tools/contracts";
 import * as Redacted from "effect/Redacted";
 import { useEffect, useEffectEvent, useState } from "react";
 import { View } from "react-native";
@@ -20,6 +26,7 @@ import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/
 import { SecretValueInput } from "./SecretValueInput";
 import { Button } from "../../components/ui/Button";
 import { ListSection } from "../../components/ui/ListSection";
+import { ListToggleRow } from "../../components/ui/ListToggleRow";
 import { serverEnvironment } from "../../state/server";
 import { useSpaceSelections } from "../../state/spaces";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -94,7 +101,12 @@ function VaultsPage(props: { readonly environmentId: EnvironmentId }) {
 
   const save = async (
     vault: VaultGroupSummary,
-    input: { readonly entryId?: VaultEntry["id"]; readonly name: string; readonly value: string },
+    input: {
+      readonly entryId?: VaultEntry["id"];
+      readonly name: string;
+      readonly value: string;
+      readonly class?: VaultEntryClass;
+    },
   ) => {
     const result = await settle(
       put({
@@ -104,6 +116,7 @@ function VaultsPage(props: { readonly environmentId: EnvironmentId }) {
           ...(input.entryId === undefined ? {} : { entryId: input.entryId }),
           name: input.name,
           value: Redacted.make(input.value),
+          ...(input.class === undefined ? {} : { class: input.class }),
         },
       }),
     );
@@ -139,8 +152,8 @@ function VaultsPage(props: { readonly environmentId: EnvironmentId }) {
         ))
       )}
       <Text className="px-2 text-xs text-foreground-muted">
-        A Secret's value is never shown again once saved. Back up the master key on the web or
-        desktop app.
+        A Secret's value is never shown again once saved; a Variable's is shown to everyone who
+        receives its group. Back up the master key on the web or desktop app.
       </Text>
     </View>
   );
@@ -155,6 +168,7 @@ function VaultCard(props: {
     readonly entryId?: VaultEntry["id"];
     readonly name: string;
     readonly value: string;
+    readonly class?: VaultEntryClass;
   }) => Promise<string>;
 }) {
   const { vault } = props;
@@ -192,7 +206,11 @@ function VaultCard(props: {
         />
       ))}
       {canAdd ? (
-        <AddSecret onAdd={(name, value) => run(() => props.onSave({ name, value }))} />
+        <AddSecret
+          onAdd={(name, value, entryClass) =>
+            run(() => props.onSave({ name, value, class: entryClass }))
+          }
+        />
       ) : null}
       {error === null ? null : (
         <Text accessibilityRole="alert" className="px-4 pb-3 text-sm text-danger-foreground">
@@ -227,6 +245,16 @@ function EntryRow(props: {
       {entry.description === null || entry.description.length === 0 ? null : (
         <Text className="text-sm text-foreground-muted">{entry.description}</Text>
       )}
+      {/* A Variable is configuration: its value, as the Hub gives it (Guests never). */}
+      {entry.class === "variable" && entry.value !== undefined ? (
+        <Text
+          selectable
+          accessibilityLabel={`Value of ${entry.name}`}
+          className="font-mono text-sm text-foreground"
+        >
+          {entry.value}
+        </Text>
+      ) : null}
       {props.canReplace && !replacing ? (
         <Button
           label="Replace value"
@@ -243,6 +271,7 @@ function EntryRow(props: {
             value={value}
             onChangeText={setValue}
             editable={!pending}
+            visible={entry.class === "variable"}
           />
           <View className="flex-row gap-2">
             <Button
@@ -280,10 +309,13 @@ function EntryRow(props: {
   );
 }
 
-function AddSecret(props: { readonly onAdd: (name: string, value: string) => Promise<boolean> }) {
+function AddSecret(props: {
+  readonly onAdd: (name: string, value: string, entryClass: VaultEntryClass) => Promise<boolean>;
+}) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
+  const [variable, setVariable] = useState(false);
   const [pending, setPending] = useState(false);
   if (!open) {
     return (
@@ -297,8 +329,10 @@ function AddSecret(props: { readonly onAdd: (name: string, value: string) => Pro
   const close = () => {
     setName("");
     setValue("");
+    setVariable(false);
     setOpen(false);
   };
+  const entryClass: VaultEntryClass = variable ? "variable" : "secret";
   return (
     <View className="gap-2 px-4 py-3">
       <TextInput
@@ -312,23 +346,32 @@ function AddSecret(props: { readonly onAdd: (name: string, value: string) => Pro
         spellCheck={false}
       />
       {problem === null ? null : <Text className="text-xs text-danger-foreground">{problem}</Text>}
+      <ListToggleRow
+        label="Variable"
+        value={variable}
+        disabled={pending}
+        onValueChange={setVariable}
+      />
+      <Text className="text-xs text-foreground-muted">{VAULT_ENTRY_TYPE_HINT[entryClass]}</Text>
       <SecretValueInput
         accessibilityLabel="Secret value"
         placeholder="Value"
         value={value}
         onChangeText={setValue}
         editable={!pending}
+        visible={variable}
       />
       <View className="flex-row gap-2">
         <Button
-          label="Save secret"
+          label={variable ? "Save variable" : "Save secret"}
+          accessibilityLabel="Save secret"
           tone="primary"
           size="compact"
           disabled={pending || trimmed.length === 0 || problem !== null || value.length === 0}
           onPress={() => {
             setPending(true);
             void props
-              .onAdd(trimmed, value)
+              .onAdd(trimmed, value, entryClass)
               .then((saved) => {
                 if (saved) close();
               })

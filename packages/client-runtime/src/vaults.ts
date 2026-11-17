@@ -144,9 +144,24 @@ export interface ThreadSecretLine {
   readonly name: string;
   readonly from: string;
   readonly winsOver: string | null;
+  /** A Variable's value, when the Hub gave it (owned-resources 05); a Secret's never. */
+  readonly value: string | null;
 }
 
-/** The lines of a Thread's «Secrets» panel: names and where they come from, never values. */
+/**
+ * Settings copy for an entry's type (owned-resources 05): a Variable is seen by whoever receives
+ * its group; a Secret by nobody once saved.
+ */
+export const VAULT_ENTRY_TYPE_HINT = {
+  secret: "Never shown again once saved, not even to the Owner: only replaced or deleted.",
+  variable: "Visible to everyone who receives this group.",
+} as const;
+
+/** What turning a Variable into a Secret does, and does not undo. */
+export const MAKE_SECRET_WARNING = (name: string) =>
+  `Make ${name} a Secret? It is hidden from now on, but what was already printed in a Thread's history stays visible there.`;
+
+/** The lines of a Thread's «Secrets» panel: names and where they come from, Variables' values. */
 export function threadSecretLines(
   environment: Pick<VaultThreadEnvironment, "variables"> &
     Partial<Pick<VaultThreadEnvironment, "vaults">>,
@@ -161,6 +176,7 @@ export function threadSecretLines(
   };
   return environment.variables.map((variable) => ({
     name: variable.name,
+    value: variable.class === "variable" ? (variable.value ?? null) : null,
     from: `${groupName(variable.vaultId, variable.vaultName)} (${VAULT_SOURCE_LABEL[variable.source]})`,
     winsOver:
       variable.shadowed.length === 0

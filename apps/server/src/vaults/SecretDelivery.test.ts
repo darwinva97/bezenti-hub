@@ -757,3 +757,45 @@ it.effect("an identity entry deleted, or out of reach, is no longer refreshed", 
     assert.lengthOf(sent, 0);
   }).pipe(Effect.scoped),
 );
+
+// Owned-resources 05: what `list_secret_names` answers the agent.
+
+it.effect(
+  "names say Secret or Variable; a Variable's value comes along, never a Secret's, a Provider entry's, a template's with a Secret or an identity's",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* ownersThreadWith(hubFilesInMemory, "https://hub.example.com");
+      const { vaults, owner, main } = setup;
+      yield* setup.put("PLAIN_SECRET", "plain-secret-value-0001");
+      yield* setup.put("PLAIN_VARIABLE", "eu-west-1", undefined, "variable");
+      yield* setup.putProvider("FROM_PROVIDER", "kv/acme/db#password");
+      // KUBE_SERVER (a Variable), KUBE_CA (template only), KUBE_TOKEN (a file), KUBECONFIG.
+      yield* kubeconfigSet(setup);
+      yield* vaults
+        .putEntry({ vaultId: main, name: "HUB_ID", identity: { audience: "vault" } })
+        .pipe(CommandActor.actAs(owner));
+      const threadId = yield* setup.thread("thread:names");
+      const names = yield* setup.delivery.turnNames(threadId);
+      const byName = new Map(names.map((entry) => [entry.name, entry]));
+      assert.deepEqual(
+        names.map((entry) => [entry.name, entry.type, "value" in entry]),
+        [
+          ["FROM_PROVIDER", "secret", false],
+          ["HUB_ID", "secret", false],
+          ["KUBECONFIG", "secret", false],
+          ["KUBE_SERVER", "variable", true],
+          ["KUBE_TOKEN", "secret", false],
+          ["PLAIN_SECRET", "secret", false],
+          ["PLAIN_VARIABLE", "variable", true],
+        ],
+      );
+      assert.equal(byName.get("PLAIN_VARIABLE")?.value, "eu-west-1");
+      assert.equal(byName.get("KUBE_SERVER")?.value, "https://k3s.internal:6443");
+      // A boolean: a failure never prints a Secret's value.
+      const text = JSON.stringify(names);
+      assert.isFalse(
+        ["plain-secret-value-0001", "kube-token-secret-0001"].some((value) => text.includes(value)),
+        "a Secret's value reached the agent's list",
+      );
+    }).pipe(Effect.scoped),
+);

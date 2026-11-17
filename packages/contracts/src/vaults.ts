@@ -613,8 +613,12 @@ export const VaultThreadVariable = Schema.Struct({
   vaultId: VaultGroupId,
   vaultName: Schema.String,
   source: VaultSource,
-  /** Names only here: a Variable's value travels in `vaults.entries.list` alone. */
   class: VaultEntryClass,
+  /**
+   * A Variable's value (owned-resources 05), for whoever may read its group's Variables (Guests
+   * never); a Secret's never.
+   */
+  value: Schema.optionalKey(Schema.String),
   /** Shorter than SECRET_MASK_MIN_LENGTH: delivered, never masked. */
   unmasked: Schema.Boolean,
   /** A name that changes how tools run, set by the Owner (`secretNameRisk`). */

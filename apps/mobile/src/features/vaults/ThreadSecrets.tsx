@@ -9,7 +9,10 @@ import { Button } from "../../components/ui/Button";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 
-/** The names a Thread's turns, terminals and scripts receive, and which Vault wins each. Never values. */
+/**
+ * The names a Thread's turns, terminals and scripts receive, and which group wins each. Variables
+ * with their value (owned-resources 05); a Secret's never.
+ */
 export function ThreadSecrets(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -81,13 +84,19 @@ function ThreadSecretsPanel(props: {
       ) : (
         <View className="gap-1" accessibilityLabel="Secrets this Thread receives">
           <Text className="text-xs text-foreground-muted">
-            Environment variables this Thread receives. Values are never shown.
+            Environment variables this Thread receives. Variables show their value; Secrets never
+            do.
           </Text>
           {threadSecretLines(current.environment).map((line) => (
             <View key={line.name}>
               <Text className="text-sm text-foreground">
                 {line.name} from {line.from}
               </Text>
+              {line.value === null ? null : (
+                <Text selectable className="font-mono text-xs text-foreground">
+                  {line.value}
+                </Text>
+              )}
               {line.winsOver === null ? null : (
                 <Text className="text-xs text-foreground-muted">Wins over {line.winsOver}</Text>
               )}

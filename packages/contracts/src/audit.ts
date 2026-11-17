@@ -152,15 +152,16 @@ export const AUDIT_DETAIL_KEYS = {
    */
   "secret.reveal": ["vault", "vaultId", "kind"],
   /**
-   * Group (`vault`, `vaultId`), kind and `op`: add, replace, rename, describe, delete, class,
-   * unlinked (migration 142, `from` link|copy); older rows: link, copy, seal, allow-reveal,
-   * `brokenLinks`. `dangerous` when such a name was confirmed. Never a value.
+   * Group (`vault`, `vaultId`), kind, `type` (secret|variable) and `op`: add, replace, rename,
+   * describe, delete, to-secret, to-variable, unlinked (migration 142); older rows: class, link,
+   * copy, seal, allow-reveal, `brokenLinks`. Never a value, a Variable's included.
    */
   "secret.edit": [
     "vault",
     "vaultId",
     "kind",
     "op",
+    "type",
     "from",
     "brokenLinks",
     "dangerous",

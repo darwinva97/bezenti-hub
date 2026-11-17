@@ -522,7 +522,7 @@ export const MCP_DOOR_RULES: Record<string, DoorRule> = {
   preview_status: none("the calling agent's own work; what it says next is an event (masked)"),
   preview_wait_for: none("the calling agent's own work; what it says next is an event (masked)"),
   read_pull_request_guide: masked("vaults/maskPullRequests.ts"),
-  list_secret_names: none("secret names, descriptions and Vault names; never a value"),
+  list_secret_names: none("names, types and groups; a Variable's value, never a Secret's"),
   request_secret: none("the calling agent's own work; what it says next is an event (masked)"),
   run_scheduled_task_now: none(
     "the calling agent's own work; what it says next is an event (masked)",

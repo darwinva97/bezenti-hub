@@ -7,6 +7,7 @@ import {
   EnvironmentHttpApi,
   SecretEnv,
   VaultEntry,
+  VaultThreadVariable,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -197,9 +198,9 @@ describe("every door of the Hub declares its rule", () => {
         /vault|reveal/iu.test(name),
       ),
     ).toEqual([]);
-    // No WS answer about Vaults has a field that could carry a Secret's value: the one `value` is
-    // a Variable's, in VaultEntry (ticket 01 of «Variables y Secrets sellados»; Vaults.shown
-    // fills it for Variables alone, Vaults.test.ts).
+    // No WS answer about Vaults has a field that could carry a Secret's value: a `value` is a
+    // Variable's, in VaultEntry (Vaults.shown) and in a Thread's variables (owned-resources 05:
+    // Vaults.variableValue, for Variables alone; Vaults.test.ts and EffectiveVaults.test.ts).
     const vaultRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
       rpc._tag.startsWith("vaults."),
     );
@@ -213,7 +214,7 @@ describe("every door of the Hub declares its rule", () => {
     for (const rpc of vaultRpcs) {
       expect(
         [...objectsWith(rpc.successSchema.ast, "value")].filter(
-          (holder) => holder !== VaultEntry.ast,
+          (holder) => holder !== VaultEntry.ast && holder !== VaultThreadVariable.ast,
         ),
         rpc._tag,
       ).toEqual([]);
@@ -289,7 +290,7 @@ describe("every door of the Hub declares its rule", () => {
       "vaults/SecretDelivery.ts", // reads: the environment of a process that starts
       "vaults/SecretMasker.ts", // reads: what to show as [NAME]
       "vaults/VaultReachLoss.ts", // removes values no row holds
-      "vaults/Vaults.ts", // reads: the reveal, a copy (sealed again), Variables (shown)
+      "vaults/Vaults.ts", // reads: Variables (shown, variableValue); copies a former link's
     ]);
     const readers = files
       .filter(({ file }) => holders.includes(file))
@@ -316,7 +317,8 @@ describe("every door of the Hub declares its rule", () => {
     // no reveal (owned-resources 01), no copy (owned-resources 03). `unshareValues` copies a
     // value a former Secret link shares under a new id, never reading it out.
     const vaults = files.find(({ file }) => file === "vaults/Vaults.ts")?.text ?? "";
-    expect(vaults.match(/\breadValue\(/gu)?.length).toBe(1);
+    // `shown` (vaults.entries.*) and `variableValue` (a Thread's panel), both Variables alone.
+    expect(vaults.match(/\breadValue\(/gu)?.length).toBe(2);
     expect(vaults.match(/\bvalues\.get\(/gu)?.length).toBe(2);
     expect(vaults).toMatch(
       /classOf\(row\) === "variable" && valueIdOf\(row\) !== null\s*\?\s*readValue\(/u,
@@ -551,12 +553,13 @@ describe("every door of the Hub declares its rule", () => {
       const text = files.find((entry) => entry.file === file)?.text ?? "";
       expect(text, file).not.toMatch(/aiCredential|directCredential|issueDirect/u);
     }
-    // No WS answer names a field that could carry it (the Secrets panel gets names only).
+    // No WS answer names a field that could carry it (the Secrets panel gets names, and a
+    // Variable's `value` alone, owned-resources 05).
     const environment = [...WsRpcGroup.requests.values()].find(
       (rpc) => rpc._tag === "vaults.threadEnvironment",
     );
     expect(environment).toBeDefined();
-    for (const credential of ["apiKey", "key", "credential", "secret", "token", "value"]) {
+    for (const credential of ["apiKey", "key", "credential", "secret", "token"]) {
       expect(successFields(environment!.successSchema.ast)).not.toContain(credential);
     }
   });

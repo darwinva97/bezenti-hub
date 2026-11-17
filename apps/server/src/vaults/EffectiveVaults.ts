@@ -132,10 +132,12 @@ export class EffectiveVaults extends Context.Service<
     }) => Effect.Effect<EffectiveSet, VaultError>;
     /**
      * `vaults.threadEnvironment`: the names the calling User's turns in a Thread they see would
-     * receive, and which Vault wins each. Never values or value ids.
+     * receive, and which group wins each. Never a Secret's value or a value id; a Variable's value
+     * only through `variableValue` (Vaults decides who may read it, owned-resources 05).
      */
     readonly threadEnvironment: (
       input: VaultThreadEnvironmentInput,
+      options?: { readonly variableValue?: VariableValueOf },
     ) => Effect.Effect<VaultThreadEnvironment, VaultError>;
     /**
      * Spec 5 ticket 07: the Vaults a Project's Threads receive from Space `from`'s side (its
@@ -150,6 +152,12 @@ export class EffectiveVaults extends Context.Service<
     }) => Effect.Effect<ReadonlyArray<SpaceSideVault>, VaultError>;
   }
 >()("t3/vaults/EffectiveVaults") {}
+
+/** A Variable's value for the caller, when they may read it (Vaults.variableValue). */
+export type VariableValueOf = (entry: {
+  readonly vaultId: VaultGroupId;
+  readonly entryId: VaultEntryId;
+}) => Effect.Effect<string | undefined>;
 
 /** A Vault a Project receives from its Space's side. */
 export interface SpaceSideVault {
@@ -485,6 +493,7 @@ const make = Effect.gen(function* () {
 
   const threadEnvironment = Effect.fn("EffectiveVaults.threadEnvironment")(function* (
     input: VaultThreadEnvironmentInput,
+    options?: { readonly variableValue?: VariableValueOf },
   ) {
     const actor = yield* spaces.actingUser.pipe(
       Effect.catchTags({
@@ -541,6 +550,27 @@ const make = Effect.gen(function* () {
             FROM vault_groups g WHERE g.group_id IN ${sql.in(set.vaults.map((v) => v.vaultId))}
           `.pipe(Effect.catch(storage("read whose the Thread's Vaults are")));
     const ownerNames = new Map(owners.map((row) => [row.vaultId, row.ownerName]));
+    // A Variable of its own value (not a template's, a provider's or a token): read by Vaults.
+    const variableValue = options?.variableValue;
+    const variableValues = new Map<string, string>();
+    if (variableValue !== undefined) {
+      for (const variable of set.variables) {
+        if (
+          variable.class !== "variable" ||
+          variable.valueId === null ||
+          variable.provider !== null ||
+          variable.template !== null ||
+          variable.identity !== undefined
+        ) {
+          continue;
+        }
+        const value = yield* variableValue({
+          vaultId: variable.vaultId,
+          entryId: variable.entryId,
+        });
+        if (value !== undefined) variableValues.set(variable.name, value);
+      }
+    }
     return {
       aiCredential:
         credential === undefined
@@ -560,6 +590,7 @@ const make = Effect.gen(function* () {
         vaultName: variable.vaultName,
         source: variable.source,
         class: variable.class,
+        ...(variableValues.has(variable.name) ? { value: variableValues.get(variable.name)! } : {}),
         unmasked: variable.unmasked,
         dangerous: variable.dangerous,
         shadowed: variable.shadowed,

@@ -1416,30 +1416,10 @@ const rows: ReadonlyArray<Row> = [
   // reading them; its Members and Guests see names; the Main vault is the Owner's alone.
   ...(
     [
-      [
-        "Owner",
-        owner,
-        ["vault.view", "vault.edit", "vault.manage", "vault.reveal", "vault.dangerousName"],
-        [],
-      ],
-      [
-        "Admin",
-        admin,
-        ["vault.view", "vault.edit"],
-        ["vault.manage", "vault.reveal", "vault.dangerousName"],
-      ],
-      [
-        "Member",
-        member,
-        ["vault.view"],
-        ["vault.edit", "vault.manage", "vault.reveal", "vault.dangerousName"],
-      ],
-      [
-        "Guest",
-        guest,
-        ["vault.view"],
-        ["vault.edit", "vault.manage", "vault.reveal", "vault.dangerousName"],
-      ],
+      ["Owner", owner, ["vault.view", "vault.edit", "vault.manage", "vault.dangerousName"], []],
+      ["Admin", admin, ["vault.view", "vault.edit"], ["vault.manage", "vault.dangerousName"]],
+      ["Member", member, ["vault.view"], ["vault.edit", "vault.manage", "vault.dangerousName"]],
+      ["Guest", guest, ["vault.view"], ["vault.edit", "vault.manage", "vault.dangerousName"]],
     ] as const
   ).flatMap(([who, actor, allowed, denied]) => [
     ...allowed.map((action): Row => [
@@ -1457,27 +1437,27 @@ const rows: ReadonlyArray<Row> = [
       action === "vault.edit" ? deny("role-not-allowed") : deny("owner-only"),
     ]),
   ]),
-  ...(
-    ["vault.view", "vault.edit", "vault.manage", "vault.reveal", "vault.dangerousName"] as const
-  ).flatMap((action): ReadonlyArray<Row> => [
-    [`Owner: ${action} on the Main vault`, owner, action, mainVault, allow],
-    ...([admin, member, guest] as const).map((actor): Row => [
-      `${actor.userId}: no ${action} on the Main vault`,
-      actor,
-      action,
-      mainVault,
-      deny("owner-only"),
-    ]),
-    [
-      `another Organization's Admin: no ${action}`,
-      outsider,
-      action,
-      orgVault,
-      action !== "vault.view" && action !== "vault.edit"
-        ? deny("owner-only")
-        : deny("not-a-member"),
+  ...(["vault.view", "vault.edit", "vault.manage", "vault.dangerousName"] as const).flatMap(
+    (action): ReadonlyArray<Row> => [
+      [`Owner: ${action} on the Main vault`, owner, action, mainVault, allow],
+      ...([admin, member, guest] as const).map((actor): Row => [
+        `${actor.userId}: no ${action} on the Main vault`,
+        actor,
+        action,
+        mainVault,
+        deny("owner-only"),
+      ]),
+      [
+        `another Organization's Admin: no ${action}`,
+        outsider,
+        action,
+        orgVault,
+        action !== "vault.view" && action !== "vault.edit"
+          ? deny("owner-only")
+          : deny("not-a-member"),
+      ],
     ],
-  ]),
+  ),
   [
     "Admin: no edit in an archived Organization",
     admin,

@@ -1020,7 +1020,7 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:secrets:vault-targets",
       tag: WS_METHODS.secretsVaultTargets,
     }),
-    // Vaults: names and metadata; a value is revealed only over HTTP (`vaults.reveal`).
+    // Vaults: names and metadata; a Secret's value never comes out (owned-resources 01).
     listVaults: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:vaults:list",
       tag: WS_METHODS.vaultsList,

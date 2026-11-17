@@ -44,7 +44,8 @@ export const MasterKeyBackupConfirmRequest = Schema.Struct({
 });
 export type MasterKeyBackupConfirmRequest = typeof MasterKeyBackupConfirmRequest.Type;
 
-// A value enters the Hub only in `put` (Redacted) and leaves only through `vaults.reveal`.
+// A value enters the Hub only in `put` (Redacted). A Secret's never leaves it through any door
+// (ADR 0012); a Variable's is listed to whoever may read Variables.
 
 export const VaultId = makeEntityId("VaultId");
 export type VaultId = typeof VaultId.Type;
@@ -255,7 +256,7 @@ export type VaultProviderSource = typeof VaultProviderSource.Type;
 
 /**
  * A Variable is configuration: its value is shown to whoever sees its name (Guests excepted) and
- * never masked. A Secret is never shown, and revealed only while it is revealable.
+ * never masked. A Secret is never shown to anyone, the Owner included (owned-resources 01).
  */
 export const VaultEntryClass = Schema.Literals(["secret", "variable"]);
 export type VaultEntryClass = typeof VaultEntryClass.Type;
@@ -294,8 +295,6 @@ export const VaultSummary = Schema.Struct({
   canEdit: Schema.Boolean,
   /** Rename, describe, archive and delete the Vault: the Owner. */
   canManage: Schema.Boolean,
-  /** Reveal values: the Owner, with a strong factor. */
-  canReveal: Schema.Boolean,
   /**
    * Whom the Owner allowed it to; empty for anyone who does not manage it. An Organization's
    * Vault reaches its own Organization without one; the Main vault only the Owner's Personal space.
@@ -315,8 +314,6 @@ export const VaultEntry = Schema.Struct({
   kind: VaultEntryKind,
   /** A link's original's; a broken link is a sealed Secret. */
   class: VaultEntryClass,
-  /** A Secret nobody reveals, not even the Owner: only replaced or deleted. */
-  sealed: Schema.Boolean,
   /** A Variable's value, for whoever may read Variables (`vault.readVariables`): never a Secret's. */
   value: Schema.optionalKey(Schema.String),
   /**
@@ -378,9 +375,7 @@ export const VaultErrorReason = Schema.Literals([
   "not-allowed",
   /** Vaults live on the Hub: a joined machine has none. */
   "unavailable",
-  /** A sealed Secret: nobody reveals it. */
-  "sealed",
-  /** Allowing reveal, or making a Secret a Variable, takes a new value in the same request. */
+  /** Making a Secret a Variable takes a new value in the same request: the old is never read. */
   "needs-new-value",
   /** A Provider entry's reference its provider does not read, or a path that leaves it. */
   "invalid-reference",
@@ -440,8 +435,7 @@ export type VaultEntriesListResult = typeof VaultEntriesListResult.Type;
 
 /**
  * Adds an entry (no `entryId`, a value) or changes one: its name, description, value or class.
- * `allowReveal`: `false` seals a Secret (one way); `true` needs a new `value`, as does making a
- * Secret a Variable. A new Secret is sealed unless `allowReveal`.
+ * Making a Secret a Variable needs a new `value`; a Variable made a Secret keeps its value.
  */
 export const VaultEntryPutInput = Schema.Struct({
   vaultId: VaultId,
@@ -450,7 +444,6 @@ export const VaultEntryPutInput = Schema.Struct({
   description: Schema.optionalKey(Schema.NullOr(VaultDescription)),
   value: Schema.optionalKey(SecretValueInput),
   class: Schema.optionalKey(VaultEntryClass),
-  allowReveal: Schema.optionalKey(Schema.Boolean),
   /**
    * A Provider entry (the Owner's, `vault.providerEntry`) instead of a `value`: where its value is
    * read. Always a sealed Secret.
@@ -526,20 +519,6 @@ export const VaultEntryFromMainInput = Schema.Struct({
   confirmDangerous: Schema.optionalKey(Schema.Boolean),
 });
 export type VaultEntryFromMainInput = typeof VaultEntryFromMainInput.Type;
-
-/** «Reveal»: the Owner, confirmed with the strong factor in the request. HTTP only. */
-export const VaultRevealRequest = Schema.Struct({
-  vaultId: VaultId,
-  entryId: VaultEntryId,
-  reauth: AuthReauth,
-});
-export type VaultRevealRequest = typeof VaultRevealRequest.Type;
-
-export const VaultRevealResult = Schema.Struct({
-  name: Schema.String,
-  value: Schema.RedactedFromValue(Schema.String),
-});
-export type VaultRevealResult = typeof VaultRevealResult.Type;
 
 // Allowances, defaults and the effective set (spec 5 ticket 03): names only, never values.
 

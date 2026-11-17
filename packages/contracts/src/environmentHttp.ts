@@ -83,8 +83,6 @@ import {
   MasterKeyBackupRequest,
   MasterKeyBackupResult,
   MasterKeyStatus,
-  VaultRevealRequest,
-  VaultRevealResult,
 } from "./vaults.ts";
 import { Grant, GrantAcceptRequest, GrantGiveRequest } from "./grants.ts";
 import {
@@ -1550,22 +1548,6 @@ class EnvironmentVaultsHttpApi extends HttpApiGroup.make("vaults")
       payload: MasterKeyBackupConfirmRequest,
       success: MasterKeyStatus,
       error: [...EnvironmentVaultsErrors, EnvironmentHttpConflictError],
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  // A secret's value: the Owner only, with a strong factor in the request; the only door that
-  // reads one. HTTP rather than WS, for the same reason as the key.
-  .add(
-    HttpApiEndpoint.post("reveal", "/api/vaults/reveal", {
-      headers: OptionalBearerHeaders,
-      payload: VaultRevealRequest,
-      success: VaultRevealResult,
-      // Conflict: a sealed Secret, refused before the factor and before its value is read.
-      error: [
-        ...EnvironmentVaultsErrors,
-        EnvironmentRateLimitedError,
-        EnvironmentResourceNotFoundError,
-        EnvironmentHttpConflictError,
-      ],
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 

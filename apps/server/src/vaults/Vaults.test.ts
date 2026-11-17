@@ -1,20 +1,14 @@
 /**
  * Vaults, their secrets and who may edit or read them (spec 5 «Vaults», ticket 02): the Owner,
- * an Admin, a Member and a Guest of Acme, and an Admin of Globex. Values never leave the Hub but
- * through the Owner's reveal, and never reach the database, the audit log, a log or a span.
+ * an Admin, a Member and a Guest of Acme, and an Admin of Globex. A Secret's value never leaves the
+ * Hub, not even to the Owner (owned-resources 01), and never reaches the database, the audit log, a
+ * log or a span. Tests compare stored values as booleans, so no failure ever prints one.
  */
 // @effect-diagnostics nodeBuiltinImport:off - the test reads the store's files and the database.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import {
-  MAIN_VAULT_ID,
-  SpaceId,
-  UserId,
-  type VaultEntryId,
-  type VaultError,
-  type VaultId,
-} from "@t3tools/contracts";
+import { MAIN_VAULT_ID, SpaceId, UserId, type VaultError } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -113,6 +107,22 @@ const hubWith = Effect.fn(function* (options: { readonly identityIssuer?: string
         : CommandActor.actAsResolved({ _tag: "User", userId, spaceLimit })(effect);
   const reveal = (cookie: string, vaultId: string, entryId: string, reauth: unknown) =>
     server.request(REVEAL, { cookie, body: { vaultId, entryId, reauth } });
+  const values = Context.get(server.services, ServerSecretStore.VaultValueStore);
+  /** The value an entry delivers now (a link's original's), opened from the store. */
+  const storedValue = (entryId: string) =>
+    server.sql<{ readonly valueId: string | null }>`
+      SELECT COALESCE(e.value_id, o.value_id) AS "valueId" FROM vault_entries e
+      LEFT JOIN vault_entries o ON e.kind = 'link' AND o.entry_id = e.linked_entry_id
+      WHERE e.entry_id = ${entryId}
+    `.pipe(
+      Effect.flatMap((rows) => values.get(rows[0]?.valueId ?? "missing")),
+      Effect.map(Option.map((bytes) => new TextDecoder().decode(bytes))),
+    );
+  /** Whether an entry delivers `expected`: a boolean, so a failure never prints a value. */
+  const holds = (entryId: string, expected: string) =>
+    storedValue(entryId).pipe(
+      Effect.map((found) => Option.isSome(found) && found.value === expected),
+    );
   return {
     server,
     provider,
@@ -129,6 +139,8 @@ const hubWith = Effect.fn(function* (options: { readonly identityIssuer?: string
     valueFiles,
     as,
     reveal,
+    storedValue,
+    holds,
   };
 });
 
@@ -138,7 +150,6 @@ type Hub = Effect.Success<typeof hub>;
 
 /**
  * The Owner's setup: GITHUB_TOKEN in the Main vault; «Acme secrets» with a link, a copy, its own.
- * Revealable ones (reveal allowed when added), as every secret was before sealing.
  */
 const acmeSecrets = Effect.fn(function* ({ vaults, as, ownerId, acmeId }: Hub) {
   const github = yield* vaults
@@ -146,7 +157,6 @@ const acmeSecrets = Effect.fn(function* ({ vaults, as, ownerId, acmeId }: Hub) {
       vaultId: MAIN_VAULT_ID,
       name: "GITHUB_TOKEN",
       value: Redacted.make(ORIGINAL),
-      allowReveal: true,
     })
     .pipe(as(ownerId));
   const acme = yield* vaults.create({ name: "Acme secrets", spaceId: acmeId }).pipe(as(ownerId));
@@ -161,7 +171,6 @@ const acmeSecrets = Effect.fn(function* ({ vaults, as, ownerId, acmeId }: Hub) {
       vaultId: acme.id,
       name: "ACME_API_KEY",
       value: Redacted.make(ACME_OWN),
-      allowReveal: true,
     })
     .pipe(as(ownerId));
   return { github: github.entry, acme, link: link.entry, copy: copy.entry, own: own.entry };
@@ -242,8 +251,8 @@ it.effect(
       const { admin } = people;
       const seen = yield* vaults.list.pipe(as(admin.id));
       assert.deepEqual(
-        seen.vaults.map((vault) => [vault.name, vault.canEdit, vault.canManage, vault.canReveal]),
-        [["Acme secrets", true, false, false]],
+        seen.vaults.map((vault) => [vault.name, vault.canEdit, vault.canManage]),
+        [["Acme secrets", true, false]],
       );
       const added = yield* vaults
         .putEntry({ vaultId: acme.id, name: "ADMIN_TOKEN", value: Redacted.make(ADMIN_WRITES) })
@@ -360,75 +369,46 @@ it.effect("an agent bound to one Space sees no Vault of another, the Owner's own
 );
 
 it.effect(
-  "only the Owner reveals, with a strong factor in the request, audited without the value",
+  "nobody reads a Secret back, the Owner with a strong factor included, and no reveal is audited",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub;
       const { server, people, owner, reveal } = setup;
       const { acme, own, link } = yield* acmeSecrets(setup);
-      for (const [who, { cookie, id }] of Object.entries(people)) {
-        // Refused by the policy itself, whatever factor they would show.
-        assert.oneOf(
-          yield* reasonOf(
-            setup.vaults.reveal({ vaultId: acme.id, entryId: own.id }).pipe(setup.as(id)),
-          ),
-          ["forbidden", "not-found"],
-          `${who} revealed a value`,
-        );
+      // As migration 141 found the ones that were revealable.
+      yield* server.sql`UPDATE vault_entries SET revealable = 1 WHERE kind = 'own'`;
+      for (const { cookie } of Object.values(people)) {
         const refused = yield* reveal(cookie, acme.id, own.id, BOGUS_REAUTH);
-        assert.oneOf(refused.status, [403, 404], `${who} revealed a value`);
+        assert.notEqual(refused.status, 200);
         assert.isFalse(mentionsAValue(JSON.stringify(refused.body)));
       }
-      const bare = yield* reveal(owner, acme.id, own.id, BOGUS_REAUTH);
-      assert.equal(bare.status, 403);
-      assert.isFalse(mentionsAValue(JSON.stringify(bare.body)));
+      for (const entryId of [own.id, link.id]) {
+        const asked = yield* reveal(
+          owner,
+          acme.id,
+          entryId,
+          yield* passkeyReauth(server, setup.authenticator),
+        );
+        assert.equal(asked.status, 404, "the reveal door is gone");
+        assert.isFalse(mentionsAValue(JSON.stringify(asked.body)));
+      }
+      const listed = yield* setup.vaults
+        .listEntries({ vaultId: acme.id })
+        .pipe(setup.as(setup.ownerId));
+      assert.isFalse(mentionsAValue(JSON.stringify(listed)));
       const audited = yield* server.sql<{ readonly n: number }>`
-      SELECT COUNT(*) AS n FROM audit_log WHERE action = 'secret.reveal'
-    `;
+        SELECT COUNT(*) AS n FROM audit_log WHERE action = 'secret.reveal'
+      `;
       assert.equal(audited[0]?.n, 0);
-
-      const shown = yield* reveal(
-        owner,
-        acme.id,
-        own.id,
-        yield* passkeyReauth(server, setup.authenticator),
-      );
-      assert.equal(shown.status, 200);
-      assert.deepEqual(shown.body, { name: "ACME_API_KEY", value: ACME_OWN });
-      // A link shows its original's value.
-      const linked = yield* reveal(
-        owner,
-        acme.id,
-        link.id,
-        yield* passkeyReauth(server, setup.authenticator),
-      );
-      assert.equal(linked.body.value, ORIGINAL);
-      const [entry] = yield* server.sql<{
-        readonly detail_json: string;
-        readonly target_name: string;
-      }>`
-      SELECT detail_json, target_name FROM audit_log WHERE action = 'secret.reveal' ORDER BY audit_id LIMIT 1
-    `;
-      assert.equal(entry?.target_name, "ACME_API_KEY");
-      assert.deepEqual(JSON.parse(entry?.detail_json ?? "{}"), {
-        vault: "Acme secrets",
-        vaultId: acme.id,
-        kind: "own",
-      });
     }),
 );
 
 it.effect("rotating the original changes what its Secret links hold; a copy keeps its value", () =>
   Effect.gen(function* () {
     const setup = yield* hub;
-    const { vaults, as, ownerId } = setup;
+    const { vaults, as, ownerId, holds } = setup;
     const { acme, github, link, copy } = yield* acmeSecrets(setup);
-    const revealOf = (entryId: VaultEntryId, vaultId: VaultId = acme.id) =>
-      vaults.reveal({ vaultId, entryId }).pipe(
-        as(ownerId),
-        Effect.map((shown) => Redacted.value(shown.value)),
-      );
-    assert.equal(yield* revealOf(link.id), ORIGINAL);
+    assert.isTrue(yield* holds(link.id, ORIGINAL), "the link delivers the original's value");
     yield* vaults
       .putEntry({
         vaultId: MAIN_VAULT_ID,
@@ -437,8 +417,8 @@ it.effect("rotating the original changes what its Secret links hold; a copy keep
         value: Redacted.make(ROTATED),
       })
       .pipe(as(ownerId));
-    assert.equal(yield* revealOf(link.id), ROTATED);
-    assert.equal(yield* revealOf(copy.id), ORIGINAL);
+    assert.isTrue(yield* holds(link.id, ROTATED), "the link follows the rotation");
+    assert.isTrue(yield* holds(copy.id, ORIGINAL), "the copy keeps its value");
     const listed = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(ownerId));
     assert.deepEqual(listed.entries.find((entry) => entry.id === link.id)?.linkedFrom, {
       entryId: github.id,
@@ -462,7 +442,7 @@ it.effect("rotating the original changes what its Secret links hold; a copy keep
 );
 
 it.effect(
-  "deleting an original lists the links it breaks, which stay «broken» and reveal nothing",
+  "deleting an original lists the links it breaks, which stay «broken» and deliver nothing",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub;
@@ -483,66 +463,47 @@ it.effect(
       const listed = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(ownerId));
       const broken = listed.entries.find((entry) => entry.id === link.id);
       assert.isTrue(broken?.broken);
-      assert.equal(
-        yield* reasonOf(vaults.reveal({ vaultId: acme.id, entryId: link.id }).pipe(as(ownerId))),
-        "not-found",
-      );
+      assert.isTrue(Option.isNone(yield* setup.storedValue(link.id)));
     }),
 );
 
 // Spec «Variables y Secrets sellados», ticket 01.
 
 it.effect(
-  "a new Secret is sealed: nobody reveals it, its copies or links, and its value is never read",
+  "a Secret is listed without its value, as are its copies and links, and is always sealed",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub;
-      const { server, vaults, as, ownerId, owner, reveal } = setup;
+      const { vaults, as, ownerId } = setup;
       const { acme } = yield* acmeSecrets(setup);
-      const sealed = yield* vaults
-        .putEntry({ vaultId: acme.id, name: "SEALED_TOKEN", value: Redacted.make(ACME_OWN) })
+      const secret = yield* vaults
+        .putEntry({ vaultId: acme.id, name: "NEW_TOKEN", value: Redacted.make(ACME_OWN) })
         .pipe(as(ownerId));
-      assert.deepEqual([sealed.entry.class, sealed.entry.sealed], ["secret", true]);
-      assert.notProperty(sealed.entry, "value");
-      yield* dropValueFile(setup, sealed.entry.id);
-      assert.equal(
-        yield* reasonOf(
-          vaults.reveal({ vaultId: acme.id, entryId: sealed.entry.id }).pipe(as(ownerId)),
-        ),
-        "sealed",
-      );
-      // Over HTTP: refused before the strong factor is checked (a bogus one gets 409, not 403).
-      const refused = yield* reveal(owner, acme.id, sealed.entry.id, BOGUS_REAUTH);
-      assert.equal(refused.status, 409);
-      assert.isFalse(mentionsAValue(JSON.stringify(refused.body)));
-
-      // A copy of a sealed Secret is sealed; a link shows its original's class and seal.
-      const mainSealed = yield* vaults
-        .putEntry({ vaultId: MAIN_VAULT_ID, name: "MAIN_SEALED", value: Redacted.make(ROTATED) })
+      assert.equal(secret.entry.class, "secret");
+      assert.notProperty(secret.entry, "value");
+      assert.notProperty(secret.entry, "sealed");
+      const mainSecret = yield* vaults
+        .putEntry({ vaultId: MAIN_VAULT_ID, name: "MAIN_TOKEN", value: Redacted.make(ROTATED) })
         .pipe(as(ownerId));
       const copy = yield* vaults
-        .copyEntry({ vaultId: acme.id, sourceEntryId: mainSealed.entry.id, name: "SEALED_COPY" })
+        .copyEntry({ vaultId: acme.id, sourceEntryId: mainSecret.entry.id, name: "MAIN_COPY" })
         .pipe(as(ownerId));
       const link = yield* vaults
-        .linkEntry({ vaultId: acme.id, sourceEntryId: mainSealed.entry.id })
+        .linkEntry({ vaultId: acme.id, sourceEntryId: mainSecret.entry.id })
         .pipe(as(ownerId));
       for (const entry of [copy.entry, link.entry]) {
-        assert.deepEqual([entry.class, entry.sealed], ["secret", true], entry.name);
-        assert.equal(
-          yield* reasonOf(vaults.reveal({ vaultId: acme.id, entryId: entry.id }).pipe(as(ownerId))),
-          "sealed",
-          entry.name,
-        );
+        assert.equal(entry.class, "secret", entry.name);
+        assert.notProperty(entry, "value", entry.name);
       }
-      const audited = yield* server.sql<{ readonly n: number }>`
-        SELECT COUNT(*) AS n FROM audit_log WHERE action = 'secret.reveal'
+      const rows = yield* setup.server.sql<{ readonly n: number }>`
+        SELECT COUNT(*) AS n FROM vault_entries WHERE revealable = 1
       `;
-      assert.equal(audited[0]?.n, 0);
+      assert.equal(rows[0]?.n, 0, "every Secret written is sealed");
     }),
 );
 
 it.effect(
-  "sealing is one way; allowing reveal or making a Variable takes a new value, the old never read",
+  "making a Secret a Variable takes a new value, the old never read; a Variable becomes a Secret as it is",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub;
@@ -550,44 +511,18 @@ it.effect(
       const { acme, own, link } = yield* acmeSecrets(setup);
       const put = (input: Omit<Parameters<typeof vaults.putEntry>[0], "vaultId">) =>
         vaults.putEntry({ vaultId: acme.id, ...input });
-      // A Member edits nothing, sealing included.
+      // A Member edits nothing, a class change included.
       assert.equal(
         yield* reasonOf(
-          put({ entryId: own.id, name: own.name, allowReveal: false }).pipe(as(people.member.id)),
+          put({
+            entryId: own.id,
+            name: own.name,
+            class: "variable",
+            value: Redacted.make("https://api.acme.example"),
+          }).pipe(as(people.member.id)),
         ),
         "forbidden",
       );
-      // An Admin seals the Owner's revealable secret, without a value.
-      const sealed = yield* put({ entryId: own.id, name: own.name, allowReveal: false }).pipe(
-        as(people.admin.id),
-      );
-      assert.isTrue(sealed.entry.sealed);
-      assert.equal(
-        yield* reasonOf(vaults.reveal({ vaultId: acme.id, entryId: own.id }).pipe(as(ownerId))),
-        "sealed",
-      );
-      // Undoing it without a new value is refused, even to the Owner.
-      assert.equal(
-        yield* reasonOf(
-          put({ entryId: own.id, name: own.name, allowReveal: true }).pipe(as(ownerId)),
-        ),
-        "needs-new-value",
-      );
-      // With one, it is allowed and the sealed value is never read (its file is gone).
-      yield* dropValueFile(setup, own.id);
-      const allowed = yield* put({
-        entryId: own.id,
-        name: own.name,
-        allowReveal: true,
-        value: Redacted.make(ADMIN_REPLACES),
-      }).pipe(as(people.admin.id));
-      assert.isFalse(allowed.entry.sealed);
-      const shown = yield* vaults.reveal({ vaultId: acme.id, entryId: own.id }).pipe(
-        as(ownerId),
-        Effect.map((revealed) => Redacted.value(revealed.value)),
-      );
-      assert.equal(shown, ADMIN_REPLACES);
-
       // A Secret becomes a Variable only with a new value, whoever edits.
       for (const who of [ownerId, people.admin.id]) {
         assert.equal(
@@ -597,6 +532,8 @@ it.effect(
           "needs-new-value",
         );
       }
+      // With one, the old value is never read (its file is gone).
+      yield* dropValueFile(setup, own.id);
       const variable = yield* put({
         entryId: own.id,
         name: own.name,
@@ -604,32 +541,28 @@ it.effect(
         value: Redacted.make("https://api.acme.example"),
       }).pipe(as(people.admin.id));
       assert.deepEqual(
-        [variable.entry.class, variable.entry.sealed, variable.entry.value],
-        ["variable", false, "https://api.acme.example"],
+        [variable.entry.class, variable.entry.value],
+        ["variable", "https://api.acme.example"],
       );
-      // Back to a Secret: whoever edits, and it is sealed.
+      // Back to a Secret: whoever edits, sealed, its value no longer listed.
       const secret = yield* put({ entryId: own.id, name: own.name, class: "secret" }).pipe(
         as(people.admin.id),
       );
-      assert.deepEqual([secret.entry.class, secret.entry.sealed], ["secret", true]);
+      assert.equal(secret.entry.class, "secret");
       assert.notProperty(secret.entry, "value");
       assert.deepEqual(yield* auditOps(setup, own.name), [
         "add",
-        "seal",
-        "allow-reveal",
-        "replace",
         "class:variable",
         "replace",
         "class:secret",
       ]);
-
-      // A link is what its original is: neither its class nor its seal changes here.
-      for (const change of [{ class: "variable" as const }, { allowReveal: false }]) {
-        assert.equal(
-          yield* reasonOf(put({ entryId: link.id, name: link.name, ...change }).pipe(as(ownerId))),
-          "not-linkable",
-        );
-      }
+      // A link is what its original is: its class does not change here.
+      assert.equal(
+        yield* reasonOf(
+          put({ entryId: link.id, name: link.name, class: "variable" }).pipe(as(ownerId)),
+        ),
+        "not-linkable",
+      );
     }),
 );
 
@@ -786,7 +719,7 @@ it.effect(
     });
     return Effect.gen(function* () {
       const setup = yield* hub;
-      const { server, vaults, as, people, owner, valuesDir } = setup;
+      const { server, vaults, as, people, valuesDir } = setup;
       const { acme, own } = yield* acmeSecrets(setup);
       yield* vaults
         .putEntry({ vaultId: acme.id, name: "ADMIN_TOKEN", value: Redacted.make(ADMIN_WRITES) })
@@ -806,13 +739,7 @@ it.effect(
           .pipe(as(people.admin.id)),
       );
       assert.isFalse(mentionsAValue(JSON.stringify(refused) + refused.message));
-      const shown = yield* setup.reveal(
-        owner,
-        acme.id,
-        own.id,
-        yield* passkeyReauth(server, setup.authenticator),
-      );
-      assert.equal(shown.body.value, ADMIN_REPLACES);
+      assert.isTrue(yield* setup.holds(own.id, ADMIN_REPLACES), "the replaced value is stored");
 
       // Every table of the database, rows as text.
       const tables = yield* server.sql<{ readonly name: string }>`
@@ -901,22 +828,16 @@ it.effect(
 it.effect("a value's file renamed to another secret, or from another entry, does not open", () =>
   Effect.gen(function* () {
     const setup = yield* hub;
-    const { vaults, as, ownerId, store, valueFileOf } = setup;
-    const { acme, own, copy } = yield* acmeSecrets(setup);
+    const { store, valueFileOf, storedValue } = setup;
+    const { own, copy } = yield* acmeSecrets(setup);
     const directory = store.directory ?? "";
     NodeFS.copyFileSync(yield* valueFileOf(own.id), yield* valueFileOf(copy.id));
-    assert.equal(
-      yield* reasonOf(vaults.reveal({ vaultId: acme.id, entryId: copy.id }).pipe(as(ownerId))),
-      "storage",
-    );
+    assert.isTrue((yield* Effect.exit(storedValue(copy.id)))._tag === "Failure");
     // A Hub secret (another purpose) moved under a Vault value's name does not open either.
     const hubSecret = NodeFS.readdirSync(directory).find((file) => file.endsWith(".sealed"));
     assert.isDefined(hubSecret);
     NodeFS.copyFileSync(NodePath.join(directory, hubSecret!), yield* valueFileOf(own.id));
-    assert.equal(
-      yield* reasonOf(vaults.reveal({ vaultId: acme.id, entryId: own.id }).pipe(as(ownerId))),
-      "storage",
-    );
+    assert.isTrue((yield* Effect.exit(storedValue(own.id)))._tag === "Failure");
   }),
 );
 
@@ -1074,8 +995,7 @@ it.effect(
         "storage",
       );
       yield* server.sql`DROP TRIGGER vault_entries_refuse`;
-      const shown = yield* vaults.reveal({ vaultId: acme.id, entryId: own.id }).pipe(as(ownerId));
-      assert.equal(Redacted.value(shown.value), ACME_OWN);
+      assert.isTrue(yield* setup.holds(own.id, ACME_OWN), "the failed replace kept the value");
       const listed = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(ownerId));
       assert.equal(listed.entries.find((entry) => entry.id === own.id)?.version, 1);
       const replaces = yield* server.sql<{ readonly n: number }>`
@@ -1182,100 +1102,90 @@ it.effect("a database another key sealed stops the start before the database cha
 
 // Ticket 02 of «Variables, Secretos sellados y Secret providers»: Provider entries.
 
-it.effect(
-  "only the Owner adds a Provider entry: a sealed Secret nobody reveals, its path for editors",
-  () =>
-    Effect.gen(function* () {
-      const setup = yield* hub;
-      const { vaults, as, ownerId, people, provider, server, owner, reveal } = setup;
-      const { acme } = yield* acmeSecrets(setup);
-      const source = { providerId: FAKE_PROVIDER_ID, reference: "kv/acme/kube#token" };
-      for (const who of Object.values(people)) {
-        assert.oneOf(
-          yield* reasonOf(
-            vaults
-              .putEntry({ vaultId: acme.id, name: "KUBE_TOKEN", provider: source })
-              .pipe(as(who.id)),
-          ),
-          ["forbidden", "not-found"],
-          who.id,
-        );
-      }
-      const added = yield* vaults
-        .putEntry({ vaultId: acme.id, name: "KUBE_TOKEN", provider: source })
-        .pipe(as(ownerId));
-      assert.deepEqual(
-        [added.entry.kind, added.entry.class, added.entry.sealed, added.entry.broken],
-        ["provider", "secret", true, false],
-      );
-      assert.deepEqual(added.entry.provider, {
-        label: FAKE_PROVIDER_LABEL,
-        reference: "kv/acme/kube#token",
-        // The Owner's own access, no Provider scope (ticket 03: «Direct»).
-        scope: null,
-      });
-      // A Member sees «Provider: OpenBao», never where it reads.
-      const seen = (yield* vaults
-        .listEntries({ vaultId: acme.id })
-        .pipe(as(people.member.id))).entries.find((entry) => entry.name === "KUBE_TOKEN");
-      assert.deepEqual(seen?.provider, {
-        label: FAKE_PROVIDER_LABEL,
-        reference: null,
-        scope: null,
-      });
-      // Sealed: refused before the factor, and the provider is never asked.
-      assert.equal(
+it.effect("only the Owner adds a Provider entry: a sealed Secret, its path for editors", () =>
+  Effect.gen(function* () {
+    const setup = yield* hub;
+    const { vaults, as, ownerId, people, provider, server } = setup;
+    const { acme } = yield* acmeSecrets(setup);
+    const source = { providerId: FAKE_PROVIDER_ID, reference: "kv/acme/kube#token" };
+    for (const who of Object.values(people)) {
+      assert.oneOf(
         yield* reasonOf(
-          vaults.reveal({ vaultId: acme.id, entryId: added.entry.id }).pipe(as(ownerId)),
+          vaults
+            .putEntry({ vaultId: acme.id, name: "KUBE_TOKEN", provider: source })
+            .pipe(as(who.id)),
         ),
-        "sealed",
+        ["forbidden", "not-found"],
+        who.id,
       );
-      assert.equal((yield* reveal(owner, acme.id, added.entry.id, BOGUS_REAUTH)).status, 409);
-      assert.lengthOf(provider.state.batches, 0);
-      // It takes no value, class or reveal; an Admin changes nothing of it but may delete it.
-      for (const change of [
-        { value: Redacted.make("x".repeat(9)) },
-        { class: "variable" as const },
-        { allowReveal: true },
-      ]) {
-        assert.equal(
-          yield* reasonOf(
-            vaults
-              .putEntry({
-                vaultId: acme.id,
-                entryId: added.entry.id,
-                name: "KUBE_TOKEN",
-                ...change,
-              })
-              .pipe(as(ownerId)),
-          ),
-          "invalid-value",
-        );
-      }
+    }
+    const added = yield* vaults
+      .putEntry({ vaultId: acme.id, name: "KUBE_TOKEN", provider: source })
+      .pipe(as(ownerId));
+    assert.deepEqual(
+      [added.entry.kind, added.entry.class, added.entry.broken],
+      ["provider", "secret", false],
+    );
+    assert.deepEqual(added.entry.provider, {
+      label: FAKE_PROVIDER_LABEL,
+      reference: "kv/acme/kube#token",
+      // The Owner's own access, no Provider scope (ticket 03: «Direct»).
+      scope: null,
+    });
+    // A Member sees «Provider: OpenBao», never where it reads.
+    const seen = (yield* vaults
+      .listEntries({ vaultId: acme.id })
+      .pipe(as(people.member.id))).entries.find((entry) => entry.name === "KUBE_TOKEN");
+    assert.deepEqual(seen?.provider, {
+      label: FAKE_PROVIDER_LABEL,
+      reference: null,
+      scope: null,
+    });
+    // Listing it never asks the provider.
+    assert.lengthOf(provider.state.batches, 0);
+    // It takes no value or class; an Admin changes nothing of it but may delete it.
+    for (const change of [
+      { value: Redacted.make("x".repeat(9)) },
+      { class: "variable" as const },
+    ]) {
       assert.equal(
         yield* reasonOf(
           vaults
-            .putEntry({ vaultId: acme.id, entryId: added.entry.id, name: "KUBE_RENAMED" })
-            .pipe(as(people.admin.id)),
+            .putEntry({
+              vaultId: acme.id,
+              entryId: added.entry.id,
+              name: "KUBE_TOKEN",
+              ...change,
+            })
+            .pipe(as(ownerId)),
         ),
-        "forbidden",
+        "invalid-value",
       );
-      // Audited with its provider's label, never its reference or a value.
-      const [audited] = yield* server.sql<{ readonly detail_json: string }>`
+    }
+    assert.equal(
+      yield* reasonOf(
+        vaults
+          .putEntry({ vaultId: acme.id, entryId: added.entry.id, name: "KUBE_RENAMED" })
+          .pipe(as(people.admin.id)),
+      ),
+      "forbidden",
+    );
+    // Audited with its provider's label, never its reference or a value.
+    const [audited] = yield* server.sql<{ readonly detail_json: string }>`
         SELECT detail_json FROM audit_log WHERE action = 'secret.edit' AND target_name = 'KUBE_TOKEN'
       `;
-      assert.deepEqual(JSON.parse(audited?.detail_json ?? "{}"), {
-        vault: "Acme secrets",
-        vaultId: acme.id,
-        kind: "provider",
-        op: "add",
-        provider: FAKE_PROVIDER_LABEL,
-      });
-      const deleted = yield* vaults
-        .deleteEntry({ vaultId: acme.id, entryId: added.entry.id })
-        .pipe(as(people.admin.id));
-      assert.isTrue(deleted.deleted);
-    }),
+    assert.deepEqual(JSON.parse(audited?.detail_json ?? "{}"), {
+      vault: "Acme secrets",
+      vaultId: acme.id,
+      kind: "provider",
+      op: "add",
+      provider: FAKE_PROVIDER_LABEL,
+    });
+    const deleted = yield* vaults
+      .deleteEntry({ vaultId: acme.id, entryId: added.entry.id })
+      .pipe(as(people.admin.id));
+    assert.isTrue(deleted.deleted);
+  }),
 );
 
 it.effect(
@@ -1336,11 +1246,11 @@ it.effect(
 );
 
 it.effect(
-  "a template names its own Vault's entries only, never another template, and is never revealed",
+  "a template names its own Vault's entries only, never another template, and is never listed with a value",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub;
-      const { vaults, as, ownerId, people, reveal, owner, server } = setup;
+      const { vaults, as, ownerId, people, server } = setup;
       const { acme } = yield* acmeSecrets(setup);
       const put = (input: Omit<Parameters<typeof vaults.putEntry>[0], "vaultId">) =>
         vaults.putEntry({ vaultId: acme.id, ...input });
@@ -1384,13 +1294,8 @@ it.effect(
       }).pipe(as(people.admin.id));
       // One input is a Secret: the template is a sealed Secret; no value is stored for it.
       assert.deepEqual(
-        [
-          kubeconfig.entry.kind,
-          kubeconfig.entry.class,
-          kubeconfig.entry.sealed,
-          kubeconfig.entry.delivery,
-        ],
-        ["template", "secret", true, "file"],
+        [kubeconfig.entry.kind, kubeconfig.entry.class, kubeconfig.entry.delivery],
+        ["template", "secret", "file"],
       );
       assert.equal(kubeconfig.entry.template?.text, text);
       assert.isUndefined(kubeconfig.entry.value);
@@ -1417,9 +1322,12 @@ it.effect(
         ),
         "invalid-template",
       );
-      // Nobody reveals it, the Owner included, and nothing is read for the refusal.
-      const revealed = yield* reveal(owner, acme.id, kubeconfig.entry.id, BOGUS_REAUTH);
-      assert.equal(revealed.status, 409);
+      // Nobody reads it back, the Owner included.
+      const asOwner = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(ownerId));
+      assert.notProperty(
+        asOwner.entries.find((entry) => entry.name === "KUBECONFIG")!,
+        "value",
+      );
       // A Guest sees that it is a template, not its text; a Member sees the text (names only).
       const asGuest = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(people.guest.id));
       const asMember = yield* vaults.listEntries({ vaultId: acme.id }).pipe(as(people.member.id));
@@ -1507,7 +1415,6 @@ it.effect("a workload identity entry is the Owner's alone, always a sealed Secre
     assert.deepInclude(added.entry, {
       kind: "identity",
       class: "secret",
-      sealed: true,
       delivery: "file",
       identity: { audience: "kubernetes", ttlSeconds: 600 },
     });
@@ -1533,12 +1440,11 @@ it.effect("a workload identity entry is the Owner's alone, always a sealed Secre
       ),
       "forbidden",
     );
-    // It takes no value, class or reveal, is never an environment variable, and never names the
+    // It takes no value or class, is never an environment variable, and never names the
     // Hub itself as audience; its lifetime is 1 minute to 1 hour.
     const owner = as(ownerId);
     for (const input of [
       { name: "A", identity: { audience: "vault" }, value: Redacted.make("x") },
-      { name: "B", identity: { audience: "vault" }, allowReveal: true },
       { name: "C", identity: { audience: "vault" }, delivery: "env" as const },
       { name: "D", identity: { audience: "https://hub.example.com" } },
       { name: "E", identity: { audience: "a b" } },

@@ -248,8 +248,6 @@ export type Action =
   | "vault.edit"
   /** Create, rename, describe, archive and delete a Vault: the Owner. */
   | "vault.manage"
-  /** Read a secret's value: the Owner (the door also asks for a strong factor). */
-  | "vault.reveal"
   /** Set a secret whose name changes how tools run (`secretNameRisk`): the Owner, confirmed. */
   | "vault.dangerousName"
   /**
@@ -664,14 +662,14 @@ const VAULT_ACTIONS: ReadonlySet<Action> = new Set([
   "vault.identityEntry",
   "vault.edit",
   "vault.manage",
-  "vault.reveal",
   "vault.dangerousName",
 ]);
 
 /**
- * Vaults. The Owner does everything, and alone creates, manages, allows and reveals; the Main
- * vault is the Owner's alone. An Organization's Vault: its Admins add, replace and delete secrets
- * without reading them; its Members and Guests see names only, and Variables' values but Guests.
+ * Vaults. The Owner does everything, and alone creates, manages and allows; nobody reads a
+ * Secret's value (owned-resources 01, ADR 0012). The Main vault is the Owner's alone. An
+ * Organization's Vault: its Admins add, replace and delete secrets without reading them; its
+ * Members and Guests see names only, and Variables' values but Guests.
  */
 const decideVault = (principal: Principal, action: Action, vault: VaultResource): Decision => {
   if (principal.isOwner) return allow;

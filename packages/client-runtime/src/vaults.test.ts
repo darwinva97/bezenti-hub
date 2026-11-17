@@ -23,7 +23,6 @@ const vault = (over: Partial<VaultSummary> = {}) =>
     entryCount: 1,
     canEdit: true,
     canManage: false,
-    canReveal: false,
     allowances: [],
     ...over,
   }) as unknown as VaultSummary;
@@ -43,11 +42,11 @@ const entry = (over: Partial<VaultEntry> = {}) =>
 
 describe("vaultActions", () => {
   it("lets an editor add and replace only with the write grant", () => {
-    expect(vaultActions(vault(), { mayWrite: true, surface: "mobile" })).toMatchObject({
+    expect(vaultActions(vault(), { mayWrite: true, surface: "mobile" })).toEqual({
       add: true,
       replace: true,
     });
-    expect(vaultActions(vault(), { mayWrite: false, surface: "mobile" })).toMatchObject({
+    expect(vaultActions(vault(), { mayWrite: false, surface: "mobile" })).toEqual({
       add: false,
       replace: false,
     });
@@ -56,14 +55,7 @@ describe("vaultActions", () => {
     expect(vaultActions(vault({ canEdit: false }), { mayWrite: true, surface: "web" })).toEqual({
       add: false,
       replace: false,
-      reveal: false,
     });
-  });
-  it("never reveals on mobile, even for the Owner", () => {
-    const owner = vault({ canReveal: true, canEdit: true, canManage: true });
-    expect(vaultActions(owner, { mayWrite: true, surface: "mobile" }).reveal).toBe(false);
-    expect(vaultActions(owner, { mayWrite: true, surface: "web" }).reveal).toBe(true);
-    expect(vaultActions(owner, { mayWrite: true, surface: "desktop" }).reveal).toBe(true);
   });
 });
 
@@ -83,58 +75,44 @@ describe("entryActions", () => {
       }).replace,
     ).toBe(true);
     expect(entryActions(vault(), entry(), ctx).replace).toBe(true);
-    // A template is composed from its entries: no value to replace, seal or reveal.
-    const template = entryActions(
-      vault({ canReveal: true }),
-      entry({ kind: "template", class: "secret", sealed: true }),
-      { ...ctx, surface: "web", isOwner: true },
-    );
-    expect(template).toMatchObject({ replace: false, seal: false, reveal: false });
+    // A template is composed from its entries: no value to replace or reclassify.
+    const template = entryActions(vault(), entry({ kind: "template", class: "secret" }), {
+      ...ctx,
+      surface: "web",
+      isOwner: true,
+    });
+    expect(template).toMatchObject({ replace: false, makeVariable: false });
   });
 
-  it("offers «Reveal» only on a revealable Secret; sealing, reveal and class to editors", () => {
-    const owner = vault({ canReveal: true, canEdit: true });
+  it("offers no way to read a Secret back, the Owner's included; class changes to editors", () => {
+    const owner = vault({ canEdit: true, canManage: true });
     const web = { mayWrite: true, surface: "web" as const, isOwner: true };
-    const revealable = entry({ class: "secret", sealed: false });
-    const sealed = entry({ class: "secret", sealed: true });
-    const variable = entry({ class: "variable", sealed: false, value: "eu-west-1" });
-    expect(entryActions(owner, revealable, web)).toMatchObject({
-      reveal: true,
-      seal: true,
-      allowReveal: false,
-      makeVariable: true,
-      makeSecret: false,
-    });
-    expect(entryActions(owner, sealed, web)).toMatchObject({
-      reveal: false,
-      seal: false,
-      allowReveal: true,
-      makeVariable: true,
-    });
+    const secret = entry({ class: "secret" });
+    const variable = entry({ class: "variable", value: "eu-west-1" });
+    const offered = entryActions(owner, secret, web);
+    expect(Object.keys(offered).toSorted()).toEqual([
+      "add",
+      "makeSecret",
+      "makeVariable",
+      "replace",
+    ]);
+    expect(offered).toMatchObject({ replace: true, makeVariable: true, makeSecret: false });
     expect(entryActions(owner, variable, web)).toMatchObject({
-      reveal: false,
-      seal: false,
-      allowReveal: false,
       makeVariable: false,
       makeSecret: true,
     });
-    // A Provider entry is its provider's: sealed, nothing to replace, reveal or reclassify.
-    expect(
-      entryActions(owner, entry({ kind: "provider", class: "secret", sealed: true }), web),
-    ).toMatchObject({
+    // A Provider entry is its provider's: nothing to replace or reclassify.
+    expect(entryActions(owner, entry({ kind: "provider", class: "secret" }), web)).toMatchObject({
       replace: false,
-      reveal: false,
-      seal: false,
-      allowReveal: false,
       makeVariable: false,
     });
     // A link is what its original is; a viewer who does not edit changes nothing.
+    expect(entryActions(owner, entry({ kind: "link", class: "secret" }), web)).toMatchObject({
+      makeVariable: false,
+    });
     expect(
-      entryActions(owner, entry({ kind: "link", class: "secret", sealed: false }), web),
-    ).toMatchObject({ seal: false, allowReveal: false, makeVariable: false });
-    expect(
-      entryActions(vault({ canEdit: false }), revealable, { ...web, isOwner: false }),
-    ).toMatchObject({ seal: false, allowReveal: false, makeVariable: false, makeSecret: false });
+      entryActions(vault({ canEdit: false }), secret, { ...web, isOwner: false }),
+    ).toMatchObject({ makeVariable: false, makeSecret: false });
   });
 });
 

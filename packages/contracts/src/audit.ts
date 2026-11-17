@@ -143,13 +143,16 @@ export const AUDIT_DETAIL_KEYS = {
   "appSignIn.approve": ["client", "redirect"],
   "mcpClient.approve": ["client", "access", "method"],
   "cliSession.issue": ["sessionId", "label", "scopes"],
-  /** The Vault's name and id and the entry's kind (`own`, `copy`, `link`); never the value. */
+  /**
+   * No longer written (owned-resources 01: nothing reveals a Secret); older rows still show. The
+   * Vault's name and id and the entry's kind; never the value.
+   */
   "secret.reveal": ["vault", "vaultId", "kind"],
   /**
-   * As `secret.reveal`, with `op`: `add`, `replace` (a new value), `rename`, `describe`, `link`,
-   * `copy` or `delete` (`brokenLinks`: how many Secret links its deletion broke), `seal`,
-   * `allow-reveal` or `class` (`class`: the new one); `dangerous` when the Owner confirmed a name
-   * that changes how tools run.
+   * The Vault's name and id and the entry's kind, with `op`: `add`, `replace` (a new value),
+   * `rename`, `describe`, `link`, `copy` or `delete` (`brokenLinks`: how many Secret links its
+   * deletion broke), `class` (`class`: the new one), and on older rows `seal` or `allow-reveal`;
+   * `dangerous` when the Owner confirmed a name that changes how tools run.
    */
   "secret.edit": [
     "vault",

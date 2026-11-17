@@ -1,7 +1,8 @@
 /**
  * Vaults. Metadata in the database; each value a sealed entry of `VaultValueStore`, replaced by a
- * new one per write. Rights are AccessPolicy's `vault.*` via SpaceDirectory.authorizer. Only
- * `reveal` returns a value; everything is audited without one. See docs/internals/secrets.md.
+ * new one per write. Rights are AccessPolicy's `vault.*` via SpaceDirectory.authorizer. No door
+ * returns a Secret's value (ADR 0012); a Variable's is listed to whoever may read Variables.
+ * Everything is audited without a value. See docs/internals/secrets.md.
  */
 import {
   IDENTITY_TTL_DEFAULT_SECONDS,
@@ -83,11 +84,6 @@ import * as VaultReachLoss from "./VaultReachLoss.ts";
 
 const MAIN_VAULT_NAME = "Main vault";
 
-export interface RevealedSecret {
-  readonly name: string;
-  readonly value: Redacted.Redacted<string>;
-}
-
 export class Vaults extends Context.Service<
   Vaults,
   {
@@ -109,22 +105,6 @@ export class Vaults extends Context.Service<
     readonly copyEntry: (
       input: VaultEntryFromMainInput,
     ) => Effect.Effect<VaultEntryResult, VaultError>;
-    /**
-     * Refuses, as `reveal` would, before the door asks for a strong factor: nobody but whom the
-     * policy lets reveal ever has a proof checked.
-     */
-    readonly authorizeReveal: (input: {
-      readonly vaultId: VaultId;
-      readonly entryId: VaultEntryId;
-    }) => Effect.Effect<void, VaultError>;
-    /**
-     * A secret's value, for the acting User when the policy lets them reveal it (the Owner),
-     * audited before it is handed out. The door asks for the strong factor first.
-     */
-    readonly reveal: (input: {
-      readonly vaultId: VaultId;
-      readonly entryId: VaultEntryId;
-    }) => Effect.Effect<RevealedSecret, VaultError>;
     // Spec 5 ticket 03: allowances and choices. What a Thread receives is EffectiveVaults'.
     /** `vaults.allow`: the Owner allows one of their Vaults to a Space or a User, or takes it back. */
     readonly allow: (input: VaultAllowInput) => Effect.Effect<VaultSummary, VaultError>;
@@ -186,7 +166,6 @@ interface EntryRow {
   readonly unmasked: number;
   /** Null on a link: its original's. */
   readonly class: VaultEntryClass | null;
-  readonly revealable: number | null;
   readonly version: number;
   readonly updatedAt: string;
   readonly updatedBy: string | null;
@@ -195,7 +174,6 @@ interface EntryRow {
   readonly linkedUnmasked: number | null;
   readonly linkedValueId: string | null;
   readonly linkedClass: VaultEntryClass | null;
-  readonly linkedRevealable: number | null;
   /** A Provider entry's provider (a key of `settings.secretProviders`) and reference. */
   readonly providerId: string | null;
   readonly providerReference: string | null;
@@ -214,13 +192,6 @@ interface EntryRow {
 const classOf = (row: EntryRow): VaultEntryClass =>
   (row.kind === "link" ? row.linkedClass : row.class) ?? "secret";
 
-/** A Secret nobody reveals: a broken link's too. */
-const isSealed = (row: EntryRow): boolean =>
-  classOf(row) === "secret" &&
-  (row.kind === "link"
-    ? row.linkedName === null || row.linkedRevealable !== 1
-    : row.revealable !== 1);
-
 /** The store entry holding what an entry delivers: a link's original's. */
 const valueIdOf = (row: EntryRow): string | null =>
   row.kind === "link" ? row.linkedValueId : row.valueId;
@@ -236,10 +207,10 @@ const ENTRY_COLUMNS = `
   e.entry_id AS "entryId", e.vault_id AS "vaultId", e.name AS "name",
   e.description AS "description", e.kind AS "kind", e.linked_entry_id AS "linkedEntryId",
   e.value_id AS "valueId", e.unmasked AS "unmasked", e.class AS "class",
-  e.revealable AS "revealable", e.version AS "version",
+  e.version AS "version",
   e.updated_at AS "updatedAt", e.updated_by AS "updatedBy",
   o.name AS "linkedName", o.unmasked AS "linkedUnmasked", o.value_id AS "linkedValueId",
-  o.class AS "linkedClass", o.revealable AS "linkedRevealable",
+  o.class AS "linkedClass",
   e.provider_id AS "providerId", e.provider_reference AS "providerReference",
   e.provider_scope_id AS "providerScopeId", s.label AS "scopeLabel",
   e.delivery AS "delivery", e.template_text AS "templateText",
@@ -395,7 +366,6 @@ const summaryOf = (row: VaultRow, known: Known, can: Can): VaultSummary => {
     entryCount: row.entryCount,
     canEdit: row.archivedAt === null && can("vault.edit", resource),
     canManage,
-    canReveal: can("vault.reveal", resource),
     // Whom a Vault reaches is the Owner's to know.
     allowances: canManage ? allowancesShown(row, known) : [],
     createdAt: row.createdAt,
@@ -431,7 +401,6 @@ const entryOf = (
     description: row.description,
     kind: row.kind,
     class: entryClass,
-    sealed: isSealed(row),
     ...(entryClass === "variable" && variableValue !== undefined ? { value: variableValue } : {}),
     ...(row.kind === "provider"
       ? {
@@ -487,8 +456,6 @@ const unavailable = Vaults.of({
   deleteEntry: refuse,
   linkEntry: refuse,
   copyEntry: refuse,
-  authorizeReveal: refuse,
-  reveal: refuse,
   allow: refuse,
   choices: refuse,
   setSpaceDefaults: refuse,
@@ -678,9 +645,7 @@ const make = Effect.gen(function* () {
           ? resource.isMain || resource.space === null
             ? "Only the Owner edits this Vault."
             : "Only the Owner and the Organization's Admins edit this Vault's secrets."
-          : action === "vault.reveal"
-            ? "Only the Owner reveals a secret's value."
-            : "Only the Owner manages Vaults.",
+          : "Only the Owner manages Vaults.",
       );
     }
     if (action === "vault.edit" && row.value.archivedAt !== null) {
@@ -1211,15 +1176,10 @@ const make = Effect.gen(function* () {
         `${existing.name} holds a value of its own: delete it and add a Provider entry instead.`,
       );
     }
-    if (
-      input.value !== undefined ||
-      input.class !== undefined ||
-      input.allowReveal !== undefined ||
-      input.template !== undefined
-    ) {
+    if (input.value !== undefined || input.class !== undefined || input.template !== undefined) {
       return yield* fail(
         "invalid-value",
-        "A Provider entry is a sealed Secret read from its provider: it takes no value, class or reveal.",
+        "A Provider entry is a sealed Secret read from its provider: it takes no value or class.",
       );
     }
     const delivery = input.delivery ?? existing?.delivery ?? "env";
@@ -1401,14 +1361,13 @@ const make = Effect.gen(function* () {
     if (
       input.value !== undefined ||
       input.class !== undefined ||
-      input.allowReveal !== undefined ||
       input.provider !== undefined ||
       input.template !== undefined ||
       (input.delivery !== undefined && input.delivery !== "file")
     ) {
       return yield* fail(
         "invalid-value",
-        "A workload identity entry is a token the Hub signs, delivered as a sealed Secret file: it takes no value, class, reveal or other delivery.",
+        "A workload identity entry is a token the Hub signs, delivered as a sealed Secret file: it takes no value, class or other delivery.",
       );
     }
     const issuer = Option.flatMap(identityIssuer, (found) =>
@@ -1528,15 +1487,10 @@ const make = Effect.gen(function* () {
         `${existing.name} is not a template: delete it and add a template instead.`,
       );
     }
-    if (
-      input.value !== undefined ||
-      input.class !== undefined ||
-      input.allowReveal !== undefined ||
-      input.provider !== undefined
-    ) {
+    if (input.value !== undefined || input.class !== undefined || input.provider !== undefined) {
       return yield* fail(
         "invalid-value",
-        "A template is composed from its Vault's entries: it takes no value, class, reveal or provider.",
+        "A template is composed from its Vault's entries: it takes no value, class or provider.",
       );
     }
     const text = input.template?.text ?? existing?.templateText ?? "";
@@ -1660,9 +1614,8 @@ const make = Effect.gen(function* () {
 
     if (input.entryId === undefined) {
       if (value === undefined) return yield* fail("invalid-value", "A secret needs a value.");
-      // A new Secret is sealed unless reveal is allowed now, with its value.
+      // Every Secret is sealed (ADR 0012): `revealable` is always 0.
       const entryClass = input.class ?? "secret";
-      const revealable = entryClass === "secret" && input.allowReveal === true ? 1 : 0;
       const delivery = input.delivery ?? "env";
       yield* nameTaken(row.vaultId, input.name);
       const entryId = yield* newId("secret");
@@ -1671,7 +1624,7 @@ const make = Effect.gen(function* () {
           yield* stillWritable(row.vaultId);
           yield* sql`
             INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, value_id, unmasked, class, revealable, delivery, version, created_at, updated_at, updated_by)
-            VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null}, 'own', ${valueId}, ${isShort(value) ? 1 : 0}, ${entryClass}, ${revealable}, ${delivery}, 1, ${at}, ${at}, ${userId})
+            VALUES (${entryId}, ${row.vaultId}, ${input.name}, ${input.description ?? null}, 'own', ${valueId}, ${isShort(value) ? 1 : 0}, ${entryClass}, 0, ${delivery}, 1, ${at}, ${at}, ${userId})
           `;
           yield* refreshTemplateClasses(row.vaultId);
           yield* recordEdit({
@@ -1705,7 +1658,7 @@ const make = Effect.gen(function* () {
           `${entry.name} is a Secret link: its value is the Main vault's. Replace the original there, or delete the link and add a secret of this Vault's own.`,
         );
       }
-      if (input.class !== undefined || input.allowReveal !== undefined) {
+      if (input.class !== undefined) {
         return yield* fail(
           "not-linkable",
           `${entry.name} is a Secret link: it is what its original in the Main vault is. Change the original there.`,
@@ -1718,10 +1671,9 @@ const make = Effect.gen(function* () {
     if (renamed) yield* nameTaken(row.vaultId, input.name, entry.entryId);
     const described = input.description !== undefined && input.description !== entry.description;
 
-    // Class and reveal: sealing is one way; undoing it, or showing a Secret as a Variable, takes a
-    // new value in the same request, so the old one is never read for it.
+    // Class: a Variable becomes a sealed Secret as it is; a Secret becomes a Variable only with a
+    // new value in the same request, so the old one is never read for it (owned-resources 01).
     const wasClass = classOf(entry);
-    const wasRevealable = wasClass === "secret" && entry.revealable === 1;
     const nextClass = input.class ?? wasClass;
     const classChanged = entry.kind !== "link" && nextClass !== wasClass;
     if (classChanged && nextClass === "variable" && value === undefined) {
@@ -1730,33 +1682,10 @@ const make = Effect.gen(function* () {
         `Making ${entry.name} a Variable takes a new value: a Secret's is never shown.`,
       );
     }
-    const nextRevealable =
-      entry.kind === "link" || nextClass === "variable"
-        ? false
-        : input.allowReveal === undefined
-          ? classChanged
-            ? false
-            : wasRevealable
-          : input.allowReveal;
-    if (nextRevealable && !(wasRevealable && !classChanged) && value === undefined) {
-      return yield* fail(
-        "needs-new-value",
-        `${entry.name} is sealed: allowing reveal takes a new value, so the sealed one is never read.`,
-      );
-    }
-    const revealChanged =
-      !classChanged && entry.kind !== "link" && nextRevealable !== wasRevealable;
     const delivery = input.delivery ?? entry.delivery;
     const redelivered = delivery !== entry.delivery;
     if (redelivered && entry.delivery === "file") yield* keepsItsPath(row.vaultId, entry.name);
-    if (
-      value === undefined &&
-      !renamed &&
-      !described &&
-      !classChanged &&
-      !revealChanged &&
-      !redelivered
-    ) {
+    if (value === undefined && !renamed && !described && !classChanged && !redelivered) {
       return yield* result(can, resource, row.vaultId, entry.entryId, []);
     }
     // The new value under a new id; the row, its version and the audit move to it together.
@@ -1775,7 +1704,7 @@ const make = Effect.gen(function* () {
             value_id = ${valueId ?? before.valueId},
             unmasked = ${value === undefined ? entry.unmasked : isShort(value) ? 1 : 0},
             class = ${entry.kind === "link" ? null : nextClass},
-            revealable = ${entry.kind === "link" ? null : nextRevealable ? 1 : 0},
+            revealable = ${entry.kind === "link" ? null : 0},
             delivery = ${delivery},
             version = version + ${value === undefined ? 0 : 1},
             updated_at = ${at},
@@ -1785,12 +1714,6 @@ const make = Effect.gen(function* () {
         const edit = { userId, vault: row, entryId: entry.entryId, name: input.name };
         if (classChanged) {
           yield* recordEdit({ ...edit, kind: entry.kind, op: "class", class: nextClass });
-        } else if (revealChanged) {
-          yield* recordEdit({
-            ...edit,
-            kind: entry.kind,
-            op: nextRevealable ? "allow-reveal" : "seal",
-          });
         }
         if (redelivered) {
           yield* recordEdit({ ...edit, kind: entry.kind, op: "delivery", delivery });
@@ -1915,7 +1838,7 @@ const make = Effect.gen(function* () {
         yield* sql`
           INSERT INTO vault_entries (entry_id, vault_id, name, description, kind, linked_entry_id, value_id, unmasked, class, revealable, version, created_at, updated_at, updated_by)
           VALUES (${entryId}, ${row.vaultId}, ${name}, ${description}, ${kind}, ${kind === "link" ? source.entryId : null}, ${valueId}, ${source.unmasked},
-            ${kind === "link" ? null : classOf(source)}, ${kind === "link" ? null : source.revealable === 1 ? 1 : 0},
+            ${kind === "link" ? null : classOf(source)}, ${kind === "link" ? null : 0},
             1, ${at}, ${at}, ${userId})
         `;
         yield* recordEdit({
@@ -1934,52 +1857,6 @@ const make = Effect.gen(function* () {
     const warnings: ReadonlyArray<VaultWarning> =
       classOf(source) === "secret" && source.unmasked === 1 ? ["short-value"] : [];
     return yield* result(can, resource, row.vaultId, entryId, warnings);
-  });
-
-  /** An entry the Owner may reveal: refused before its value is read, a sealed one always. */
-  const revealable = Effect.fn("Vaults.revealable")(function* (input: {
-    readonly vaultId: VaultId;
-    readonly entryId: VaultEntryId;
-  }) {
-    const { userId, row } = yield* authorizeVault(input.vaultId, "vault.reveal");
-    const entry = yield* findEntry(row.vaultId, input.entryId);
-    if (entry.kind === "link" && entry.linkedName === null) {
-      return yield* fail("not-found", `${entry.name} is a broken link: its original is gone.`);
-    }
-    // A template's value is composed when a process starts: nobody reads it from the Hub.
-    if (isSealed(entry) || entry.kind === "template") {
-      return yield* fail(
-        "sealed",
-        `${entry.name} is sealed: nobody reveals it, not even the Owner. Replace it or delete it.`,
-      );
-    }
-    return { userId, row, entry };
-  });
-
-  const reveal = Effect.fn("Vaults.reveal")(function* (input: {
-    readonly vaultId: VaultId;
-    readonly entryId: VaultEntryId;
-  }) {
-    const { userId, row, entry } = yield* revealable(input);
-    const value = yield* readValue(valueIdOf(entry));
-    // Recorded before the value leaves: one whose reveal could not be recorded is not shown.
-    yield* audit
-      .record({
-        actor: AuditLog.userActor(userId),
-        action: "secret.reveal",
-        spaceId: row.spaceId as SpaceId | null,
-        target: { kind: "secret", id: entry.entryId, name: entry.name },
-        detail: { vault: row.name, vaultId: row.vaultId, kind: entry.kind },
-      })
-      .pipe(Effect.catch(storage("record the reveal")));
-    return { name: entry.name, value: Redacted.make(value) } satisfies RevealedSecret;
-  });
-
-  const authorizeReveal = Effect.fn("Vaults.authorizeReveal")(function* (input: {
-    readonly vaultId: VaultId;
-    readonly entryId: VaultEntryId;
-  }) {
-    yield* revealable(input);
   });
 
   // Spec 5 ticket 03: allowances, a Space's defaults and a Project's choices. Which Vaults may
@@ -2337,7 +2214,6 @@ const make = Effect.gen(function* () {
     setProjectChoice,
     saveTargets,
     providerScopes,
-    authorizeReveal,
     create,
     update,
     remove,
@@ -2350,7 +2226,6 @@ const make = Effect.gen(function* () {
     copyEntry: Effect.fn("Vaults.copyEntry")((input: VaultEntryFromMainInput) =>
       fromMain(input, "copy"),
     ),
-    reveal,
   });
 });
 

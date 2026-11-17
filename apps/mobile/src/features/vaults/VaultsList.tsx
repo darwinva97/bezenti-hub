@@ -36,8 +36,9 @@ const messageOf = (cause: unknown) =>
 
 /**
  * Settings → Vaults on a phone: Vaults and the names in them; the Owner and an Organization's
- * Admins add or replace a value. Never a value on screen, never «Reveal» or the master key: those
- * stay on web and desktop (spec 5, «Clientes»). The Hub decides again on every call.
+ * Admins add or replace a value. Never a Secret's value on screen (nobody reads one back), never
+ * the master key: that stays on web and desktop (spec 5, «Clientes»). The Hub decides again on
+ * every call.
  */
 export function VaultsList(props: { readonly environmentId: EnvironmentId }) {
   return <VaultsPage key={props.environmentId} environmentId={props.environmentId} />;
@@ -137,7 +138,8 @@ function VaultsPage(props: { readonly environmentId: EnvironmentId }) {
         ))
       )}
       <Text className="px-2 text-xs text-foreground-muted">
-        Values are never shown here. Reveal and back up the master key on the web or desktop app.
+        A Secret's value is never shown again once saved. Back up the master key on the web or
+        desktop app.
       </Text>
     </View>
   );

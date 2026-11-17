@@ -184,7 +184,8 @@ A `file` answer is for the agent's own shell, which reads it by path.
 ## Vaults (spec 5, ticket 02)
 
 A Vault is a named set of secrets, each under an environment-variable name. `vaults/Vaults.ts`
-is the one service; WS RPCs `vaults.*` and HTTP `vaults.reveal` are its doors.
+is the one service; WS RPCs `vaults.*` are its doors. No door answers a Secret's value
+(owned-resources 01, ADR 0012).
 
 - **Where values live:** never in the database. Each `own` or `copy` value is an entry of
   `ServerSecretStore.VaultValueStore`: its own folder, `secrets/vault-values/<value id>.sealed`,
@@ -209,10 +210,10 @@ is the one service; WS RPCs `vaults.*` and HTTP `vaults.reveal` are its doors.
   start; re-sealed when it opens only with the previous key (after a rotation; `t3 secrets key
   rotate` re-seals it at once); a key that opens the secrets folder but not this check stops the
   Hub: the database and the folder come from different Hubs.
-- **Who may** (`AccessPolicy`, `vault.view|edit|manage|reveal` on a `VaultResource`, through
+- **Who may** (`AccessPolicy`, `vault.view|edit|manage` on a `VaultResource`, through
   `SpaceDirectory.authorizer`, decided once per request, which also keeps an agent bound to one
   Space to that Space):
-  the Owner does everything and alone creates, renames, archives, deletes and reveals; the Main
+  the Owner does everything and alone creates, renames, archives and deletes; the Main
   vault and the Owner's other Vaults are the Owner's alone; an Organization's Admins add, replace,
   rename and delete its secrets without reading them; its Members and Guests see names and
   descriptions. A Vault one cannot see answers like a missing one.
@@ -237,35 +238,33 @@ is the one service; WS RPCs `vaults.*` and HTTP `vaults.reveal` are its doors.
   add one, rename into one, nor replace or rename one the Owner set. **Values:** UTF-8 without
   NUL, at most 64 KiB; shorter than 6 characters is kept with a `short-value` warning and marked
   `unmasked` (never masked later).
-- **Values out:** only `vaults.reveal` (HTTP), the Owner, after `Vaults.authorizeReveal` and then a
-  strong factor in the request; audited `secret.reveal` before the value leaves. Values in arrive
-  as `Schema.RedactedFromValue`, so no log, span or error shows them. Every change is audited
-  (`vault.create|update|delete`, `secret.edit` with `op`) with names and kinds, never values.
+- **Values out:** none for a Secret, the Owner included (owned-resources 01: «Reveal», its HTTP
+  door `vaults.reveal`, `vault.reveal` and the `secret.reveal` audit are gone; older audit rows
+  still show). A Secret's value is read only to deliver it (`SecretDelivery`) and to mask it
+  (`SecretMasker`); a Variable's, also to list it (`Vaults.shown`, `vault.readVariables`). Values
+  in arrive as `Schema.RedactedFromValue`, so no log, span or error shows them. Every change is
+  audited (`vault.create|update|delete`, `secret.edit` with `op`) with names and kinds, never
+  values. The master key's backup (`vaults.masterKeyBackup`, `t3 secrets key export`) stays: it
+  is the operator's, and ADR 0008 makes the promise the application's.
 
 ## Variables y sellado («Variables, Secretos sellados y Secret providers», ticket 01)
 
-Each entry is a **Variable** (configuration, shown and never masked) or a **Secret**, and a
-Secret is **revealable** or **sealed** (nobody reveals it, not even the Owner).
+Each entry is a **Variable** (configuration, shown and never masked) or a **Secret**, which is
+always sealed: nobody reads it back, not even the Owner (owned-resources 01).
 
 - **Data** (migration 119, a rebuild of `vault_entries`): `class` (`secret` | `variable`) and
   `revealable` (0 | 1), both NULL on a link, which is what its original is (a broken link counts
   as a sealed Secret). A row written without them is a sealed Secret (the defaults fail closed).
-  The entries that existed before stay revealable Secrets. A Variable is never `revealable`. A
-  copy takes its original's class and seal (`Vaults.fromMain`; two rows, so no CHECK).
-- **Reveal:** `Vaults.revealable` refuses a sealed one with `sealed` before anything else
-  happens: before the HTTP door asks for the strong factor (409 `EnvironmentHttpConflictError`)
-  and before its value is read. A Variable can still be revealed by the Owner, but no client offers it.
-- **Changes** (`vaults.entries.put`, `class` and `allowReveal`), each for whoever edits the Vault:
-  - **Seal** (`allowReveal: false`) is one way.
-  - **Allow reveal** (`allowReveal: true`) on a sealed Secret, and **Secret → Variable**,
-    need a `value` in the same request (`needs-new-value`). The old value is removed unread, as a
-    replace does.
-  - **Variable → Secret** gives a sealed Secret.
-  - A new Secret is sealed unless `allowReveal`.
-  - A link's class or seal is changed at its original (`not-linkable`).
-  - Audited `secret.edit` with `op` `seal`, `allow-reveal` or `class` (detail `class`), beside
-    the usual `replace`.
-  - The Secret → Variable change without a new value (revealable + strong factor) is not built.
+  Migration 141 sealed the ones that were revealable; the column stays for the CHECKs and
+  nothing reads it. A copy takes its original's class (`Vaults.fromMain`).
+- **Changes** (`vaults.entries.put`, `class`), each for whoever edits the Vault:
+  - **Secret → Variable** needs a `value` in the same request (`needs-new-value`). It is allowed,
+    not refused: the old value is removed unread, as a replace does, so it never exposes a Secret.
+  - **Variable → Secret** gives a Secret with the same value; what was already printed in the
+    history stays visible.
+  - A link's class is changed at its original (`not-linkable`).
+  - Audited `secret.edit` with `op` `class` (detail `class`), beside the usual `replace`; older
+    rows may say `seal` or `allow-reveal`.
 - **Who reads a Variable's value:** `vault.readVariables`, which is `vault.view` without Guests (an
   invitation can leave the Organization; decision 4). `Vaults.shown` is the one place that reads
   one, for rows of class `variable` only. It is the only `value` a WS answer carries
@@ -291,9 +290,8 @@ Secret is **revealable** or **sealed** (nobody reveals it, not even the Owner).
   - whoever has the Hub's disk and the master key decrypts the store;
   - the agent that receives a value can print it, and its AI provider sees what it reads.
   - Sealing protects reading through the Hub's UI and APIs.
-- **Clients:** web only in this ticket. `entryActions` (client-runtime) offers «Reveal» only on a
-  revealable Secret, and also offers «Seal», «Allow reveal», «Make variable» and «Make secret».
-  Mobile keeps working with the new fields and will show them in a later ticket.
+- **Clients:** `entryActions` (client-runtime) offers «Replace value», «Make variable» and
+  «Make secret»; nothing reads a Secret back on any client.
 
 ## Provider entries («Variables, Secretos sellados y Secret providers», ticket 02)
 
@@ -313,7 +311,6 @@ on the Thread's behalf: [ADR 0008](../adr/0008-vault-entries-read-from-secret-pr
   - It is «broken» for everyone when its provider is gone, or is of a kind this Hub has no driver
     for. A broken entry is not delivered, like a broken link.
   - It cannot be linked or copied (`not-linkable`): «Copy into the Hub» is ticket 08.
-  - Reveal answers `sealed` without asking the provider.
 - **Driver contract** (`packages/secret-provider-core`):
   - `read` gives each reference either `{ value, expiresAt?, version? }` or a class of error:
     `not-found`, `forbidden`, `unavailable` or `invalid`. It never carries text, because a
@@ -360,7 +357,7 @@ on the Thread's behalf: [ADR 0008](../adr/0008-vault-entries-read-from-secret-pr
   - `delivery`: `env`, `file` or `none`.
   - `template_text`: names and literal text only, never a value, so it is stored in clear.
   - `kind = 'template'`.
-  - A template holds no value, is never revealable and never `none` (CHECK).
+  - A template holds no value and is never `none` (CHECK).
   - «`none` only if a template of the Vault names it» spans rows: it is the put warning
     `not-used-by-template`, not a CHECK.
   - A template's stored `class` (shown in the list) is recalculated in every write to its Vault.
@@ -372,7 +369,7 @@ on the Thread's behalf: [ADR 0008](../adr/0008-vault-entries-read-from-secret-pr
   - At most 64 KiB and 64 references.
   - When saved, every name must be a non-template entry of the same Vault, and `| path` needs an
     entry delivered as `file`. That entry cannot leave `file` while a template takes its path.
-  - Link or copy of a Main vault template: `not-linkable`. Reveal answers `sealed`.
+  - Link or copy of a Main vault template: `not-linkable`.
   - Who: whoever edits the Vault (`vault.edit`). Its text is shown like a Variable's value: to
     the Owner, Admins and Members, never to Guests.
   - There is no preview door: the form previews with the shared parser, as `[NAME]`, and reads
@@ -1097,42 +1094,41 @@ No door of its own: clients call the commands of tickets 02-06, gated by each co
 `permissionAtom`, and the Hub decides again.
 
 - **Shared state** (`@t3tools/client-runtime/vaults`): `vaultActions` / `entryActions` (what a
-  viewer is offered from the Hub's `canEdit` / `canReveal` plus the session's write grant; a link
-  is never replaced, a `dangerous` name only by the Owner; `reveal` is never true on the `mobile`
-  surface), `loadVaultOverview`, `entryBadges`, `vaultOwnerLine`, `threadSecretLines`,
+  viewer is offered from the Hub's `canEdit` plus the session's write grant; a link is never
+  replaced, a `dangerous` name only by the Owner; nothing reads a Secret back), `loadVaultOverview`, `entryBadges`, `vaultOwnerLine`, `threadSecretLines`,
   `vaultFailureMessage` (only a Vault's own message is shown; anything else is generic, since a
   transport error could carry what was typed). Web, desktop and mobile all use them.
 - **Desktop** renders the web bundle from the Hub (`window.desktopBridge` only changes the HTTP
-  layer to a bearer token), so Settings → Vaults, «Reveal» and «Download master key backup» (strong
-  factor in the request) are the web components.
+  layer to a bearer token), so Settings → Vaults and «Download master key backup» (strong factor
+  in the request) are the web components.
 - **Mobile:** Settings → Vaults (`SettingsVaults`, `features/vaults/VaultsList.tsx`: Vaults, names,
   badges, «Add secret» / «Replace value» for the Owner and an Organization's Admins), the Thread's
   «Secrets» (`ThreadSecrets.tsx`) and «Also save to Vault» on the `request_secret` card. Inputs are
-  secure and cleared after saving. **No «Reveal», no master key:** `noReveal.test.ts` scans
+  secure and cleared after saving. **No master key:** `noReveal.test.ts` scans
   `apps/mobile/src` for `vaults.reveal`, `revealVaultSecret` and the master key calls.
   Creating, deleting, linking, allowing and defaults stay on web and desktop.
 
 ## The door inventory (spec 5 ticket 09)
 
-The rule: a value leaves the Hub only by `vaults.reveal` (the Owner, strong factor), the master
-key's backup (the Owner) and `secretEnv` to a process that starts; everything else carries names
-or `[NAME]`. Each door is declared, and a test fails for one that is not:
+The rule: a Secret's value leaves the Hub only by `secretEnv` to a process that starts (and the
+master key's backup, the Owner's, opens them all from a copy of the disk); a Variable's also in
+`vaults.entries.*` to whoever may read Variables; everything else carries names or `[NAME]`. Each door is declared, and a test fails for one that is not:
 
-| Doors                                              | Declared in                                         | Test that fails for a new one                        |
-| -------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------- |
-| WS RPCs                                            | `RPC_SPACE_ACCESS`, `MaskedPaths.WS_DOOR_RULES`     | `RpcAuthorization.test.ts`, `MaskedPaths.test.ts`    |
-| HTTP endpoints, raw routes, MCP tools              | `DoorRules.ts`, `MaskedPaths.ts`                    | `DoorRules.test.ts`, `MaskedPaths.test.ts`           |
-| Executor operations (`secretEnv` on three of them) | `MaskedPaths.EXECUTOR_OPERATIONS`                   | `MaskedPaths.test.ts`, `DoorRules.test.ts` (count)   |
-| Modules that read a value                          | `DoorRules.test.ts`: reveal, delivery, masking only | the same (a new reader, a new caller of `readValue`) |
-| The Vaults' tables                                 | `DoorRules.test.ts`                                 | the same                                             |
-| Doors named after Vaults or secrets                | `vaults/VaultDoors.test.ts`                         | the same (a door neither called there nor elsewhere) |
+| Doors                                              | Declared in                                     | Test that fails for a new one                        |
+| -------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------- |
+| WS RPCs                                            | `RPC_SPACE_ACCESS`, `MaskedPaths.WS_DOOR_RULES` | `RpcAuthorization.test.ts`, `MaskedPaths.test.ts`    |
+| HTTP endpoints, raw routes, MCP tools              | `DoorRules.ts`, `MaskedPaths.ts`                | `DoorRules.test.ts`, `MaskedPaths.test.ts`           |
+| Executor operations (`secretEnv` on three of them) | `MaskedPaths.EXECUTOR_OPERATIONS`               | `MaskedPaths.test.ts`, `DoorRules.test.ts` (count)   |
+| Modules that read a value                          | `DoorRules.test.ts`: delivery, masking only     | the same (a new reader, a new caller of `readValue`) |
+| The Vaults' tables                                 | `DoorRules.test.ts`                             | the same                                             |
+| Doors named after Vaults or secrets                | `vaults/VaultDoors.test.ts`                     | the same (a door neither called there nor elsewhere) |
 
 - **Value sweep** (`vaults/VaultDoors.test.ts`): full Vaults (Main, link, copy, each
   Organization's own, one of the Owner's allowed to Acme and one to a User); the Owner and an
   Admin, a Member and a Guest of Acme and of Globex call every `vaults.*` door, reads and writes,
-  the reveal without a strong factor, the master key's status, the audit log and
-  `list_secret_names`. No answer or refusal holds a value; none names a secret its caller may not
-  see; only the Owner's reveal with a passkey answers one.
+  a reveal (no such door: the Owner with a passkey included), the master key's status, the audit
+  log and `list_secret_names`. No answer or refusal holds a Secret's value; none names a secret
+  its caller may not see.
 - **Guest and read-only views**: a guest link's stream and items show `[OWNER_TOKEN]`
   (`HubWithEnvironments.secretMasking.test.ts`); the read-only snapshots serve the masked store.
 - **Leak smoke**: after a turn and a terminal (`secretMasking`), a handoff (`handoff`) and a

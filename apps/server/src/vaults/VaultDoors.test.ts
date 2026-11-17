@@ -1,7 +1,8 @@
 /**
  * Spec 5 ticket 09: the Owner and four roles of two Organizations call every Vault door (WS
- * handlers call these services one to one; HTTP over HTTP). No answer holds a value but the
- * Owner's reveal, nor a name its caller may not see; a new Vault or secret door not called fails.
+ * handlers call these services one to one; HTTP over HTTP). No answer holds a Secret's value, the
+ * Owner's included (owned-resources 01: nothing reveals), nor a name its caller may not see; a new
+ * Vault or secret door not called fails.
  */
 // @effect-diagnostics globalJsonInEffect:off -- answers are searched as text.
 import {
@@ -111,11 +112,8 @@ const team = Effect.gen(function* () {
   const effective = Context.get(server.services, EffectiveVaults.EffectiveVaults);
   const delivery = Context.get(server.services, SecretDelivery.SecretDelivery);
   const as = (userId: UserId) => CommandActor.actAs(userId);
-  // Revealable, as every secret was before sealing: the Owner's reveal is one of the doors.
   const put = (vaultId: VaultId, name: string, value: string) =>
-    vaults
-      .putEntry({ vaultId, name, value: Redacted.make(value), allowReveal: true })
-      .pipe(as(ownerId));
+    vaults.putEntry({ vaultId, name, value: Redacted.make(value) }).pipe(as(ownerId));
 
   // Full Vaults: the Main vault (one kept, one linked and copied into Acme's), Acme's and Globex's
   // own, one of the Owner's allowed to Acme and one allowed to Grace alone.
@@ -149,6 +147,8 @@ const team = Effect.gen(function* () {
     .setSpaceDefaults({ spaceId: acmeId, vaultIds: [acme.id, shared.id] })
     .pipe(as(ownerId));
   yield* vaults.setSpaceDefaults({ spaceId: globexId, vaultIds: [globex.id] }).pipe(as(ownerId));
+  // Revealable, as every Secret was before migration 119 made new ones sealed: still never shown.
+  yield* server.sql`UPDATE vault_entries SET revealable = 1 WHERE class = 'secret' AND kind = 'own'`;
 
   const project = Effect.fn(function* (cookie: string, id: string, spaceId: SpaceId) {
     const made = yield* server.request("/api/projects/mutate", {
@@ -220,7 +220,7 @@ const shown = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   );
 
 it.effect(
-  "no Vault door answers a value, refusals included, but the Owner's reveal; nor a name its caller may not see",
+  "no Vault door answers a Secret's value, refusals and the Owner's strong factor included; nor a name its caller may not see",
   () =>
     Effect.gen(function* () {
       const t = yield* team;
@@ -315,7 +315,7 @@ it.effect(
         if (made._tag === "Some") yield* call("ws:vaults.delete", v.remove({ vaultId: scratch }));
         else yield* call("ws:vaults.delete", v.remove({ vaultId: t.acmeVault }));
 
-        // HTTP: the reveal, refused without a strong factor; the key's status; the audit log.
+        // HTTP: a reveal (no such door), the key's status, the audit log.
         const http = Effect.fn(function* (door: string, path: string, body?: unknown) {
           swept.add(door);
           const answer = yield* t.server.request(path, {
@@ -333,7 +333,7 @@ it.effect(
               entryId: entry.id,
               reauth: { method: "password", password: "nope", totpCode: "000000" },
             });
-            assert.notEqual(refused.status, 200, `${who.name} revealed without a strong factor`);
+            assert.notEqual(refused.status, 200, `${who.name} got an answer from a reveal`);
           }
         }
         yield* http("http:vaults.masterKeyStatus", "/api/vaults/master-key");
@@ -392,7 +392,7 @@ it.effect(
       );
       assert.deepEqual(named, []);
 
-      // The Owner's reveal, with a strong factor: the one door that answers a value.
+      // Not even the Owner with a strong factor reads a revealable Secret: there is no such door.
       const page = yield* t.vaults.listEntries({ vaultId: t.acmeVault }).pipe(t.as(t.ownerId));
       const acmeOwn = page.entries.find((entry) => entry.name === "ACME_API_KEY");
       const revealed = yield* t.server.request("/api/vaults/reveal", {
@@ -403,8 +403,11 @@ it.effect(
           reauth: yield* passkeyReauth(t.server, t.authenticator),
         },
       });
-      assert.equal(revealed.status, 200);
-      assert.include(JSON.stringify(revealed.body), ACME_OWN);
+      assert.notEqual(revealed.status, 200, "the Owner's reveal was answered");
+      assert.isFalse(
+        VALUES.some((value) => JSON.stringify(revealed.body).includes(value)),
+        "the Owner's reveal answered a value",
+      );
 
       // Every door about Vaults or secrets is called here, or in the file named for it.
       const doors = [

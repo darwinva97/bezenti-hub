@@ -2443,7 +2443,7 @@ export const layerWsRpc = (
             Effect.andThen(secretRequests.vaultTargets(input)),
           ),
         // Vaults: each decided by Vaults (AccessPolicy `vault.*`) for the connection's User.
-        // None returns a value; a value is revealed only over HTTP (`vaults.reveal`).
+        // None returns a Secret's value (owned-resources 01); Variables' to whoever may read them.
         [WS_METHODS.vaultsList]: (_input) => vaults.list,
         [WS_METHODS.vaultsCreate]: (input) => vaults.create(input),
         [WS_METHODS.vaultsUpdate]: (input) => vaults.update(input),

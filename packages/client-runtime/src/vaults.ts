@@ -9,7 +9,7 @@ import {
   type VaultThreadEnvironment,
 } from "@t3tools/contracts";
 
-/** Revealing a value needs a strong factor on a large screen: never on a phone. */
+/** A dangerous name is replaced on a large screen only: never on a phone. */
 export type VaultSurface = "web" | "desktop" | "mobile";
 
 const VAULT_SOURCE_LABEL: Record<VaultSource, string> = {
@@ -21,31 +21,22 @@ const VAULT_SOURCE_LABEL: Record<VaultSource, string> = {
 export interface VaultActions {
   readonly add: boolean;
   readonly replace: boolean;
-  readonly reveal: boolean;
 }
 
 /**
- * What a client offers on one Vault: what the Hub says the viewer may do (`canEdit`, `canReveal`)
- * and the session's grant for the command (`mayWrite`, its `permissionAtom`). The Hub decides
- * again on every call.
+ * What a client offers on one Vault: what the Hub says the viewer may do (`canEdit`) and the
+ * session's grant for the command (`mayWrite`, its `permissionAtom`). The Hub decides again on
+ * every call. Nothing reads a Secret back (owned-resources 01).
  */
 export function vaultActions(
-  vault: Pick<VaultSummary, "canEdit" | "canReveal">,
+  vault: Pick<VaultSummary, "canEdit">,
   context: { readonly mayWrite: boolean; readonly surface: VaultSurface },
 ): VaultActions {
   const edit = vault.canEdit && context.mayWrite;
-  return {
-    add: edit,
-    replace: edit,
-    reveal: vault.canReveal && context.surface !== "mobile",
-  };
+  return { add: edit, replace: edit };
 }
 
 export interface EntryActions extends VaultActions {
-  /** Seal a revealable Secret: one way, no value. */
-  readonly seal: boolean;
-  /** Make a sealed Secret revealable: with a new value. */
-  readonly allowReveal: boolean;
   /** Make a Secret a Variable: with a new value. */
   readonly makeVariable: boolean;
   /** Make a Variable a Secret (sealed). */
@@ -54,11 +45,11 @@ export interface EntryActions extends VaultActions {
 
 /**
  * A link is replaced at its original, and is what its original is; a name that changes how tools
- * run is the Owner's. «Reveal» only on a revealable Secret: never a sealed one or a Variable.
+ * run is the Owner's.
  */
 export function entryActions(
-  vault: Pick<VaultSummary, "canEdit" | "canReveal">,
-  entry: Pick<VaultEntry, "kind" | "name"> & Partial<Pick<VaultEntry, "class" | "sealed">>,
+  vault: Pick<VaultSummary, "canEdit">,
+  entry: Pick<VaultEntry, "kind" | "name"> & Partial<Pick<VaultEntry, "class">>,
   context: {
     readonly mayWrite: boolean;
     readonly surface: VaultSurface;
@@ -69,7 +60,7 @@ export function entryActions(
   const dangerousOnPhone =
     context.surface === "mobile" && secretNameRisk(entry.name) === "dangerous";
   // A Provider entry's value is its provider's, a template's its entries': nothing to replace,
-  // seal, reveal or reclassify here.
+  // or reclassify here.
   const mayReplace =
     base.replace &&
     !dangerousOnPhone &&
@@ -81,9 +72,6 @@ export function entryActions(
   return {
     ...base,
     replace: mayReplace,
-    reveal: base.reveal && !isVariable && entry.sealed !== true && entry.kind !== "template",
-    seal: mayReplace && !isVariable && entry.sealed !== true,
-    allowReveal: mayReplace && !isVariable && entry.sealed === true,
     makeVariable: mayReplace && !isVariable,
     makeSecret: mayReplace && isVariable,
   };

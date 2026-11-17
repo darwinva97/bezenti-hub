@@ -170,15 +170,27 @@ describe("every door of the Hub declares its rule", () => {
     expect(twins.filter((method) => spaceAccessForRpcMethod(method) === undefined)).toEqual([]);
   });
 
-  it("reads a Vault's value only through HTTP `vaults.reveal`: no WS, MCP or CLI door", () => {
-    // The only callers of the reveal: the HTTP door, and the Vaults service that defines it.
-    const callers = files
-      .filter(({ text }) => /\.reveal\(|\.authorizeReveal\(/u.test(text))
+  it("reads a Secret's value only to deliver and mask it; a Variable's also to list it (owned-resources 01)", () => {
+    // No door reveals: the HTTP one is gone, and nothing defines or calls a reveal.
+    expect(
+      files.filter(({ text }) => /\.reveal\(|\.authorizeReveal\(|vault\.reveal/u.test(text)),
+    ).toEqual([]);
+    expect(Object.keys(HTTP_ENDPOINT_RULES).filter((name) => /reveal/iu.test(name))).toEqual([]);
+    // Who opens the Vault values' store: delivery and the masker read it; Vaults reads it for a
+    // Variable (`vault.readVariables`) and to copy a value into a new one; the rest remove only.
+    const holders = files
+      .filter(({ text }) =>
+        /(?:yield\* |serviceOption\()ServerSecretStore\.VaultValueStore\b/u.test(text),
+      )
       .map(({ file }) => file);
-    expect(callers.toSorted()).toEqual(["vaults/http.ts"]);
-    expect(Object.keys(HTTP_ENDPOINT_RULES).filter((name) => /reveal/iu.test(name))).toEqual([
-      "vaults.reveal",
+    expect(holders.toSorted()).toEqual([
+      "spaces/OrganizationLifecycle.ts",
+      "vaults/SecretDelivery.ts",
+      "vaults/SecretMasker.ts",
+      "vaults/Vaults.ts",
     ]);
+    const lifecycle = files.find(({ file }) => file === "spaces/OrganizationLifecycle.ts")!.text;
+    expect(lifecycle).not.toMatch(/vaultValues\.value\.get\(/u);
     expect(
       [...Object.keys(MCP_TOOL_RULES), ...Object.keys(RAW_ROUTE_RULES)].filter((name) =>
         /vault|reveal/iu.test(name),
@@ -268,7 +280,7 @@ describe("every door of the Hub declares its rule", () => {
     expect(successFields(editors!.successSchema.ast)).not.toContain("auth");
   });
 
-  it("reads a Vault value in three places only: the reveal, delivery and masking (spec 5 ticket 09)", () => {
+  it("reads a Vault value in two places only: delivery and masking (spec 5 ticket 09, owned-resources 01)", () => {
     // Every module that holds the values' store, and why. A new one fails here.
     const holders = files
       .filter(({ text }) => /\bVaultValueStore\b/u.test(text))
@@ -304,10 +316,10 @@ describe("every door of the Hub declares its rule", () => {
       "vaults/SecretMasker.ts", // reads: what to show as [NAME]
       "vaults/deliveredValueId.ts", // a comment: where they are read back from
     ]);
-    // In Vaults, a value is read for the reveal, for a copy and for a Variable shown (`shown`, its
-    // class checked), nothing else; the reveal refuses a sealed one before its read.
+    // In Vaults, a value is read for a copy and for a Variable shown (`shown`, its class checked),
+    // nothing else: no reveal (owned-resources 01).
     const vaults = files.find(({ file }) => file === "vaults/Vaults.ts")?.text ?? "";
-    expect(vaults.match(/\breadValue\(/gu)?.length).toBe(3);
+    expect(vaults.match(/\breadValue\(/gu)?.length).toBe(2);
     expect(vaults).toMatch(
       /classOf\(row\) === "variable" && valueIdOf\(row\) !== null\s*\?\s*readValue\(/u,
     );
@@ -327,6 +339,7 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/120_VaultProviderEntries.ts",
       "persistence/Migrations/122_VaultEntryDelivery.ts",
       "persistence/Migrations/123_WorkloadIdentity.ts",
+      "persistence/Migrations/141_VaultEntriesSealed.ts",
       "vaults/DeliveredValues.ts",
       "vaults/EffectiveVaults.ts",
       "vaults/SecretDelivery.ts",

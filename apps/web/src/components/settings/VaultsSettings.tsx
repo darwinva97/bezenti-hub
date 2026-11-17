@@ -3,7 +3,6 @@ import {
   IDENTITY_TTL_DEFAULT_SECONDS,
   IDENTITY_TTL_MAX_SECONDS,
   IDENTITY_TTL_MIN_SECONDS,
-  type AuthAccount,
   type EnvironmentId,
   looksLikeCredential,
   MAIN_VAULT_ID,
@@ -26,8 +25,6 @@ import * as Redacted from "effect/Redacted";
 import { useEffect, useEffectEvent, useState } from "react";
 
 import { usePrimarySessionState } from "../../environments/primary";
-import { fetchAccount } from "../../environments/primary/userAccounts";
-import { revealVaultSecret } from "../../environments/primary/vaults";
 import { isElectron } from "../../env";
 import { errorMessageOf } from "../../lib/errorMessage";
 import { useCurrentSpace } from "../../state/currentSpace";
@@ -40,7 +37,6 @@ import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
-import { emptyStepUp, StepUpFields, toStepUp } from "./AccountSettingsSection";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SpaceDefaultVaults, VaultAllowances } from "./VaultChoices";
 import { settle } from "./vaultCommands";
@@ -64,8 +60,6 @@ const SEEN_INPUT_PROPS = {
   "data-1p-ignore": true,
   "data-lpignore": "true",
 } as const;
-/** A revealed value stays on screen this long, at most. */
-const REVEAL_MS = 60_000;
 const VAULT_SURFACE = isElectron ? "desktop" : "web";
 const CONFIRM_DANGEROUS = "This value changes how tools run";
 
@@ -88,8 +82,6 @@ const isDangerous = (name: string) => secretNameRisk(name) === "dangerous";
 
 const CREDENTIAL_WARNING =
   "This looks like a credential. A Variable's value is shown to everyone who sees it and never masked: make it a Secret unless it is meant to be seen.";
-const SEAL_CONFIRM = (name: string) =>
-  `Seal ${name}? Nobody will reveal it again, not even you. Only a new value can make it revealable.`;
 
 type AddKind = VaultEntryClass | "template" | "identity";
 const KIND_ITEMS: ReadonlyArray<{ readonly value: AddKind; readonly label: string }> = [
@@ -147,11 +139,10 @@ const templateProblem = (text: string, entries: ReadonlyArray<VaultEntry>): stri
   return null;
 };
 
-/** What a change to an entry sends, besides its name: a value, a class, the reveal choice. */
+/** What a change to an entry sends, besides its name: a value, a class, its delivery. */
 interface EntryChange {
   readonly value?: string;
   readonly class?: VaultEntryClass;
-  readonly allowReveal?: boolean;
   readonly delivery?: VaultEntryDelivery;
   readonly confirmDangerous: boolean;
 }
@@ -192,10 +183,9 @@ function DeliverySelect(props: {
 }
 
 /** The value form an entry row opens: a plain replace, or one of the changes that need a value. */
-type ValueMode = "replace" | "allow-reveal" | "make-variable";
+type ValueMode = "replace" | "make-variable";
 const VALUE_MODE_LABEL: Record<ValueMode, string> = {
   replace: "Save value",
-  "allow-reveal": "Save and allow reveal",
   "make-variable": "Save as Variable",
 };
 
@@ -249,8 +239,9 @@ type VaultCommands = ReturnType<typeof useVaultCommands>;
 
 /**
  * Settings → Vaults: named sets of secrets, each under an environment-variable name. The Owner
- * manages them and reveals values; an Organization's Admins add, replace and delete its secrets
- * without seeing them; Members and Guests see names only. See docs/internals/secrets.md.
+ * manages them; an Organization's Admins add, replace and delete its secrets. Nobody sees a
+ * Secret's value again once saved, the Owner included; Members and Guests see names only, and
+ * Variables' values. See docs/internals/secrets.md.
  */
 export function VaultsSettings() {
   const environmentId = usePrimaryEnvironmentId();
@@ -332,7 +323,7 @@ function VaultsPage({ environmentId }: { readonly environmentId: EnvironmentId }
           title="Secrets for your agents"
           description={
             isOwner
-              ? "Each entry reaches agents as an environment variable. A Variable is configuration: everyone who sees it reads its value, Guests excepted. A Secret is never shown; a new one is sealed (nobody reveals it, not even you) unless you allow reveal. An Organization's Admins add, replace and delete its entries without seeing Secrets."
+              ? "Each entry reaches agents as an environment variable. A Variable is configuration: everyone who sees it reads its value, Guests excepted. A Secret is never shown again once saved, not even to you: replace it or delete it. An Organization's Admins add, replace and delete its entries without seeing Secrets."
               : "The entries your Organizations' agents receive, by name. Variables show their value; Secrets never do."
           }
           status={
@@ -506,7 +497,6 @@ function VaultSection(props: {
             name: entry.name,
             ...(input.value === undefined ? {} : { value: Redacted.make(input.value) }),
             ...(input.class === undefined ? {} : { class: input.class }),
-            ...(input.allowReveal === undefined ? {} : { allowReveal: input.allowReveal }),
             ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
             ...(input.confirmDangerous ? { confirmDangerous: true } : {}),
           },
@@ -518,12 +508,8 @@ function VaultSection(props: {
           : input.class === "variable"
             ? "is now a Variable"
             : input.class === "secret"
-              ? "is now a sealed Secret"
-              : input.allowReveal === false
-                ? "sealed"
-                : input.allowReveal === true
-                  ? "replaced; you can reveal it"
-                  : "replaced";
+              ? "is now a Secret; what was already printed in the history stays visible"
+              : "replaced";
       return savedMessage(entry.name, verb, result.warnings);
     });
   const owner = vault.isMain
@@ -535,7 +521,7 @@ function VaultSection(props: {
     <SettingsSection id={`vault-${vault.id}`} title={vault.name}>
       <SettingsRow
         title={`${vault.entryCount} ${vault.entryCount === 1 ? "secret" : "secrets"}`}
-        description={`${owner}.${vault.archived ? " Archived." : ""}${canEdit && !vault.canReveal ? " You can add, replace and delete secrets, never see them." : ""}`}
+        description={`${owner}.${vault.archived ? " Archived." : ""}${canEdit ? " You can add, replace and delete secrets, never see them." : ""}`}
         status={
           error !== null ? (
             <span className="text-destructive" role="alert">
@@ -621,9 +607,6 @@ function VaultSection(props: {
                             },
                           }
                         : { value: Redacted.make(value), class: options.kind }),
-                    ...(options.kind === "secret" && options.allowReveal
-                      ? { allowReveal: true }
-                      : {}),
                     delivery: options.delivery,
                     ...(options.confirmDangerous ? { confirmDangerous: true } : {}),
                   },
@@ -709,11 +692,7 @@ function EntryRow(props: {
     <li className="flex flex-col gap-2 px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <code className="text-sm font-medium">{entry.name}</code>
-        {isVariable ? (
-          <Badge variant="outline">Variable</Badge>
-        ) : entry.sealed ? (
-          <Badge variant="outline">Sealed</Badge>
-        ) : null}
+        <Badge variant="outline">{isVariable ? "Variable" : "Secret"}</Badge>
         {isVariable && entry.value !== undefined ? (
           <code
             aria-label={`Value of ${entry.name}`}
@@ -791,30 +770,6 @@ function EntryRow(props: {
               Replace value
             </Button>
           ) : null}
-          {actions.seal ? (
-            <Button
-              size="xs"
-              variant="outline"
-              aria-label={`Seal ${entry.name}`}
-              onClick={() => {
-                if (!window.confirm(SEAL_CONFIRM(entry.name))) return;
-                // Confirming the seal confirms a name that changes how tools run (the Owner's).
-                void props.onChange({ allowReveal: false, confirmDangerous: dangerous });
-              }}
-            >
-              Seal
-            </Button>
-          ) : null}
-          {actions.allowReveal ? (
-            <Button
-              size="xs"
-              variant="outline"
-              aria-label={`Allow reveal of ${entry.name}`}
-              onClick={() => toggle("allow-reveal")}
-            >
-              Allow reveal
-            </Button>
-          ) : null}
           {actions.makeVariable ? (
             <Button
               size="xs"
@@ -869,7 +824,6 @@ function EntryRow(props: {
             void props
               .onChange({
                 value,
-                ...(mode === "allow-reveal" ? { allowReveal: true } : {}),
                 ...(mode === "make-variable" ? { class: "variable" as const } : {}),
                 confirmDangerous: confirmed,
               })
@@ -882,11 +836,7 @@ function EntryRow(props: {
               });
           }}
         >
-          {mode === "allow-reveal" ? (
-            <span className="text-xs text-muted-foreground">
-              A sealed value is never read back: allowing reveal takes a new one.
-            </span>
-          ) : mode === "make-variable" ? (
+          {mode === "make-variable" ? (
             <span className="text-xs text-muted-foreground">
               A Secret's value is never shown: a Variable takes a new one, visible to everyone who
               sees it.
@@ -912,123 +862,7 @@ function EntryRow(props: {
           {dangerous ? <ConfirmDangerous checked={confirmed} onChange={setConfirmed} /> : null}
         </form>
       )}
-      {actions.reveal && !entry.broken ? (
-        // A new version hides a value revealed before it.
-        <RevealControl key={`${entry.id}:${entry.version}`} vault={vault} entry={entry} />
-      ) : null}
     </li>
-  );
-}
-
-type RevealStage =
-  | { readonly _tag: "idle" }
-  | {
-      readonly _tag: "step-up";
-      readonly account: AuthAccount;
-      readonly stepUp: ReturnType<typeof emptyStepUp>;
-    }
-  | { readonly _tag: "shown"; readonly value: string };
-
-/** «Reveal»: the Owner's, after their strong factor; shown for a minute at most, then hidden. */
-function RevealControl(props: { readonly vault: VaultSummary; readonly entry: VaultEntry }) {
-  const { entry } = props;
-  const [stage, setStage] = useState<RevealStage>({ _tag: "idle" });
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const shown = stage._tag === "shown";
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hides a revealed value after REVEAL_MS, so it does not stay on an unattended screen.
-  useEffect(() => {
-    if (!shown) return;
-    const timer = window.setTimeout(() => setStage({ _tag: "idle" }), REVEAL_MS);
-    return () => window.clearTimeout(timer);
-  }, [shown]);
-  const run = (work: () => Promise<void>) => {
-    setPending(true);
-    setError(null);
-    void work()
-      .catch((cause: unknown) => setError(errorMessageOf(cause, "Could not reveal it.")))
-      .finally(() => setPending(false));
-  };
-  if (stage._tag === "idle") {
-    return (
-      <div className="flex items-center gap-2">
-        <Button
-          size="xs"
-          variant="ghost"
-          aria-label={`Reveal ${entry.name}`}
-          disabled={pending}
-          onClick={() =>
-            run(async () => {
-              const account = await fetchAccount();
-              setStage({ _tag: "step-up", account, stepUp: emptyStepUp(account) });
-            })
-          }
-        >
-          Reveal
-        </Button>
-        {error === null ? null : (
-          <span className="text-xs text-destructive" role="alert">
-            {error}
-          </span>
-        )}
-      </div>
-    );
-  }
-  if (stage._tag === "shown") {
-    return (
-      <div className="flex items-center gap-2">
-        <code
-          aria-label={`Value of ${entry.name}`}
-          className="rounded bg-muted px-2 py-1 text-xs break-all"
-        >
-          {stage.value}
-        </code>
-        <Button size="xs" variant="ghost" onClick={() => setStage({ _tag: "idle" })}>
-          Hide
-        </Button>
-      </div>
-    );
-  }
-  return (
-    <form
-      className="flex max-w-sm flex-col gap-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        run(async () => {
-          const value = await revealVaultSecret(
-            toStepUp(stage.account, stage.stepUp),
-            props.vault.id,
-            entry.id,
-          );
-          setStage({ _tag: "shown", value });
-        });
-      }}
-    >
-      <StepUpFields
-        account={stage.account}
-        disabled={pending}
-        value={stage.stepUp}
-        onChange={(stepUp) => setStage({ ...stage, stepUp })}
-      />
-      <div className="flex gap-2">
-        <Button disabled={pending} size="sm" type="submit">
-          {pending ? "Revealing…" : `Confirm and reveal ${entry.name}`}
-        </Button>
-        <Button
-          disabled={pending}
-          size="sm"
-          variant="ghost"
-          onClick={() => setStage({ _tag: "idle" })}
-        >
-          Cancel
-        </Button>
-      </div>
-      {error === null ? null : (
-        <span className="text-xs text-destructive" role="alert">
-          {error}
-        </span>
-      )}
-    </form>
   );
 }
 
@@ -1041,7 +875,6 @@ function AddSecretForm(props: {
     value: string,
     options: {
       readonly kind: AddKind;
-      readonly allowReveal: boolean;
       readonly delivery: VaultEntryDelivery;
       readonly confirmDangerous: boolean;
       /** A workload identity token's lifetime. */
@@ -1053,7 +886,6 @@ function AddSecretForm(props: {
   const [value, setValue] = useState("");
   const [kind, setKind] = useState<AddKind>("secret");
   const [delivery, setDelivery] = useState<VaultEntryDelivery>("env");
-  const [allowReveal, setAllowReveal] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
   const [minutes, setMinutes] = useState(String(IDENTITY_TTL_DEFAULT_SECONDS / 60));
@@ -1089,7 +921,6 @@ function AddSecretForm(props: {
         void props
           .onAdd(name, value, {
             kind,
-            allowReveal: kind === "secret" && allowReveal,
             delivery: chosenDelivery,
             confirmDangerous: dangerous && confirmed,
             ...(isIdentity ? { ttlSeconds } : {}),
@@ -1099,7 +930,6 @@ function AddSecretForm(props: {
             if (!saved) return;
             setName("");
             setValue("");
-            setAllowReveal(false);
             setDelivery("env");
             setConfirmed(false);
           })
@@ -1249,22 +1079,11 @@ function AddSecretForm(props: {
       ) : DELIVERY_HINT[chosenDelivery].length === 0 ? null : (
         <span className="text-xs text-muted-foreground">{DELIVERY_HINT[chosenDelivery]}</span>
       )}
-      {kind !== "secret" ? null : (
-        <label className="flex items-center gap-2 text-xs font-medium">
-          <Checkbox
-            aria-label="Allow reveal"
-            checked={allowReveal}
-            disabled={pending}
-            onCheckedChange={(checked) => setAllowReveal(checked === true)}
-          />
-          Allow reveal
-          <span className="font-normal text-muted-foreground">
-            {allowReveal
-              ? "The Owner can read it back, with a strong factor."
-              : "Sealed: nobody reads it back, not even the Owner."}
-          </span>
-        </label>
-      )}
+      {kind === "secret" ? (
+        <span className="text-xs text-muted-foreground">
+          Never shown again once saved, not even to the Owner: only replaced or deleted.
+        </span>
+      ) : null}
       {isVariable ? <CredentialWarning name={name} value={value} /> : null}
       {hint === null ? null : <span className="text-xs text-destructive">{hint}</span>}
       {dangerous && props.isOwner ? (

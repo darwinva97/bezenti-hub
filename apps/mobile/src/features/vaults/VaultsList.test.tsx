@@ -65,7 +65,6 @@ const vault = (over: Partial<VaultSummary>) =>
     entryCount: 2,
     canEdit: false,
     canManage: false,
-    canReveal: false,
     allowances: [],
     ...over,
   }) as unknown as VaultSummary;
@@ -153,13 +152,12 @@ describe("Settings → Vaults on mobile", () => {
       vault({
         canEdit: true,
         canManage: true,
-        canReveal: true,
         isMain: true,
         spaceId: null,
         spaceName: null,
       }),
     );
-    expect(text()).not.toMatch(/\breveal\b(?! and back up)/i);
+    expect(text()).not.toMatch(/\breveal/i);
     expect(text()).not.toMatch(/Download master key/i);
     expect(text()).toContain("Replace value");
   });

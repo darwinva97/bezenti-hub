@@ -614,7 +614,8 @@ export const WS_METHODS = {
   scheduledTasksRotateWebhookToken: "scheduledTasks.rotateWebhookToken",
   secretsAnswerRequest: "secrets.answerRequest",
   secretsVaultTargets: "secrets.vaultTargets",
-  // Vaults: names and metadata only. Values go in with `put` and out only by HTTP `vaults.reveal`.
+  // Vaults: names and metadata, and Variables' values. Values go in with `put`; a Secret's never
+  // comes out (owned-resources 01).
   vaultsList: "vaults.list",
   vaultsCreate: "vaults.create",
   vaultsUpdate: "vaults.update",

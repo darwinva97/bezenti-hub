@@ -169,15 +169,15 @@ close that gap and are the next step if it matters.
 ([EnvironmentJoin](../../apps/server/src/environments/EnvironmentJoin.ts)). The
 machine makes its credential itself, `t3env.<issuing Hub's id>.<secret>`, and
 starts a join request carrying only its SHA-256 and a PKCE challenge; the
-credential never travels. The Owner, or a User with the `environments.registerOwn`
-Installation permission, approves on «Register this machine», from any device,
-and the machine becomes the approver's personal one. The policy asks
-`environment.register` first (`missing-installation-permission` otherwise, whose
-message names the permission and is the one `REGISTER_OWN_REQUIRED_MESSAGE` the
-page also gets as the request's `denialMessage`; the page learns it beforehand
-from `viewerMayApprove`, and only a viewer who may approve sees the machine's
-name, hostname, OS and time), so the proof of a User without the right is never
-checked; then `UserDirectory.confirmStrongFactor` needs a
+credential never travels. Any active User approves on «Register this machine»,
+from any device, and the machine becomes the approver's personal one; no
+Installation permission gates it (migration 139 dropped the old
+`environments.registerOwn` grants; how many machines a User may join comes with
+plans). The policy asks `environment.register` first (refused only for a User
+turned off, whose message the page also gets as the request's `denialMessage`;
+the page learns it beforehand from `viewerMayApprove`, and only a viewer who may
+approve sees the machine's name, hostname, OS and time), so the proof of a User
+without the right is never checked; then `UserDirectory.confirmStrongFactor` needs a
 fresh passkey assertion or a password _with_ a TOTP code in the same request, so
 a stolen browser session cannot add a machine. Only such a User denies a request,
 and only while it is pending.
@@ -193,7 +193,7 @@ question with «Register as theirs» and «Not me». `POST /api/environments/joi
 (with the verifier) accepts, which writes the row and its `environment.register`
 entry, whose actor is the approver, or refuses, which ends the request. The
 registry asks the policy again in the transaction that writes the row, so a
-permission revoked between the approval and the confirmation adds nothing. The
+User turned off between the approval and the confirmation adds nothing. The
 machine asks the outcome with its verifier until then, and asking again after a
 lost answer gets the same machine, never a second one. A browser on the machine itself is also sent to `t3 join`'s loopback
 port (as app sign-in does), only as a nudge to ask now. The PKCE store is shared
@@ -216,10 +216,8 @@ another id gets the socket closed by the machine. `leave` refuses plain HTTP
 from off the Hub's machine, as the socket does (`isSecureEnvironmentTransport`).
 A machine belongs to its owner: turning off or removing that User revokes their
 machines in the same transaction and closes their sockets after it commits, and
-the credential check refuses a machine whose owner is off in any case. Revoking
-`environments.registerOwn` only stops new approvals: the permission gates
-joining, not having, so machines already joined keep working, and their owner
-still sees, renames and removes them in Settings (the Owner sees and manages
+the credential check refuses a machine whose owner is off in any case. Their
+owner sees, renames and removes them in Settings (the Owner sees and manages
 every one, but uses only their own). The Hub machine's load, providers and
 running Threads are the whole Installation's, so only the Owner's list carries
 them; everyone else gets the row without them.
@@ -288,7 +286,7 @@ space. Who may do what is decided only by the pure
 [AccessPolicy](../../apps/server/src/auth/AccessPolicy.ts), whose table-driven test
 is the Role table; a new rule is a new row there, not a check at a call site.
 [SpaceDirectory](../../apps/server/src/spaces/SpaceDirectory.ts) loads the
-principal (Owner or not, Roles, Installation permissions) for it.
+principal (Owner or not, Roles) for it.
 
 A new Project or Thread is claimed for its Space inside the service every caller
 goes through, `ProjectService.create` and `ThreadManagementService.dispatch`, so
@@ -316,12 +314,11 @@ Personal space; the migration cannot backfill them because the Owner may not
 exist yet. A trigger on `users` creates each User's Personal space
 (`personal:<userId>`) with the row, so no account path has to remember it, and
 its User always uses it: no permission gates it (migration 137 dropped the old
-`personalSpace.create` grants). The Owner grants and revokes the remaining
-Installation permissions (`installation_permissions` rows) over HTTP
-(`/api/installation/users`, which also needs the `access:read`/`access:write`
-scope) through `SpaceDirectory.setInstallationPermission`. `environments.registerOwn`
-lets a User approve their own machine joining (see
-[Joined environments](#joined-environments)). The Owner reads every
+`personalSpace.create` grants, migration 139 the `environments.registerOwn` ones:
+no Installation permission is left, and every User approves their own machine
+joining, see [Joined environments](#joined-environments)). The Owner lists Users
+over HTTP (`/api/installation/users`, which also needs the `access:read` scope)
+and disables or removes them (`access:write`). The Owner reads every
 Personal space and lists them in the selector, but changes nothing in another
 User's (`personal-space-read-only`). Naming a Space one cannot see, a
 `personal:<id>` included, answers exactly like naming a missing one.
@@ -358,7 +355,7 @@ place this is answered, and every read of Projects or Threads asks it:
   everything, which only happens before an Owner exists.
   The scope's `userId` is the same field WS and HTTP principals carry, so
   `SpaceDirectory.principalOf` gives services the same principal (Owner or not,
-  Roles, Installation permissions). MCP project updates and deletes treat a
+  Roles). MCP project updates and deletes treat a
   Project the User cannot see as missing; Role write rules come with ticket 08.
 
 Each WebSocket connection resolves its viewer once (`CurrentViewer`) and again
@@ -375,8 +372,8 @@ visibility when the client resubscribes. The socket subscribes to Membership
 changes before it resolves its viewer, so a change in between is not missed, and
 a write that changes nothing publishes nothing.
 
-Granting or revoking an Installation permission keeps the socket: it wakes that
-User's open streams instead (`SpaceDirectory.subscribeAccessChanges`, one hub
+A change to what a User may reach that ends no Membership keeps the socket: it
+wakes that User's open streams instead (`SpaceDirectory.subscribeAccessChanges`, one hub
 per User, only when a row changed). The shell stream restarts, the old round
 ending before a fresh authoritative snapshot and its live tail take over (web
 reloads its Spaces on it). Streams on one Thread (Thread, command output,

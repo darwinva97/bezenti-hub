@@ -9,10 +9,6 @@ export type SpaceKind = typeof SpaceKind.Type;
 export const SpaceRole = Schema.Literals(["admin", "member", "guest"]);
 export type SpaceRole = typeof SpaceRole.Type;
 
-/** Permissions the Owner grants a User outside any Organization. */
-export const InstallationPermission = Schema.Literals(["environments.registerOwn"]);
-export type InstallationPermission = typeof InstallationPermission.Type;
-
 /** A Space as the signed-in User sees it in the Space selector. */
 export const SpaceSummary = Schema.Struct({
   id: SpaceId,
@@ -126,19 +122,16 @@ export const InstallationUser = Schema.Struct({
   loginName: Schema.NullOr(Schema.String),
   isOwner: Schema.Boolean,
   status: InstallationUserStatus,
-  /** What the Owner granted them; the Owner holds every permission and lists none. */
-  installationPermissions: Schema.Array(InstallationPermission),
+  /**
+   * Deprecated: Installation permissions are gone (owned-resources 06); always empty, kept so
+   * older clients decode.
+   */
+  installationPermissions: Schema.Array(Schema.String),
 });
 export type InstallationUser = typeof InstallationUser.Type;
 
 export const InstallationUserList = Schema.Struct({ users: Schema.Array(InstallationUser) });
 export type InstallationUserList = typeof InstallationUserList.Type;
-
-export const SetInstallationPermissionRequest = Schema.Struct({
-  permission: InstallationPermission,
-  granted: Schema.Boolean,
-});
-export type SetInstallationPermissionRequest = typeof SetInstallationPermissionRequest.Type;
 
 export const SetInstallationUserStatusRequest = Schema.Struct({ status: InstallationUserStatus });
 export type SetInstallationUserStatusRequest = typeof SetInstallationUserStatusRequest.Type;

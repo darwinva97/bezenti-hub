@@ -427,8 +427,8 @@ export const EnvironmentJoinRequestView = Schema.Struct({
   requestedAt: Schema.optionalKey(IsoDateTime),
   status: Schema.Literals(["pending", "awaiting-confirmation", "approved", "denied"]),
   /**
-   * Whether the browser's signed-in User may approve it (the Owner, or `environments.registerOwn`);
-   * absent when that is unknown, as when nobody is signed in. Approving checks again.
+   * Whether the browser's signed-in User may approve it (every active User); absent when that is
+   * unknown, as when nobody is signed in. Approving checks again.
    */
   viewerMayApprove: Schema.optionalKey(Schema.Boolean),
   /** Why they may not, when they may not. */

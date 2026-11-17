@@ -1,4 +1,4 @@
-import { type InstallationPermission, SpaceId, type SpaceRole, UserId } from "@t3tools/contracts";
+import { SpaceId, type SpaceRole, UserId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import * as AccessPolicy from "./AccessPolicy.ts";
@@ -27,12 +27,10 @@ const principal = (
   options: {
     readonly isOwner?: boolean;
     readonly roles?: ReadonlyArray<readonly [SpaceId, SpaceRole]>;
-    readonly permissions?: ReadonlyArray<InstallationPermission>;
   } = {},
 ): AccessPolicy.Principal => ({
   userId: UserId.make(userId),
   isOwner: options.isOwner ?? false,
-  installationPermissions: new Set(options.permissions ?? []),
   roles: new Map(options.roles ?? []),
 });
 
@@ -1102,36 +1100,47 @@ const rows: ReadonlyArray<Row> = [
     organization,
     deny("wrong-resource"),
   ],
-  // Environments: the Owner and Users with `environments.registerOwn` join their own machines, and
-  // a personal one is its owner's alone.
+  // Environments (owned-resources 06): every active User joins their own machines, with no
+  // Installation permission, and a personal one is its owner's alone.
   ["Owner registers a machine", owner, "environment.register", AccessPolicy.installation, allow],
   [
-    "an Admin without the permission does not register a machine",
+    "an Admin registers their own machine",
     admin,
-    "environment.register",
-    AccessPolicy.installation,
-    deny("missing-installation-permission"),
-  ],
-  [
-    "a User with `environments.registerOwn` registers their own machine",
-    principal("grace", { roles: [[ORG, "member"]], permissions: ["environments.registerOwn"] }),
     "environment.register",
     AccessPolicy.installation,
     allow,
   ],
   [
-    "a disabled User with the permission registers nothing",
-    {
-      ...principal("grace", { permissions: ["environments.registerOwn"] }),
-      inactive: true,
-    },
+    "a Member with no permission registers their own machine",
+    member,
+    "environment.register",
+    AccessPolicy.installation,
+    allow,
+  ],
+  [
+    "a User in no Organization registers their own machine",
+    personalCreator,
+    "environment.register",
+    AccessPolicy.installation,
+    allow,
+  ],
+  [
+    "a Guest registers their own machine",
+    guest,
+    "environment.register",
+    AccessPolicy.installation,
+    allow,
+  ],
+  [
+    "a disabled User registers nothing",
+    disabledMember,
     "environment.register",
     AccessPolicy.installation,
     deny("user-inactive"),
   ],
   [
     "registering is decided on the Installation",
-    principal("grace", { permissions: ["environments.registerOwn"] }),
+    member,
     "environment.register",
     organization,
     deny("wrong-resource"),
@@ -1368,8 +1377,8 @@ const rows: ReadonlyArray<Row> = [
     deny("owner-only"),
   ],
   [
-    "a User with every Installation permission does not back up the master key",
-    principal("grace", { permissions: ["environments.registerOwn"] }),
+    "a User in no Organization does not back up the master key",
+    personalCreator,
     "masterKey.backup",
     AccessPolicy.installation,
     deny("owner-only"),
@@ -1638,8 +1647,8 @@ const rows: ReadonlyArray<Row> = [
   // for its Threads, as its Sandbox; other Spaces neither see nor use it.
   ["Owner dedicates machines", owner, "environment.dedicate", AccessPolicy.installation, allow],
   [
-    "a User with `registerOwn` does not dedicate machines",
-    principal("grace", { roles: [[ORG, "admin"]], permissions: ["environments.registerOwn"] }),
+    "registering one's own machines does not dedicate machines",
+    admin,
     "environment.dedicate",
     AccessPolicy.installation,
     deny("owner-only"),

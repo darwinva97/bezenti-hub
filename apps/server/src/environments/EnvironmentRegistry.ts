@@ -42,7 +42,6 @@ import {
 import {
   environmentCredentialIssuer,
   formatEnvironmentCredential,
-  REGISTER_OWN_REQUIRED_MESSAGE,
 } from "@t3tools/shared/environmentJoin";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
@@ -116,8 +115,6 @@ export class EnvironmentAccessDeniedError extends Schema.TaggedError<Environment
         return "Its Organization is archived: restore it to start its Sandbox.";
       case "space-frozen":
         return "Its Personal space is frozen: nothing starts in it.";
-      case "missing-installation-permission":
-        return REGISTER_OWN_REQUIRED_MESSAGE;
       case "not-an-organization":
         return "A machine is dedicated to an Organization that is not archived.";
       case "not-external":
@@ -435,8 +432,8 @@ export class EnvironmentRegistry extends Context.Service<
       EnvironmentNotFoundError | EnvironmentAccessDeniedError | EnvironmentStorageError
     >;
     /**
-     * Whether the User may approve their own machine joining (the Owner, or `registerOwn`);
-     * checked before the strong factor. Refuses with the reason.
+     * Whether the User may approve their own machine joining (every active User); checked before
+     * the strong factor. Refuses with the reason.
      */
     readonly authorizeRegister: (
       userId: UserId,

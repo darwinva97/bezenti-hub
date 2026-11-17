@@ -1,16 +1,10 @@
 import {
   fetchInstallationUsers,
-  INSTALLATION_PERMISSION_LABELS,
-  setInstallationPermission,
   setInstallationUserStatus,
 } from "@t3tools/client-runtime/spaces/space-directory";
-import type {
-  InstallationPermission,
-  InstallationUser,
-  InstallationUserStatus,
-} from "@t3tools/contracts";
+import type { InstallationUser, InstallationUserStatus } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { PrimaryEnvironmentHttpClient } from "../../environments/primary/httpClient";
 import { errorMessageOf as messageOf } from "../../lib/errorMessage";
@@ -28,10 +22,6 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import { Label } from "../ui/label";
-import { Switch } from "../ui/switch";
-
-const PERMISSIONS: ReadonlyArray<InstallationPermission> = ["environments.registerOwn"];
 
 const fetchUsers = () =>
   runPrimaryHttp(PrimaryEnvironmentHttpClient.pipe(Effect.flatMap(fetchInstallationUsers)));
@@ -39,9 +29,8 @@ const fetchUsers = () =>
 /** What the Owner types to confirm a removal: the sign-in name, else the display name. */
 const confirmationOf = (user: InstallationUser) => user.loginName ?? user.displayName;
 
-/** The Owner's list of Users, with the Installation permissions each one holds. */
+/** The Owner's list of Users, to disable, turn back on or remove. */
 export function UsersDialog({ onClose }: { readonly onClose: () => void }) {
-  const id = useId();
   const [users, setUsers] = useState<ReadonlyArray<InstallationUser> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -74,29 +63,6 @@ export function UsersDialog({ onClose }: { readonly onClose: () => void }) {
     if (environmentId !== null) void loadSpaces(environmentId);
   };
 
-  const toggle = async (
-    user: InstallationUser,
-    permission: InstallationPermission,
-    granted: boolean,
-  ) => {
-    setPending(`${user.id}:${permission}`);
-    setError(null);
-    try {
-      replace(
-        await runPrimaryHttp(
-          PrimaryEnvironmentHttpClient.pipe(
-            Effect.flatMap((client) =>
-              setInstallationPermission(client, user.id, permission, granted),
-            ),
-          ),
-        ),
-      );
-    } catch (cause) {
-      setError(messageOf(cause, "Could not change the permission."));
-    }
-    setPending(null);
-  };
-
   const changeStatus = async (user: InstallationUser, status: InstallationUserStatus) => {
     setPending(`${user.id}:status`);
     setError(null);
@@ -126,8 +92,8 @@ export function UsersDialog({ onClose }: { readonly onClose: () => void }) {
         <DialogHeader>
           <DialogTitle>Users</DialogTitle>
           <DialogDescription>
-            Installation permissions apply outside any Organization and take effect at once. You can
-            always see every Personal space.
+            Every User joins their own machines and keeps their own Personal space. You can always
+            see every Personal space.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -153,9 +119,7 @@ export function UsersDialog({ onClose }: { readonly onClose: () => void }) {
                       {user.status === "removed" ? <Badge variant="outline">Removed</Badge> : null}
                     </div>
                     {user.isOwner ? (
-                      <p className="text-xs text-muted-foreground">
-                        Owner: holds every permission.
-                      </p>
+                      <p className="text-xs text-muted-foreground">Owner: runs this Hub.</p>
                     ) : user.status === "removed" ? (
                       <p className="text-xs text-muted-foreground">
                         Can no longer sign in. Their Personal space is yours to read under Personal
@@ -163,26 +127,6 @@ export function UsersDialog({ onClose }: { readonly onClose: () => void }) {
                       </p>
                     ) : (
                       <>
-                        {PERMISSIONS.map((permission) => {
-                          const switchId = `${id}-${user.id}-${permission}`;
-                          return (
-                            <div key={permission} className="flex items-center gap-2">
-                              <Switch
-                                id={switchId}
-                                size="sm"
-                                aria-label={`${INSTALLATION_PERMISSION_LABELS[permission]}: ${user.displayName}`}
-                                checked={user.installationPermissions.includes(permission)}
-                                disabled={pending !== null}
-                                onCheckedChange={(checked) =>
-                                  void toggle(user, permission, checked)
-                                }
-                              />
-                              <Label htmlFor={switchId}>
-                                {INSTALLATION_PERMISSION_LABELS[permission]}
-                              </Label>
-                            </div>
-                          );
-                        })}
                         <div className="flex flex-wrap gap-2">
                           <Button
                             type="button"

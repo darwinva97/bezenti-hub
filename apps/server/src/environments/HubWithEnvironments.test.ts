@@ -35,7 +35,7 @@ import { ClaudeProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/Claud
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as EnvironmentRegistry from "./EnvironmentRegistry.ts";
 import { connectProtocolEnvironment, makeHub, seedProject } from "./HubWithEnvironments.testkit.ts";
-import { memberWithPasskey, setRegisterOwn } from "./environments.testkit.ts";
+import { memberWithPasskey } from "./environments.testkit.ts";
 import {
   CLAUDE,
   idleAdapters,
@@ -250,7 +250,6 @@ describe("Hub con Environments", () => {
           displayName: "Linus",
           spaceId: grace.spaceId,
         });
-        yield* setRegisterOwn(hub.server, hub.owner, grace.userId, true);
         const laptop = yield* hub.join({
           name: "Grace's laptop",
           adapters: idleAdapters(instanceId),
@@ -302,10 +301,6 @@ describe("Hub con Environments", () => {
             }),
           ),
         );
-
-        // Revoking the permission stops new machines, not the ones already joined.
-        yield* setRegisterOwn(hub.server, hub.owner, grace.userId, false);
-        assert.equal(yield* choose(graceId, ProjectId.make("project:acme")), laptop.environmentId);
       }).pipe(Effect.scoped),
   );
   it.live("an effect's call resends on the next socket with the same key, and once only", () =>

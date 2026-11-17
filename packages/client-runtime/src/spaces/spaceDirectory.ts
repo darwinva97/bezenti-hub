@@ -6,7 +6,6 @@ import type {
   AuditAction,
   AuditLogQuery,
   CommandId,
-  InstallationPermission,
   InstallationUserStatus,
   ProjectId,
   SpaceDirectoryView,
@@ -80,18 +79,6 @@ export function projectMoveDestinations(
 /** The Owner's Users admin view. */
 export const fetchInstallationUsers = (client: EnvironmentHttpClient) =>
   client.installationUsers.list({ headers: {} });
-
-export const setInstallationPermission = (
-  client: EnvironmentHttpClient,
-  userId: UserId,
-  permission: InstallationPermission,
-  granted: boolean,
-) =>
-  client.installationUsers.setPermission({
-    headers: {},
-    params: { userId },
-    payload: { permission, granted },
-  });
 
 /** Disables, re-enables or removes a User; removing cannot be undone. */
 export const setInstallationUserStatus = (
@@ -177,10 +164,6 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "grant.cancel": "Cancelled a loan offer",
   "grant.end": "Ended a loan",
   "grant.limits.change": "Changed a loan's limits",
-};
-
-export const INSTALLATION_PERMISSION_LABELS: Record<InstallationPermission, string> = {
-  "environments.registerOwn": "Register their own Environments",
 };
 
 /** Where a client keeps its current Space, one per User so a shared browser does not mix them. */

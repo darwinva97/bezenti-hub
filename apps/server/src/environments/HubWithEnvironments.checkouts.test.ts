@@ -34,7 +34,7 @@ import {
   type Hub,
   type TestEnvironment,
 } from "./HubWithEnvironments.testkit.ts";
-import { memberWithPasskey, setRegisterOwn } from "./environments.testkit.ts";
+import { memberWithPasskey } from "./environments.testkit.ts";
 import {
   idleAdapters,
   loadFixture,
@@ -303,9 +303,6 @@ describe("Hub con Environments: checkouts from the Hub repository", () => {
           displayName: "Linus",
           spaceId: acme,
         });
-        for (const user of [ada, grace, linus]) {
-          yield* setRegisterOwn(hub.server, hub.owner, user.userId, true);
-        }
         const machineOf = (user: typeof grace, name: string) =>
           hub.join({
             as: { cookie: user.cookie, authenticator: user.authenticator },

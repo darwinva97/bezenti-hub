@@ -13,6 +13,7 @@ const { mocks } = vi.hoisted(() => ({
       readonly bearerToken: string | null;
     },
     runPromise: vi.fn(),
+    ownList: [] as ReadonlyArray<unknown>,
   },
 }));
 
@@ -53,7 +54,24 @@ vi.mock("../../lib/runtime", () => ({
   runtime: { runPromise: (effect: unknown) => mocks.runPromise(effect) },
 }));
 vi.mock("../../state/spaces", () => ({
-  useSpaceSelections: () => new Map([["hub", { view: { isOwner: mocks.isOwner } }]]),
+  useSpaceSelections: () =>
+    new Map([
+      [
+        "hub",
+        {
+          view: {
+            isOwner: mocks.isOwner,
+            userId: "grace",
+            spaces: [{ id: "space-acme", name: "Acme" }],
+          },
+        },
+      ],
+    ]),
+}));
+vi.mock("../../state/hubEnvironments", () => ({
+  useHubEnvironments: () => mocks.ownList,
+  useHubEnvironmentsStatus: () => "ready",
+  refreshHubEnvironments: () => {},
 }));
 
 import { HubMachinesSection } from "./HubMachinesSection";
@@ -150,10 +168,66 @@ describe("HubMachinesSection", () => {
     ]);
   });
 
-  it("shows nothing to anyone else, and never asks the Owner-only endpoint", async () => {
+  it("shows anyone else their own and dedicated machines and how to add one, never asking the Owner-only endpoint", async () => {
     mocks.isOwner = false;
+    mocks.ownList = [
+      {
+        id: "hub",
+        name: "Hub machine",
+        kind: "hub",
+        mode: "personal",
+        ownerUserId: null,
+        status: "online",
+        registeredAt: "2026-01-01T00:00:00.000Z",
+        lastSeenAt: null,
+        os: null,
+        hostname: null,
+        providers: [],
+        resources: null,
+        runningThreadCount: 0,
+      },
+      {
+        id: "env-laptop",
+        name: "Grace's laptop",
+        kind: "external",
+        mode: "personal",
+        ownerUserId: "grace",
+        status: "online",
+        registeredAt: "2026-01-01T00:00:00.000Z",
+        lastSeenAt: null,
+        os: "linux",
+        hostname: null,
+        providers: [],
+        resources: null,
+        runningThreadCount: 0,
+      },
+      {
+        id: "env-vps",
+        name: "Acme VPS",
+        kind: "external",
+        mode: "dedicated",
+        ownerUserId: null,
+        spaceId: "space-acme",
+        status: "online",
+        registeredAt: "2026-01-01T00:00:00.000Z",
+        lastSeenAt: null,
+        os: "linux",
+        hostname: null,
+        providers: [],
+        resources: null,
+        runningThreadCount: 0,
+      },
+    ];
     await render();
-    expect(container?.innerHTML).toBe("");
     expect(mocks.runPromise).not.toHaveBeenCalled();
+    expect(container?.querySelector('section[aria-label="Your machines"]')).not.toBeNull();
+    expect(container?.textContent).toContain("Grace's laptop");
+    expect(container?.textContent).toContain("Acme VPS");
+    expect(container?.textContent).not.toContain("Hub machine");
+    expect(
+      container?.querySelector('[aria-label="Acme VPS, Online · Dedicated to Acme · linux"]'),
+    ).not.toBeNull();
+    expect(container?.textContent).toContain("Add a machine");
+    expect(container?.querySelectorAll("button")).toHaveLength(0);
   });
 });

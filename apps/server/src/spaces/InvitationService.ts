@@ -204,7 +204,6 @@ const DENIED_REASONS: Record<AccessPolicy.DenyReason, string> = {
   "role-not-allowed": ADMINS_INVITE,
   "not-your-personal-space": "Nothing is shared from a Personal space.",
   "personal-space-read-only": "Nothing is shared from a Personal space.",
-  "missing-installation-permission": ADMINS_INVITE,
   "space-archived": "This Organization is archived.",
   "space-frozen": "This Space is frozen.",
   "wrong-resource": "Only Organizations take Invitations; nothing is shared from a Personal space.",

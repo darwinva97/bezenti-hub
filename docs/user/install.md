@@ -283,13 +283,12 @@ You see the projects and threads of your Personal space and of every
 organization you belong to, whoever created them, and nothing else. Work in an
 archived organization disappears for its members. The Owner sees everything.
 
-### Personal spaces and Installation permissions
+### Personal spaces
 
 Everyone has a Personal space from the moment their account exists, also after
 leaving every organization, so there is always somewhere to work outside them.
-The one Installation permission left, **Register their own Environments**, is in
-**Users and permissions** from the Space selector: it lets a person join their
-own machines to the Hub (see [Join a machine to your Hub](#join-a-machine-to-your-hub)).
+Nobody needs a permission from the Owner for it, nor to join their own machines
+to the Hub (see [Join a machine to your Hub](#join-a-machine-to-your-hub)).
 
 The Owner can see every Personal space: the selector lists them under **Personal
 spaces (read only)**, and the Owner reads them but changes nothing in them. The
@@ -320,7 +319,7 @@ cannot be disabled or removed.
 The Owner can see who did what in the sensitive actions: open **Audit log**
 from the Space selector, or from **Settings → Access**. It lists invitations
 created, accepted and revoked, Role changes, people removed or leaving an
-organization, reset links, Installation permissions, people disabled, turned
+organization, reset links, people disabled, turned
 back on or removed, organizations archived, restored and deleted, projects
 moved and deleted, threads deleted for good, guest links, and the app and
 outside-agent sign-ins you approved, plus tokens and Owner reset links issued
@@ -707,15 +706,14 @@ machine, `t3 join` says who approved it (`Approved by Grace (grace) as their
 personal machine. Register it as theirs? [y/N]`); answer `y` only if that is
 you, since anyone who saw the link could have approved it. Without a terminal,
 add `--owner <your sign-in name>` (or your user id if you sign in only with a
-passkey): the machine is registered only if that user approved it. The Owner can add machines, and so can any
-user the Owner gave **Register their own Environments** in **Users**; without
-it the page says so. The machine becomes the personal machine of whoever
-approved it: only they run work on it, in any of their Spaces. Other users never
-see it; the Owner sees every machine but runs nothing on someone else's. Each
-user sees their machines in **Settings → Environments**, where they rename and
-remove them. Taking the permission away stops new machines but keeps the ones
-already joined; turning a user off or removing them also removes their
-machines. The Hub's address must be `https://`; plain `http://` is accepted
+passkey): the machine is registered only if that user approved it. Every user
+can add their own machines; nobody needs a permission from the Owner. The machine
+becomes the personal machine of whoever approved it: only they run work on it,
+in any of their Spaces. Other users never see it; the Owner sees every machine
+but runs nothing on someone else's. Each user sees their machines in **Settings
+→ Environments**, where they rename and remove them; the mobile app lists them
+under **Your machines**. Turning a user off stops their machines until they are
+turned back on; removing them removes their machines. The Hub's address must be `https://`; plain `http://` is accepted
 only for a Hub on the same machine.
 
 Joining a server that already has its own users or threads cuts them off, since

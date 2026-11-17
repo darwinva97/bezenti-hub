@@ -928,7 +928,7 @@ export const makeHub = Effect.fn("HubWithEnvironments.makeHub")(function* (
   sandboxes.setHubUrl(server.url);
   /**
    * Joins a machine (`t3 join`, approved with a passkey) and connects it: the Owner's, or that of
-   * the User signed in as `as`, who needs `environments.registerOwn`.
+   * the User signed in as `as` (every active User joins their own).
    */
   const join = Effect.fn("HubWithEnvironments.join")(function* (input: {
     readonly as?: { readonly cookie: string; readonly authenticator: Authenticator };

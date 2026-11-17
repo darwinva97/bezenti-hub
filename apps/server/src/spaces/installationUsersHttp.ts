@@ -53,26 +53,6 @@ export const layer = HttpApiBuilder.group(
         }),
       )
       .handle(
-        "setPermission",
-        Effect.fn("environment.installationUsers.setPermission")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          return yield* spaces
-            .setInstallationPermission({
-              actorUserId: yield* requireUser(AuthAccessWriteScope),
-              userId: args.params.userId,
-              permission: args.payload.permission,
-              granted: args.payload.granted,
-            })
-            .pipe(
-              Effect.catchTags({
-                SpaceAccessDeniedError: failDenied,
-                InstallationUserNotFoundError: () => failEnvironmentNotFound("user_not_found"),
-                SpaceDirectoryStorageError: failStorage,
-              }),
-            );
-        }),
-      )
-      .handle(
         "setStatus",
         Effect.fn("environment.installationUsers.setStatus")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);

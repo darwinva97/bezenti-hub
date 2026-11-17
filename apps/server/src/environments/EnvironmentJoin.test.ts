@@ -19,13 +19,19 @@ import {
   listEnvironments,
   loopbackStateOf,
   memberWithPasskey,
-  setRegisterOwn,
   startJoin,
 } from "./environments.testkit.ts";
 
-const NEEDS_REGISTER_OWN =
-  'Adding your own machines needs the "Register their own Environments" permission. Ask this Hub\'s Owner for it.';
+const TURNED_OFF = "This account is turned off.";
 const STRONG_FACTOR = "Confirm with your passkey, or with your password and a code from your app.";
+
+const registeredCount = (server: Effect.Success<ReturnType<typeof hubWithOwner>>["server"]) =>
+  Effect.map(
+    server.sql<{ readonly count: number }>`
+      SELECT COUNT(*) AS count FROM environments WHERE kind = 'external'
+    `,
+    (rows) => rows[0]?.count ?? 0,
+  );
 
 it.effect("the Owner registers a machine with a passkey and it joins as their personal one", () =>
   Effect.gen(function* () {
@@ -73,34 +79,26 @@ it.effect("the Owner registers a machine with a passkey and it joins as their pe
   }),
 );
 
-it.effect(
-  "a Member without the permission cannot approve a machine, whatever proof they bring",
-  () =>
-    Effect.gen(function* () {
-      const { server } = yield* hubWithOwner();
-      const member = yield* addMember(server);
-      const { requestId } = yield* startJoin(server);
-      // The page knows before anything is posted.
-      const view = yield* server.request("/api/environments/join/request", {
-        cookie: member,
-        body: { requestId },
-      });
-      assert.equal(view.body.viewerMayApprove, false);
-      // Nor does it learn about the machine.
-      for (const field of ["name", "os", "hostname", "requestedAt"]) {
-        assert.notProperty(view.body, field);
-      }
-      assert.equal(view.body.denialMessage, NEEDS_REGISTER_OWN);
-      const refused = yield* approveJoin(server, member, requestId, {
-        reauth: { method: "password", password: "anything", totpCode: "123456" },
-      });
-      assert.equal(refused.status, 403);
-      assert.equal(refused.body.message, NEEDS_REGISTER_OWN);
-      assert.notProperty(refused.body, "redirectTo");
-    }),
+it.effect("a disabled User approves no machine, whatever proof they bring", () =>
+  Effect.gen(function* () {
+    const { server, owner } = yield* hubWithOwner();
+    const grace = yield* memberWithPasskey(server, owner, { displayName: "Grace Hopper" });
+    const { requestId } = yield* startJoin(server);
+    const reauth = yield* passkeyReauth(server, grace.authenticator);
+    const disabled = yield* server.request(`/api/installation/users/${grace.userId}/status`, {
+      cookie: owner,
+      body: { status: "disabled" },
+    });
+    assert.equal(disabled.status, 200);
+    const refused = yield* approveJoin(server, grace.cookie, requestId, { reauth });
+    assert.notEqual(refused.status, 200);
+    assert.notProperty(refused.body, "redirectTo");
+    assert.equal((yield* joinStatus(server, requestId)).body.status, "pending");
+    assert.equal(yield* registeredCount(server), 0);
+  }),
 );
 
-it.effect("a User with `environments.registerOwn` approves their own machine, theirs alone", () =>
+it.effect("a Member with no permission approves their own machine, theirs alone", () =>
   Effect.gen(function* () {
     const { server, owner } = yield* hubWithOwner();
     const grace = yield* memberWithPasskey(server, owner, { displayName: "Grace Hopper" });
@@ -108,7 +106,6 @@ it.effect("a User with `environments.registerOwn` approves their own machine, th
       displayName: "Linus",
       spaceId: grace.spaceId,
     });
-    yield* setRegisterOwn(server, owner, grace.userId, true);
     const external = (cookie: string) =>
       Effect.map(listEnvironments(server, cookie), (list) =>
         list
@@ -185,27 +182,15 @@ it.effect("a User with `environments.registerOwn` approves their own machine, th
   }),
 );
 
-it.effect("revoking the permission keeps the User's machines; removing the User does not", () =>
+it.effect("removing the User removes their machines", () =>
   Effect.gen(function* () {
     const { server, owner } = yield* hubWithOwner();
     const grace = yield* memberWithPasskey(server, owner, { displayName: "Grace Hopper" });
-    yield* setRegisterOwn(server, owner, grace.userId, true);
     const joined = yield* joinMachine(server, grace.authenticator, grace.cookie);
-
-    yield* setRegisterOwn(server, owner, grace.userId, false);
-    const kept = yield* listEnvironments(server, grace.cookie);
     assert.include(
-      kept.map((environment) => environment.id),
+      (yield* listEnvironments(server, grace.cookie)).map((environment) => environment.id),
       joined.environmentId,
     );
-    // No new one, though.
-    const { requestId } = yield* startJoin(server);
-    const refused = yield* approveJoin(server, grace.cookie, requestId, {
-      reauth: yield* passkeyReauth(server, grace.authenticator),
-    });
-    assert.equal(refused.status, 403);
-    assert.equal(refused.body.message, NEEDS_REGISTER_OWN);
-
     const removedUser = yield* server.request(`/api/installation/users/${grace.userId}/status`, {
       cookie: owner,
       body: { status: "removed" },
@@ -218,29 +203,24 @@ it.effect("revoking the permission keeps the User's machines; removing the User 
   }),
 );
 
-const registeredCount = (server: Effect.Success<ReturnType<typeof hubWithOwner>>["server"]) =>
-  Effect.map(
-    server.sql<{ readonly count: number }>`
-      SELECT COUNT(*) AS count FROM environments WHERE kind = 'external'
-    `,
-    (rows) => rows[0]?.count ?? 0,
-  );
-
-it.effect("a permission revoked between the approval and the write registers nothing", () =>
+it.effect("a User turned off between the approval and the write registers nothing", () =>
   Effect.gen(function* () {
     const { server, owner } = yield* hubWithOwner();
     const grace = yield* memberWithPasskey(server, owner, { displayName: "Grace Hopper" });
-    yield* setRegisterOwn(server, owner, grace.userId, true);
     const { requestId } = yield* startJoin(server);
     const approved = yield* approveJoin(server, grace.cookie, requestId, {
       reauth: yield* passkeyReauth(server, grace.authenticator),
     });
     assert.equal(approved.status, 200);
-    // Granted when she approved, gone by the write: the registry asks again in its transaction.
-    yield* setRegisterOwn(server, owner, grace.userId, false);
+    // Active when she approved, off by the write: the registry asks again in its transaction.
+    const disabled = yield* server.request(`/api/installation/users/${grace.userId}/status`, {
+      cookie: owner,
+      body: { status: "disabled" },
+    });
+    assert.equal(disabled.status, 200);
     const confirmed = yield* confirmJoin(server, requestId, true);
     assert.equal(confirmed.status, 403);
-    assert.equal(confirmed.body.message, NEEDS_REGISTER_OWN);
+    assert.equal(confirmed.body.message, TURNED_OFF);
     assert.equal(yield* registeredCount(server), 0);
     assert.equal((yield* joinStatus(server, requestId)).body.status, "denied");
   }),
@@ -252,7 +232,6 @@ it.effect(
     Effect.gen(function* () {
       const { server, owner, authenticator } = yield* hubWithOwner();
       const mallory = yield* memberWithPasskey(server, owner, { displayName: "Mallory" });
-      yield* setRegisterOwn(server, owner, mallory.userId, true);
       // Grace's `t3 join`; Mallory got hold of its link and approves first.
       const { requestId } = yield* startJoin(server);
       const approved = yield* approveJoin(server, mallory.cookie, requestId, {
@@ -291,17 +270,12 @@ it.effect(
     }),
 );
 
-it.effect("only someone who may approve denies, and only a request still pending", () =>
+it.effect("only a request still pending is denied", () =>
   Effect.gen(function* () {
     const { server, owner, authenticator } = yield* hubWithOwner();
-    const linus = yield* addMember(server);
     const deny = (cookie: string, requestId: string) =>
       server.request("/api/environments/join/deny", { cookie, body: { requestId } });
     const { requestId } = yield* startJoin(server);
-    const refused = yield* deny(linus, requestId);
-    assert.equal(refused.status, 403);
-    assert.equal(refused.body.message, NEEDS_REGISTER_OWN);
-    assert.equal((yield* joinStatus(server, requestId)).body.status, "pending");
 
     // Approved and waiting for the machine: no longer anyone's to deny.
     yield* approveJoin(server, owner, requestId, {

@@ -175,20 +175,6 @@ export const memberWithPasskey = Effect.fn(function* (
   };
 });
 
-/** The Owner grants or revokes «Register their own Environments» (spec 1's Users admin). */
-export const setRegisterOwn = Effect.fn(function* (
-  server: Server,
-  owner: string,
-  userId: string,
-  granted: boolean,
-) {
-  const changed = yield* server.request(`/api/installation/users/${userId}/permissions`, {
-    cookie: owner,
-    body: { permission: "environments.registerOwn", granted },
-  });
-  assert.equal(changed.status, 200);
-});
-
 export const loopbackStateOf = (redirectTo: unknown) => {
   const url = new URL(String(redirectTo));
   assert.equal(`${url.origin}${url.pathname}`, REDIRECT);

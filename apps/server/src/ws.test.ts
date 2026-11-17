@@ -3672,22 +3672,16 @@ describe("Space visibility", () => {
     () =>
       withHub(({ server, owner, grace, linus }) =>
         Effect.gen(function* () {
-          const setPermission = (cookie: string, permission: string) =>
-            server.request(`/api/installation/users/${grace.userId}/permissions`, {
-              cookie,
-              body: { permission, granted: true },
-            });
-          // Only the Owner lists Users and grants or revokes their permissions.
-          assert.equal(
-            (yield* setPermission(grace.cookie, "environments.registerOwn")).status,
-            403,
-          );
+          // Only the Owner lists Users; no Installation permission is left to grant.
           assert.equal(
             (yield* server.request("/api/installation/users", { cookie: linus.cookie })).status,
             403,
           );
-          // Using one's Personal space is no permission any more: there is nothing to grant.
-          assert.equal((yield* setPermission(owner, "personalSpace.create")).status, 400);
+          const gone = yield* server.request(
+            `/api/installation/users/${grace.userId}/permissions`,
+            { cookie: owner, body: { permission: "environments.registerOwn", granted: true } },
+          );
+          assert.equal(gone.status, 404);
           const users = yield* server.request("/api/installation/users", { cookie: owner });
           assert.deepInclude(users.body.users as ReadonlyArray<unknown>, {
             id: grace.userId,
@@ -3767,7 +3761,7 @@ describe("Space visibility", () => {
   );
 
   it.effect("the Owner's Users endpoints need the access scopes, not just the Owner", () =>
-    withHub(({ server, grace }) =>
+    withHub(({ server }) =>
       Effect.gen(function* () {
         const [ownerRow] = yield* server.sql<{ userId: string }>`
           SELECT user_id AS "userId" FROM users WHERE is_owner = 1
@@ -3781,15 +3775,6 @@ describe("Space visibility", () => {
         });
         const cookie = `${server.sessions.cookieName}=${narrow.token}`;
         assert.equal((yield* server.request("/api/installation/users", { cookie })).status, 403);
-        const set = yield* server.request(`/api/installation/users/${grace.userId}/permissions`, {
-          cookie,
-          body: { permission: "environments.registerOwn", granted: true },
-        });
-        assert.equal(set.status, 403);
-        const [granted] = yield* server.sql<{ count: number }>`
-          SELECT COUNT(*) AS count FROM installation_permissions
-        `;
-        assert.equal(granted?.count, 0);
       }),
     ),
   );

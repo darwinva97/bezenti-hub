@@ -212,14 +212,6 @@ it.effect(
       });
       assert.equal(redeemed.status, 200);
 
-      const permission = (granted: boolean) =>
-        server.request(`/api/installation/users/${linus.userId}/permissions`, {
-          body: { permission: "environments.registerOwn", granted },
-          cookie: owner,
-        });
-      assert.equal((yield* permission(true)).status, 200);
-      assert.equal((yield* permission(false)).status, 200);
-
       const left = yield* server.request(`/api/spaces/${acmeId}/leave`, {
         body: {},
         cookie: linus.cookie,
@@ -419,18 +411,6 @@ it.effect(
           actor: user(grace.userId),
           spaceId: null,
           target: { kind: "user", id: grace.userId },
-        },
-        {
-          action: "installationPermission.grant",
-          actor: user(ownerId),
-          spaceId: null,
-          target: { kind: "user", id: linus.userId },
-        },
-        {
-          action: "installationPermission.revoke",
-          actor: user(ownerId),
-          spaceId: null,
-          target: { kind: "user", id: linus.userId },
         },
         {
           action: "membership.leave",
@@ -652,6 +632,10 @@ it.effect(
         "grant.cancel",
         "grant.end",
         "grant.limits.change",
+        // No longer written (owned-resources 06: no Installation permission is left); old rows
+        // stay readable.
+        "installationPermission.grant",
+        "installationPermission.revoke",
       ];
       assert.sameMembers(
         [...new Set([...expected.map((row) => row.action), ...recordedElsewhere])],

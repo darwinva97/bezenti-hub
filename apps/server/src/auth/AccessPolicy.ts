@@ -3,18 +3,11 @@
  * may do everything but create in archived or frozen Spaces, change another User's Personal space
  * (bar moving, stopping and deleting in a removed User's), share from one, or turn themselves off.
  */
-import type {
-  InstallationPermission,
-  SpaceId,
-  SpaceKind,
-  SpaceRole,
-  UserId,
-} from "@t3tools/contracts";
+import type { SpaceId, SpaceKind, SpaceRole, UserId } from "@t3tools/contracts";
 
 export interface Principal {
   readonly userId: UserId;
   readonly isOwner: boolean;
-  readonly installationPermissions: ReadonlySet<InstallationPermission>;
   /** The User's Role in each Organization they are a Member of. */
   readonly roles: ReadonlyMap<SpaceId, SpaceRole>;
   /** Disabled or removed: every action is refused, though their Memberships may remain. */
@@ -133,7 +126,7 @@ export type Action =
   | "thread.create"
   | "project.create"
   | "organization.create"
-  /** List Users and grant or revoke their Installation permissions. */
+  /** List the Installation's Users (the Owner's Users admin view). */
   | "installationPermission.manage"
   /** Disable a User or turn them back on: their sessions end, their Memberships stay. */
   | "user.disable"
@@ -182,10 +175,7 @@ export type Action =
   | "organization.restore"
   /** Permanently delete an archived Organization with everything in it. */
   | "organization.delete"
-  /**
-   * Approve one's own machine joining the Hub as a personal one (`t3 join`): the Owner, or a User
-   * with the `environments.registerOwn` Installation permission.
-   */
+  /** Approve one's own machine joining the Hub as a personal one (`t3 join`): every active User. */
   | "environment.register"
   /**
    * Register a machine dedicated to an Organization, or change a machine's mode or Space: the
@@ -329,7 +319,6 @@ export type DenyReason =
   | "not-your-personal-space"
   /** The Owner reads another User's Personal space and changes nothing in it. */
   | "personal-space-read-only"
-  | "missing-installation-permission"
   | "space-archived"
   | "space-frozen"
   /** The User was disabled or removed. */
@@ -443,7 +432,7 @@ const decideEnvironment = (
       ? deny("hub-machine")
       : allow;
   }
-  // A User renames and removes their own personal machine, even once `registerOwn` is revoked.
+  // A User renames and removes their own personal machine.
   return environment.environmentKind === "external" && own ? allow : deny("owner-only");
 };
 
@@ -773,11 +762,9 @@ export function decide(principal: Principal, action: Action, resource: Resource)
       ? decideEnvironment(principal, action, resource)
       : deny("wrong-resource");
   }
+  // Owned-resources 06: every active User joins their own machines (the limit comes with plans).
   if (action === "environment.register") {
-    if (resource.kind !== "installation") return deny("wrong-resource");
-    return principal.isOwner || principal.installationPermissions.has("environments.registerOwn")
-      ? allow
-      : deny("missing-installation-permission");
+    return resource.kind === "installation" ? allow : deny("wrong-resource");
   }
   if (action === "aiAccount.manage") {
     if (resource.kind !== "installation") return deny("wrong-resource");

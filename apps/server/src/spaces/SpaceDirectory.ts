@@ -1,5 +1,4 @@
 import {
-  InstallationPermission,
   type InstallationUser,
   InstallationUserStatus,
   type MemberList,
@@ -53,7 +52,7 @@ const DENIED_ACTION_LABELS: Record<string, string> = {
   "thread.create": "create Threads",
   "project.create": "create Projects",
   "organization.create": "create Organizations",
-  "installationPermission.manage": "grant Installation permissions",
+  "installationPermission.manage": "list the Installation's Users",
   "invitation.create": "invite people",
   "invitation.manage": "manage Invitations",
   "guestLink.create": "create guest links",
@@ -130,11 +129,8 @@ const deniedMessage = (action: string, reason: string): string | undefined => {
   if (reason === "personal-space-read-only") {
     return "This is someone else's Personal space: you can read it but not change anything in it.";
   }
-  if (reason === "missing-installation-permission") {
-    return "This needs an Installation permission the Owner has not given you.";
-  }
   if (action === "installationPermission.manage") {
-    return "Only the Owner grants Installation permissions.";
+    return "Only the Owner lists the Installation's Users.";
   }
   if (reason === "owner-protected") return "The Owner can't be disabled or removed.";
   if (reason === "user-removed") return "A removed User stays removed.";
@@ -355,19 +351,6 @@ export class SpaceDirectory extends Context.Service<
     ) => Effect.Effect<
       ReadonlyArray<InstallationUser>,
       SpaceAccessDeniedError | SpaceDirectoryStorageError
-    >;
-    /**
-     * Grants or revokes one Installation permission; Owner only. Takes effect at once: cached
-     * principals go stale and the User's open connections hear it on `subscribeAccessChanges`.
-     */
-    readonly setInstallationPermission: (input: {
-      readonly actorUserId: UserId;
-      readonly userId: UserId;
-      readonly permission: InstallationPermission;
-      readonly granted: boolean;
-    }) => Effect.Effect<
-      InstallationUser,
-      SpaceAccessDeniedError | InstallationUserNotFoundError | SpaceDirectoryStorageError
     >;
     /**
      * Refuses a change to the User's status the policy denies (only the Owner, never on the Owner)
@@ -730,27 +713,17 @@ const make = Effect.gen(function* () {
       WHERE users.user_id = ${userId}
     `,
   });
-  const findPermissions = SqlSchema.findAll({
-    Request: UserId,
-    Result: Schema.Struct({ permission: InstallationPermission }),
-    execute: (userId) => sql`
-      SELECT permission FROM installation_permissions WHERE user_id = ${userId}
-    `,
-  });
   const UserRow = Schema.Struct({
     id: UserId,
     displayName: Schema.String,
     loginName: Schema.NullOr(Schema.String),
     isOwner: Schema.BooleanFromBit,
     status: InstallationUserStatus,
-    permissions: Schema.NullOr(Schema.String),
   });
   const USER_COLUMNS = `users.user_id AS "id", users.display_name AS "displayName",
     users.login_name AS "loginName", users.is_owner AS "isOwner",
     CASE WHEN users.removed_at IS NOT NULL THEN 'removed'
-      WHEN users.disabled_at IS NOT NULL THEN 'disabled' ELSE 'active' END AS "status",
-    (SELECT group_concat(permission, ' ') FROM installation_permissions p
-      WHERE p.user_id = users.user_id) AS "permissions"`;
+      WHEN users.disabled_at IS NOT NULL THEN 'disabled' ELSE 'active' END AS "status"`;
   const listUserRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: UserRow,
@@ -782,16 +755,14 @@ const make = Effect.gen(function* () {
       ORDER BY u.display_name COLLATE NOCASE ASC, s.space_id ASC
     `,
   });
-  const isPermission = Schema.is(InstallationPermission);
   const toInstallationUser = (row: typeof UserRow.Type): InstallationUser => ({
     id: row.id,
     displayName: row.displayName,
     loginName: row.loginName,
     isOwner: row.isOwner,
     status: row.status,
-    installationPermissions: row.isOwner
-      ? []
-      : (row.permissions ?? "").split(" ").filter(isPermission).toSorted(),
+    // Owned-resources 06: no Installation permission is left; kept empty for older clients.
+    installationPermissions: [],
   });
   const findOwnerId = SqlSchema.findOneOption({
     Request: Schema.Void,
@@ -811,10 +782,7 @@ const make = Effect.gen(function* () {
    * they have a passkey or an authenticator app: a stolen password alone makes no Admin.
    */
   const membershipsOf = Effect.fn("SpaceDirectory.membershipsOf")(function* (userId: UserId) {
-    const [rows, permissions] = yield* Effect.all(
-      [findPrincipalRows(userId), findPermissions(userId)],
-      { concurrency: "unbounded" },
-    );
+    const rows = yield* findPrincipalRows(userId);
     const roles = new Map<SpaceId, SpaceRole>();
     const storedRoles = new Map<SpaceId, SpaceRole>();
     const pendingAdmin = new Set<SpaceId>();
@@ -828,7 +796,6 @@ const make = Effect.gen(function* () {
     const principal = {
       userId,
       isOwner: rows[0]?.isOwner ?? false,
-      installationPermissions: new Set(permissions.map((row) => row.permission)),
       roles,
       inactive: rows[0]?.inactive ?? false,
     } satisfies AccessPolicy.Principal;
@@ -958,58 +925,6 @@ const make = Effect.gen(function* () {
     const rows = yield* listUserRows().pipe(Effect.mapError(storageError));
     return rows.map(toInstallationUser);
   });
-
-  const setInstallationPermission = Effect.fn("SpaceDirectory.setInstallationPermission")(
-    function* (input: {
-      readonly actorUserId: UserId;
-      readonly userId: UserId;
-      readonly permission: InstallationPermission;
-      readonly granted: boolean;
-    }) {
-      const principal = yield* principalOf(input.actorUserId);
-      yield* requireAllowed(principal, "installationPermission.manage", AccessPolicy.installation);
-      const target = yield* findUserRow(input.userId).pipe(Effect.mapError(storageError));
-      if (Option.isNone(target) || target.value.status === "removed") {
-        return yield* new InstallationUserNotFoundError({ userId: input.userId });
-      }
-      // The Owner holds every permission; there is nothing to grant or revoke.
-      if (target.value.isOwner) return toInstallationUser(target.value);
-      const now = DateTime.formatIso(yield* DateTime.now);
-      const written = yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const rows = yield* input.granted
-              ? sql<{ readonly userId: string }>`
-                  INSERT INTO installation_permissions (user_id, permission, granted_by, granted_at)
-                  VALUES (${input.userId}, ${input.permission}, ${input.actorUserId}, ${now})
-                  ON CONFLICT (user_id, permission) DO NOTHING
-                  RETURNING user_id AS "userId"
-                `
-              : sql<{ readonly userId: string }>`
-                  DELETE FROM installation_permissions
-                  WHERE user_id = ${input.userId} AND permission = ${input.permission}
-                  RETURNING user_id AS "userId"
-                `;
-            if (rows.length > 0) {
-              yield* audit.record({
-                actor: AuditLog.userActor(input.actorUserId),
-                action: input.granted
-                  ? "installationPermission.grant"
-                  : "installationPermission.revoke",
-                target: { kind: "user", id: input.userId },
-                detail: { permission: input.permission },
-              });
-            }
-            return rows;
-          }),
-        )
-        .pipe(Effect.mapError(storageError));
-      // Only a row that changed moves caches and wakes the User's connections.
-      if (written.length > 0) yield* Effect.andThen(changed, accessChanged(input.userId));
-      const updated = yield* findUserRow(input.userId).pipe(Effect.mapError(storageError));
-      return toInstallationUser(Option.getOrElse(updated, () => target.value));
-    },
-  );
 
   const installationUser = Effect.fn("SpaceDirectory.installationUser")(function* (userId: UserId) {
     const row = yield* findUserRow(userId).pipe(Effect.mapError(storageError));
@@ -1916,7 +1831,6 @@ const make = Effect.gen(function* () {
     principalOf,
     view,
     listUsers,
-    setInstallationPermission,
     authorizeUserChange,
     endAccessOf,
     installationUser,

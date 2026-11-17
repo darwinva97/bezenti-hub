@@ -127,6 +127,7 @@ import Migration0135 from "./Migrations/135_Grants.ts";
 import Migration0136 from "./Migrations/136_LentSandboxes.ts";
 import Migration0137 from "./Migrations/137_PersonalSpaceAlways.ts";
 import Migration0138 from "./Migrations/138_OrganizationCreator.ts";
+import Migration0139 from "./Migrations/139_RegisterOwnPermissionGone.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -256,6 +257,7 @@ const migrationEntries = [
   [136, "LentSandboxes", Migration0136],
   [137, "PersonalSpaceAlways", Migration0137],
   [138, "OrganizationCreator", Migration0138],
+  [139, "RegisterOwnPermissionGone", Migration0139],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

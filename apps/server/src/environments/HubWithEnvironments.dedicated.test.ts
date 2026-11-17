@@ -53,7 +53,6 @@ import {
   joinStatus,
   listEnvironments,
   memberWithPasskey,
-  setRegisterOwn,
   startJoin,
 } from "./environments.testkit.ts";
 import { makeHub, seedProject, type Hub } from "./HubWithEnvironments.testkit.ts";
@@ -193,7 +192,6 @@ describe("Hub con Environments: a machine dedicated to a Space", () => {
           displayName: "Grace Hopper",
           spaceId: acme,
         });
-        yield* setRegisterOwn(hub.server, hub.owner, grace.userId, true);
 
         const { requestId } = yield* startJoin(hub.server, { dedicatedSpace: "acme" });
         // The Owner is offered every Organization, the one `--dedicated` named first.

@@ -73,7 +73,6 @@ import {
   MemberList,
   MemberRequest,
   MemberResetLink,
-  SetInstallationPermissionRequest,
   SetInstallationUserStatusRequest,
   SpaceDirectoryView,
   SpaceSummary,
@@ -1065,7 +1064,7 @@ const EnvironmentInstallationUserErrors = [
   EnvironmentScopeRequiredError,
 ] as const;
 
-// The Owner's Users admin view: list Users, grant or revoke their Installation permissions, and
+// The Owner's Users admin view: list Users, and
 // disable, re-enable or remove them.
 class EnvironmentInstallationUsersHttpApi extends HttpApiGroup.make("installationUsers")
   .add(
@@ -1073,15 +1072,6 @@ class EnvironmentInstallationUsersHttpApi extends HttpApiGroup.make("installatio
       headers: OptionalBearerHeaders,
       success: InstallationUserList,
       error: EnvironmentInstallationUserErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("setPermission", "/api/installation/users/:userId/permissions", {
-      headers: OptionalBearerHeaders,
-      params: InstallationUserParams,
-      payload: SetInstallationPermissionRequest,
-      success: InstallationUser,
-      error: [...EnvironmentInstallationUserErrors, EnvironmentResourceNotFoundError],
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(

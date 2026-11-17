@@ -40,10 +40,6 @@ _Avoid_: Participant, collaborator
 The fixed set of permissions a Member has in one Organization. Each Member has exactly one Role per Organization; Roles are a closed set, not configurable.
 _Avoid_: Rol, group, permission set
 
-**Installation permission**:
-A permission the Owner grants a user that belongs to no Organization, such as creating in their own Personal space.
-_Avoid_: Global role, system permission
-
 **Invitation**:
 An offer to join one Organization that the invitee must accept; accepting it creates the user's account if they had none.
 _Avoid_: Sign-up, registration

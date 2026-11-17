@@ -106,9 +106,10 @@ export function RegisterEnvironmentSurface({ signedIn }: { readonly signedIn: bo
     return ended("Registration cancelled", "The machine was not added. You can close this tab.");
   }
   if (request !== null && request.status === "pending" && request.viewerMayApprove === false) {
+    // Every active User adds their own machines; only an account turned off is refused.
     return ended(
-      "You need permission to add machines",
-      `${request.denialMessage ?? "You may not add machines to this Hub."} Then open this link again.`,
+      "This account can't add machines",
+      request.denialMessage ?? "You may not add machines to this Hub.",
     );
   }
   // Signed in, yet the Hub could not tell who this is: never offer the form on a guess.

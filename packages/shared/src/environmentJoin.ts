@@ -55,10 +55,6 @@ export const environmentCredentialIssuer = (credential: string): string | undefi
   return fromBase64Url(hub);
 };
 
-/** Why a User may not approve a machine joining: the one wording the Hub and its pages use. */
-export const REGISTER_OWN_REQUIRED_MESSAGE =
-  'Adding your own machines needs the "Register their own Environments" permission. Ask this Hub\'s Owner for it.';
-
 /** How `t3 join` names the User who approved it: their sign-in name, or their id without one. */
 export const environmentJoinApproverLabel = (approver: {
   readonly userId: string;

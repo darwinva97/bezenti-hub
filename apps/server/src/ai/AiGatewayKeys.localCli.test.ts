@@ -156,20 +156,16 @@ it.live.skipIf(!posix || platform === undefined)(
       assert.include(stored, NodeCrypto.createHash("sha256").update(key, "utf8").digest("hex"));
       const audit = yield* setup.server.sql<Record<string, unknown>>`SELECT * FROM audit_log`;
       assert.notInclude(JSON.stringify(audit), key.slice(5));
-      // A key needs a name; without a Space and no Personal space, a User is told to choose one.
+      // A key needs a name; without a Space it goes to the User's Personal space, which every
+      // User has.
       const unnamed = yield* setup.keys
         .createForSession({ name: "   " })
         .pipe(CommandActor.actAs(setup.people.member), Effect.flip);
       assert.equal(unnamed.reason, "invalid");
-      yield* setup.server.sql`
-        DELETE FROM installation_permissions
-        WHERE user_id = ${setup.people.member} AND permission = 'personalSpace.create'
-      `;
-      const nowhere = yield* setup.keys
+      const personal = yield* setup.keys
         .createForSession({ name: "Grace laptop" })
-        .pipe(CommandActor.actAs(setup.people.member), Effect.flip);
-      assert.equal(nowhere.reason, "forbidden");
-      assert.include(nowhere.message, "Choose a Space");
+        .pipe(CommandActor.actAs(setup.people.member));
+      assert.equal(personal.created.spaceId, SpaceId.make(`personal:${setup.people.member}`));
     }).pipe(Effect.scoped),
 );
 

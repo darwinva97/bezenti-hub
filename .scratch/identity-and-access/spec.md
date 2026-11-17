@@ -59,8 +59,8 @@ Todo Project y todo Thread pertenece a un Space: una Organization o el Personal 
 31. As an Organization, I want everything a person created in it to stay in it when they leave, so that work is never lost with people.
 32. As the Owner, I want to archive an Organization so it disappears for its Members and nothing runs, and restore it later, so that I can pause a team safely.
 33. As the Owner, I want to permanently delete only an already archived Organization, so that deletion is never one accidental click.
-34. As the Owner, I want to grant a User the Installation permission to create in their Personal space, so that only the people I choose work outside Organizations.
-35. As a User without that permission, I want my Personal space to stay empty and hidden, so that I am not offered something I cannot use.
+34. As the Owner, I want to grant a User the Installation permission to create in their Personal space, so that only the people I choose work outside Organizations. _(Sustituida por el ticket 17: todo User tiene siempre su Personal space.)_
+35. As a User without that permission, I want my Personal space to stay empty and hidden, so that I am not offered something I cannot use. _(Sustituida por el ticket 17.)_
 36. As the Owner, I want removing a User from the Installation to freeze their Personal space and hand it to me, so that I decide whether to keep, move or delete it.
 37. As the Owner, I want to see every User's Personal space, so that I keep oversight of my Installation.
 

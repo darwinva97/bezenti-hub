@@ -128,7 +128,7 @@ const deniedMessage = (action: string, reason: string): string | undefined => {
     return "This is someone else's Personal space: you can read it but not change anything in it.";
   }
   if (reason === "missing-installation-permission") {
-    return "Your Personal space is off. Ask the Owner to let you create in it.";
+    return "This needs an Installation permission the Owner has not given you.";
   }
   if (action === "installationPermission.manage") {
     return "Only the Owner grants Installation permissions.";
@@ -835,7 +835,7 @@ const make = Effect.gen(function* () {
       frozen: false,
     };
     const spaces: Array<SpaceSummary> = [
-      // Hidden, not just closed, while the User lacks `personalSpace.create`.
+      // Every User has theirs; only an inactive User is refused it.
       ...(allows(principal, "space.view", personal)
         ? [
             {

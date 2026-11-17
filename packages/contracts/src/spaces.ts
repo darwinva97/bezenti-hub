@@ -10,10 +10,7 @@ export const SpaceRole = Schema.Literals(["admin", "member", "guest"]);
 export type SpaceRole = typeof SpaceRole.Type;
 
 /** Permissions the Owner grants a User outside any Organization. */
-export const InstallationPermission = Schema.Literals([
-  "personalSpace.create",
-  "environments.registerOwn",
-]);
+export const InstallationPermission = Schema.Literals(["environments.registerOwn"]);
 export type InstallationPermission = typeof InstallationPermission.Type;
 
 /** A Space as the signed-in User sees it in the Space selector. */

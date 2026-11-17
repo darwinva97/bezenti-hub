@@ -214,7 +214,7 @@ it.effect(
 
       const permission = (granted: boolean) =>
         server.request(`/api/installation/users/${linus.userId}/permissions`, {
-          body: { permission: "personalSpace.create", granted },
+          body: { permission: "environments.registerOwn", granted },
           cookie: owner,
         });
       assert.equal((yield* permission(true)).status, 200);

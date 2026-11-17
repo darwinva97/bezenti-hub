@@ -455,15 +455,9 @@ const decideEnvironment = (
 const ROLES_THAT_CREATE_PROJECTS: ReadonlySet<SpaceRole> = new Set(["admin", "member"]);
 const ADMIN_ONLY: ReadonlySet<SpaceRole> = new Set(["admin"]);
 
-// Without the permission a Personal space is hidden, not just closed to new work: what it holds
-// from before a revoke is out of reach too.
-const inPersonalSpace = (principal: Principal, space: SpaceResource) => {
-  if (space.personalOwnerUserId !== principal.userId) return deny("not-your-personal-space");
-  if (!principal.installationPermissions.has("personalSpace.create")) {
-    return deny("missing-installation-permission");
-  }
-  return allow;
-};
+// Every User always has their Personal space; nobody else but the Owner (read-only) reaches it.
+const inPersonalSpace = (principal: Principal, space: SpaceResource) =>
+  space.personalOwnerUserId === principal.userId ? allow : deny("not-your-personal-space");
 
 const inOrganization = (
   principal: Principal,

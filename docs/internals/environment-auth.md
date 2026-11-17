@@ -309,11 +309,10 @@ Organizations and frozen Personal spaces take nothing new, even from the Owner.
 Rows from before Spaces keep `NULL` in both columns and count as the Owner's
 Personal space; the migration cannot backfill them because the Owner may not
 exist yet. A trigger on `users` creates each User's Personal space
-(`personal:<userId>`) with the row, so no account path has to remember it.
-Using a Personal space at all needs the `personalSpace.create` Installation
-permission: without it the space is hidden (`space.view` is denied, so what it
-holds from before a revoke reads as missing too). The Owner grants and revokes
-permissions (`installation_permissions` rows) over HTTP
+(`personal:<userId>`) with the row, so no account path has to remember it, and
+its User always uses it: no permission gates it (migration 150 dropped the old
+`personalSpace.create` grants). The Owner grants and revokes the remaining
+Installation permissions (`installation_permissions` rows) over HTTP
 (`/api/installation/users`, which also needs the `access:read`/`access:write`
 scope) through `SpaceDirectory.setInstallationPermission`. `environments.registerOwn`
 lets a User approve their own machine joining (see
@@ -325,7 +324,7 @@ User's (`personal-space-read-only`). Naming a Space one cannot see, a
 #### Who sees what
 
 A User sees the Projects and Threads of the Spaces the policy lets them view
-(`space.view`): their own Personal space (with the permission) and every live
+(`space.view`): their own Personal space and every live
 Organization they belong to. The Owner sees everything, every Personal space included; an archived
 Organization disappears for its Members only. A Thread's Space is its own
 `spaceId`, else its Project's, so an unstamped child Thread follows its Project;

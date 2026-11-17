@@ -46,10 +46,12 @@ it.effect("lets only the Owner create Organizations, which then show in the Spac
       "Acme",
       "Grace Hopper",
     ]);
-    // Not a Member of Acme and without `personalSpace.create`, Grace has no Space at all.
+    // Not a Member of Acme and granted nothing, Grace still has her own Personal space.
     const memberView = yield* server.request("/api/spaces", { cookie: member });
     expect(memberView.body).toMatchObject({ canCreateOrganization: false, isOwner: false });
-    expect(memberView.body.spaces).toEqual([]);
+    expect(memberView.body.spaces).toEqual([
+      expect.objectContaining({ kind: "personal", isOwn: true, canCreateThreads: true }),
+    ]);
   }),
 );
 

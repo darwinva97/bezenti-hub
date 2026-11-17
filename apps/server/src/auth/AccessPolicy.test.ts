@@ -41,7 +41,8 @@ const admin = principal("ada", { roles: [[ORG, "admin"]] });
 const member = principal("grace", { roles: [[ORG, "member"]] });
 const guest = principal("linus", { roles: [[ORG, "guest"]] });
 const outsider = principal("eve", { roles: [[OTHER_ORG, "admin"]] });
-const personalCreator = principal("grace", { permissions: ["personalSpace.create"] });
+/** Grace with no Organization and no Installation permission: her Personal space is still hers. */
+const personalCreator = principal("grace");
 
 const owned = (
   kind: "thread" | "project",
@@ -107,10 +108,7 @@ const adminHereMemberThere = principal("ada", {
     [OTHER_ORG, "member"],
   ],
 });
-const personalAdmin = principal("grace", {
-  roles: [[ORG, "admin"]],
-  permissions: ["personalSpace.create"],
-});
+const personalAdmin = principal("grace", { roles: [[ORG, "admin"]] });
 
 const hubMachine: AccessPolicy.EnvironmentResource = {
   kind: "environment",
@@ -271,24 +269,31 @@ const rows: ReadonlyArray<Row> = [
     deny("owner-only"),
   ],
 
-  // Personal spaces: private to their User; using one at all is an Installation permission.
+  // Personal spaces: every User always has theirs, private to them; no permission is involved.
   [
-    "with the permission a User views their own Personal space",
+    "a User with no Organization views their own Personal space",
     personalCreator,
     "space.view",
     personalOf("grace"),
     allow,
   ],
   [
-    "without the permission a User's Personal space is hidden",
+    "a Member of an Organization views their own Personal space too",
     member,
     "space.view",
     personalOf("grace"),
-    deny("missing-installation-permission"),
+    allow,
   ],
   [
-    "a User's permission does not reach someone else's Personal space",
-    principal("ada", { permissions: ["personalSpace.create"] }),
+    "a disabled User does not reach their own Personal space",
+    disabledMember,
+    "space.view",
+    personalOf("grace"),
+    deny("user-inactive"),
+  ],
+  [
+    "a User does not reach someone else's Personal space",
+    principal("ada"),
     "space.view",
     personalOf("grace"),
     deny("not-your-personal-space"),
@@ -315,28 +320,28 @@ const rows: ReadonlyArray<Row> = [
     deny("not-your-personal-space"),
   ],
   [
-    "creating in a Personal space needs the permission",
+    "a Member creates Threads in their own Personal space",
     member,
     "thread.create",
     personalOf("grace"),
-    deny("missing-installation-permission"),
+    allow,
   ],
   [
-    "with the permission a User creates Threads there",
+    "a User creates Threads in their own Personal space",
     personalCreator,
     "thread.create",
     personalOf("grace"),
     allow,
   ],
   [
-    "with the permission a User creates Projects there",
+    "a User creates Projects in their own Personal space",
     personalCreator,
     "project.create",
     personalOf("grace"),
     allow,
   ],
   [
-    "the permission does not reach another Personal space",
+    "a User creates nothing in another User's Personal space",
     personalCreator,
     "thread.create",
     personalOf("ada"),
@@ -700,11 +705,11 @@ const rows: ReadonlyArray<Row> = [
     deny("not-your-personal-space"),
   ],
   [
-    "once the permission is revoked, what is in the Personal space is out of reach",
+    "a Member continues their Thread in their own Personal space",
     member,
     "thread.continue",
     owned("thread", "grace", { space: personalOf("grace") }),
-    deny("missing-installation-permission"),
+    allow,
   ],
   // The Owner only reads another User's Personal space: nothing there is theirs to change.
   ...(
@@ -1003,13 +1008,6 @@ const rows: ReadonlyArray<Row> = [
     allow,
   ],
   ["and back", personalAdmin, "project.move", move(organization, personalOf("grace")), allow],
-  [
-    "not from a Personal space they may not use",
-    principal("grace", { roles: [[ORG, "admin"]] }),
-    "project.move",
-    move(personalOf("grace"), organization),
-    deny("missing-installation-permission"),
-  ],
   [
     "not out of someone else's Personal space",
     admin,
@@ -1361,7 +1359,7 @@ const rows: ReadonlyArray<Row> = [
   ],
   [
     "a User with every Installation permission does not back up the master key",
-    principal("grace", { permissions: ["environments.registerOwn", "personalSpace.create"] }),
+    principal("grace", { permissions: ["environments.registerOwn"] }),
     "masterKey.backup",
     AccessPolicy.installation,
     deny("owner-only"),

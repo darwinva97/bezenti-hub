@@ -273,11 +273,11 @@ archived organization disappears for its members. The Owner sees everything.
 
 ### Personal spaces and Installation permissions
 
-A Personal space is yours alone, but it stays hidden until the Owner allows it.
-The Owner opens **Users and permissions** from the Space selector and turns on
-**Use their Personal space** for a person; it shows up in that person's selector
-at once, and turning it off hides it again, along with what is in it. **Register
-their own Environments** is stored for a later release and changes nothing yet.
+Everyone has a Personal space from the moment their account exists, also after
+leaving every organization, so there is always somewhere to work outside them.
+The one Installation permission left, **Register their own Environments**, is in
+**Users and permissions** from the Space selector: it lets a person join their
+own machines to the Hub (see [Join a machine to your Hub](#join-a-machine-to-your-hub)).
 
 The Owner can see every Personal space: the selector lists them under **Personal
 spaces (read only)**, and the Owner reads them but changes nothing in them. The

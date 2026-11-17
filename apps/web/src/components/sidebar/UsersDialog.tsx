@@ -31,10 +31,7 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
 
-const PERMISSIONS: ReadonlyArray<InstallationPermission> = [
-  "personalSpace.create",
-  "environments.registerOwn",
-];
+const PERMISSIONS: ReadonlyArray<InstallationPermission> = ["environments.registerOwn"];
 
 const fetchUsers = () =>
   runPrimaryHttp(PrimaryEnvironmentHttpClient.pipe(Effect.flatMap(fetchInstallationUsers)));

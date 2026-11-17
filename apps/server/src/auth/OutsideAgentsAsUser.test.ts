@@ -278,18 +278,21 @@ it.live("an MCP client Grace approves reads and creates as Grace, not as the Own
       ["acme-thread"],
     );
 
-    // A new Project lands in Grace's Personal space, where she may not create, so it is refused
-    // instead of being made in the Owner's.
+    // A new Project lands in Grace's own Personal space, never in the Owner's.
+    const sideRoot = server.newProjectFolder("side");
     const created = yield* callProjectTool(server, scope!, "t3_project_create", {
       title: "Side project",
-      workspaceRoot: "/work/side",
+      workspaceRoot: sideRoot,
     });
-    assert.isTrue(created.isFailure);
-    assert.include(JSON.stringify(created.result), "Your Personal space is off.");
-    const rows = yield* server.sql<{ count: number }>`
-      SELECT COUNT(*) AS count FROM projection_projects WHERE workspace_root = '/work/side'
+    assert.isFalse(created.isFailure, JSON.stringify(created.result));
+    const rows = yield* server.sql<{ spaceId: string; ownerUserId: string }>`
+      SELECT space_id AS "spaceId", owner_user_id AS "ownerUserId" FROM projection_projects
+      WHERE workspace_root = ${sideRoot}
     `;
-    assert.equal(rows[0]?.count, 0);
+    assert.deepEqual(
+      rows.map((row) => ({ ...row })),
+      [{ spaceId: `personal:${grace.userId}`, ownerUserId: grace.userId }],
+    );
 
     // A Project in a Space Grace cannot see cannot be changed or deleted: it reads as missing.
     for (const [tool, params] of [

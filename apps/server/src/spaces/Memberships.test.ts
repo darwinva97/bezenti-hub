@@ -342,9 +342,10 @@ it.effect(
         cookie: grace.cookie,
       });
       expect(left.status).toBe(200);
-      expect(
-        (left.body.spaces as ReadonlyArray<{ id: string }>).map((space) => space.id),
-      ).not.toContain(acmeId);
+      // Out of her only Organization, she still has her Personal space to work in.
+      expect((left.body.spaces as ReadonlyArray<{ id: string }>).map((space) => space.id)).toEqual([
+        `personal:${grace.userId}`,
+      ]);
       expect(yield* projectIds(grace.cookie)).toEqual([]);
       expect(yield* projectIds(linus.cookie)).toEqual(["graces-app"]);
       expect(yield* projectIds(owner)).toEqual(["graces-app"]);

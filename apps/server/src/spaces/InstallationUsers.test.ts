@@ -214,7 +214,7 @@ it.effect(
       const { server, owner, ownerId, acmeId, grace, linus } = yield* hub;
       const granted = yield* server.request(`/api/installation/users/${grace.userId}/permissions`, {
         cookie: owner,
-        body: { permission: "personalSpace.create", granted: true },
+        body: { permission: "environments.registerOwn", granted: true },
       });
       assert.equal(granted.status, 200);
       const project = (cookie: string, id: string, type = "project.create") =>
@@ -322,7 +322,7 @@ it.effect(
         loginName: "grace",
         isOwner: false,
         status: "removed",
-        installationPermissions: ["personalSpace.create"],
+        installationPermissions: ["environments.registerOwn"],
       });
     }).pipe(Effect.scoped),
 );

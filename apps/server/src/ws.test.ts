@@ -2682,18 +2682,11 @@ describe("Space visibility", () => {
     it.effect(
       "Scratch Threads keep their folders, whoever made the Scratch Project, but not the whole Scratch folder",
       () =>
-        withTeam(({ server, owner, grace, ada }) =>
+        withTeam(({ server, grace, ada }) =>
           Effect.gen(function* () {
             const path = yield* Path.Path;
             const config = Context.get(server.services, ServerConfigModule.ServerConfig);
             const scratch = path.resolve(config.baseDir, "scratch");
-            const grant = (userId: string) =>
-              server.request(`/api/installation/users/${userId}/permissions`, {
-                cookie: owner,
-                body: { permission: "personalSpace.create", granted: true },
-              });
-            assert.equal((yield* grant(grace.userId)).status, 200);
-            assert.equal((yield* grant(ada.userId)).status, 200);
             // Grace was the first to ask for Scratch, so the Scratch Project is stamped hers.
             yield* server.sql`
               INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json,
@@ -2748,7 +2741,7 @@ describe("Space visibility", () => {
     it.effect(
       "a Member's Scratch Thread takes only a folder of its own, never the Scratch folder or another User's",
       () =>
-        withTeam(({ server, owner, grace, ada }) =>
+        withTeam(({ server, grace, ada }) =>
           Effect.gen(function* () {
             const path = yield* Path.Path;
             const fs = yield* FileSystem.FileSystem;
@@ -2758,13 +2751,6 @@ describe("Space visibility", () => {
             const graceFolder = `${scratch}/2026-11-09-grace`;
             yield* fs.makeDirectory(adaFolder, { recursive: true });
             yield* fs.makeDirectory(graceFolder, { recursive: true });
-            for (const userId of [grace.userId, ada.userId]) {
-              const granted = yield* server.request(
-                `/api/installation/users/${userId}/permissions`,
-                { cookie: owner, body: { permission: "personalSpace.create", granted: true } },
-              );
-              assert.equal(granted.status, 200);
-            }
             yield* server.sql`
               INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json,
                 created_at, updated_at, space_id, owner_user_id)
@@ -3682,21 +3668,26 @@ describe("Space visibility", () => {
 
   // Live: the shell tail batches deltas on a wall-clock window.
   it.live(
-    "the Owner turns a Member's Personal space on and off; her open connection follows at once",
+    "every Member has her Personal space from the start; her open connection shows what she adds",
     () =>
       withHub(({ server, owner, grace, linus }) =>
         Effect.gen(function* () {
-          const setPersonal = (cookie: string, granted: boolean) =>
+          const setPermission = (cookie: string, permission: string) =>
             server.request(`/api/installation/users/${grace.userId}/permissions`, {
               cookie,
-              body: { permission: "personalSpace.create", granted },
+              body: { permission, granted: true },
             });
           // Only the Owner lists Users and grants or revokes their permissions.
-          assert.equal((yield* setPersonal(grace.cookie, true)).status, 403);
+          assert.equal(
+            (yield* setPermission(grace.cookie, "environments.registerOwn")).status,
+            403,
+          );
           assert.equal(
             (yield* server.request("/api/installation/users", { cookie: linus.cookie })).status,
             403,
           );
+          // Using one's Personal space is no permission any more: there is nothing to grant.
+          assert.equal((yield* setPermission(owner, "personalSpace.create")).status, 400);
           const users = yield* server.request("/api/installation/users", { cookie: owner });
           assert.deepInclude(users.body.users as ReadonlyArray<unknown>, {
             id: grace.userId,
@@ -3733,8 +3724,7 @@ describe("Space visibility", () => {
                 ),
               );
           const personal = `personal:${grace.userId}`;
-          assert.notInclude(yield* spaceIds(grace.cookie), personal);
-          assert.equal((yield* createNotes("too-early")).status, 403);
+          assert.include(yield* spaceIds(grace.cookie), personal);
 
           // Grace's open shell, synchronized before anything changes.
           const client = yield* connect(server, grace.userId);
@@ -3747,15 +3737,10 @@ describe("Space visibility", () => {
           );
           while ((yield* Queue.take(items)).kind !== "synchronized");
 
-          const granted = yield* setPersonal(owner, true);
-          assert.equal(granted.status, 200);
-          assert.deepEqual(granted.body.installationPermissions, ["personalSpace.create"]);
-          assert.include(yield* spaceIds(grace.cookie), personal);
           const notes = yield* createNotes("notes");
           assert.equal(notes.status, 200);
           assert.equal(notes.body.spaceId, personal);
-          // The same connection shows it, with no resubscribe: as a delta, or in the fresh
-          // snapshot the grant restarts the stream with.
+          // The same connection shows it, with no resubscribe.
           for (let item = yield* Queue.take(items); ; item = yield* Queue.take(items)) {
             if (item.kind === "project.updated" && item.project.id === "notes") break;
             if (item.kind === "snapshot" && shellIds(item.snapshot).projects.includes("notes"))
@@ -3777,19 +3762,6 @@ describe("Space visibility", () => {
           assert.include(yield* spaceIds(owner), personal);
           assert.notInclude(yield* projectIds(linus.cookie), "notes");
           assert.notInclude(yield* spaceIds(linus.cookie), personal);
-
-          // Revoking hides it again: the open shell gets a fresh snapshot without it.
-          assert.equal((yield* setPersonal(owner, false)).status, 200);
-          for (let item = yield* Queue.take(items); ; item = yield* Queue.take(items)) {
-            if (item.kind === "snapshot" && item.resolvedRepositoryIdentityRoots === undefined) {
-              assert.notInclude(shellIds(item.snapshot).projects, "notes");
-              break;
-            }
-          }
-          assert.notInclude(yield* spaceIds(grace.cookie), personal);
-          assert.notInclude(yield* projectIds(grace.cookie), "notes");
-          assert.equal((yield* createNotes("after-revoke")).status, 403);
-          assert.include(yield* projectIds(owner), "notes");
         }),
       ),
   );
@@ -3811,7 +3783,7 @@ describe("Space visibility", () => {
         assert.equal((yield* server.request("/api/installation/users", { cookie })).status, 403);
         const set = yield* server.request(`/api/installation/users/${grace.userId}/permissions`, {
           cookie,
-          body: { permission: "personalSpace.create", granted: true },
+          body: { permission: "environments.registerOwn", granted: true },
         });
         assert.equal(set.status, 403);
         const [granted] = yield* server.sql<{ count: number }>`
@@ -3853,16 +3825,15 @@ describe("Space visibility", () => {
   );
 
   it.effect(
-    "revoking a Personal space ends its streams, closes its folders and the Owner only reads it",
+    "disabling a User ends her Personal space's streams and closes its folders; the Owner only reads it",
     () =>
       withTeam(({ server, owner, grace }) =>
         Effect.gen(function* () {
-          const setPersonal = (granted: boolean) =>
-            server.request(`/api/installation/users/${grace.userId}/permissions`, {
+          const disable = () =>
+            server.request(`/api/installation/users/${grace.userId}/status`, {
               cookie: owner,
-              body: { permission: "personalSpace.create", granted },
+              body: { status: "disabled" },
             });
-          assert.equal((yield* setPersonal(true)).status, 200);
           // Her own Project in the Hub's Projects folder, and a Thread in it.
           const notesRoot = server.newProjectFolder("grace-notes");
           yield* server.sql`
@@ -3934,7 +3905,7 @@ describe("Space visibility", () => {
             Effect.forkScoped,
           );
 
-          assert.equal((yield* setPersonal(false)).status, 200);
+          assert.equal((yield* disable()).status, 200);
           assert.equal((yield* Fiber.join(open))._tag, "SpaceResourceNotFoundError");
           assert.isFalse(yield* mayUseNotes);
         }),

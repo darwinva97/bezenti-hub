@@ -103,8 +103,9 @@ it.effect(
       expect(accepted.status).toBe(200);
       expect(accepted.body).toMatchObject({ spaceId: acmeId, session: { authenticated: true } });
       const grace = accepted.cookie ?? "";
-      // Her Personal space stays hidden until the Owner grants `personalSpace.create`.
+      // She joins Acme and has her own Personal space from the start, with nothing to grant.
       expect(yield* spacesOf(server, grace)).toEqual([
+        expect.objectContaining({ kind: "personal", isOwn: true, canCreateThreads: true }),
         expect.objectContaining({ id: acmeId, name: "Acme", role: "member" }),
       ]);
       // The new User signs in again with what they chose.

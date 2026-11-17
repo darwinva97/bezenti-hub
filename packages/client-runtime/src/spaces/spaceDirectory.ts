@@ -179,7 +179,6 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
 };
 
 export const INSTALLATION_PERMISSION_LABELS: Record<InstallationPermission, string> = {
-  "personalSpace.create": "Use their Personal space",
   "environments.registerOwn": "Register their own Environments",
 };
 
@@ -188,8 +187,8 @@ export const currentSpaceStorageKey = (userId: UserId) => `t3code:current-space:
 
 /**
  * The Space to start in: the stored one while it is still listed, otherwise the first the User
- * can create in (their Personal space is listed only once they hold that permission), else the
- * first listed, else none: a hidden Personal space is never chosen.
+ * can create in (their own Personal space, which every User has, unless an Organization comes
+ * first), else the first listed, else none.
  */
 export function chooseCurrentSpace(
   view: SpaceDirectoryView,

@@ -987,6 +987,14 @@ active Grant, with the runtime and container rules of a dedicated machine.
   is never rotated under it. `/self` and the executor contract are unchanged: older hosts never
   call it and lend nothing; a Grant of a machine that never reported is created with «cannot host
   yet», one that reported `ready: false` is refused with its reason.
+- **Disk** (Grants ticket 09). Each report carries every lent home's size (`du`, as a Hub's
+  Sandbox), kept in `last_disk_json`. Opening a session or starting a turn there
+  (`RemoteEnvironments.requireSandboxSpace`, after the Space check) is refused while the last
+  size is over the Grant's `diskBytes`, or three measurements in a row failed
+  (`LentSandboxDiskFullError`), or the host's disk is below `minHostFreeBytes`
+  (`LentHostDiskLowError`). Nothing is deleted and terminals and files keep working, so the Space
+  can clean up; raising the limit lets the next turn start. Lender and borrower see the size on
+  the Grant (`machine.diskUsedBytes`).
 
 **On the machine.**
 

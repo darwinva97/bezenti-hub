@@ -999,6 +999,14 @@ composer's **Environment** picker, marked as lent, and can be a Project's
 it. Guests and other Spaces never see it. The lender sees the Sandbox's state
 and use, never its Threads.
 
+**Disk.** The machine measures each lent Sandbox's files every minute; both
+sides see the size on the loan. Over the loan's disk limit, new turns there are
+refused with a message saying how much it uses, and nothing is deleted:
+terminals and files keep working so the Space can clean up, or the lender can
+raise the limit. If the machine itself runs almost out of disk, the lent
+Sandboxes stop and no new turn starts on them, while the owner's own work goes
+on.
+
 ### Add a machine over SSH
 
 Instead of running `t3 join` on a server yourself, the Owner can let the Hub do it. In

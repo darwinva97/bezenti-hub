@@ -5,22 +5,31 @@
  */
 import { assert, describe, it } from "@effect/vitest";
 import {
+  CommandId,
   type EnvironmentId,
+  GrantId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionId,
   type SpaceId,
+  ThreadId,
   UserId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as CommandActor from "../auth/CommandActor.ts";
 import { addMember, joinOrganization, passkeyReauth } from "../auth/UserAuth.testkit.ts";
 import * as HubRepository from "../checkpointing/HubRepository.ts";
+import * as EnvironmentExecutor from "../environment/EnvironmentExecutor.ts";
+import * as Grants from "../grants/Grants.ts";
 import { ClaudeProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import { boundSpaceOf } from "../sandboxes/sandboxSpace.ts";
+import { boundSpaceOf, lentSandboxRefusalOf } from "../sandboxes/sandboxSpace.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as EnvironmentRegistry from "./EnvironmentRegistry.ts";
 import { listEnvironments } from "./environments.testkit.ts";
@@ -28,6 +37,7 @@ import { makeHub, seedProject, type Hub } from "./HubWithEnvironments.testkit.ts
 
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
 const INSTANCE = ProviderInstanceId.make("claudeAgent");
+const MODEL = { instanceId: INSTANCE, model: "claude-sonnet-4-6" };
 
 /** The provider, with no recorded turns: these tests run none. */
 const idleAdapters = ProviderAdapterRegistry.layerFromAdapters([
@@ -199,6 +209,95 @@ const lentToAcmeAndGlobex = Effect.fn(function* () {
 const listedIds = (hub: Hub, cookie: string) =>
   listEnvironments(hub.server, cookie).pipe(Effect.map((listed) => listed.map(({ id }) => id)));
 
+/** A Thread of Acme placed on its lent Sandbox. */
+const acmeThreadOn = Effect.fn(function* (
+  t: Effect.Success<ReturnType<typeof lentToAcmeAndGlobex>>,
+  threadId: ThreadId,
+) {
+  yield* t.hub.service(Orchestrator.OrchestratorV2).dispatch({
+    type: "thread.create",
+    createdBy: "user",
+    creationSource: "web",
+    commandId: CommandId.make(`command:${threadId}`),
+    threadId,
+    projectId: t.acmeProject,
+    title: "Acme on the lent machine",
+    modelSelection: MODEL,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    activeEnvironmentId: t.acmeLaunch.joined.environmentId,
+  });
+});
+
+/** The tags of what refusing to open a session on the Thread's Environment carries. */
+const openSessionRefusal = Effect.fn(function* (
+  hub: Hub,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+) {
+  const executors = hub.service(EnvironmentExecutor.EnvironmentExecutorRegistry);
+  const adapter = yield* (yield* executors.get(environmentId)).provider.adapters.get(INSTANCE);
+  const refused = yield* adapter
+    .openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make(`provider-session:${threadId}`),
+      modelSelection: MODEL,
+      runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: "/x" },
+    })
+    .pipe(Effect.provideService(Scope.Scope, yield* Effect.scope), Effect.flip);
+  const causes: Array<string> = [];
+  for (let current: unknown = refused; typeof current === "object" && current !== null;) {
+    causes.push(String((current as { readonly _tag?: unknown })._tag));
+    current = (current as { readonly cause?: unknown }).cause;
+  }
+  return causes;
+});
+
+/** The host's report, as the machine sends it with its own credential. */
+const report = (
+  hub: Hub,
+  credential: string,
+  input: {
+    readonly hostFreeBytes: number;
+    readonly sandboxes: ReadonlyArray<{
+      readonly grantId: string;
+      readonly diskUsedBytes: number | null;
+      readonly diskMeasureFailures: number;
+    }>;
+  },
+) =>
+  HttpClient.HttpClient.pipe(
+    Effect.flatMap((client) =>
+      HttpClientRequest.post(`${hub.server.url}/api/environments/self/report`).pipe(
+        HttpClientRequest.bearerToken(credential),
+        HttpClientRequest.bodyJson({
+          sandboxHost: {
+            ready: true,
+            reason: null,
+            limitSupport: { cpus: false, memory: false, pids: false, note: null },
+            reachablePorts: [],
+            hostCpus: 4,
+            hostMemoryBytes: 8 * 1024 ** 3,
+            hostFreeBytes: input.hostFreeBytes,
+            hostTotalBytes: 1000 * 1024 ** 3,
+          },
+          sandboxes: input.sandboxes.map((sandbox) => ({
+            ...sandbox,
+            state: "running",
+            message: null,
+          })),
+          credentialsFor: [],
+        }),
+        Effect.flatMap((request) => client.execute(request)),
+      ),
+    ),
+    Effect.map((response) => assert.equal(response.status, 200)),
+    Effect.provide(FetchHttpClient.layer),
+    Effect.orDie,
+  );
+
 describe("Hub con Environments: a machine lent to Spaces", () => {
   it.live(
     "runs one Sandbox per borrowing Space, each reaching its own Space alone, while its owner keeps it",
@@ -276,6 +375,72 @@ describe("Hub con Environments: a machine lent to Spaces", () => {
         // The Owner still uses their machine natively, in any of their Spaces.
         assert.equal(yield* choose(t.owner, t.acmeProject, host.native.environmentId), "placed");
         assert.equal(yield* choose(t.owner, t.globexProject, host.native.environmentId), "placed");
+      }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "starts no turn on a Sandbox over its disk limit or on a host almost out of disk, until it has room",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* lentToAcmeAndGlobex();
+        const { hub, host } = t;
+        const sandbox = t.acmeLaunch.joined.environmentId;
+        const threadId = ThreadId.make("thread:acme-lent");
+        yield* acmeThreadOn(t, threadId);
+        const GIB = 1024 ** 3;
+        const roomy = 500 * GIB;
+        // Its host measured 3 GiB in a home whose loan allows 2 GiB.
+        yield* report(hub, host.native.credential, {
+          hostFreeBytes: roomy,
+          sandboxes: [{ grantId: t.acmeGrant, diskUsedBytes: 3 * GIB, diskMeasureFailures: 0 }],
+        });
+        assert.include(
+          yield* openSessionRefusal(hub, sandbox, threadId),
+          "LentSandboxDiskFullError",
+        );
+        // Both sides see what it uses.
+        const given = yield* hub.service(Grants.Grants).listGiven.pipe(CommandActor.actAs(t.owner));
+        assert.equal(
+          given.grants.find((grant) => grant.id === t.acmeGrant)?.machine?.diskUsedBytes,
+          3 * GIB,
+        );
+        // Three failed measurements in a row count as over the limit too.
+        yield* report(hub, host.native.credential, {
+          hostFreeBytes: roomy,
+          sandboxes: [{ grantId: t.acmeGrant, diskUsedBytes: 1 * GIB, diskMeasureFailures: 3 }],
+        });
+        assert.include(
+          yield* openSessionRefusal(hub, sandbox, threadId),
+          "LentSandboxDiskFullError",
+        );
+        // The lender raises the limit: the next measurement under it lets turns start.
+        yield* hub
+          .service(Grants.Grants)
+          .setLimits({
+            grantId: GrantId.make(t.acmeGrant),
+            limits: { ...LIMITS, diskBytes: 4 * GIB },
+          })
+          .pipe(CommandActor.actAs(t.owner));
+        yield* report(hub, host.native.credential, {
+          hostFreeBytes: roomy,
+          sandboxes: [{ grantId: t.acmeGrant, diskUsedBytes: 3 * GIB, diskMeasureFailures: 0 }],
+        });
+        const refusal = (environmentId: EnvironmentId) =>
+          lentSandboxRefusalOf(environmentId).pipe(
+            Effect.provideService(SqlClient.SqlClient, hub.server.sql),
+            Effect.orDie,
+          );
+        assert.isUndefined(yield* refusal(sandbox));
+        // The machine almost out of disk: no turn starts on any of its lent Sandboxes.
+        yield* report(hub, host.native.credential, {
+          hostFreeBytes: 2 * GIB,
+          sandboxes: [{ grantId: t.acmeGrant, diskUsedBytes: 3 * GIB, diskMeasureFailures: 0 }],
+        });
+        assert.include(yield* openSessionRefusal(hub, sandbox, threadId), "LentHostDiskLowError");
+        assert.equal(
+          (yield* refusal(t.globexLaunch.joined.environmentId))?._tag,
+          "LentHostDiskLowError",
+        );
       }).pipe(Effect.scoped),
   );
 });

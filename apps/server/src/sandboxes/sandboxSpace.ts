@@ -1,7 +1,16 @@
-import { type EnvironmentId, HUB_MACHINE_ENVIRONMENT_ID, SpaceId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  GrantLimits,
+  HUB_MACHINE_ENVIRONMENT_ID,
+  SandboxHostReport,
+  SpaceId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+
+import { DISK_MEASURE_FAILURES_ALLOWED, formatBytes, minHostFreeBytes } from "./sandboxLimits.ts";
 
 /** The Space a Sandbox's Environment id names, whether or not the Sandbox exists yet. */
 export const sandboxSpaceOf = (environmentId: EnvironmentId) =>
@@ -128,6 +137,106 @@ export const spaceRefusalOf = Effect.fn("spaceRefusalOf")(function* (
     return row.spaceId === spaceId ? undefined : ("other-space" as const);
   }
   return row.usable === 1 ? undefined : ("owner-left" as const);
+});
+
+/** What a lent Sandbox's host last said of it: its state and its home's size. */
+export const LentSandboxDisk = Schema.Struct({
+  state: Schema.String,
+  message: Schema.NullOr(Schema.String),
+  usedBytes: Schema.NullOr(Schema.Number),
+  failures: Schema.Int,
+  measuredAt: Schema.String,
+});
+const decodeLentDisk = Schema.decodeUnknownOption(Schema.fromJsonString(LentSandboxDisk));
+const decodeLimits = Schema.decodeUnknownOption(Schema.fromJsonString(GrantLimits));
+const decodeHost = Schema.decodeUnknownOption(Schema.fromJsonString(SandboxHostReport));
+
+/**
+ * A lent Sandbox's home is over its Grant's disk limit, or could not be measured three times in a
+ * row: no new turn starts there; terminals and files still work, so it can be cleaned up.
+ */
+export class LentSandboxDiskFullError extends Schema.TaggedError<LentSandboxDiskFullError>()(
+  "LentSandboxDiskFullError",
+  {
+    environmentId: Schema.String,
+    usedBytes: Schema.NullOr(Schema.Number),
+    limitBytes: Schema.Number,
+    unmeasurable: Schema.Boolean,
+  },
+) {
+  override get message(): string {
+    return this.unmeasurable
+      ? `The disk use of this Thread's lent machine could not be measured ${DISK_MEASURE_FAILURES_ALLOWED} times in a row, so it counts as over its ${formatBytes(this.limitBytes)} limit. Make every file in it readable (terminals and files still work), or ask its lender to look.`
+      : `This Thread's lent machine is over its disk limit: it uses ${formatBytes(this.usedBytes ?? 0)} of ${formatBytes(this.limitBytes)}. Free some space (terminals and files still work), or ask its lender to raise the limit.`;
+  }
+}
+
+/** The machine lent to the Space is almost out of disk: no new turn starts on its Sandboxes. */
+export class LentHostDiskLowError extends Schema.TaggedError<LentHostDiskLowError>()(
+  "LentHostDiskLowError",
+  { environmentId: Schema.String, freeBytes: Schema.Number, totalBytes: Schema.Number },
+) {
+  override get message(): string {
+    return `The machine lent to this Thread's Space is almost out of disk (${formatBytes(this.freeBytes)} free of ${formatBytes(this.totalBytes)}): new turns wait until its owner frees some.`;
+  }
+}
+
+/**
+ * Why no new turn starts on a lent Sandbox now, from its host's last report: its home over its
+ * Grant's disk limit (or unmeasurable), or the host's disk almost full. Undefined otherwise, and
+ * for any other Environment.
+ */
+export const lentSandboxRefusalOf = Effect.fn("lentSandboxRefusalOf")(function* (
+  environmentId: EnvironmentId,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const [row] = yield* sql<{
+    readonly diskJson: string | null;
+    readonly limitsJson: string | null;
+    readonly hostJson: string | null;
+  }>`
+    SELECT e.last_disk_json AS "diskJson", g.limits_json AS "limitsJson",
+      host.sandbox_host_json AS "hostJson"
+    FROM environments e
+    LEFT JOIN grants g ON g.grant_id = e.grant_id
+    LEFT JOIN environments host ON host.environment_id = e.host_environment_id
+    WHERE e.environment_id = ${environmentId} AND e.mode = 'lent'
+  `.pipe(Effect.mapError((cause) => new SpaceCheckUnavailableError({ environmentId, cause })));
+  if (row === undefined) return undefined;
+  const host = row.hostJson === null ? undefined : Option.getOrUndefined(decodeHost(row.hostJson));
+  if (
+    host?.hostFreeBytes != null &&
+    host.hostTotalBytes != null &&
+    host.hostFreeBytes < minHostFreeBytes(host.hostTotalBytes)
+  ) {
+    return new LentHostDiskLowError({
+      environmentId,
+      freeBytes: host.hostFreeBytes,
+      totalBytes: host.hostTotalBytes,
+    });
+  }
+  const limits =
+    row.limitsJson === null ? undefined : Option.getOrUndefined(decodeLimits(row.limitsJson));
+  const disk =
+    row.diskJson === null ? undefined : Option.getOrUndefined(decodeLentDisk(row.diskJson));
+  if (limits === undefined || disk === undefined) return undefined;
+  if (disk.failures >= DISK_MEASURE_FAILURES_ALLOWED) {
+    return new LentSandboxDiskFullError({
+      environmentId,
+      usedBytes: disk.usedBytes,
+      limitBytes: limits.diskBytes,
+      unmeasurable: true,
+    });
+  }
+  if (disk.usedBytes !== null && disk.usedBytes > limits.diskBytes) {
+    return new LentSandboxDiskFullError({
+      environmentId,
+      usedBytes: disk.usedBytes,
+      limitBytes: limits.diskBytes,
+      unmeasurable: false,
+    });
+  }
+  return undefined;
 });
 
 /** Whether the Environment runs the Thread in `spaceId` (`spaceRefusalOf` says why not). */

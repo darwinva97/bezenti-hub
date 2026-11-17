@@ -71,6 +71,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as RuntimePolicy from "../orchestration-v2/RuntimePolicy.ts";
 import {
+  lentSandboxRefusalOf,
   SandboxSpaceMismatchError,
   SPACE_REFUSAL_MESSAGES,
   SpaceCheckUnavailableError,
@@ -402,7 +403,20 @@ const make = Effect.gen(function* () {
       Effect.provideService(SqlClient.SqlClient, sql),
       Effect.mapError(refuse),
     );
-    if (refusal === undefined) return;
+    if (refusal === undefined) {
+      // A lent Sandbox over its disk limit, or on a host almost out of disk, starts no turn
+      // (Grants ticket 09); its terminals and files still work.
+      const full = yield* lentSandboxRefusalOf(link.environmentId).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.mapError(refuse),
+      );
+      if (full === undefined) return;
+      return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+        driver,
+        detail: full.message,
+        cause: full,
+      });
+    }
     if (refusal !== "other-space") {
       return yield* new ProviderAdapter.ProviderAdapterProtocolError({
         driver,

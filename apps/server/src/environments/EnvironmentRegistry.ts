@@ -75,7 +75,7 @@ import {
   SandboxLimitsInvalidError,
   type SandboxNotFoundError,
 } from "../sandboxes/sandboxLimitStore.ts";
-import { sandboxSpaceOf } from "../sandboxes/sandboxSpace.ts";
+import { LentSandboxDisk, sandboxSpaceOf } from "../sandboxes/sandboxSpace.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as EnvironmentConnections from "./EnvironmentConnections.ts";
 
@@ -298,15 +298,6 @@ const decodeGrantLimits = Schema.decodeUnknownOption(Schema.fromJsonString(Grant
 /** A lent Sandbox's Environment id: one per Grant, never `sandbox:` (a Hub Sandbox's). */
 const lentEnvironmentIdOf = (grantId: string) => EnvironmentId.make(`lent:${grantId}`);
 
-/** What a lent Sandbox's host last said of it: its state and its home's size. */
-export const LentSandboxDisk = Schema.Struct({
-  state: Schema.String,
-  message: Schema.NullOr(Schema.String),
-  usedBytes: Schema.NullOr(Schema.Number),
-  failures: Schema.Int,
-  measuredAt: Schema.String,
-});
-export type LentSandboxDisk = typeof LentSandboxDisk.Type;
 const encodeLentDisk = Schema.encodeSync(Schema.fromJsonString(LentSandboxDisk));
 const encodeProviders = Schema.encodeSync(
   Schema.fromJsonString(Schema.Array(EnvironmentProviderSummary)),

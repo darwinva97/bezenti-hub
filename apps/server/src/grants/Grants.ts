@@ -40,6 +40,7 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
 import { invalidLimitsReason } from "../sandboxes/sandboxLimits.ts";
+import { LentSandboxDisk } from "../sandboxes/sandboxSpace.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 
 /** What a change does to a Grant. */
@@ -142,9 +143,7 @@ const limitsProblem = (limits: GrantLimits) =>
   );
 
 const decodeHost = Schema.decodeUnknownOption(Schema.fromJsonString(SandboxHostReport));
-const decodeDisk = Schema.decodeUnknownOption(
-  Schema.fromJsonString(EnvironmentRegistry.LentSandboxDisk),
-);
+const decodeDisk = Schema.decodeUnknownOption(Schema.fromJsonString(LentSandboxDisk));
 
 /** A machine Grant's host and Sandbox, as their last reports say. */
 const machineOf = (row: GrantRow) => {

@@ -345,6 +345,54 @@ describe("CLIProxyAPI built-in management API", () => {
     }),
   );
 
+  it.effect(
+    "keeps every per-model weekly window, also as top-level seven_day_<model> (ticket 16)",
+    () =>
+      Effect.gen(function* () {
+        const test = fixture({
+          accounts: [{ ...accounts[0]!, provider: "claude" }],
+          upstream: (request) => ({
+            status: request.header?.["User-Agent"]?.startsWith("claude-code/") ? 200 : 429,
+            body: {
+              five_hour: { utilization: 10, resets_at: "2099-01-01T05:00:00Z" },
+              seven_day: { utilization: 50, resets_at: "2099-01-07T00:00:00Z" },
+              seven_day_opus: { utilization: 30, resets_at: "2099-01-06T00:00:00Z" },
+              seven_day_sonnet: { utilization: 12.5, resets_at: null },
+              // Named by `limits` too: kept once, from there.
+              seven_day_fable: { utilization: 1, resets_at: null },
+              // Not a model's window, or none reported.
+              seven_day_oauth_apps: null,
+              seven_day_cowork: { utilization: 99, resets_at: null },
+              limits: [
+                {
+                  kind: "weekly_scoped",
+                  percent: 80,
+                  resets_at: "2099-01-05T00:00:00Z",
+                  scope: { model: { display_name: "Fable" } },
+                },
+              ],
+            },
+          }),
+        });
+        const result = yield* (yield* test.api).readAccounts(config);
+        const windows = result[0]?.usageLimits.windows ?? [];
+        expect(windows.map((window) => [window.id, window.kind, window.usedPercent])).toEqual([
+          ["five_hour", "session", 10],
+          ["seven_day", "weekly", 50],
+          ["seven_day_fable", "weekly", 80],
+          ["seven_day_opus", "weekly", 30],
+          ["seven_day_sonnet", "weekly", 12.5],
+        ]);
+        // Each with its reset time when the provider gives one.
+        expect(windows.find((window) => window.id === "seven_day_opus")?.resetsAt).toBe(
+          "2099-01-06T00:00:00.000Z",
+        );
+        expect(windows.find((window) => window.id === "five_hour")?.resetsAt).toBe(
+          "2099-01-01T05:00:00.000Z",
+        );
+      }),
+  );
+
   it.effect.each([
     {
       name: "spend budget",

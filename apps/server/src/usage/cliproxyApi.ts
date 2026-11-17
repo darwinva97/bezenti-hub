@@ -117,6 +117,34 @@ const decodeCreditList = Schema.decodeUnknownEffect(Schema.fromJsonString(Credit
 const decodeClaudeUsage = Schema.decodeUnknownEffect(Schema.fromJsonString(ClaudeUsage));
 const decodeCodexUsage = Schema.decodeUnknownEffect(Schema.fromJsonString(CodexUsage));
 const isUsageLimitSourceError = Schema.is(UsageLimitSourceError);
+const decodeUsageFields = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
+const decodeClaudeWindow = Schema.decodeUnknownOption(ClaudeWindow);
+/** `seven_day_<model>`, but not the windows that name no model. */
+const MODEL_WINDOW_KEY = /^seven_day_([a-z0-9]+)$/u;
+const NOT_A_MODEL = new Set(["oauth_apps", "overage", "cowork"]);
+
+/** `seven_day_opus` → «Opus», with its utilization and reset; malformed ones are skipped. */
+const topLevelModelWindows = (body: string) =>
+  decodeUsageFields(body).pipe(
+    Effect.map((fields) =>
+      Object.entries(fields).flatMap(([key, value]) => {
+        const model = MODEL_WINDOW_KEY.exec(key)?.[1];
+        if (model === undefined || NOT_A_MODEL.has(model)) return [];
+        const window = decodeClaudeWindow(value);
+        if (window._tag === "None") return [];
+        return [
+          {
+            display_name: model.charAt(0).toUpperCase() + model.slice(1),
+            utilization: window.value.utilization,
+            resets_at: window.value.resets_at,
+          },
+        ];
+      }),
+    ),
+    Effect.orElseSucceed(() => []),
+  );
 
 // Extra CAs can fix untrusted chains; expiry/hostname failures report codes only.
 const UNTRUSTED_CERTIFICATE_CODES = new Set([
@@ -295,7 +323,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
       if (account.provider === "claude") {
         const body = yield* apiCall(hub, account, "https://api.anthropic.com/api/oauth/usage");
         const usage = yield* decodeClaudeUsage(body);
-        const model_scoped = (usage.limits ?? []).flatMap((limit) =>
+        const scoped = (usage.limits ?? []).flatMap((limit) =>
           limit.kind === "weekly_scoped" && limit.scope?.model && typeof limit.percent === "number"
             ? [
                 {
@@ -306,6 +334,15 @@ export const makeCliproxyApi = Effect.gen(function* () {
               ]
             : [],
         );
+        // The per-model weekly windows as top-level `seven_day_<model>` objects (the shape the
+        // endpoint also answers with), unless `limits` already named that model.
+        const named = new Set(scoped.map((entry) => entry.display_name.toLowerCase()));
+        const model_scoped = [
+          ...scoped,
+          ...(yield* topLevelModelWindows(body)).filter(
+            (entry) => !named.has(entry.display_name.toLowerCase()),
+          ),
+        ];
         const rateLimits = {
           five_hour: usage.five_hour ?? null,
           seven_day: usage.seven_day ?? null,

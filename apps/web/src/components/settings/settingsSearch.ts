@@ -26,19 +26,14 @@ import {
 export type SettingsPath =
   | "/settings/diagnostics"
   | "/settings/providers"
-  | "/settings/ai-gateway"
   | "/settings/ai-accounts"
-  | "/settings/threads"
-  | "/settings/browser"
   | "/settings/devices"
   | "/settings/source-control"
-  | "/settings/worktrees"
   | "/settings/connections"
   | "/settings/access"
   | "/settings/secrets"
   | "/settings/vaults"
-  | "/settings/maintenance"
-  | "/settings/labs";
+  | "/settings/maintenance";
 
 export type SettingsSearchScope =
   | "environment"
@@ -52,8 +47,10 @@ export type SettingsSearchScope =
 export type SettingsSearchLocation =
   | { readonly to: SettingsPath; readonly modal?: undefined; readonly section?: undefined }
   | {
-      readonly modal: "user" | "space" | "project";
+      readonly modal: "user" | "space" | "project" | "platform";
       readonly section: string;
+      /** A page inside the section, such as Hub defaults → Threads. */
+      readonly subsection?: string;
       readonly to?: undefined;
     };
 
@@ -94,19 +91,14 @@ export interface SettingsSearchAvailability {
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/diagnostics": "Diagnostics",
   "/settings/providers": "Providers",
-  "/settings/ai-gateway": "AI gateway",
   "/settings/ai-accounts": "AI accounts",
-  "/settings/threads": "Threads",
-  "/settings/browser": "Browser",
   "/settings/devices": "Devices",
   "/settings/source-control": "Source control",
-  "/settings/worktrees": "Worktrees",
   "/settings/connections": "Environments",
   "/settings/access": "Sharing & access",
   "/settings/secrets": "Secrets",
   "/settings/vaults": "Vaults",
   "/settings/maintenance": "Maintenance",
-  "/settings/labs": "Labs",
 };
 
 /** Sidebar order. A group without a heading is set apart by space alone. */
@@ -116,18 +108,11 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
 }> = [
   {
     heading: "Agents",
-    paths: [
-      "/settings/providers",
-      "/settings/ai-accounts",
-      "/settings/ai-gateway",
-      "/settings/threads",
-      "/settings/browser",
-      "/settings/devices",
-    ],
+    paths: ["/settings/providers", "/settings/ai-accounts", "/settings/devices"],
   },
   {
     heading: "Code",
-    paths: ["/settings/source-control", "/settings/worktrees"],
+    paths: ["/settings/source-control"],
   },
   {
     heading: "Connections",
@@ -140,7 +125,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   },
   {
     heading: null,
-    paths: ["/settings/maintenance", "/settings/labs"],
+    paths: ["/settings/maintenance"],
   },
 ];
 
@@ -151,7 +136,6 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
  */
 export const SETTINGS_OWNER_ONLY_PATHS: ReadonlySet<SettingsPath> = new Set<SettingsPath>([
   "/settings/providers",
-  "/settings/ai-gateway",
   "/settings/devices",
   "/settings/maintenance",
   "/settings/diagnostics",
@@ -235,7 +219,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "storage-worktree-keep-when",
     targetId: "storage-worktrees",
     title: "Keep worktrees with local changes",
-    to: "/settings/worktrees",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "worktrees",
     scope: "project-defaults",
     searchTerms: [
       "any local files uncommitted changes edited tracked files ignored env build output cleanup",
@@ -251,7 +237,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "storage-worktrees",
     title: "Worktree cleanup",
-    to: "/settings/worktrees",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "worktrees",
     scope: "project-defaults",
     searchTerms: [
       "disk storage automatic delete deleted archived threads old inactive merged settled unchanged worktrees retention days project inherit off custom",
@@ -260,7 +248,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "storage-worktrees-location",
     title: "Worktree location",
-    to: "/settings/worktrees",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "worktrees",
     scope: "environment-defaults",
     searchTerms: ["worktree location folder directory path drive external disk"],
   },
@@ -276,7 +266,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "project-defaults",
     title: "Project defaults and overrides",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     scope: "project-defaults",
     searchTerms: ["model workspace environments projects inheritance checkout"],
   },
@@ -286,6 +278,41 @@ export const SETTINGS_SEARCH_ITEMS = [
     modal: "project",
     section: "general",
     searchTerms: ["name icon emoji image checkout remove delete"],
+  },
+  {
+    id: "platform-users",
+    title: "Users",
+    modal: "platform",
+    section: "users",
+    searchTerms: ["people accounts disable turn off remove sign in owner permissions"],
+  },
+  {
+    id: "audit-log",
+    title: "Audit log",
+    modal: "platform",
+    section: "audit-log",
+    searchTerms: ["history who did what invitations roles deletions approvals security"],
+  },
+  {
+    id: "master-key",
+    title: "Master key",
+    modal: "platform",
+    section: "master-key",
+    searchTerms: ["encryption secrets vault key rotate recovery"],
+  },
+  {
+    id: "hub-sandboxes",
+    title: "Sandboxes",
+    modal: "platform",
+    section: "sandboxes",
+    searchTerms: ["containers podman limits cpu memory disk"],
+  },
+  {
+    id: "sandbox-image",
+    title: "Sandbox image",
+    modal: "platform",
+    section: "sandboxes",
+    searchTerms: ["container image build rebuild base"],
   },
   {
     id: "space-members",
@@ -311,14 +338,18 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "default-model",
     title: "Default model",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     scope: "project-defaults",
     searchTerms: ["new thread project provider reasoning effort"],
   },
   {
     id: "fallback-model",
     title: "Fallback model",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     scope: "environment-defaults",
     searchTerms: ["fallback agent provider out of usage new threads"],
     environmentOnly: true,
@@ -326,7 +357,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "default-permissions",
     title: "Permissions",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     scope: "project-defaults",
     searchTerms: [
       "new thread default runtime mode supervised approvals auto accept edits full access",
@@ -488,7 +521,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "snooze-options",
     title: "Snooze options",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     searchTerms: ["snooze presets times later tonight tomorrow next week remind"],
     environmentOnly: true,
     scope: "environment-defaults",
@@ -496,13 +531,17 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "snooze-limited-threads",
     title: "Snooze until limits reset",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     searchTerms: ["usage quota rate limit reset wake recover continue"],
   },
   {
     id: "auto-resume-limited-threads",
     title: "Resume after usage limits",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     searchTerms: ["usage quota rate limit reset recover continue"],
   },
   {
@@ -515,33 +554,39 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "boring-sidebar",
     title: "Boring sidebar (group by project)",
-    to: "/settings/labs",
+    modal: "platform",
+    section: "labs",
     searchTerms: ["beta folders project tree legacy old classic sidebar"],
   },
   {
     id: "boring-sidebar-multiline",
     title: "Two-line folder rows",
-    to: "/settings/labs",
+    modal: "platform",
+    section: "labs",
     searchTerms: ["beta boring sidebar folder rows multiline branch pull request details"],
   },
   {
     id: "guest-links",
     title: "Guest links",
-    to: "/settings/labs",
+    modal: "platform",
+    section: "labs",
     scope: "environment",
     searchTerms: ["beta share guest invite link teammate watch public address"],
   },
   {
     id: "simlock-hosts",
     title: "Simlock device hosts (alpha)",
-    to: "/settings/labs",
+    modal: "platform",
+    section: "labs",
     scope: "environment",
     searchTerms: ["beta alpha simlock callstack simulator emulator ios android pool lease gateway"],
   },
   {
     id: "auto-settle-inactive-threads",
     title: "Auto-settle inactive threads",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     searchTerms: ["sidebar inactivity days no activity automatically"],
     requiresThreadAutoSettlement: true,
     scope: "project-defaults",
@@ -556,7 +601,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "auto-settle-merged-threads",
     title: "Auto-settle merged threads",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     searchTerms: ["pull request merge closed automatically sidebar"],
     requiresThreadAutoSettlement: true,
     scope: "project-defaults",
@@ -564,7 +611,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "keep-threads-with-pull-requests",
     title: "Keep threads with a PR",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     targetId: "auto-settle-inactive-threads",
     searchTerms: ["pull request inactivity auto-settle merge close sidebar"],
     requiresThreadAutoSettlement: true,
@@ -573,7 +622,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "days-before-auto-settle",
     title: "Days of inactivity before auto-settle",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     targetId: "auto-settle-inactive-threads",
     searchTerms: ["thread timeout activity sidebar"],
     requiresThreadAutoSettlement: true,
@@ -603,7 +654,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "response-streaming",
     title: "Response streaming",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     scope: "project-defaults",
     searchTerms: ["output token paragraph buffered wait turn legacy"],
   },
@@ -693,28 +746,36 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "new-threads",
     title: "New threads",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     scope: "project-defaults",
     searchTerms: ["default workspace mode draft local worktree"],
   },
   {
     id: "worktree-submodules",
     title: "Submodules",
-    to: "/settings/worktrees",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "worktrees",
     scope: "project-defaults",
     searchTerms: ["git submodule init recursive top-level none worktree t3.json"],
   },
   {
     id: "start-from-origin",
     title: "Start from remote",
-    to: "/settings/worktrees",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "worktrees",
     scope: "project-defaults",
     searchTerms: ["new worktrees start remote origin latest fetched branch local"],
   },
   {
     id: "add-project-starts-in",
     title: "Add project starts in",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     scope: "environment-defaults",
     searchTerms: ["base directory folder browser path home"],
   },
@@ -750,14 +811,18 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "text-generation-model",
     title: "Text generation model",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     scope: "project-defaults",
     searchTerms: ["generated thread titles source control content default provider"],
   },
   {
     id: "thread-title-instructions",
     title: "Thread title instructions",
-    to: "/settings/threads",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "threads",
     scope: "project-defaults",
     searchTerms: ["generated thread titles prompt custom style naming rename regenerate"],
   },
@@ -806,13 +871,15 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "legacy-plan-mode",
     title: "Plan mode (legacy)",
-    to: "/settings/labs",
+    modal: "platform",
+    section: "labs",
     searchTerms: ["build plan composer old"],
   },
   {
     id: "legacy-context-window-indicator",
     title: "Context window indicator (legacy)",
-    to: "/settings/labs",
+    modal: "platform",
+    section: "labs",
     searchTerms: ["composer meter usage tokens circle old"],
   },
   {
@@ -903,7 +970,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "agent-browser-access",
     title: "Agent browser access",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     scope: "project-defaults",
     searchTerms: ["allow disable enable open drive preview tools sessions project override"],
   },
@@ -939,60 +1008,80 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "browser-profiles",
     title: "Browser profiles",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     targetId: "browser",
   },
   {
     id: "browser-default-profile",
     title: "Default browser profile",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     targetId: "browser-profiles",
   },
   {
     id: "browser-default-viewport",
     title: "Default browser viewport",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     searchTerms: ["preview size width height device desktop mobile rotate"],
   },
   {
     id: "browser-default-zoom",
     title: "Default browser zoom",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     searchTerms: ["preview page scale tabs percent"],
   },
   {
     id: "browser-default-appearance",
     title: "Default browser appearance",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     searchTerms: ["preview color scheme light dark system os"],
   },
   {
     id: "browser-recording-frame-rate",
     title: "Browser recording frame rate",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
   },
   {
     id: "browser-recording-key-presses",
     title: "Show key presses in recordings",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     searchTerms: ["browser preview keyboard shortcuts keystrokes overlay capture"],
   },
   {
     id: "browser-recording-mouse-presses",
     title: "Show mouse presses in recordings",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     searchTerms: ["browser preview clicks buttons drag overlay capture"],
   },
   {
     id: "browser-link-target",
     title: "Open links in",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     searchTerms: ["links default browser in-app browser external open"],
   },
   {
     id: "browser-search-engine",
     title: "Search engine",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     searchTerms: ["address bar duckduckgo google bing brave kagi ecosia custom url"],
   },
   {
@@ -1007,7 +1096,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "browser-auto-show-floating-preview",
     title: "Auto-show floating preview",
-    to: "/settings/browser",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "browser",
     searchTerms: ["agent opens browser device simulator pop into view hide"],
   },
   {
@@ -1056,7 +1147,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "worktree-branch-naming",
     title: "Worktree branch naming",
-    to: "/settings/worktrees",
+    modal: "platform",
+    section: "hub-defaults",
+    subsection: "worktrees",
     searchTerms: ["static semantic prefix custom prompt instructions feat fix refactor chore"],
     environmentOnly: true,
     scope: "project-defaults",
@@ -1231,7 +1324,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "ai-gateway",
     title: "AI gateway",
-    to: "/settings/ai-gateway",
+    modal: "platform",
+    section: "ai-gateway",
     searchTerms: ["cliproxyapi cli proxy api update roll back version subscriptions"],
   },
   {
@@ -1263,19 +1357,14 @@ const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id,
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
   "/settings/diagnostics": "environment",
   "/settings/providers": null,
-  "/settings/ai-gateway": null,
   "/settings/ai-accounts": null,
-  "/settings/threads": null,
-  "/settings/browser": null,
   "/settings/devices": null,
   "/settings/source-control": "environment-defaults",
-  "/settings/worktrees": "project-defaults",
   "/settings/connections": "connections",
   "/settings/access": "connections",
   "/settings/secrets": null,
   "/settings/vaults": null,
   "/settings/maintenance": null,
-  "/settings/labs": null,
 };
 
 // Pages of the old nav whose rows moved elsewhere; a link to one follows its anchor.
@@ -1291,12 +1380,20 @@ export function settingsItemPath(item: SettingsSearchLocation): string {
   if (item.modal === "project") return "/settings/projects";
   // A Space's own settings need its id; without one they are the current Space's.
   if (item.modal === "space") return `/settings/space/${CURRENT_SPACE_SEGMENT}/${item.section}`;
+  if (item.modal === "platform") {
+    return `/settings/platform/${item.section}${item.subsection === undefined ? "" : `/${item.subsection}`}`;
+  }
   return item.modal === undefined ? item.to : `/settings/${item.modal}/${item.section}`;
 }
 
 export type SettingsDestination =
   | { readonly to: SettingsPath }
   | { readonly to: "/settings/user/$section"; readonly params: { readonly section: string } }
+  | { readonly to: "/settings/platform/$section"; readonly params: { readonly section: string } }
+  | {
+      readonly to: "/settings/platform/hub-defaults/$subsection";
+      readonly params: { readonly subsection: string };
+    }
   | {
       readonly to: "/settings/space/$spaceId/$section";
       readonly params: { readonly spaceId: string; readonly section: string };
@@ -1321,6 +1418,14 @@ export function settingsItemDestination(
   if (item.modal === undefined) return { to: item.to };
   if (item.modal === "user")
     return { to: "/settings/user/$section", params: { section: item.section } };
+  if (item.modal === "platform") {
+    return item.subsection === undefined
+      ? { to: "/settings/platform/$section", params: { section: item.section } }
+      : {
+          to: "/settings/platform/hub-defaults/$subsection",
+          params: { subsection: item.subsection },
+        };
+  }
   if (item.modal === "space") {
     if (spaceId === undefined) return null;
     return { to: "/settings/space/$spaceId/$section", params: { spaceId, section: item.section } };

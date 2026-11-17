@@ -29,13 +29,9 @@ import { ManagedByOrganization } from "../ManagedPolicy";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
-import { AuditLogSettingsSection } from "./AuditLogSettingsSection";
-import { MasterKeySettingsSection } from "./MasterKeySettingsSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { GrantsSettings } from "./GrantsSettings";
 import { HubEnvironmentsSettings } from "./HubEnvironmentsSettings";
-import { HubSandboxesSettings } from "./HubSandboxesSettings";
-import { SandboxImageSettings } from "./SandboxImageSettings";
 import { JoinedEnvironmentSetting } from "./JoinedEnvironmentSetting";
 import { PullRequestRoutingSettings } from "./PullRequestRoutingSettings";
 import { Input } from "../ui/input";
@@ -1312,21 +1308,13 @@ export function ConnectionsSettings({
   }
 
   if (showsAccess) {
-    return (
-      <SettingsPageContainer>
-        <MasterKeySettingsSection />
-        <AuditLogSettingsSection />
-        {primarySettings}
-      </SettingsPageContainer>
-    );
+    return <SettingsPageContainer>{primarySettings}</SettingsPageContainer>;
   }
 
   return (
     <SettingsPageContainer>
       <HubEnvironmentsSettings />
       <GrantsSettings />
-      <HubSandboxesSettings />
-      <SandboxImageSettings />
       {desktopBridge ? (
         <SettingsSection id="this-app" title="This app">
           <LocalEnvironmentSetting />

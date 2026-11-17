@@ -106,6 +106,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "settings.user",
   "settings.space",
   "settings.project",
+  "settings.platform",
   "theme.select",
   "appearance.cycle",
   "themeEditor.toggle",

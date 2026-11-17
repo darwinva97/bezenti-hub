@@ -19,6 +19,12 @@ const SETTINGS_BREADCRUMB_LABELS: Readonly<Record<string, string>> = {
   "/settings/diagnostics": "Diagnostics",
 };
 
+const HUB_DEFAULTS_PAGE_LABELS: Readonly<Record<string, string>> = {
+  threads: "Threads",
+  browser: "Browser",
+  worktrees: "Worktrees",
+};
+
 /** The trail of a page: its parents, then its own label. Empty for an unknown page. */
 function settingsBreadcrumbTrail(
   pathname: string,
@@ -37,6 +43,9 @@ function settingsBreadcrumbTrail(
       `${SETTINGS_MODAL_LABELS[modal]} settings${objectName ? ` · ${objectName}` : ""}`,
       ...(section ? [section.label] : []),
       ...(subpage === "licenses" ? ["Open source licenses"] : []),
+      ...(modal === "platform" && sectionId === "hub-defaults"
+        ? [HUB_DEFAULTS_PAGE_LABELS[subpage ?? "threads"] ?? "Threads"]
+        : []),
     ];
   }
   const label = SETTINGS_BREADCRUMB_LABELS[normalizedPathname];

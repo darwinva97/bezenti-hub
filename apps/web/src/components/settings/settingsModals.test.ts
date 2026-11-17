@@ -30,7 +30,7 @@ const OLD_URLS: ReadonlyArray<readonly [pathname: string, hash: string, to: stri
   ["/settings/user", "", "/settings/user/general"],
   ["/settings/general", "", "/settings/user/general"],
   ["/settings/general", "time-format", "/settings/user/general"],
-  ["/settings/general", "text-generation-model", "/settings/threads"],
+  ["/settings/general", "text-generation-model", "/settings/platform/hub-defaults/threads"],
   ["/settings/appearance", "", "/settings/user/appearance"],
   ["/settings/appearance", "theme", "/settings/user/appearance"],
   ["/settings/appearance", "diff-color-scheme", "/settings/user/diffs"],
@@ -51,11 +51,27 @@ const OLD_URLS: ReadonlyArray<readonly [pathname: string, hash: string, to: stri
   ["/settings/access", "account", "/settings/user/account"],
   ["/settings/connections", "remote-environments", "/settings/user/account"],
   ["/settings/connections", "network-access", "/settings/access"],
-  ["/settings/source-control", "worktree-branch-naming", "/settings/worktrees"],
-  ["/settings/storage", "storage-worktrees", "/settings/worktrees"],
+  [
+    "/settings/source-control",
+    "worktree-branch-naming",
+    "/settings/platform/hub-defaults/worktrees",
+  ],
+  ["/settings/storage", "storage-worktrees", "/settings/platform/hub-defaults/worktrees"],
   ["/settings/storage", "", "/settings/maintenance"],
   ["/settings/integrations", "devices", "/settings/devices"],
-  ["/settings/beta", "", "/settings/labs"],
+  ["/settings/beta", "", "/settings/platform/labs"],
+  ["/settings/labs", "", "/settings/platform/labs"],
+  ["/settings/labs", "legacy-features", "/settings/platform/labs"],
+  ["/settings/ai-gateway", "", "/settings/platform/ai-gateway"],
+  ["/settings/threads", "", "/settings/platform/hub-defaults/threads"],
+  ["/settings/threads", "snooze-options", "/settings/platform/hub-defaults/threads"],
+  ["/settings/browser", "", "/settings/platform/hub-defaults/browser"],
+  ["/settings/integrations", "", "/settings/platform/hub-defaults/browser"],
+  ["/settings/worktrees", "", "/settings/platform/hub-defaults/worktrees"],
+  ["/settings/access", "master-key", "/settings/platform/master-key"],
+  ["/settings/access", "audit-log", "/settings/platform/audit-log"],
+  ["/settings/connections", "hub-sandboxes", "/settings/platform/sandboxes"],
+  ["/settings/connections", "sandbox-image", "/settings/platform/sandboxes"],
 ];
 
 /** `/settings/projects` moves the Project from the query into the path; machine and checkout stay. */
@@ -125,9 +141,9 @@ describe("old settings URLs", () => {
   it("leads every old URL to a section that exists and is visible", () => {
     for (const [, hash, to] of OLD_URLS) {
       const [, , modal, objectOrSection, spaceSection] = to.split("/");
-      if (modal === "user" || modal === "space") {
+      if (modal === "user" || modal === "space" || modal === "platform") {
         // The Space modal names its Space before the section; `current` is the current one.
-        const sectionId = modal === "user" ? objectOrSection : spaceSection;
+        const sectionId = modal === "space" ? spaceSection : objectOrSection;
         const section = findSettingsSection(modal, sectionId ?? "");
         expect(section, `${to} (${hash})`).toBeDefined();
         const space = { kind: "organization", isOwn: false, canInvite: true } as const;
@@ -198,12 +214,30 @@ describe("settings modal sections", () => {
     }
   });
 
-  it("shows Platform only to the Owner", () => {
-    for (const principal of PRINCIPALS) {
-      for (const section of SETTINGS_MODAL_SECTIONS.platform) {
-        expect(isSettingsSectionVisible("platform", section, principal)).toBe(false);
-      }
+  it("shows Platform only to the Owner, and only its built sections", () => {
+    const ids = (principal: SettingsVisibilityContext) =>
+      visibleSettingsSections("platform", principal).map((section) => section.id);
+    for (const principal of [MEMBER_ON_DESKTOP, MEMBER_IN_BROWSER, PAIRED_IN_BROWSER]) {
+      expect(ids(principal)).toEqual([]);
     }
+    for (const principal of [OWNER_ON_DESKTOP, OWNER_IN_BROWSER]) {
+      expect(ids(principal)).toEqual([
+        "users",
+        "audit-log",
+        "master-key",
+        "ai-gateway",
+        "sandboxes",
+        "hub-defaults",
+        "labs",
+      ]);
+    }
+  });
+
+  it("reserves the Platform sections other specs fill in", () => {
+    const reservedIds = SETTINGS_MODAL_SECTIONS.platform
+      .filter((section) => section.component === null)
+      .map((section) => section.id);
+    expect(reservedIds).toEqual(["hub-machine", "registration", "keycloak", "plans", "terms"]);
   });
 
   it("shows User settings to everyone, and SnapShots on the desktop only", () => {

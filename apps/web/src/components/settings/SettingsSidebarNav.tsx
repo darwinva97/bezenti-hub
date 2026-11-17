@@ -1,13 +1,8 @@
 import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent } from "react";
 import {
   BotIcon,
-  NetworkIcon,
-  FlaskConicalIcon,
-  FolderTreeIcon,
   GitBranchIcon,
-  GlobeIcon,
   KeyRoundIcon,
-  MessagesSquareIcon,
   SearchIcon,
   ServerIcon,
   ShieldCheckIcon,
@@ -61,19 +56,14 @@ const SETTINGS_SECTION_ICONS: Readonly<
 > = {
   "/settings/diagnostics": WrenchIcon,
   "/settings/providers": BotIcon,
-  "/settings/ai-gateway": NetworkIcon,
   "/settings/ai-accounts": KeyRoundIcon,
-  "/settings/threads": MessagesSquareIcon,
-  "/settings/browser": GlobeIcon,
   "/settings/devices": SmartphoneIcon,
   "/settings/source-control": GitBranchIcon,
-  "/settings/worktrees": FolderTreeIcon,
   "/settings/connections": ServerIcon,
   "/settings/access": ShieldCheckIcon,
   "/settings/secrets": KeyRoundIcon,
   "/settings/vaults": VaultIcon,
   "/settings/maintenance": WrenchIcon,
-  "/settings/labs": FlaskConicalIcon,
 };
 
 // Detail pages without a nav entry highlight the page that links to them.
@@ -135,7 +125,7 @@ function legacyNavGroups(actsForInstallation: boolean): ReadonlyArray<SettingsNa
 }
 
 function modalNavGroups(
-  modal: "user" | "space" | "project",
+  modal: SettingsModalId,
   visibility: ReturnType<typeof useSettingsVisibility>,
   objectKey: { readonly projectKey: string | undefined; readonly spaceId: string | undefined },
 ): ReadonlyArray<SettingsNavGroup> {
@@ -155,15 +145,17 @@ function modalNavGroups(
       target:
         modal === "user"
           ? userSectionTarget(section.id)
-          : modal === "space"
-            ? {
-                to: "/settings/space/$spaceId/$section",
-                params: { spaceId: spaceId ?? "", section: section.id },
-              }
-            : {
-                to: "/settings/project/$projectKey/$section",
-                params: { projectKey: projectKey ?? "", section: section.id },
-              },
+          : modal === "platform"
+            ? { to: "/settings/platform/$section", params: { section: section.id } }
+            : modal === "space"
+              ? {
+                  to: "/settings/space/$spaceId/$section",
+                  params: { spaceId: spaceId ?? "", section: section.id },
+                }
+              : {
+                  to: "/settings/project/$projectKey/$section",
+                  params: { projectKey: projectKey ?? "", section: section.id },
+                },
       replace: true,
     });
   }
@@ -174,11 +166,11 @@ function modalNavGroups(
 }
 
 const MODAL_SECTION_ICONS: Readonly<
-  Record<
-    "user" | "space" | "project",
-    Readonly<Record<string, ComponentType<{ className?: string }>>>
-  >
+  Record<SettingsModalId, Readonly<Record<string, ComponentType<{ className?: string }>>>>
 > = {
+  platform: Object.fromEntries(
+    SETTINGS_MODAL_SECTIONS.platform.map((section) => [section.id, section.icon]),
+  ),
   user: Object.fromEntries(
     SETTINGS_MODAL_SECTIONS.user.map((section) => [section.id, section.icon]),
   ),
@@ -189,11 +181,6 @@ const MODAL_SECTION_ICONS: Readonly<
     SETTINGS_MODAL_SECTIONS.project.map((section) => [section.id, section.icon]),
   ),
 };
-
-/** The modals whose sections are built; the rest still show the old pages. */
-function navModalFor(modal: SettingsModalId | null): "user" | "space" | "project" | null {
-  return modal === "user" || modal === "space" || modal === "project" ? modal : null;
-}
 
 // Attached only to the highlighted result, so it runs whenever the highlight lands on a row.
 function scrollResultIntoView(row: HTMLElement | null) {
@@ -215,13 +202,13 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const currentHash = useLocation({ select: (location) => location.hash });
   const currentSearch = useLocation({ select: (location) => location.search });
   const scopeSearch = validateSettingsScopeSearch(currentSearch);
-  const modal = navModalFor(settingsModalForPathname(pathname));
+  const modal = settingsModalForPathname(pathname);
   const { projectKey, spaceId } = useParams({ strict: false });
   // A section's subpages keep it open: its key is the modal and the section segment of the path.
   const activePath =
     modal === null
       ? (SETTINGS_DETAIL_PAGE_PARENTS[pathname] ?? pathname)
-      : `${modal}/${pathname.split("/")[modal === "user" ? 3 : 4] ?? ""}`;
+      : `${modal}/${pathname.split("/")[modal === "user" || modal === "platform" ? 3 : 4] ?? ""}`;
   const visibility = useSettingsVisibility();
   // A Member of a Hub does not see the pages only its Owner changes.
   const actsForInstallation = usePrimaryActsForInstallation();

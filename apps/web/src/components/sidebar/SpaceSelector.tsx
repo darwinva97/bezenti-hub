@@ -3,14 +3,13 @@ import type { SpaceId } from "@t3tools/contracts";
 import {
   BuildingIcon,
   ChevronsUpDownIcon,
-  ScrollTextIcon,
   PlusIcon,
   RefreshCwIcon,
+  ServerCogIcon,
   SettingsIcon,
   ShieldIcon,
   UserIcon,
   UserPlusIcon,
-  UsersIcon,
 } from "lucide-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useId, useState } from "react";
@@ -36,8 +35,6 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import { UsersDialog } from "./UsersDialog";
-import { AuditLogDialog } from "./AuditLogDialog";
 import { Label } from "../ui/label";
 import {
   Menu,
@@ -67,8 +64,6 @@ export function SpaceSelector() {
     if (openThreadRoute) void navigate({ to: "/" });
   };
   const [creating, setCreating] = useState(false);
-  const [managingUsers, setManagingUsers] = useState(false);
-  const [readingAudit, setReadingAudit] = useState(false);
   // A fresh shell snapshot follows a reconnect, as after the User's Memberships changed.
   const shellGeneration = useShellGeneration(environmentId);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the signed-in User's Spaces from the server, again after each fresh shell snapshot
@@ -235,22 +230,18 @@ export function SpaceSelector() {
               </>
             ) : null}
             {view.isOwner === true ? (
-              <>
-                <MenuItem onClick={() => setManagingUsers(true)}>
-                  <UsersIcon />
-                  Users and permissions
-                </MenuItem>
-                <MenuItem onClick={() => setReadingAudit(true)}>
-                  <ScrollTextIcon />
-                  Audit log
-                </MenuItem>
-              </>
+              <MenuItem
+                onClick={() =>
+                  void navigate({ to: "/settings/platform/$section", params: { section: "users" } })
+                }
+              >
+                <ServerCogIcon />
+                Platform
+              </MenuItem>
             ) : null}
           </MenuPopup>
         </Menu>
         {creating ? <CreateOrganizationDialog onClose={() => setCreating(false)} /> : null}
-        {managingUsers ? <UsersDialog onClose={() => setManagingUsers(false)} /> : null}
-        {readingAudit ? <AuditLogDialog onClose={() => setReadingAudit(false)} /> : null}
         {notice !== null ? (
           <p className="px-2 pt-1 text-muted-foreground text-xs">{notice}</p>
         ) : null}

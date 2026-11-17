@@ -1,6 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ThreadsSettingsPanel } from "../components/settings/SettingsPanels";
 
-export const Route = createFileRoute("/_chat/settings/threads")({
-  component: ThreadsSettingsPanel,
-});
+// Moved into Platform; the settings route redirects old links.
+export const Route = createFileRoute("/_chat/settings/threads")({});

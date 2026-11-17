@@ -60,12 +60,15 @@ import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draf
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 import { Route as ChatSettingsUserIndexRouteImport } from './routes/_chat.settings.user.index'
 import { Route as ChatSettingsSpaceIndexRouteImport } from './routes/_chat.settings.space.index'
+import { Route as ChatSettingsPlatformIndexRouteImport } from './routes/_chat.settings.platform.index'
 import { Route as ChatSettingsUserSectionRouteImport } from './routes/_chat.settings.user.$section'
+import { Route as ChatSettingsPlatformSectionRouteImport } from './routes/_chat.settings.platform.$section'
 import { Route as ChatSettingsSpaceSpaceIdIndexRouteImport } from './routes/_chat.settings.space.$spaceId.index'
 import { Route as ChatSettingsProjectProjectKeyIndexRouteImport } from './routes/_chat.settings.project.$projectKey.index'
 import { Route as ChatSettingsUserAboutLicensesRouteImport } from './routes/_chat.settings.user.about.licenses'
 import { Route as ChatSettingsSpaceSpaceIdSectionRouteImport } from './routes/_chat.settings.space.$spaceId.$section'
 import { Route as ChatSettingsProjectProjectKeySectionRouteImport } from './routes/_chat.settings.project.$projectKey.$section'
+import { Route as ChatSettingsPlatformHubDefaultsSubsectionRouteImport } from './routes/_chat.settings.platform.hub-defaults.$subsection'
 
 const WelcomeRoute = WelcomeRouteImport.update({
   id: '/welcome',
@@ -327,11 +330,23 @@ const ChatSettingsSpaceIndexRoute = ChatSettingsSpaceIndexRouteImport.update({
   path: '/space/',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
+const ChatSettingsPlatformIndexRoute =
+  ChatSettingsPlatformIndexRouteImport.update({
+    id: '/platform/',
+    path: '/platform/',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
 const ChatSettingsUserSectionRoute = ChatSettingsUserSectionRouteImport.update({
   id: '/user/$section',
   path: '/user/$section',
   getParentRoute: () => ChatSettingsRoute,
 } as any)
+const ChatSettingsPlatformSectionRoute =
+  ChatSettingsPlatformSectionRouteImport.update({
+    id: '/platform/$section',
+    path: '/platform/$section',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
 const ChatSettingsSpaceSpaceIdIndexRoute =
   ChatSettingsSpaceSpaceIdIndexRouteImport.update({
     id: '/space/$spaceId/',
@@ -360,6 +375,12 @@ const ChatSettingsProjectProjectKeySectionRoute =
   ChatSettingsProjectProjectKeySectionRouteImport.update({
     id: '/project/$projectKey/$section',
     path: '/project/$projectKey/$section',
+    getParentRoute: () => ChatSettingsRoute,
+  } as any)
+const ChatSettingsPlatformHubDefaultsSubsectionRoute =
+  ChatSettingsPlatformHubDefaultsSubsectionRouteImport.update({
+    id: '/platform/hub-defaults/$subsection',
+    path: '/platform/hub-defaults/$subsection',
     getParentRoute: () => ChatSettingsRoute,
   } as any)
 
@@ -412,9 +433,12 @@ export interface FileRoutesByFullPath {
   '/settings/vaults': typeof ChatSettingsVaultsRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/settings/platform/$section': typeof ChatSettingsPlatformSectionRoute
   '/settings/user/$section': typeof ChatSettingsUserSectionRoute
+  '/settings/platform/': typeof ChatSettingsPlatformIndexRoute
   '/settings/space/': typeof ChatSettingsSpaceIndexRoute
   '/settings/user/': typeof ChatSettingsUserIndexRoute
+  '/settings/platform/hub-defaults/$subsection': typeof ChatSettingsPlatformHubDefaultsSubsectionRoute
   '/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
   '/settings/space/$spaceId/$section': typeof ChatSettingsSpaceSpaceIdSectionRoute
   '/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
@@ -470,9 +494,12 @@ export interface FileRoutesByTo {
   '/settings/vaults': typeof ChatSettingsVaultsRoute
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/settings/platform/$section': typeof ChatSettingsPlatformSectionRoute
   '/settings/user/$section': typeof ChatSettingsUserSectionRoute
+  '/settings/platform': typeof ChatSettingsPlatformIndexRoute
   '/settings/space': typeof ChatSettingsSpaceIndexRoute
   '/settings/user': typeof ChatSettingsUserIndexRoute
+  '/settings/platform/hub-defaults/$subsection': typeof ChatSettingsPlatformHubDefaultsSubsectionRoute
   '/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
   '/settings/space/$spaceId/$section': typeof ChatSettingsSpaceSpaceIdSectionRoute
   '/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
@@ -530,9 +557,12 @@ export interface FileRoutesById {
   '/_chat/settings/vaults': typeof ChatSettingsVaultsRoute
   '/_chat/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/_chat/settings/platform/$section': typeof ChatSettingsPlatformSectionRoute
   '/_chat/settings/user/$section': typeof ChatSettingsUserSectionRoute
+  '/_chat/settings/platform/': typeof ChatSettingsPlatformIndexRoute
   '/_chat/settings/space/': typeof ChatSettingsSpaceIndexRoute
   '/_chat/settings/user/': typeof ChatSettingsUserIndexRoute
+  '/_chat/settings/platform/hub-defaults/$subsection': typeof ChatSettingsPlatformHubDefaultsSubsectionRoute
   '/_chat/settings/project/$projectKey/$section': typeof ChatSettingsProjectProjectKeySectionRoute
   '/_chat/settings/space/$spaceId/$section': typeof ChatSettingsSpaceSpaceIdSectionRoute
   '/_chat/settings/user/about/licenses': typeof ChatSettingsUserAboutLicensesRoute
@@ -590,9 +620,12 @@ export interface FileRouteTypes {
     | '/settings/vaults'
     | '/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/settings/platform/$section'
     | '/settings/user/$section'
+    | '/settings/platform/'
     | '/settings/space/'
     | '/settings/user/'
+    | '/settings/platform/hub-defaults/$subsection'
     | '/settings/project/$projectKey/$section'
     | '/settings/space/$spaceId/$section'
     | '/settings/user/about/licenses'
@@ -648,9 +681,12 @@ export interface FileRouteTypes {
     | '/settings/vaults'
     | '/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/settings/platform/$section'
     | '/settings/user/$section'
+    | '/settings/platform'
     | '/settings/space'
     | '/settings/user'
+    | '/settings/platform/hub-defaults/$subsection'
     | '/settings/project/$projectKey/$section'
     | '/settings/space/$spaceId/$section'
     | '/settings/user/about/licenses'
@@ -707,9 +743,12 @@ export interface FileRouteTypes {
     | '/_chat/settings/vaults'
     | '/_chat/settings/worktrees'
     | '/threads/$environmentId/$threadId'
+    | '/_chat/settings/platform/$section'
     | '/_chat/settings/user/$section'
+    | '/_chat/settings/platform/'
     | '/_chat/settings/space/'
     | '/_chat/settings/user/'
+    | '/_chat/settings/platform/hub-defaults/$subsection'
     | '/_chat/settings/project/$projectKey/$section'
     | '/_chat/settings/space/$spaceId/$section'
     | '/_chat/settings/user/about/licenses'
@@ -1091,11 +1130,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsSpaceIndexRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/platform/': {
+      id: '/_chat/settings/platform/'
+      path: '/platform'
+      fullPath: '/settings/platform/'
+      preLoaderRoute: typeof ChatSettingsPlatformIndexRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
     '/_chat/settings/user/$section': {
       id: '/_chat/settings/user/$section'
       path: '/user/$section'
       fullPath: '/settings/user/$section'
       preLoaderRoute: typeof ChatSettingsUserSectionRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
+    '/_chat/settings/platform/$section': {
+      id: '/_chat/settings/platform/$section'
+      path: '/platform/$section'
+      fullPath: '/settings/platform/$section'
+      preLoaderRoute: typeof ChatSettingsPlatformSectionRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
     '/_chat/settings/space/$spaceId/': {
@@ -1133,6 +1186,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsProjectProjectKeySectionRouteImport
       parentRoute: typeof ChatSettingsRoute
     }
+    '/_chat/settings/platform/hub-defaults/$subsection': {
+      id: '/_chat/settings/platform/hub-defaults/$subsection'
+      path: '/platform/hub-defaults/$subsection'
+      fullPath: '/settings/platform/hub-defaults/$subsection'
+      preLoaderRoute: typeof ChatSettingsPlatformHubDefaultsSubsectionRouteImport
+      parentRoute: typeof ChatSettingsRoute
+    }
   }
 }
 
@@ -1166,9 +1226,12 @@ interface ChatSettingsRouteChildren {
   ChatSettingsThreadsRoute: typeof ChatSettingsThreadsRoute
   ChatSettingsVaultsRoute: typeof ChatSettingsVaultsRoute
   ChatSettingsWorktreesRoute: typeof ChatSettingsWorktreesRoute
+  ChatSettingsPlatformSectionRoute: typeof ChatSettingsPlatformSectionRoute
   ChatSettingsUserSectionRoute: typeof ChatSettingsUserSectionRoute
+  ChatSettingsPlatformIndexRoute: typeof ChatSettingsPlatformIndexRoute
   ChatSettingsSpaceIndexRoute: typeof ChatSettingsSpaceIndexRoute
   ChatSettingsUserIndexRoute: typeof ChatSettingsUserIndexRoute
+  ChatSettingsPlatformHubDefaultsSubsectionRoute: typeof ChatSettingsPlatformHubDefaultsSubsectionRoute
   ChatSettingsProjectProjectKeySectionRoute: typeof ChatSettingsProjectProjectKeySectionRoute
   ChatSettingsSpaceSpaceIdSectionRoute: typeof ChatSettingsSpaceSpaceIdSectionRoute
   ChatSettingsUserAboutLicensesRoute: typeof ChatSettingsUserAboutLicensesRoute
@@ -1206,9 +1269,13 @@ const ChatSettingsRouteChildren: ChatSettingsRouteChildren = {
   ChatSettingsThreadsRoute: ChatSettingsThreadsRoute,
   ChatSettingsVaultsRoute: ChatSettingsVaultsRoute,
   ChatSettingsWorktreesRoute: ChatSettingsWorktreesRoute,
+  ChatSettingsPlatformSectionRoute: ChatSettingsPlatformSectionRoute,
   ChatSettingsUserSectionRoute: ChatSettingsUserSectionRoute,
+  ChatSettingsPlatformIndexRoute: ChatSettingsPlatformIndexRoute,
   ChatSettingsSpaceIndexRoute: ChatSettingsSpaceIndexRoute,
   ChatSettingsUserIndexRoute: ChatSettingsUserIndexRoute,
+  ChatSettingsPlatformHubDefaultsSubsectionRoute:
+    ChatSettingsPlatformHubDefaultsSubsectionRoute,
   ChatSettingsProjectProjectKeySectionRoute:
     ChatSettingsProjectProjectKeySectionRoute,
   ChatSettingsSpaceSpaceIdSectionRoute: ChatSettingsSpaceSpaceIdSectionRoute,

@@ -234,7 +234,8 @@ function CustomSnoozeDialog() {
               onClick={() => {
                 finish(null);
                 void navigate({
-                  to: "/settings/threads",
+                  to: "/settings/platform/hub-defaults/$subsection",
+                  params: { subsection: "threads" },
                   hash: "snooze-options",
                 });
               }}

@@ -69,6 +69,7 @@ import {
   PaletteIcon,
   RotateCcwIcon,
   BuildingIcon,
+  ServerCogIcon,
   SettingsIcon,
   MonitorIcon,
   PinIcon,
@@ -139,6 +140,7 @@ import {
   useVisibleThreadShells,
   waitForProject,
 } from "../state/entities";
+import { usePrimaryActsForInstallation } from "../environments/primary";
 import {
   useCurrentSpace,
   useProjectsInCurrentSpace,
@@ -543,6 +545,7 @@ function OpenCommandPaletteDialog(props: {
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
   const { environmentLabelById, projectEnvironmentLocationById } = useEnvironmentLookups();
   const projectGroups = useSortedProjectGroups(environmentLabelById);
+  const isOwner = usePrimaryActsForInstallation();
   const currentSpaceId = useCurrentSpace((state) => state.currentSpaceId);
   const currentSpaceName = useCurrentSpace(
     (state) => state.view?.spaces.find((space) => space.id === state.currentSpaceId)?.name ?? null,
@@ -1654,6 +1657,31 @@ function OpenCommandPaletteDialog(props: {
           to: "/settings/space/$spaceId/$section",
           params: { spaceId: currentSpaceId, section: "general" },
         });
+      },
+    });
+  }
+
+  if (isOwner) {
+    actionItems.push({
+      kind: "action",
+      value: "action:platform-settings",
+      searchTerms: [
+        "platform",
+        "settings",
+        "users",
+        "audit",
+        "master key",
+        "ai gateway",
+        "sandboxes",
+        "labs",
+        "hub",
+      ],
+      title: "Platform",
+      description: "Users, audit log and the Hub",
+      icon: <ServerCogIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "settings.platform",
+      run: async () => {
+        await navigate({ to: "/settings/platform/$section", params: { section: "users" } });
       },
     });
   }

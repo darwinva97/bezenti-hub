@@ -72,7 +72,9 @@ describe("searchSettings", () => {
     for (const query of ["fallback", "fallback agent", "fallback model"]) {
       expect(searchSettings(query)[0]).toMatchObject({
         id: "fallback-model",
-        to: "/settings/threads",
+        modal: "platform",
+        section: "hub-defaults",
+        subsection: "threads",
         scope: "environment-defaults",
       });
     }
@@ -140,7 +142,8 @@ describe("searchSettings", () => {
     expect(memberNav).not.toContain("/settings/ai-gateway");
     // A Member sees the names of the AI accounts they may use.
     expect(memberNav).toContain("/settings/ai-accounts");
-    expect(memberNav).toContain("/settings/threads");
+    // Hub defaults are the Owner's, in Platform; they are not in the old nav at all.
+    expect(memberNav).not.toContain("/settings/threads");
     expect(settingsNavGroupsFor(true)).toBe(SETTINGS_NAV_GROUPS);
   });
 

@@ -1,6 +1,10 @@
 import {
   ArchiveIcon,
   BotIcon,
+  BoxIcon,
+  FlaskConicalIcon,
+  NetworkIcon,
+  ScrollTextIcon,
   CalendarClockIcon,
   SlidersHorizontalIcon,
   SquareTerminalIcon,
@@ -138,6 +142,30 @@ const SpaceArchiveSection = lazy(() =>
   import("./ArchivedThreadsPanel").then((module) => ({ default: module.ArchivedThreadsPanel })),
 );
 
+const PlatformUsersSection = lazy(() =>
+  import("./PlatformUsersSection").then((module) => ({ default: module.PlatformUsersSection })),
+);
+const PlatformAuditLogSection = lazy(() =>
+  import("./PlatformAuditLogSection").then((module) => ({
+    default: module.PlatformAuditLogSection,
+  })),
+);
+const PlatformMasterKeySection = lazy(() =>
+  import("./PlatformSections").then((module) => ({ default: module.PlatformMasterKeySection })),
+);
+const PlatformSandboxesSection = lazy(() =>
+  import("./PlatformSections").then((module) => ({ default: module.PlatformSandboxesSection })),
+);
+const PlatformAiGatewaySection = lazy(() =>
+  import("./AiGatewaySettings").then((module) => ({ default: module.AiGatewaySettingsPanel })),
+);
+const PlatformLabsSection = lazy(() =>
+  import("./LabsSettingsPanel").then((module) => ({ default: module.LabsSettingsPanel })),
+);
+const HubDefaultsSection = lazy(() =>
+  import("./HubDefaultsSettings").then((module) => ({ default: module.HubDefaultsSettings })),
+);
+
 const reserved = (
   id: string,
   label: string,
@@ -262,14 +290,54 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
     },
   ],
   platform: [
-    reserved("users", "Users", UserIcon, 0),
-    reserved("audit-log", "Audit log", ShieldCheckIcon, 0),
-    reserved("master-key", "Master key", KeyRoundIcon, 0),
-    reserved("ai-gateway", "AI gateway", BotIcon, 1),
-    reserved("sandboxes", "Sandboxes", ServerIcon, 1),
+    { id: "users", label: "Users", icon: UsersIcon, component: PlatformUsersSection, group: 0 },
+    {
+      id: "audit-log",
+      label: "Audit log",
+      icon: ScrollTextIcon,
+      component: PlatformAuditLogSection,
+      group: 0,
+    },
+    {
+      id: "master-key",
+      label: "Master key",
+      icon: KeyRoundIcon,
+      component: PlatformMasterKeySection,
+      group: 0,
+    },
+    {
+      id: "ai-gateway",
+      label: "AI gateway",
+      icon: NetworkIcon,
+      component: PlatformAiGatewaySection,
+      group: 1,
+    },
+    {
+      id: "sandboxes",
+      label: "Sandboxes",
+      icon: BoxIcon,
+      component: PlatformSandboxesSection,
+      group: 1,
+    },
     reserved("hub-machine", "Hub machine", ServerIcon, 1),
-    reserved("hub-defaults", "Hub defaults", Settings2Icon, 1),
-    reserved("labs", "Labs", InfoIcon, 2),
+    {
+      id: "hub-defaults",
+      label: "Hub defaults",
+      icon: SlidersHorizontalIcon,
+      component: HubDefaultsSection,
+      group: 1,
+    },
+    reserved("registration", "Registration", UserPlusIcon, 2),
+    reserved("keycloak", "Keycloak", KeyRoundIcon, 2),
+    reserved("plans", "Plans", SparklesIcon, 2),
+    reserved("terms", "Terms", ScrollTextIcon, 2),
+    {
+      id: "labs",
+      label: "Labs",
+      icon: FlaskConicalIcon,
+      component: PlatformLabsSection,
+      group: 3,
+    },
   ],
 };
 
@@ -355,15 +423,20 @@ export const OLD_SETTINGS_PATHS: Readonly<Record<string, string>> = {
   "/settings/open-source-licenses": "/settings/user/about/licenses",
   "/settings/archived": `/settings/space/${CURRENT_SPACE_SEGMENT}/archive`,
   "/settings/scheduled-tasks": `/settings/space/${CURRENT_SPACE_SEGMENT}/scheduled-tasks`,
+  "/settings/ai-gateway": "/settings/platform/ai-gateway",
+  "/settings/threads": "/settings/platform/hub-defaults/threads",
+  "/settings/browser": "/settings/platform/hub-defaults/browser",
+  "/settings/worktrees": "/settings/platform/hub-defaults/worktrees",
+  "/settings/labs": "/settings/platform/labs",
   // Names older than the modals.
-  "/settings/integrations": "/settings/browser",
+  "/settings/integrations": "/settings/platform/hub-defaults/browser",
   "/settings/storage": "/settings/maintenance",
-  "/settings/beta": "/settings/labs",
+  "/settings/beta": "/settings/platform/labs",
 };
 
 /** Section anchors that moved but are not search results themselves. */
 export const MOVED_SECTION_ANCHORS: Readonly<Record<string, string>> = {
-  "legacy-features": "/settings/labs",
-  "text-generation": "/settings/threads",
+  "legacy-features": "/settings/platform/labs",
+  "text-generation": "/settings/platform/hub-defaults/threads",
   about: "/settings/user/about",
 };

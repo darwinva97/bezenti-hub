@@ -11,11 +11,16 @@ import {
   type AiUsageSummary,
   type AiUsageSummaryInput,
   type SpaceId,
+  UsageDay,
+  type UsageSummary,
   type UserId,
 } from "@t3tools/contracts";
+import type { UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as Effect from "effect/Effect";
 
 import * as CommandActor from "../auth/CommandActor.ts";
+import { withHubGatewayUsage } from "../usage/hubGatewayUsage.ts";
+import type * as UsageService from "../usage/UsageService.ts";
 import {
   acmeSetup,
   call,
@@ -448,6 +453,36 @@ live("the Usage dialog's Hub turns follow the same rules as the summary (ticket 
     // Without a signed-in User: refused, as the summary is.
     const anonymous = yield* setup.usage.threadRequests(window).pipe(Effect.flip);
     assert.equal(anonymous.reason, "forbidden");
+
+    // What reaches a non-Owner's Usage dialog: only their own Hub turns, never another User's.
+    const handed: Array<ReadonlyArray<string>> = [];
+    const usageService = {
+      withGatewayRecords: (
+        summary: UsageSummary,
+        _input: unknown,
+        records: ReadonlyArray<UsageRecord>,
+      ) =>
+        Effect.sync(() => {
+          handed.push(records.map((record) => record.sessionId));
+          return summary;
+        }),
+    } as unknown as UsageService.UsageService["Service"];
+    const dialogInput = {
+      timeZone: "UTC",
+      sinceDay: UsageDay.make("2000-01-01"),
+      untilDay: UsageDay.make("2099-12-31"),
+    };
+    const empty = { buckets: [], sources: [] } as unknown as UsageSummary;
+    const dialogAs = (userId: UserId | undefined) =>
+      withHubGatewayUsage(usageService, setup.usage)(empty, dialogInput).pipe(
+        CommandActor.actAs(userId),
+      );
+    yield* dialogAs(member);
+    yield* dialogAs(globexMember);
+    yield* dialogAs(undefined);
+    yield* dialogAs(setup.ownerId);
+    assert.deepEqual(handed.slice(0, 3), [[grace.threadId], [gus.threadId], []]);
+    assert.deepEqual([...(handed[3] ?? [])].toSorted(), all);
   }),
 );
 

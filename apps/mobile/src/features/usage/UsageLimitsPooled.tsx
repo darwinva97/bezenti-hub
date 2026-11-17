@@ -10,6 +10,7 @@ import {
   cursorUsageWindowDetails,
   displayLimitWindows,
   formatResetsIn,
+  HUB_LIMITS_NOTE,
   paceRemainingPercent,
   remainingPercent,
   type LimitAccount,
@@ -441,7 +442,7 @@ export function UsageLimitsSection({
         <Text className="py-12 text-center text-base text-foreground-muted">
           {selected.size === 0
             ? "Select an environment to see limits."
-            : "No provider on the selected environments reports subscription limits."}
+            : `No provider on the selected environments reports subscription limits. ${HUB_LIMITS_NOTE}`}
         </Text>
       ) : null}
       {pools.map((pool, index) => {

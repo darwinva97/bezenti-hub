@@ -233,6 +233,13 @@ function accountKeyResolver(reports: Iterable<AccountReport>) {
   };
 }
 
+/**
+ * Said where no limits show (ticket 16): a Hub turn runs on the Hub's AI accounts through its
+ * gateway, whose windows no provider login reports and only the Owner's session receives.
+ */
+export const HUB_LIMITS_NOTE =
+  "Turns on the Hub use its AI accounts through the AI gateway; their limits are shown to the Owner only.";
+
 const hubAccountName = (account: { readonly id: string }) => account.id.replace(/\.json$/i, "");
 
 export interface LimitAccount {

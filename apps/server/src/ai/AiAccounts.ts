@@ -121,6 +121,13 @@ export class AiAccounts extends Context.Service<
     readonly modelsOf: (
       accountId: AiAccountId,
     ) => Effect.Effect<ReadonlyArray<string>, AiAccountError>;
+    /**
+     * Ticket 16: the quota windows of the Hub's Claude and Codex subscriptions, read through the
+     * gateway (the Owner's list's 5-minute cache), by account name: never an e-mail or anything
+     * derived from the credential. Null for anyone but the Owner acting on the Installation, when
+     * the Hub has no such subscription, and when unreadable (fails closed).
+     */
+    readonly ownerSubscriptionLimits: Effect.Effect<HubSubscriptionLimits | null>;
     /** Writes every enabled account into the running CLIProxyAPI now (the Hub does it itself). */
     readonly sync: Effect.Effect<void>;
     /**
@@ -178,6 +185,16 @@ export class AiAccounts extends Context.Service<
     ) => Effect.Effect<{ readonly accountId: string; readonly created: boolean }, AiAccountError>;
   }
 >()("t3/ai/AiAccounts") {}
+
+/** What the Usage dialog's Limits show of the Hub's subscriptions, for the Owner. */
+export interface HubSubscriptionLimits {
+  readonly gatewayRunning: boolean;
+  readonly accounts: ReadonlyArray<{
+    readonly name: string;
+    readonly provider: "claude" | "codex";
+    readonly usageLimits: ServerProviderUsageLimits;
+  }>;
+}
 
 export interface AdoptProviderKeyInput {
   /** `env:<instance>:<VARIABLE>` or `field:<instance>:<field>`. */
@@ -449,6 +466,7 @@ const unavailable = AiAccounts.of({
   allow: refuse,
   reorder: refuse,
   modelsOf: refuse,
+  ownerSubscriptionLimits: Effect.succeed(null),
   sync: Effect.void,
   loginStart: refuse,
   loginComplete: refuse,
@@ -2621,6 +2639,45 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     Effect.orElseSucceed(() => false),
   );
 
+  const ownerSubscriptionLimits = Effect.gen(function* () {
+    const { manages } = yield* caller;
+    if (!manages) return null;
+    const rows = yield* sql<{
+      readonly accountId: string;
+      readonly name: string;
+      readonly provider: "claude" | "codex";
+      readonly credentialId: string;
+    }>`
+      SELECT account_id AS "accountId", name, provider, credential_id AS "credentialId"
+      FROM ai_accounts
+      WHERE deleted_at IS NULL AND disabled = 0 AND type = 'subscription'
+        AND provider IN ('claude', 'codex') AND credential_id IS NOT NULL
+      ORDER BY priority, account_id
+    `;
+    // No subscription with windows to read: nothing to say.
+    if (rows.length === 0) return null;
+    const endpoint = yield* gateway.endpoint;
+    if (Option.isNone(endpoint)) return { gatewayRunning: false, accounts: [] };
+    const quotas = yield* quotaWindows(endpoint.value);
+    return {
+      gatewayRunning: true,
+      accounts: rows.flatMap((row) => {
+        const limits = quotas.get(tokenFileNameOf(row.accountId, row.credentialId));
+        return limits === undefined
+          ? []
+          : [{ name: row.name, provider: row.provider, usageLimits: limits }];
+      }),
+    } satisfies HubSubscriptionLimits;
+  }).pipe(
+    // Fails closed: anything unreadable shows nothing rather than another User's windows.
+    Effect.catchCause((cause) =>
+      Effect.logWarning("AiAccounts: could not read the Hub's subscription limits", { cause }).pipe(
+        Effect.as(null),
+      ),
+    ),
+    Effect.withSpan("AiAccounts.ownerSubscriptionLimits"),
+  );
+
   return AiAccounts.of({
     list,
     create,
@@ -2629,6 +2686,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     allow,
     reorder,
     modelsOf,
+    ownerSubscriptionLimits,
     sync: Effect.asVoid(syncNow),
     loginStart,
     loginComplete,

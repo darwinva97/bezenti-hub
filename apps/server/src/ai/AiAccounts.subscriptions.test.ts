@@ -800,6 +800,35 @@ live(
     }),
 );
 
+live("the Usage dialog's Hub limits go to the Owner only, by account name (ticket 16)", () =>
+  Effect.gen(function* () {
+    const setup = yield* hub();
+    const { stack } = setup;
+    // No subscription yet: nothing to say, even to the Owner.
+    assert.isNull(yield* stack.accounts.ownerSubscriptionLimits.pipe(setup.as(setup.ownerId)));
+    yield* signIn(setup, stack, "claude", "Owner Claude");
+    const owner = yield* stack.accounts.ownerSubscriptionLimits.pipe(setup.as(setup.ownerId));
+    assert.equal(owner?.gatewayRunning, true);
+    assert.deepEqual(
+      owner?.accounts.map((account) => [account.name, account.provider]),
+      [["Owner Claude", "claude"]],
+    );
+    assert.isAbove(owner?.accounts[0]?.usageLimits.windows.length ?? 0, 0);
+    // Nothing of the credential: no e-mail, no token.
+    assert.notInclude(JSON.stringify(owner), "@");
+    assert.isFalse(mentionsAToken(JSON.stringify(owner)));
+    // Anyone else, an Admin included, and the Owner limited to one Space: nothing at all.
+    for (const view of [
+      setup.as(setup.member),
+      setup.as(setup.admin),
+      setup.as(setup.ownerId, setup.acmeId),
+    ]) {
+      assert.isNull(yield* stack.accounts.ownerSubscriptionLimits.pipe(view));
+    }
+    assert.isNull(yield* stack.accounts.ownerSubscriptionLimits);
+  }),
+);
+
 it("keeps the newest copy of a token: last refresh first, then access expiry; else the gateway's", () => {
   const sealed = {
     type: "claude",

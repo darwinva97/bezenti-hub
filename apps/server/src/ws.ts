@@ -265,6 +265,7 @@ import * as AiAccountChoice from "./ai/AiAccountChoice.ts";
 import * as AiAccounts from "./ai/AiAccounts.ts";
 import * as AiGateway from "./ai/AiGateway.ts";
 import * as AiUsage from "./ai/AiUsage.ts";
+import { withHubAiAccountLimits } from "./usage/hubAiAccountLimits.ts";
 import { withHubGatewayUsage } from "./usage/hubGatewayUsage.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
@@ -3593,7 +3594,12 @@ export const layerWsRpc = (
                   : Stream.empty;
               const usageLimitSourceUpdates =
                 input.usageLimitSources === true
-                  ? usageLimitSources.streamChanges.pipe(
+                  ? // The Hub's AI accounts' windows only for the Owner's session (ticket 16).
+                    withHubAiAccountLimits(
+                      usageLimitSources.streamChanges,
+                      aiAccounts.ownerSubscriptionLimits,
+                      principal.userId,
+                    ).pipe(
                       Stream.map((sources) => ({
                         version: 1 as const,
                         type: "usageLimitSourcesUpdated" as const,

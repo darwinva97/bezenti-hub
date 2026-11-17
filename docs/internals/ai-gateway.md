@@ -436,6 +436,13 @@ shown, **never limited**: no quota, cap or block anywhere.
   the source «Hub AI gateway». The provider is the driver of the Thread's latest provider session
   when it speaks the request's dialect (`claudeAgent` → Claude, `codex`, `opencode`, `pi`), else
   the dialect's own (Anthropic → Claude, OpenAI → Codex).
+- **The Usage dialog's Limits:** a Hub turn's CLI has no provider login, so none reports its
+  subscription's windows. The Owner's session (decided on the server, as its User, in
+  `usage/hubAiAccountLimits.ts`) gets one more limit source, «Hub AI accounts», from
+  `AiAccounts.ownerSubscriptionLimits`: the Claude and Codex subscriptions' windows from the same
+  5-minute read as the Owner's list, by account name, without reset credits or anything derived
+  from the credential; read again every 5 minutes. Anyone else gets no such source, and the empty
+  state says the Hub's limits are shown to the Owner only.
 - **Counted as failed (no tokens):** a refusal after authentication (gateway not running, 415, 429
   limits, body too large or not JSON, no model served, all accounts out of quota) with the account
   last tried or none (account and model `''` in the summary; the model is kept only once the plan

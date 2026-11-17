@@ -139,11 +139,26 @@ export function aiAccountFallbackName(provider: AiAccountProvider): string {
   return `${AI_PROVIDER_LABEL[provider]} account`;
 }
 
-/** An account as the picker lists it: its name, and «from <lender>» when a Grant lends it. */
+const PERIOD_WORDS = { day: "daily", week: "weekly", month: "monthly" } as const;
+
+/**
+ * An account as the picker lists it: its name, and «from <lender>» when a Grant lends it, with how
+ * much of its cap is used («40% of daily cap», «cap reached»; Grants ticket 03).
+ */
 export function aiAccountPickerLabel(account: AiAccountPickerAccount): string {
-  return account.lentBy === undefined
-    ? account.name
-    : `${account.name} · from ${account.lentBy.name}`;
+  const lent = account.lentBy;
+  if (lent === undefined) return account.name;
+  const uses = [lent.caps?.tokens ?? null, lent.caps?.requests ?? null].filter(
+    (use) => use !== null,
+  );
+  const reached = uses.some((use) => use.used >= use.amount);
+  const first = uses[0];
+  const cap = reached
+    ? " · cap reached"
+    : first === undefined
+      ? ""
+      : ` · ${Math.min(100, Math.round((first.used / first.amount) * 100))}% of ${PERIOD_WORDS[first.period]} cap`;
+  return `${account.name} · from ${lent.name}${cap}`;
 }
 
 /** The models a gateway provider offers here: its allowed accounts' that `isModelListedFor` it. */

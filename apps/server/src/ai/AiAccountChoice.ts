@@ -36,6 +36,7 @@ import * as AiAccounts from "./AiAccounts.ts";
 import * as AiGatewaySessions from "./AiGatewaySessions.ts";
 import * as AllowedAiAccounts from "./AllowedAiAccounts.ts";
 import { chooseAiAccount, isCompatibleAccount } from "./chooseAiAccount.ts";
+import * as GrantCaps from "./GrantCaps.ts";
 
 export class AiAccountChoice extends Context.Service<
   AiAccountChoice,
@@ -80,7 +81,18 @@ const make = Effect.gen(function* () {
   const accounts = yield* AiAccounts.AiAccounts;
   const sessions = yield* AiGatewaySessions.AiGatewaySessions;
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-
+  // Grants ticket 03: how much of a lent account's caps is used, for the picker.
+  const caps = yield* Effect.serviceOption(GrantCaps.GrantCaps);
+  const capsOf = Effect.fn("AiAccountChoice.capsOf")(function* (
+    via: Extract<AllowedAiAccounts.AllowedVia, { readonly kind: "grant" }>,
+  ) {
+    if (Option.isNone(caps) || (via.limits.tokens === null && via.limits.requests === null)) {
+      return {};
+    }
+    const state = yield* caps.value.check(via.grantId, via.limits).pipe(Effect.option);
+    if (Option.isNone(state)) return {};
+    return { caps: { tokens: state.value.tokens, requests: state.value.requests } };
+  });
   /**
    * The driver of a provider instance: where it runs (the routed registry), else the Hub's
    * settings; a default instance's id is its driver's.
@@ -333,7 +345,13 @@ const make = Effect.gen(function* () {
           priority: account.priority,
           models,
           ...(account.via.kind === "grant"
-            ? { lentBy: { grantId: account.via.grantId, name: account.via.lenderName } }
+            ? {
+                lentBy: {
+                  grantId: account.via.grantId,
+                  name: account.via.lenderName,
+                  ...(yield* capsOf(account.via)),
+                },
+              }
             : {}),
         };
       }),

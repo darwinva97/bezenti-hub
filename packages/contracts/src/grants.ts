@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 
 import { AiAccountId, AiAccountProvider, AiAccountType } from "./aiAccounts.ts";
 import { EnvironmentId, makeEntityId, SpaceId, UserId } from "./baseSchemas.ts";
+import { GrantCap, GrantCapState } from "./grantCaps.ts";
 import { SandboxHostReport } from "./hubEnvironments.ts";
 import { AuthReauth } from "./userAccounts.ts";
 
@@ -55,13 +56,6 @@ export const EnvironmentGrantLimits = Schema.Struct({
   diskBytes: PositiveInt,
 });
 export type EnvironmentGrantLimits = typeof EnvironmentGrantLimits.Type;
-
-/** A cap's calendar period, in UTC: a day, an ISO week (from Monday) or a month. */
-export const GrantCapPeriod = Schema.Literals(["day", "week", "month"]);
-export type GrantCapPeriod = typeof GrantCapPeriod.Type;
-
-export const GrantCap = Schema.Struct({ amount: PositiveInt, period: GrantCapPeriod });
-export type GrantCap = typeof GrantCap.Type;
 
 /**
  * A lent AI account's caps, enforced by the AI gateway on each request: tokens (input, output and
@@ -126,9 +120,16 @@ export const Grant = Schema.Struct({
       diskMeasureFailures: Schema.Int,
     }),
   ),
-  /** A lent AI account's provider and type (a subscription's terms forbid sharing it). */
+  /**
+   * A lent AI account's provider and type (a subscription's terms forbid sharing it) and, while
+   * active, how much of its caps is used (Grants ticket 03).
+   */
   aiAccount: Schema.optionalKey(
-    Schema.Struct({ provider: AiAccountProvider, type: AiAccountType }),
+    Schema.Struct({
+      provider: AiAccountProvider,
+      type: AiAccountType,
+      caps: Schema.optionalKey(GrantCapState),
+    }),
   ),
   /** What the viewer may do with it now. */
   can: Schema.Struct({

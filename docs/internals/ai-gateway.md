@@ -393,6 +393,36 @@ rest, so any other door (ticket 06's relay included) reuses it.
   Hub socket, which forwards `/api/ai/…` (and still nothing of CLIProxyAPI, which listens on loopback
   only). The key is what decides.
 
+## Caps of lent AI accounts (Grants ticket 03)
+
+A Grant of an AI account carries caps (`AiAccountGrantLimits`): tokens per day, ISO week or
+month, or explicitly none; requests per period, optionally. `ai/GrantCaps.ts` checks them and
+`AiGatewayProxy` asks before each candidate account that a Grant lends (`via: grant`).
+
+- **What counts.** Tokens: input + output + cache writes. Cache reads are shown in usage but never
+  counted: Claude Code's are huge and would make caps meaningless. A request with unknown tokens
+  counts 0 tokens and 1 request. Every request that reached the lent account counts one, upstream
+  errors included; one refused by the Hub (load, a cap) reached no account and counts nothing.
+- **Periods** are UTC calendar ones, the days of `ai_usage_daily`: a day, an ISO week from Monday, a
+  month. A new period starts from zero; the UI shows the reset in local time.
+- **Used** = the Grant's `ai_usage_daily` rows of the period (`grant_id`, migration 146) + what
+  `AiGatewayActivity` recorded and the usage log has not committed yet (`unwritten`: added when a
+  request is recorded, removed only after its batch commits, so a cap never undercounts).
+- **When a cap is reached** the account counts as out of quota: the next allowed account of the
+  same provider serving the model is tried (the existing failover). None left: a 429 in the
+  client's shape, «The AI account <name> lent to <Space> reached its <daily|weekly|monthly> token
+  cap; it resets <date> 00:00 UTC. Switch AI account.», recorded as shed. It names no other Space
+  and nobody's use. The Space's own accounts are never capped.
+- **Why a cap can be passed.** It is checked when a request starts, never mid-answer: a request
+  admitted below the cap streams to its end and counts in full, so only requests already in flight
+  when the cap is reached pass it (at most the key and User concurrency limits, one answer each).
+  A new one never does. Lowering a cap below what was used (`grants.setLimits`, audited
+  `grant.limits.change`) stops the next request.
+- **One Grant, one cap:** the same account lent to two Spaces has two Grants and two caps. Local CLI
+  keys bound to a Space resolve the same Grant as its Threads (`via` from AllowedAiAccounts).
+- **Shown:** the picker («<name> · from <lender> · 40% of daily cap» or «cap reached») and the Loans
+  lists (used of each cap and its reset), from the same check.
+
 ## Local CLI keys (spec 4 ticket 10)
 
 A User points Claude Code or Codex on their own machine at the Hub with a **User key**: Settings →

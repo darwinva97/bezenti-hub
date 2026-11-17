@@ -215,6 +215,7 @@ import * as ThreadSecretFiles from "./secrets/ThreadSecretFiles.ts";
 import * as SecretMasker from "./vaults/SecretMasker.ts";
 import * as MasterKeyBackup from "./auth/MasterKeyBackup.ts";
 import * as AiAccountChanges from "./ai/AiAccountChanges.ts";
+import * as GrantCaps from "./ai/GrantCaps.ts";
 import * as AiAccounts from "./ai/AiAccounts.ts";
 import * as AiGateway from "./ai/AiGateway.ts";
 import * as AiGatewayActivity from "./ai/AiGatewayActivity.ts";
@@ -587,7 +588,12 @@ const layerAuth = Layer.mergeAll(
   // A loan that ends signals AiAccountChanges (shared with AiAccounts) for AiSessionReach.
   Layer.mergeAll(
     SshInstall.layer,
-    Grants.layer.pipe(Layer.provide(AuditLog.layer), Layer.provide(AiAccountChanges.layer)),
+    Grants.layer.pipe(
+      Layer.provide(AuditLog.layer),
+      Layer.provide(AiAccountChanges.layer),
+      // The same layers as the gateway's (memoized): a loan shows the caps the gateway applies.
+      Layer.provide(GrantCaps.layer.pipe(Layer.provide(AiGatewayActivity.layer))),
+    ),
   ).pipe(Layer.provideMerge(EnvironmentRegistry.layerFromConfig)),
 ).pipe(
   Layer.provideMerge(EnvironmentAuth.layer.pipe(Layer.provideMerge(SpaceDirectory.layer))),

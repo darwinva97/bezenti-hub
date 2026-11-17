@@ -661,15 +661,18 @@ describe("every door of the Hub declares its rule", () => {
     for (const content of ["prompt", "messages", "content", "text", "body", "key", "headers"]) {
       expect(fields).not.toContain(content);
     }
-    // The tables: written and read by AiUsage alone (and created by their migration; migration 145
-    // reads once who used a migrated account where, for the Owner's review, Grants ticket 02).
+    // The tables: written and read by AiUsage alone (and created by their migrations); GrantCaps
+    // sums a Grant's days for its caps (Grants 03); migration 145 reads once who used a migrated
+    // account where, for the Owner's review (Grants 02).
     const readers = files
       .filter(({ text }) => /\bai_usage(_daily)?\b/u.test(text))
       .map(({ file }) => file);
     expect(readers.toSorted()).toEqual([
       "ai/AiUsage.ts",
+      "ai/GrantCaps.ts",
       "persistence/Migrations/114_AiUsage.ts",
       "persistence/Migrations/145_AiAccountAllowancesToGrants.ts",
+      "persistence/Migrations/146_AiUsageGrant.ts",
     ]);
   });
 

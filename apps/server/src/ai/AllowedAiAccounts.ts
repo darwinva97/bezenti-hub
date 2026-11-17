@@ -48,6 +48,8 @@ export type AllowedVia =
       readonly grantId: GrantId;
       /** The lending User's display name, or the lending Organization's name. */
       readonly lenderName: string;
+      /** The Space it is lent to, by name (a cap's message names it). */
+      readonly spaceName: string;
       readonly limits: AiAccountGrantLimits;
     };
 
@@ -111,6 +113,7 @@ interface LentRow extends AccountRow {
   readonly grantId: string;
   readonly targetId: string;
   readonly lenderName: string | null;
+  readonly targetName: string | null;
   readonly limitsJson: string;
 }
 
@@ -221,6 +224,11 @@ const make = Effect.gen(function* () {
         a.provider AS "provider", a.priority AS "priority", a.owner_kind AS "ownerKind",
         a.owner_id AS "ownerId", g.grant_id AS "grantId", g.target_id AS "targetId",
         g.limits_json AS "limitsJson",
+        (SELECT CASE s.kind
+            WHEN 'personal' THEN COALESCE((SELECT u.display_name FROM users u
+              WHERE u.user_id = s.personal_owner_user_id) || '''s Personal space', s.name)
+            ELSE s.name END
+          FROM spaces s WHERE s.space_id = g.target_id) AS "targetName",
         CASE g.lender_kind
           WHEN 'user' THEN (SELECT display_name FROM users WHERE user_id = g.lender_id)
           ELSE (SELECT name FROM spaces WHERE space_id = g.lender_id) END AS "lenderName"
@@ -261,6 +269,7 @@ const make = Effect.gen(function* () {
             kind: "grant",
             grantId: row.grantId as GrantId,
             lenderName: row.lenderName ?? "",
+            spaceName: row.targetName ?? "",
             limits: limits.value,
           }),
         );

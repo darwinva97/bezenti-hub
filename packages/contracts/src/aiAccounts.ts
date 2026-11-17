@@ -13,6 +13,7 @@ import {
   TrimmedNonEmptyString,
   UserId,
 } from "./baseSchemas.ts";
+import { GrantCapState } from "./grantCaps.ts";
 import { ResourceOwner } from "./ownership.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
@@ -377,8 +378,17 @@ export const AiAccountPickerAccount = Schema.Struct({
    * gateway catalog the Hub could not read now (unknown, never "serves nothing").
    */
   models: Schema.NullOr(Schema.Array(Schema.String)),
-  /** Lent to the Space by a Grant: its id and the lender's name («from <lender>»). */
-  lentBy: Schema.optionalKey(Schema.Struct({ grantId: Schema.String, name: Schema.String })),
+  /**
+   * Lent to the Space by a Grant: its id, the lender's name («from <lender>») and how much of its
+   * caps is used now (Grants ticket 03; absent when it has none).
+   */
+  lentBy: Schema.optionalKey(
+    Schema.Struct({
+      grantId: Schema.String,
+      name: Schema.String,
+      caps: Schema.optionalKey(GrantCapState),
+    }),
+  ),
 });
 export type AiAccountPickerAccount = typeof AiAccountPickerAccount.Type;
 

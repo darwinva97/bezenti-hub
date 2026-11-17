@@ -42,6 +42,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 
 import * as AiAccountChanges from "../ai/AiAccountChanges.ts";
+import * as GrantCaps from "../ai/GrantCaps.ts";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
@@ -248,6 +249,23 @@ const make = Effect.gen(function* () {
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   // Who may use an AI account changed: live processes are checked again (`AiSessionReach`).
   const accountChanges = yield* Effect.serviceOption(AiAccountChanges.AiAccountChanges);
+  // How much of a lent AI account's caps is used, where the Hub runs the gateway.
+  const caps = yield* Effect.serviceOption(GrantCaps.GrantCaps);
+
+  /** An active AI account Grant's caps now; nothing when it has none or the Hub cannot tell. */
+  const capsOf = Effect.fn("Grants.capsOf")(function* (row: GrantRow, limits: GrantLimits) {
+    if (
+      Option.isNone(caps) ||
+      row.state !== "active" ||
+      limits.kind !== "ai-account" ||
+      (limits.tokens === null && limits.requests === null)
+    ) {
+      return {};
+    }
+    const state = yield* caps.value.check(row.grantId, limits).pipe(Effect.option);
+    if (Option.isNone(state)) return {};
+    return { caps: { tokens: state.value.tokens, requests: state.value.requests } };
+  });
 
   const storage =
     (what: string) =>
@@ -412,7 +430,13 @@ const make = Effect.gen(function* () {
       endedAt: row.endedAt,
       ...(row.resourceKind === "environment" ? { machine: machineOf(row) } : {}),
       ...(row.aiProvider !== null && row.aiType !== null
-        ? { aiAccount: { provider: row.aiProvider, type: row.aiType } }
+        ? {
+            aiAccount: {
+              provider: row.aiProvider,
+              type: row.aiType,
+              ...(yield* capsOf(row, limits)),
+            },
+          }
         : {}),
       can: {
         cancel: mayTransition("cancel", row.state) && can("grant.cancel"),

@@ -164,25 +164,27 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       const day = request.at.slice(0, 10);
       const accountId = request.accountId ?? "";
       const model = request.model ?? "";
+      // Which Grant lent the account that answered (grants ticket 03); '' in the summary: own.
+      const grantId = request.accountId === null ? null : (request.grantId ?? null);
       yield* sql`
         INSERT INTO ai_usage (usage_id, at, day, user_id, space_id, thread_id, key_id,
           account_id, provider, model, shape, status, duration_ms, failovers,
-          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, grant_id)
         VALUES (${usageId}, ${request.at}, ${day}, ${request.userId}, ${request.spaceId},
           ${request.threadId}, ${request.keyId}, ${request.accountId}, ${request.provider},
           ${request.model}, ${request.shape}, ${request.status}, ${request.durationMs},
           ${request.failovers}, ${usage?.inputTokens ?? null}, ${usage?.outputTokens ?? null},
-          ${usage?.cacheReadTokens ?? null}, ${usage?.cacheWriteTokens ?? null})
+          ${usage?.cacheReadTokens ?? null}, ${usage?.cacheWriteTokens ?? null}, ${grantId})
       `;
       yield* sql`
-        INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model, requests,
+        INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model, grant_id, requests,
           failed_requests, unknown_requests, input_tokens, output_tokens,
           cache_read_tokens, cache_write_tokens)
-        VALUES (${day}, ${request.userId}, ${request.spaceId}, ${accountId}, ${model}, 1,
-          ${failed ? 1 : 0}, ${unknown ? 1 : 0}, ${usage?.inputTokens ?? 0},
+        VALUES (${day}, ${request.userId}, ${request.spaceId}, ${accountId}, ${model},
+          ${grantId ?? ""}, 1, ${failed ? 1 : 0}, ${unknown ? 1 : 0}, ${usage?.inputTokens ?? 0},
           ${usage?.outputTokens ?? 0}, ${usage?.cacheReadTokens ?? 0},
           ${usage?.cacheWriteTokens ?? 0})
-        ON CONFLICT (day, user_id, space_id, account_id, model) DO UPDATE SET
+        ON CONFLICT (day, user_id, space_id, account_id, model, grant_id) DO UPDATE SET
           requests = requests + 1,
           failed_requests = failed_requests + excluded.failed_requests,
           unknown_requests = unknown_requests + excluded.unknown_requests,
@@ -257,7 +259,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
                 failed_requests)
               VALUES (${entry.day}, ${entry.userId}, ${entry.spaceId}, '', '', ${entry.count},
                 ${entry.count})
-              ON CONFLICT (day, user_id, space_id, account_id, model) DO UPDATE SET
+              ON CONFLICT (day, user_id, space_id, account_id, model, grant_id) DO UPDATE SET
                 requests = requests + excluded.requests,
                 failed_requests = failed_requests + excluded.failed_requests
             `,
@@ -273,10 +275,15 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
           ),
         );
     });
-    const writeItems = (items: ReadonlyArray<AiGatewayActivity.GatewayRequestRecord | null>) =>
-      writeAll(items.filter((item) => item !== null)).pipe(
+    // Written or lost, a request is no longer unwritten for a Grant's caps (grants ticket 03):
+    // only after its transaction, so a cap never undercounts.
+    const writeItems = (items: ReadonlyArray<AiGatewayActivity.GatewayRequestRecord | null>) => {
+      const records = items.filter((item) => item !== null);
+      return writeAll(records).pipe(
         Effect.andThen(items.includes(null) ? flushShed : Effect.void),
+        Effect.ensuring(activity.settle(records)),
       );
+    };
 
     // Shutdown order (finalizers run last-added first): the feeder and the writer are stopped
     // first (the writer finishes the batch it holds: that part is uninterruptible), then what is
@@ -292,7 +299,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
     const requests = yield* activity.subscribeRequests;
     yield* Stream.runForEach(requests, (request) => {
       // Counting tokens is not using a model: it would only add requests without tokens.
-      if (request.route.endsWith("/count_tokens")) return Effect.void;
+      if (request.route.endsWith("/count_tokens")) return activity.settle([request]);
       if (request.shed === true) {
         const day = request.at.slice(0, 10);
         const key = `${day}|${request.userId}|${request.spaceId}`;
@@ -308,7 +315,9 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         Effect.flatMap((queued) =>
           queued
             ? Effect.void
-            : Effect.logWarning("AiUsage: the write queue is full; a request was not counted"),
+            : Effect.logWarning("AiUsage: the write queue is full; a request was not counted").pipe(
+                Effect.andThen(activity.settle([request])),
+              ),
         ),
       );
     }).pipe(Effect.forkScoped);

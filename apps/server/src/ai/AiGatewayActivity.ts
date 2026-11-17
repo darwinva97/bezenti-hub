@@ -46,7 +46,34 @@ export interface GatewayRequestRecord {
   readonly usage: GatewayUsage | null;
   /** A request refused for load (a limit): counted in the daily summary, never as its own row. */
   readonly shed?: true;
+  /** The Grant that lent the account that answered (grants ticket 03); absent or null: own. */
+  readonly grantId?: string | null;
 }
+
+/** What a Grant used on one UTC day and the usage log has not written yet. */
+export interface UnwrittenUse {
+  readonly day: string;
+  readonly tokens: number;
+  readonly requests: number;
+}
+
+/**
+ * The tokens a Grant's caps count (grants ticket 03): input, output and cache writes. Cache reads
+ * are shown but never counted; unknown tokens count 0.
+ */
+const cappedTokensOf = (usage: GatewayUsage | null) =>
+  (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0) + (usage?.cacheWriteTokens ?? 0);
+
+/** A request a Grant's caps count: one that reached its account (never shed, never a count). */
+const countsForCaps = (
+  request: GatewayRequestRecord,
+): request is GatewayRequestRecord & {
+  readonly grantId: string;
+} =>
+  request.grantId !== undefined &&
+  request.grantId !== null &&
+  request.shed !== true &&
+  !request.route.endsWith("/count_tokens");
 
 /** The AI account a Thread's requests go to now. */
 export interface AccountInUse {
@@ -60,8 +87,15 @@ export interface AccountInUse {
 export class AiGatewayActivity extends Context.Service<
   AiGatewayActivity,
   {
-    /** Called once per request when it ends; ticket 05 counts usage from these. */
+    /**
+     * Called once per request when it ends; ticket 05 counts usage from these. A request through a
+     * Grant is also held as unwritten until the usage log `settle`s it, so a cap sees it at once.
+     */
     readonly record: (request: GatewayRequestRecord) => Effect.Effect<void>;
+    /** What a Grant used that the usage log has not written yet, by day (grants ticket 03). */
+    readonly unwritten: (grantId: string) => Effect.Effect<ReadonlyArray<UnwrittenUse>>;
+    /** The usage log wrote (or lost) these: they are no longer unwritten. */
+    readonly settle: (requests: ReadonlyArray<GatewayRequestRecord>) => Effect.Effect<void>;
     /** Subscribes now (nothing recorded after it returns is missed): every request from now on. */
     readonly subscribeRequests: Effect.Effect<
       Stream.Stream<GatewayRequestRecord>,
@@ -83,6 +117,21 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const requests = yield* PubSub.unbounded<GatewayRequestRecord>();
   const changes = yield* PubSub.unbounded<AccountInUse>();
+  // Grant → day → what is recorded and not yet written. Changed synchronously: a request recorded
+  // is seen by the next cap check; it leaves only after the log committed (never undercounted).
+  const pending = new Map<string, Map<string, { tokens: number; requests: number }>>();
+  const tally = (request: GatewayRequestRecord, sign: 1 | -1) => {
+    if (!countsForCaps(request)) return;
+    const day = request.at.slice(0, 10);
+    const days = pending.get(request.grantId) ?? new Map();
+    const entry = days.get(day) ?? { tokens: 0, requests: 0 };
+    entry.tokens += sign * cappedTokensOf(request.usage);
+    entry.requests += sign;
+    if (entry.requests <= 0) days.delete(day);
+    else days.set(day, entry);
+    if (days.size === 0) pending.delete(request.grantId);
+    else pending.set(request.grantId, days);
+  };
 
   const inUse = Effect.fn("AiGatewayActivity.inUse")(function* (threadId: ThreadId) {
     const rows = yield* sql<{ readonly accountId: string; readonly model: string }>`
@@ -124,7 +173,22 @@ const make = Effect.gen(function* () {
 
   return AiGatewayActivity.of({
     record: Effect.fn("AiGatewayActivity.record")(function* (request: GatewayRequestRecord) {
+      tally(request, 1);
       yield* PubSub.publish(requests, request);
+    }),
+    unwritten: Effect.fn("AiGatewayActivity.unwritten")(function* (grantId: string) {
+      return yield* Effect.sync(() =>
+        [...(pending.get(grantId) ?? new Map<string, { tokens: number; requests: number }>())].map(
+          ([day, entry]) => ({ day, tokens: entry.tokens, requests: entry.requests }),
+        ),
+      );
+    }),
+    settle: Effect.fn("AiGatewayActivity.settle")(function* (
+      written: ReadonlyArray<GatewayRequestRecord>,
+    ) {
+      yield* Effect.sync(() => {
+        for (const request of written) tally(request, -1);
+      });
     }),
     subscribeRequests: Effect.map(PubSub.subscribe(requests), Stream.fromSubscription),
     noteInUse,

@@ -3,13 +3,10 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type {
-  AiAccountProvider,
   AuthAccount,
   EnvironmentGrantLimits,
   EnvironmentId,
   Grant,
-  GrantLimits,
-  GrantSpaceRef,
   GrantTarget,
   HubEnvironmentSummary,
   SandboxHostReport,
@@ -36,10 +33,11 @@ import {
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { emptyStepUp, StepUpFields, toStepUp } from "./AccountSettingsSection";
+import { capUseText, gib, limitsText, spaceLabel, subscriptionTermsWarning } from "./grantText";
+import { ChangeCapsDialog } from "./LendAiAccountDialog";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 const GIB = 1024 ** 3;
-const gib = (bytes: number) => `${(bytes / GIB).toFixed(bytes % GIB === 0 ? 0 : 1)} GiB`;
 
 /** What a borrower is told before accepting, and what the lent machine shows: the spec's words. */
 const lenderSeesEverything = (lender: string) =>
@@ -52,37 +50,8 @@ const LENDER_RISKS = [
   "Disk is measured every minute, not capped: a Sandbox can go over its limit between two checks.",
 ];
 
-/**
- * A loan's Space as people tell them apart: every Personal space is called «Personal», so it is
- * named by its owner, «Ana (personal)».
- */
-export const spaceLabel = (space: GrantSpaceRef) =>
-  space.kind === "personal" ? `${space.ownerDisplayName ?? space.name} (personal)` : space.name;
 const targetLabel = (grant: Grant, fallback: string) =>
   grant.target === null ? fallback : spaceLabel(grant.target);
-
-const PERIODS = { day: "day", week: "week", month: "month" } as const;
-const machineLimitsText = (limits: EnvironmentGrantLimits) =>
-  `${limits.cpus} CPUs · ${gib(limits.memoryBytes)} memory · ${limits.pids} processes · ${gib(limits.diskBytes)} disk`;
-/** A loan's limits in words: a machine's sizes, or an AI account's caps («No cap»). */
-const limitsText = (limits: GrantLimits) => {
-  if (limits.kind === "environment") return machineLimitsText(limits);
-  const caps = [
-    ...(limits.tokens === null
-      ? []
-      : [`${limits.tokens.amount.toLocaleString()} tokens a ${PERIODS[limits.tokens.period]}`]),
-    ...(limits.requests === null
-      ? []
-      : [
-          `${limits.requests.amount.toLocaleString()} requests a ${PERIODS[limits.requests.period]}`,
-        ]),
-  ];
-  return caps.length === 0 ? "No cap" : caps.join(" · ");
-};
-
-/** The spec's warning for lending (and borrowing) a subscription. */
-export const subscriptionTermsWarning = (provider: AiAccountProvider | string) =>
-  `The terms of ${provider} forbid sharing this account; it may be suspended.`;
 
 /** What a loan lends, in words. */
 const nounOf = (grant: Grant) => (grant.resource.kind === "ai-account" ? "AI account" : "machine");
@@ -356,6 +325,11 @@ const loanDescription = (grant: Grant, side: "given" | "received") => {
     `${STATE_LABELS[grant.state]}${grant.endReason === null ? "" : ` (${END_LABELS[grant.endReason]})`} ${where}`,
     limitsText(grant.limits),
   ];
+  const caps = grant.aiAccount?.caps;
+  if (caps !== undefined && grant.state === "active") {
+    if (caps.tokens !== null) parts.push(capUseText("tokens", caps.tokens));
+    if (caps.requests !== null) parts.push(capUseText("requests", caps.requests));
+  }
   const machine = grant.machine;
   if (machine !== undefined && grant.state === "active") {
     if (machine.sandboxState !== null) {
@@ -400,6 +374,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
     readonly stepUp: StepUpState;
   } | null>(null);
   const [ending, setEnding] = useState<Grant | null>(null);
+  const [capping, setCapping] = useState<Grant | null>(null);
 
   const fetchLoans = (target: EnvironmentId) =>
     Promise.all([
@@ -538,26 +513,50 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
           title={`${grant.resource.name ?? `Your ${nounOf(grant)}`}`}
           description={loanDescription(grant, "given")}
           control={
-            mayChange && (grant.can.revoke || grant.can.cancel) ? (
-              <Button
-                disabled={pending}
-                size="xs"
-                variant="destructive-outline"
-                onClick={() =>
-                  grant.can.cancel
-                    ? void run(() =>
-                        settle(commands.cancel({ environmentId, input: { grantId: grant.id } })),
-                      )
-                    : setEnding(grant)
-                }
-              >
-                {grant.can.cancel ? "Cancel" : "Take back"}
-              </Button>
+            mayChange && (grant.can.revoke || grant.can.cancel || grant.can.setLimits) ? (
+              <div className="flex gap-1">
+                {grant.resource.kind === "ai-account" && grant.can.setLimits ? (
+                  <Button
+                    disabled={pending}
+                    size="xs"
+                    variant="outline"
+                    onClick={() => setCapping(grant)}
+                  >
+                    Caps…
+                  </Button>
+                ) : null}
+                {grant.can.revoke || grant.can.cancel ? (
+                  <Button
+                    disabled={pending}
+                    size="xs"
+                    variant="destructive-outline"
+                    onClick={() =>
+                      grant.can.cancel
+                        ? void run(() =>
+                            settle(
+                              commands.cancel({ environmentId, input: { grantId: grant.id } }),
+                            ),
+                          )
+                        : setEnding(grant)
+                    }
+                  >
+                    {grant.can.cancel ? "Cancel" : "Take back"}
+                  </Button>
+                ) : null}
+              </div>
             ) : null
           }
         />
       ))}
       {error === null ? null : <SettingsRow title="Something went wrong" description={error} />}
+      {capping !== null ? (
+        <ChangeCapsDialog
+          environmentId={environmentId}
+          grant={capping}
+          onClose={() => setCapping(null)}
+          onChanged={reload}
+        />
+      ) : null}
       {accepting !== null ? (
         <Dialog open onOpenChange={(open) => (open ? undefined : setAccepting(null))}>
           <DialogPopup className="sm:max-w-md">

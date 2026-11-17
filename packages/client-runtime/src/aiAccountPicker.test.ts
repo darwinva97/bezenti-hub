@@ -205,6 +205,25 @@ describe("aiAccountPickerLabel", () => {
     expect(aiAccountPickerLabel({ ...account, lentBy: { grantId: "grant-1", name: "Ana" } })).toBe(
       "Ana Claude · from Ana",
     );
+    // Grants 03: how much of its cap is used, or that it is reached.
+    const use = (used: number) => ({
+      used,
+      amount: 2000,
+      period: "day" as const,
+      resetsAt: "2026-11-19T00:00:00.000Z",
+    });
+    expect(
+      aiAccountPickerLabel({
+        ...account,
+        lentBy: { grantId: "grant-1", name: "Ana", caps: { tokens: use(800), requests: null } },
+      }),
+    ).toBe("Ana Claude · from Ana · 40% of daily cap");
+    expect(
+      aiAccountPickerLabel({
+        ...account,
+        lentBy: { grantId: "grant-1", name: "Ana", caps: { tokens: use(2100), requests: null } },
+      }),
+    ).toBe("Ana Claude · from Ana · cap reached");
   });
 });
 

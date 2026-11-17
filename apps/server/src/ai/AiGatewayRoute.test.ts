@@ -169,7 +169,7 @@ it.live.skipIf(!posix || platform === undefined)(
         body: { model: "deepseek-chat", input: PROMPT },
       });
       assert.equal(responses.status, 200);
-      // Grace's own Gemini (allowed to her, not to Acme) works in Acme for her.
+      // «Grace Gemini», lent to Acme, works in Acme.
       const gemini = yield* call(
         setup,
         "/api/ai/gemini/v1beta/models/gemini-3-pro:streamGenerateContent?alt=sse",

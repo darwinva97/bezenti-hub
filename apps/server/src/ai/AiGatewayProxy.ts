@@ -1,7 +1,8 @@
 /**
  * The AI gateway's work for one authorized request (spec 4 ticket 04), whatever door it came by:
  * read the body under a deadline, plan the route, hold a slot, pin `acct-<id>/<model>`, fail over
- * on 429 within one provider, stream the answer through the tap and record it. docs: ai-gateway.md.
+ * on 429 (or a lent account's reached cap, grants ticket 03) within one provider, stream the answer
+ * through the tap and record it. docs: ai-gateway.md.
  */
 import type { AiAccountId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -23,6 +24,7 @@ import * as AiAccounts from "./AiAccounts.ts";
 import * as AiGateway from "./AiGateway.ts";
 import * as AiGatewayActivity from "./AiGatewayActivity.ts";
 import type { GatewayCaller } from "./AiGatewayKeys.ts";
+import * as GrantCaps from "./GrantCaps.ts";
 import {
   bodyTemplate,
   CHOSEN_NOT_ALLOWED,
@@ -173,6 +175,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
     const accounts = yield* AiAccounts.AiAccounts;
     const gateway = yield* AiGateway.AiGateway;
     const activity = yield* AiGatewayActivity.AiGatewayActivity;
+    const caps = yield* GrantCaps.GrantCaps;
     const httpClient = yield* HttpClient.HttpClient;
     const slots = makePool({ perKey: limits.perKey, perUser: limits.perUser, total: limits.total });
     const readers = makePool({ perUser: limits.readersPerUser, total: limits.readersTotal });
@@ -319,6 +322,12 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
       const shape = route.shape;
       const startedAt = yield* DateTime.now;
       const allowed: ReadonlyArray<RoutableAccount> = caller.allowed;
+      // Why each allowed account is usable: the Space's own, or lent by a Grant (with its caps).
+      const viaOf = new Map(caller.allowed.map((account) => [account.id, account.via] as const));
+      const grantOf = (account: RoutableAccount | null) => {
+        const via = account === null ? undefined : viaOf.get(account.id);
+        return via?.kind === "grant" ? via.grantId : null;
+      };
       const chosenGone =
         caller.chosenAccountId !== null &&
         !allowed.some((account) => account.id === caller.chosenAccountId);
@@ -372,6 +381,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
             durationMs: DateTime.toEpochMillis(endedAt) - DateTime.toEpochMillis(startedAt),
             failovers: input.failovers,
             usage: input.usage,
+            grantId: grantOf(input.account),
             ...(input.shed === true ? { shed: true as const } : {}),
           };
           // Method, route, account, model, status and tokens: never a key, a header or a body.
@@ -536,7 +546,28 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
           );
       };
 
-      for (const [index, account] of plan.candidates.entries()) {
+      // A lent account whose Grant reached a cap counts as out of quota: the next candidate is
+      // tried (grants ticket 03). Checked before each send, so only requests already in flight
+      // when a cap is reached can pass it.
+      let capReached: string | null = null;
+      let outOfQuota: RoutableAccount | null = null;
+      for (const account of plan.candidates) {
+        const via = viaOf.get(account.id);
+        if (via?.kind === "grant") {
+          const state = yield* caps.check(via.grantId, via.limits).pipe(Effect.result);
+          if (state._tag === "Failure") {
+            return yield* refuseRecorded(503, state.failure.message);
+          }
+          if (state.success.exhausted !== null) {
+            capReached ??= GrantCaps.capReachedMessage({
+              accountName: account.name,
+              spaceName: via.spaceName,
+              reached: state.success.exhausted,
+            });
+            failovers += 1;
+            continue;
+          }
+        }
         lastAccount = account;
         const sent = yield* send(account);
         if (sent._tag === "Failure") {
@@ -549,12 +580,9 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
         const response = sent.success;
         if (response.status === 429) {
           yield* readError(response.stream);
-          if (index < plan.candidates.length - 1) {
-            failovers += 1;
-            continue;
-          }
-          yield* record({ account, status: 429, failovers, usage: null });
-          return refuse(shape, 429, noQuotaMessage(plan.candidates[0]!.provider));
+          outOfQuota = account;
+          failovers += 1;
+          continue;
         }
         if (response.status < 200 || response.status >= 300) {
           const text = yield* readError(response.stream);
@@ -618,6 +646,14 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
           body: answer,
         } satisfies ProxyAnswer;
       }
+      // None left: the accounts tried before the last one are its failovers.
+      failovers = Math.max(0, failovers - 1);
+      // A cap reached says which loan and when it resets (shed: no account answered).
+      if (capReached !== null) return yield* refuseRecorded(429, capReached);
+      if (outOfQuota !== null) {
+        yield* record({ account: outOfQuota, status: 429, failovers, usage: null });
+        return refuse(shape, 429, noQuotaMessage(plan.candidates[0]!.provider));
+      }
       return yield* refuseRecorded(503, "No AI account could serve this request.");
     });
 
@@ -625,9 +661,12 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
   }
 });
 
-/** With these limits (tests); `layer` reads the body limit from the environment. */
+/**
+ * With these limits (tests); `layer` reads the body limit from the environment. Both bring the
+ * loans' caps (GrantCaps), which the picker reads too.
+ */
 export const layerWith = (limits: AiGatewayProxyLimits) =>
-  Layer.effect(AiGatewayProxy, make(limits));
+  Layer.effect(AiGatewayProxy, make(limits)).pipe(Layer.provideMerge(GrantCaps.layer));
 
 export const layer = Layer.effect(
   AiGatewayProxy,
@@ -637,4 +676,4 @@ export const layer = Layer.effect(
     );
     return yield* make({ ...DEFAULT_AI_GATEWAY_PROXY_LIMITS, maxRequestBytes });
   }),
-);
+).pipe(Layer.provideMerge(GrantCaps.layer));

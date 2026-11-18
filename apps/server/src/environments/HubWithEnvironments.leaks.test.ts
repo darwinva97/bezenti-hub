@@ -1,8 +1,8 @@
 /**
- * Owned-resources 11, leak smoke: Ana's multi-line Secret and her own AI account's key, after a
- * turn that prints both and a terminal that prints half the Secret, are in no log, span, row,
- * process argument, Hub file or file of her machine but her Project's checkout. Every check is a
- * count or a boolean: a failure never prints a planted value.
+ * Owned-resources 11, leak smoke: Ana's multi-line Secret, her own AI account's key and a Secret
+ * of a group lent to her Personal space (Grants ticket 07), after a turn that prints them and a
+ * terminal that prints the Secrets, are in no log, span, row, process argument, Hub file or file
+ * of her machine but her Project's checkout. Every check is a count or a boolean.
  */
 // @effect-diagnostics nodeBuiltinImport:off -- the test reads files and /proc.
 import { assert, describe, it } from "@effect/vitest";
@@ -30,6 +30,7 @@ import * as Tracer from "effect/Tracer";
 
 import * as AiAccounts from "../ai/AiAccounts.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
+import { lendVaultGroup } from "../grants/Grants.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as Vaults from "../vaults/Vaults.ts";
@@ -38,6 +39,7 @@ import {
   awaitUploaded,
   createOrganization,
   loadFixture,
+  ownerIdOf,
   replayOn,
 } from "./HubWithEnvironments.scenarios.testkit.ts";
 import {
@@ -61,7 +63,9 @@ const ANA_PEM = PEM_LINES.join("\n");
 /** What must never show: the whole value and each line the masker covers on its own. */
 const PEM_NEEDLES = [ANA_PEM, ...PEM_LINES.filter((line) => !line.startsWith("-----"))];
 const ANA_KEY = "crsr-ana-own-direct-key-0123456789abcdef";
-const NEEDLES = [...PEM_NEEDLES, ANA_KEY];
+/** Grants ticket 07: a Secret of the Owner's group lent to Ana's Personal space. */
+const LENT_SECRET = "lent-by-the-owner-secret-0707-fedcba9876";
+const NEEDLES = [...PEM_NEEDLES, ANA_KEY, LENT_SECRET];
 
 type Adapters = Layer.Layer<
   ProviderAdapterRegistry.ProviderAdapterRegistryV2,
@@ -93,7 +97,7 @@ const printingAll = (adapters: Adapters, seen: Array<SecretEnv | undefined>): Ad
                       maskDeep(event, (text) =>
                         text.replaceAll(
                           "fixture simple ok",
-                          `key ${ANA_KEY}\n${ANA_PEM}\nhalf ${PEM_LINES[1]}`,
+                          `key ${ANA_KEY}\n${ANA_PEM}\nhalf ${PEM_LINES[1]}\nlent ${LENT_SECRET}`,
                         ),
                       ),
                     ),
@@ -166,6 +170,25 @@ describe("Hub con Environments: Ana's Secret and AI key leak nowhere (owned-reso
           apiKey: Redacted.make(ANA_KEY),
         })
         .pipe(asAna);
+      // The Owner lends one of their groups to her Personal space; she makes it a default there.
+      const owner = yield* ownerIdOf(hub);
+      const lent = yield* hub
+        .service(Vaults.Vaults)
+        .create({ name: "Owner lends", owner: { kind: "user", userId: owner } })
+        .pipe(CommandActor.actAs(owner));
+      yield* hub
+        .service(Vaults.Vaults)
+        .putEntry({ vaultId: lent.id, name: "LENT_TOKEN", value: Redacted.make(LENT_SECRET) })
+        .pipe(CommandActor.actAs(owner));
+      yield* lendVaultGroup(hub.server.sql, {
+        vaultId: lent.id,
+        spaceId: `personal:${ana}`,
+        lender: { kind: "user", id: owner },
+      });
+      yield* hub
+        .service(Vaults.Vaults)
+        .setSpaceDefaults({ spaceId: SpaceId.make(`personal:${ana}`), vaultIds: [lent.id] })
+        .pipe(asAna);
       const laptop = yield* hub.join({
         name: "Ana Laptop",
         adapters: printingAll(loaded.adapters, seen),
@@ -181,11 +204,12 @@ describe("Hub con Environments: Ana's Secret and AI key leak nowhere (owned-reso
       yield* awaitUploaded(hub, threadId as ThreadId, 1);
       // Her process got both (so the checks below look for something that was there).
       const delivered = seen.flatMap((env) => env?.variables ?? []).map((v) => v.name);
-      assert.includeMembers(delivered, ["ANA_PEM", "CURSOR_API_KEY"]);
+      assert.includeMembers(delivered, ["ANA_PEM", "CURSOR_API_KEY", "LENT_TOKEN"]);
       const projection = JSON.stringify(
         yield* hub.service(Orchestrator.OrchestratorV2).getThreadProjection(threadId as ThreadId),
       );
       assert.include(projection, "[ANA_PEM]", "the history names the Secret");
+      assert.include(projection, "[LENT_TOKEN]", "the history names the lent Secret");
       assert.equal(holds(projection), 0, "the history holds a planted value");
 
       // A terminal that prints the Secret: the client sees `[ANA_PEM]`.
@@ -222,6 +246,14 @@ describe("Hub con Environments: Ana's Secret and AI key leak nowhere (owned-reso
       const frame = yield* Queue.take(frames);
       assert.include(frame, "[ANA_PEM]");
       assert.equal(holds(frame), 0, "the terminal showed a planted value");
+      // And the lent Secret, read from the same shell: `[LENT_TOKEN]`.
+      yield* workspace.terminalWrite(
+        { threadId: threadId as ThreadId, terminalId: "term-1", data: "echo $LENT_TOKEN\r" },
+        caller,
+      );
+      let shown = "";
+      while (!shown.includes("[LENT_TOKEN]")) shown += yield* Queue.take(frames);
+      assert.equal(holds(shown), 0, "the terminal showed the lent value");
 
       // The smoke: counts only.
       const hubFiles = yield* Effect.forEach(NEEDLES, (needle) => hubFilesHolding(hub, needle));

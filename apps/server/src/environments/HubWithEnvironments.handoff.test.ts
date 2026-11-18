@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
+  ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
   EnvironmentId,
   EventId,
   ProviderInstanceId,
@@ -23,11 +24,16 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/ai";
 
+import * as CommandActor from "../auth/CommandActor.ts";
 import { addMember } from "../auth/UserAuth.testkit.ts";
+import * as Grants from "../grants/Grants.ts";
+import { lendVaultGroup } from "../grants/Grants.testkit.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { projectTurnItemForWire } from "../orchestration-v2/WireProjection.ts";
@@ -36,7 +42,10 @@ import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as SecretDelivery from "../vaults/SecretDelivery.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
+import * as Vaults from "../vaults/Vaults.ts";
 import {
   databaseText,
   hubFilesHolding,
@@ -300,6 +309,106 @@ describe("Hub con Environments: the agent's memory after a move", () => {
         { hub: [], database: false, laptop: [], desktop: [], processes: [] },
       );
     }).pipe(Effect.scoped),
+  );
+
+  // Grants ticket 07: a Secret of Ana's group lent to the Thread's Space reaches the Thread's process
+  // by delivery, as any; after the loan ends, a handoff summary that names it is still masked.
+  it.live(
+    "a lent Secret a Thread received stays masked in the handoff after the loan ends (Grants 07)",
+    () =>
+      Effect.gen(function* () {
+        const value = "ana-lent-handoff-value-0707";
+        const { hub, laptop, desktop, threadId, owner } = yield* turnOnLaptop({
+          desktop: true,
+          laptopTextGeneration: recordingTextGeneration([], {
+            summary: `The deploy used ${value} from Ana's keys.`,
+          }),
+          hubTextGeneration: recordingTextGeneration([], { summary: "unused" }),
+        });
+        assert.isDefined(desktop);
+        const ana = UserId.make("ana");
+        yield* addMember(hub.server, { id: "ana", displayName: "Ana" });
+        const vaults = hub.service(Vaults.Vaults);
+        const group = yield* vaults
+          .create({ name: "Ana lends", owner: { kind: "user", userId: ana } })
+          .pipe(CommandActor.actAs(ana));
+        yield* vaults
+          .putEntry({ vaultId: group.id, name: "ANA_LENT_TOKEN", value: Redacted.make(value) })
+          .pipe(CommandActor.actAs(ana));
+        const placement = yield* hub
+          .service(SpaceDirectory.SpaceDirectory)
+          .placementOf(threadId)
+          .pipe(Effect.orDie);
+        assert.isTrue(Option.isSome(placement));
+        const spaceId = Option.getOrThrow(placement).space.id;
+        const grantId = yield* lendVaultGroup(hub.server.sql, {
+          vaultId: group.id,
+          spaceId,
+          lender: { kind: "user", id: ana },
+        });
+        yield* vaults
+          .setSpaceDefaults({ spaceId, vaultIds: [group.id] })
+          .pipe(CommandActor.actAs(owner));
+        // A process of the Thread started by its owner on the Laptop (a terminal, a script) receives
+        // it, through delivery, which remembers it for masking.
+        const delivery = hub.service(SecretDelivery.SecretDelivery);
+        const target = {
+          environmentId: laptop.environmentId,
+          contractVersion: ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
+        };
+        const startProcess = delivery
+          .plan({ threadId, actingUserId: owner, target })
+          .pipe(Effect.flatMap(delivery.resolve), Effect.orDie);
+        const received = yield* startProcess;
+        assert.isTrue(
+          received?.variables?.some(
+            (variable) => variable.name === "ANA_LENT_TOKEN" && variable.value === value,
+          ) === true,
+          "the lent Secret reached the Thread's process",
+        );
+
+        // Ana takes it back: the next process gets nothing of it.
+        yield* hub
+          .service(Grants.Grants)
+          .end({ grantId })
+          .pipe(CommandActor.actAs(ana), Effect.orDie);
+        const after = yield* startProcess;
+        assert.isFalse(
+          after?.variables?.some((variable) => variable.name === "ANA_LENT_TOKEN") === true,
+          "a revoked loan reaches no new process",
+        );
+
+        // The move's summary names it: stored and shown as [ANA_LENT_TOKEN], nowhere in clear.
+        yield* dispatchMove(hub, {
+          commandId: "command:move-lent-secret-summary",
+          threadId,
+          target: desktop.environmentId,
+          actor: owner,
+        });
+        const moved = yield* settledMove(hub, threadId);
+        assert.equal(moved.move?.status, "switched", moved.move?.failure?.message);
+        const { item } = yield* handoffItemOf(hub, threadId);
+        assert.equal(item.summary, "The deploy used [ANA_LENT_TOKEN] from Ana's keys.");
+        assert.isFalse(item.context.includes(value), "the handoff context holds the value");
+        const stored = yield* hub.server.sql<{ readonly payload: string }>`
+          SELECT payload_json AS payload FROM orchestration_v2_move_handoffs
+        `;
+        // As the handoff is kept (its row, and every other row of the database, checked below).
+        assert.isFalse(
+          stored.some((row) => row.payload.includes(value)),
+          "a stored handoff holds the value",
+        );
+        assert.deepEqual(
+          {
+            hub: yield* hubFilesHolding(hub, value),
+            database: (yield* databaseText(hub)).includes(value),
+            laptop: yield* machineFilesHolding(laptop, value),
+            desktop: yield* machineFilesHolding(desktop, value),
+            processes: yield* processArgsHolding(value),
+          },
+          { hub: [], database: false, laptop: [], desktop: [], processes: [] },
+        );
+      }).pipe(Effect.scoped),
   );
 
   it.live("with the source offline and no agents on the Hub, the target writes the summary", () =>

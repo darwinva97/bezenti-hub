@@ -255,6 +255,9 @@ export const ProjectId = makeEntityId("ProjectId");
 export type ProjectId = typeof ProjectId.Type;
 export const EnvironmentId = makeEntityId("EnvironmentId");
 export type EnvironmentId = typeof EnvironmentId.Type;
+/** A loan (`grants.ts`); here so Vaults' contracts name one without importing Grants'. */
+export const GrantId = makeEntityId("GrantId");
+export type GrantId = typeof GrantId.Type;
 export const CommandId = makeEntityId("CommandId");
 export type CommandId = typeof CommandId.Type;
 export const EventId = makeEntityId("EventId");

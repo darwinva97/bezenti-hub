@@ -439,8 +439,7 @@ import {
   VaultGroupListResult,
   VaultGroupSummary,
   VaultGroupUpdateInput,
-  // Spec 5 ticket 03: allowances, defaults and the effective set.
-  VaultAllowInput,
+  // Spec 5 ticket 03: defaults and the effective set.
   VaultChoices,
   VaultChoicesInput,
   VaultProjectChoiceSetInput,
@@ -632,8 +631,7 @@ export const WS_METHODS = {
   vaultsEntriesPut: "vaults.entries.put",
   vaultsEntriesDelete: "vaults.entries.delete",
   vaultsUnlinkedNoticeDismiss: "vaults.unlinkedNotice.dismiss",
-  // Vaults, spec 5 ticket 03: allowances, defaults, Project choices and a Thread's names.
-  vaultsAllow: "vaults.allow",
+  // Vaults, spec 5 ticket 03: defaults, Project choices and a Thread's names.
   vaultsChoices: "vaults.choices",
   vaultsSpaceDefaultsSet: "vaults.spaceDefaults.set",
   vaultsProjectChoicesSet: "vaults.projectChoices.set",
@@ -2273,12 +2271,7 @@ const WsVaultsUnlinkedNoticeDismissRpc = Rpc.make(WS_METHODS.vaultsUnlinkedNotic
   success: VaultUnlinkedDismissResult,
   error: VaultRpcError,
 });
-// Spec 5 ticket 03: allowances, defaults, Project choices and a Thread's names.
-const WsVaultsAllowRpc = Rpc.make(WS_METHODS.vaultsAllow, {
-  payload: VaultAllowInput,
-  success: VaultGroupSummary,
-  error: VaultRpcError,
-});
+// Spec 5 ticket 03: defaults, Project choices and a Thread's names.
 const WsVaultsChoicesRpc = Rpc.make(WS_METHODS.vaultsChoices, {
   payload: VaultChoicesInput,
   success: VaultChoices,
@@ -2449,7 +2442,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsVaultsEntriesPutRpc,
   WsVaultsEntriesDeleteRpc,
   WsVaultsUnlinkedNoticeDismissRpc,
-  WsVaultsAllowRpc,
   WsVaultsChoicesRpc,
   WsVaultsSpaceDefaultsSetRpc,
   WsVaultsProjectChoicesSetRpc,

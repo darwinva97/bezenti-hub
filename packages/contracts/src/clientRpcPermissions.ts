@@ -94,7 +94,6 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.vaultsEntriesPut]: AuthAccessWriteScope,
   [WS_METHODS.vaultsEntriesDelete]: AuthAccessWriteScope,
   [WS_METHODS.vaultsUnlinkedNoticeDismiss]: AuthAccessWriteScope,
-  [WS_METHODS.vaultsAllow]: AuthAccessWriteScope,
   // Vaults ticket 03: Secret providers' scopes and «Test connection» are settings, the Owner's.
   [WS_METHODS.secretProvidersTest]: AuthSettingsWriteScope,
   [WS_METHODS.secretProvidersScopesPut]: AuthSettingsWriteScope,

@@ -137,6 +137,7 @@ import Migration0145 from "./Migrations/145_AiAccountAllowancesToGrants.ts";
 import Migration0146 from "./Migrations/146_AiUsageGrant.ts";
 import Migration0147 from "./Migrations/147_AiUsageUncachedInput.ts";
 import Migration0148 from "./Migrations/148_GrantOffersCancellable.ts";
+import Migration0149 from "./Migrations/149_VaultAllowancesToGrants.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -276,6 +277,7 @@ const migrationEntries = [
   [146, "AiUsageGrant", Migration0146],
   [147, "AiUsageUncachedInput", Migration0147],
   [148, "GrantOffersCancellable", Migration0148],
+  [149, "VaultAllowancesToGrants", Migration0149],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

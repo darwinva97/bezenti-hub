@@ -1,14 +1,13 @@
 /**
  * Grants: an owner lends one resource to a Space, with limits, and can take it back. Machines
- * (`environment`) and AI accounts are lent today; Vault groups fit the same row later. See
- * docs/internals/grants.md.
+ * (`environment`), AI accounts and Vault groups are lent. See docs/internals/grants.md.
  */
 import * as Schema from "effect/Schema";
 
 import { AiAccountId, AiAccountProvider, AiAccountType } from "./aiAccounts.ts";
 import {
   EnvironmentId,
-  makeEntityId,
+  GrantId,
   SpaceId,
   TrimmedNonEmptyString,
   UserId,
@@ -16,9 +15,9 @@ import {
 import { GrantCap, GrantCapState } from "./grantCaps.ts";
 import { SandboxHostReport } from "./hubEnvironments.ts";
 import { AuthReauth } from "./userAccounts.ts";
+import { VaultEntryId, VaultGroupId } from "./vaults.ts";
 
-export const GrantId = makeEntityId("GrantId");
-export type GrantId = typeof GrantId.Type;
+export { GrantId };
 
 export const GrantResourceKind = Schema.Literals(["environment", "ai-account", "vault-group"]);
 export type GrantResourceKind = typeof GrantResourceKind.Type;
@@ -74,13 +73,22 @@ export const AiAccountGrantLimits = Schema.Struct({
 });
 export type AiAccountGrantLimits = typeof AiAccountGrantLimits.Type;
 
-/** By resource kind; Vault groups join this union when they can be lent. */
-export const GrantLimits = Schema.Union([EnvironmentGrantLimits, AiAccountGrantLimits]);
+/** A lent Vault group has no limits: its borrower's agents read its Secrets, or nothing reaches them. */
+export const VaultGroupGrantLimits = Schema.Struct({ kind: Schema.Literal("vault-group") });
+export type VaultGroupGrantLimits = typeof VaultGroupGrantLimits.Type;
+
+/** By resource kind. */
+export const GrantLimits = Schema.Union([
+  EnvironmentGrantLimits,
+  AiAccountGrantLimits,
+  VaultGroupGrantLimits,
+]);
 export type GrantLimits = typeof GrantLimits.Type;
 
 export const GrantResourceRef = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("environment"), environmentId: EnvironmentId }),
   Schema.Struct({ kind: Schema.Literal("ai-account"), aiAccountId: AiAccountId }),
+  Schema.Struct({ kind: Schema.Literal("vault-group"), vaultGroupId: VaultGroupId }),
 ]);
 export type GrantResourceRef = typeof GrantResourceRef.Type;
 
@@ -147,6 +155,15 @@ export const Grant = Schema.Struct({
       status: Schema.Literals(["open", "expired", "used", "cancelled"]),
     }),
   ),
+  /**
+   * A lent Vault group's, for its lender only (Grants ticket 07): once the loan is over, the
+   * Secrets the borrower's agents could read whose value was not replaced since. Names only.
+   */
+  vaultGroup: Schema.optionalKey(
+    Schema.Struct({
+      toRotate: Schema.Array(Schema.Struct({ entryId: VaultEntryId, name: Schema.String })),
+    }),
+  ),
   /** What the viewer may do with it now. */
   can: Schema.Struct({
     cancel: Schema.Boolean,
@@ -192,6 +209,11 @@ export const GrantGiveInput = Schema.Struct({
   limits: GrantLimits,
   /** A Plan as the destination: refused (`plan-target-unavailable`) until Plans exist. */
   planId: Schema.optionalKey(Schema.String),
+  /**
+   * A Vault group's loan that starts active: also make it the Space's last default (Grants
+   * ticket 07). Ignored otherwise.
+   */
+  useAsDefault: Schema.optionalKey(Schema.Boolean),
 });
 export type GrantGiveInput = typeof GrantGiveInput.Type;
 
@@ -224,20 +246,39 @@ export type GrantMigrationReview = typeof GrantMigrationReview.Type;
 export const GrantMigrationReviewsInput = Schema.Struct({});
 export type GrantMigrationReviewsInput = typeof GrantMigrationReviewsInput.Type;
 
+/**
+ * Grants ticket 07: the same for a Vault allowance «to a User»: one of the Owner's groups reached
+ * that User's own turns in an Organization they work in, and its Grant (to their Personal space)
+ * does not. Lending it there reaches every Thread of that Organization that chooses it.
+ */
+export const GrantVaultGroupMigrationReview = Schema.Struct({
+  vaultGroupId: VaultGroupId,
+  vaultGroupName: Schema.String,
+  userId: UserId,
+  userName: Schema.String,
+  spaceId: SpaceId,
+  spaceName: Schema.String,
+  startsActive: Schema.Boolean,
+});
+export type GrantVaultGroupMigrationReview = typeof GrantVaultGroupMigrationReview.Type;
+
 export const GrantMigrationReviews = Schema.Struct({
   reviews: Schema.Array(GrantMigrationReview),
+  vaultGroups: Schema.optionalKey(Schema.Array(GrantVaultGroupMigrationReview)),
 });
 export type GrantMigrationReviews = typeof GrantMigrationReviews.Type;
 
 /** «Dismiss»: the Owner keeps it narrowed; the row goes. */
-export const GrantDismissMigrationReviewInput = Schema.Struct({
-  aiAccountId: AiAccountId,
-  userId: UserId,
-  spaceId: SpaceId,
-});
+export const GrantDismissMigrationReviewInput = Schema.Union([
+  Schema.Struct({ aiAccountId: AiAccountId, userId: UserId, spaceId: SpaceId }),
+  Schema.Struct({ vaultGroupId: VaultGroupId, userId: UserId, spaceId: SpaceId }),
+]);
 export type GrantDismissMigrationReviewInput = typeof GrantDismissMigrationReviewInput.Type;
 
-/** HTTP: giving or accepting a machine needs a strong factor when it makes the Grant active. */
+/**
+ * HTTP: giving or accepting a machine needs a strong factor when it makes the Grant active;
+ * giving a Vault group always does (its Secrets reach the borrower's agents).
+ */
 export const GrantGiveRequest = Schema.Struct({
   ...GrantGiveInput.fields,
   reauth: Schema.optionalKey(AuthReauth),
@@ -247,6 +288,8 @@ export type GrantGiveRequest = typeof GrantGiveRequest.Type;
 export const GrantAcceptRequest = Schema.Struct({
   grantId: GrantId,
   reauth: Schema.optionalKey(AuthReauth),
+  /** A Vault group's loan: also make it the Space's last default (Grants ticket 07). */
+  useAsDefault: Schema.optionalKey(Schema.Boolean),
 });
 export type GrantAcceptRequest = typeof GrantAcceptRequest.Type;
 

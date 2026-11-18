@@ -1,0 +1,242 @@
+{
+  "owner|personal:owner|-": {
+    "vaults": ["o-user", "owner-default"],
+    "sources": {
+      "o-user": "user",
+      "owner-default": "space"
+    },
+    "winners": {
+      "OWNER_DEFAULT": "owner-default",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "owner|personal:ana|-": {
+    "vaults": ["o-user", "ana-default", "o-multi"],
+    "sources": {
+      "o-user": "user",
+      "ana-default": "space",
+      "o-multi": "space"
+    },
+    "winners": {
+      "ANA_DEFAULT": "ana-default",
+      "O_MULTI": "o-multi",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "owner|personal:bob|-": {
+    "vaults": ["o-user", "bob-default"],
+    "sources": {
+      "o-user": "user",
+      "bob-default": "space"
+    },
+    "winners": {
+      "BOB_DEFAULT": "bob-default",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "owner|personal:dan|-": {
+    "vaults": ["o-user"],
+    "sources": {
+      "o-user": "user"
+    },
+    "winners": {
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "owner|org-acme|-": {
+    "vaults": ["o-user", "acme-default", "o-multi", "o-shared"],
+    "sources": {
+      "o-user": "user",
+      "acme-default": "space",
+      "o-multi": "space",
+      "o-shared": "space"
+    },
+    "winners": {
+      "ACME_DEFAULT": "acme-default",
+      "O_MULTI": "o-multi",
+      "O_SHARED": "o-shared",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "owner|org-acme|p-acme": {
+    "vaults": ["o-user", "acme-keys", "acme-default", "o-shared"],
+    "sources": {
+      "o-user": "user",
+      "acme-keys": "project",
+      "acme-default": "space",
+      "o-shared": "space"
+    },
+    "winners": {
+      "ACME_DEFAULT": "acme-default",
+      "ACME_KEYS": "acme-keys",
+      "O_SHARED": "o-shared",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "owner|org-globex|-": {
+    "vaults": ["o-user", "globex-default"],
+    "sources": {
+      "o-user": "user",
+      "globex-default": "space"
+    },
+    "winners": {
+      "GLOBEX_DEFAULT": "globex-default",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "owner|org-initech|-": {
+    "vaults": ["o-user"],
+    "sources": {
+      "o-user": "user"
+    },
+    "winners": {
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "ana|personal:owner|-": "forbidden",
+  "ana|personal:ana|-": {
+    "vaults": ["o-multi", "o-user", "ana-default"],
+    "sources": {
+      "o-multi": "user",
+      "o-user": "user",
+      "ana-default": "space"
+    },
+    "winners": {
+      "ANA_DEFAULT": "ana-default",
+      "O_MULTI": "o-multi",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-multi",
+      "USER_NAME": "o-user"
+    }
+  },
+  "ana|personal:bob|-": "forbidden",
+  "ana|personal:dan|-": "forbidden",
+  "ana|org-acme|-": {
+    "vaults": ["o-multi", "o-user", "acme-default", "o-shared"],
+    "sources": {
+      "o-multi": "user",
+      "o-user": "user",
+      "acme-default": "space",
+      "o-shared": "space"
+    },
+    "winners": {
+      "ACME_DEFAULT": "acme-default",
+      "O_MULTI": "o-multi",
+      "O_SHARED": "o-shared",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-multi",
+      "USER_NAME": "o-user"
+    }
+  },
+  "ana|org-acme|p-acme": {
+    "vaults": ["o-multi", "o-user", "acme-keys", "acme-default", "o-shared"],
+    "sources": {
+      "o-multi": "user",
+      "o-user": "user",
+      "acme-keys": "project",
+      "acme-default": "space",
+      "o-shared": "space"
+    },
+    "winners": {
+      "ACME_DEFAULT": "acme-default",
+      "ACME_KEYS": "acme-keys",
+      "O_MULTI": "o-multi",
+      "O_SHARED": "o-shared",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-multi",
+      "USER_NAME": "o-user"
+    }
+  },
+  "ana|org-globex|-": {
+    "vaults": ["o-multi", "o-user", "globex-default"],
+    "sources": {
+      "o-multi": "user",
+      "o-user": "user",
+      "globex-default": "space"
+    },
+    "winners": {
+      "GLOBEX_DEFAULT": "globex-default",
+      "O_MULTI": "o-multi",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-multi",
+      "USER_NAME": "o-user"
+    }
+  },
+  "ana|org-initech|-": "forbidden",
+  "bob|personal:owner|-": "forbidden",
+  "bob|personal:ana|-": "forbidden",
+  "bob|personal:bob|-": {
+    "vaults": ["o-user", "bob-default"],
+    "sources": {
+      "o-user": "user",
+      "bob-default": "space"
+    },
+    "winners": {
+      "BOB_DEFAULT": "bob-default",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "bob|personal:dan|-": "forbidden",
+  "bob|org-acme|-": {
+    "vaults": ["o-user", "acme-default", "o-multi", "o-shared"],
+    "sources": {
+      "o-user": "user",
+      "acme-default": "space",
+      "o-multi": "space",
+      "o-shared": "space"
+    },
+    "winners": {
+      "ACME_DEFAULT": "acme-default",
+      "O_MULTI": "o-multi",
+      "O_SHARED": "o-shared",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "bob|org-acme|p-acme": {
+    "vaults": ["o-user", "acme-keys", "acme-default", "o-shared"],
+    "sources": {
+      "o-user": "user",
+      "acme-keys": "project",
+      "acme-default": "space",
+      "o-shared": "space"
+    },
+    "winners": {
+      "ACME_DEFAULT": "acme-default",
+      "ACME_KEYS": "acme-keys",
+      "O_SHARED": "o-shared",
+      "O_USER": "o-user",
+      "SHARED_NAME": "o-user",
+      "USER_NAME": "o-user"
+    }
+  },
+  "bob|org-globex|-": "forbidden",
+  "bob|org-initech|-": "forbidden",
+  "dan|personal:owner|-": "forbidden",
+  "dan|personal:ana|-": "forbidden",
+  "dan|personal:bob|-": "forbidden",
+  "dan|personal:dan|-": "forbidden",
+  "dan|org-acme|-": "forbidden",
+  "dan|org-acme|p-acme": "forbidden",
+  "dan|org-globex|-": "forbidden",
+  "dan|org-initech|-": "forbidden"
+}

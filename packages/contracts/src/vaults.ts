@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import {
+  GrantId,
   IsoDateTime,
   makeEntityId,
   ProjectId,
@@ -298,11 +299,20 @@ export const VaultGroupSummary = Schema.Struct({
   canEdit: Schema.Boolean,
   /** Rename, describe, archive and delete the group: its owner's managers, never on `default`. */
   canManage: Schema.Boolean,
-  /**
-   * Whom the Owner allowed it to; empty for anyone who does not manage it. A group reaches its
-   * owner's Space without one; only the Owner's named groups are allowed further.
-   */
+  /** Deprecated: always empty (Grants ticket 07, allowances became Grants). Older clients decode it. */
   allowances: Schema.Array(VaultAllowance),
+  /**
+   * Grants ticket 07: lent by its owner to a Space the viewer works in, read-only there: its
+   * Variables with their value, its Secrets by name.
+   */
+  borrowed: Schema.optionalKey(
+    Schema.Struct({
+      grantId: GrantId,
+      spaceId: SpaceId,
+      spaceName: Schema.String,
+      lenderName: Schema.NullOr(Schema.String),
+    }),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -522,17 +532,10 @@ export const VaultUnlinkedDismissInput = Schema.Struct({});
 export const VaultUnlinkedDismissResult = Schema.Struct({ dismissed: Schema.Number });
 export type VaultUnlinkedDismissResult = typeof VaultUnlinkedDismissResult.Type;
 
-/** `vaults.allow`: the Owner allows one of their named groups to a Space or a User, or takes it back. */
-export const VaultAllowInput = Schema.Struct({
-  vaultId: VaultGroupId,
-  subject: VaultSubject,
-  allowed: Schema.Boolean,
-});
-export type VaultAllowInput = typeof VaultAllowInput.Type;
-
 /**
- * Where a Thread's Vault comes from, in the order that wins a name both define: the acting
- * User's own, then the ones its Project adds, then its Space's defaults.
+ * Where a Thread's Vault comes from, in the order that wins a name both define: the ones its
+ * Project adds, then its Space's defaults. `user` (a group allowed to the acting User) is never
+ * sent since allowances became Grants (Grants ticket 07); kept so older clients decode.
  */
 export const VaultSource = Schema.Literals(["user", "project", "space"]);
 export type VaultSource = typeof VaultSource.Type;
@@ -552,6 +555,8 @@ export const VaultChoiceOption = Schema.Struct({
   archived: Schema.Boolean,
   /** The secrets' names it holds (never values). */
   names: Schema.Array(Schema.String),
+  /** Grants ticket 07: lent to the Space by its owner (`ownerName`). */
+  lent: Schema.optionalKey(Schema.Struct({ grantId: GrantId })),
 });
 export type VaultChoiceOption = typeof VaultChoiceOption.Type;
 
@@ -627,6 +632,19 @@ export const VaultThreadVariable = Schema.Struct({
 });
 export type VaultThreadVariable = typeof VaultThreadVariable.Type;
 
+/**
+ * Grants ticket 07: a name of a lent group the Thread's processes never receive: one that changes
+ * how tools run (`lent-dangerous`), or any while the Thread runs on a machine lent to its Space
+ * (`lent-machine`: that machine's owner could read it). Names only.
+ */
+export const VaultThreadWithheld = Schema.Struct({
+  name: Schema.String,
+  vaultId: VaultGroupId,
+  vaultName: Schema.String,
+  reason: Schema.Literals(["lent-dangerous", "lent-machine"]),
+});
+export type VaultThreadWithheld = typeof VaultThreadWithheld.Type;
+
 export const VaultThreadEnvironment = Schema.Struct({
   threadId: ThreadId,
   spaceId: SpaceId,
@@ -638,9 +656,12 @@ export const VaultThreadEnvironment = Schema.Struct({
       name: Schema.String,
       source: VaultSource,
       ownerName: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      /** Grants ticket 07: lent to the Thread's Space by its owner. */
+      lent: Schema.optionalKey(Schema.Boolean),
     }),
   ),
   variables: Schema.Array(VaultThreadVariable),
+  withheld: Schema.optionalKey(Schema.Array(VaultThreadWithheld)),
   /**
    * Spec 4 ticket 07: the direct AI account credential the Thread's agent last received («AI
    * account credential»): the variable's and the account's names, never its value.

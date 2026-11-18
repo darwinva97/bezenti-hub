@@ -184,12 +184,14 @@ export const AUDIT_DETAIL_KEYS = {
   /** `via` the removal that took it (`user.remove`, `organization.delete`), if any. */
   "vault_group.delete": ["entries", "via"],
   /** Allowed (`allowed`: true) or taken back, to a `space` or a `user` (`subjectKind`, `subjectId`). */
+  /** No longer written (Grants ticket 07: allowances became Grants); older rows still show. */
   "vault.allow": ["subjectKind", "subjectId", "subjectName", "allowed"],
   /**
    * A Space's defaults or a Project's choice changed: `scope` space or project (`projectId`),
-   * `choice` default, none, add, remove or inherit, and the default's `position`.
+   * `choice` default, none, add, remove or inherit, and the default's `position`; `via` what did
+   * it besides a choice (`grant.accept`, `grant.end`, `migration`).
    */
-  "vault.choose": ["scope", "projectId", "choice", "position"],
+  "vault.choose": ["scope", "projectId", "choice", "position", "via"],
   /** `settings` or `cli`, and the key's id (a fingerprint, never the key). */
   "secret.master_key.export": ["via", "keyId"],
   /** The key ids before and after (fingerprints, never keys). */

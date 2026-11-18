@@ -316,10 +316,10 @@ function VaultsPage({
 
   return (
     <>
-      <SettingsSection id="vaults" title="Vaults">
+      <SettingsSection id="vaults" title="Vault">
         <SettingsRow
           title="Secrets for your agents"
-          description="Each owner has one Vault of groups: its default group, which every Thread of its Space receives, and named ones you choose per Space or Project. A Variable is configuration: everyone who sees it reads its value, Guests excepted. A Secret is never shown again once saved, not even to the Owner: replace it or delete it."
+          description="A group is a named set of Variables and Secrets for your agents. The Default group goes to every Thread of its Space; you can add named groups per Space or Project. A Variable is configuration: everyone who can see it reads its value, except Guests. A Secret is never shown again once saved, not even to the Owner. It can only be replaced or deleted."
           status={
             error === null ? null : (
               <span className="text-destructive" role="alert">
@@ -418,7 +418,7 @@ function OwnerVault(props: {
     <>
       <SettingsSection
         id={`vault-owner-${section.owner.kind === "user" ? section.owner.userId : section.owner.spaceId}`}
-        title={section.mine ? "Mine" : section.name}
+        title={section.mine ? "Groups" : section.name}
       >
         {section.canCreate && props.mayCreate ? (
           <NewGroupForm
@@ -503,6 +503,24 @@ function NewGroupForm(props: {
 /** Runs a change: resolves true once it is saved, false when it failed (and says why). */
 type Act = (work: () => Promise<string | null>, all?: boolean) => Promise<boolean>;
 
+/** A group's name as shown: the stored `default` reads as "Default group". Display only. */
+const groupLabel = (group: Pick<VaultGroupSummary, "name" | "isDefault">) =>
+  group.isDefault ? "Default group" : group.name;
+
+/** The line under a group: whose Vault it is, and for the default group which Space receives it. */
+function defaultGroupLine(group: VaultGroupSummary, userId: string | null): string {
+  const whose = vaultOwnerLine({ ...group, isDefault: false }, { userId });
+  if (!group.isDefault) return whose;
+  const owner = group.ownerName ?? "A removed owner";
+  const space =
+    group.owner.kind === "organization"
+      ? owner
+      : group.owner.userId === userId
+        ? "your Personal space"
+        : `${owner}'s Personal space`;
+  return `${whose}. Every Thread in ${space} receives this group`;
+}
+
 function VaultSection(props: {
   readonly environmentId: EnvironmentId;
   readonly commands: VaultCommands;
@@ -564,12 +582,12 @@ function VaultSection(props: {
               : "replaced";
       return savedMessage(entry.name, verb, result.warnings);
     });
-  const owner = vaultOwnerLine(vault, { userId: props.userId });
+  const owner = defaultGroupLine(vault, props.userId);
   // A name that changes how tools run: the Owner's, and a User's in their own Vault (04).
   const confirmsDangerous =
     props.isOwner || (vault.owner.kind === "user" && vault.owner.userId === props.userId);
   return (
-    <SettingsSection id={`vault-${vault.id}`} title={vault.name}>
+    <SettingsSection id={`vault-${vault.id}`} title={groupLabel(vault)}>
       <SettingsRow
         title={`${vault.entryCount} ${vault.entryCount === 1 ? "secret" : "secrets"}`}
         description={`${owner}.${vault.archived ? " Archived." : ""}${canEdit ? " You can add, replace and delete secrets, never see them." : ""}`}
@@ -954,8 +972,8 @@ function AddSecretForm(props: {
           .finally(() => setPending(false));
       }}
     >
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <label className="flex flex-col gap-1 text-xs font-medium sm:w-32">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+        <label className="flex flex-col gap-1 text-xs font-medium sm:w-36 sm:shrink-0">
           Kind
           <Select
             disabled={pending}
@@ -979,7 +997,7 @@ function AddSecretForm(props: {
             </SelectPopup>
           </Select>
         </label>
-        <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs font-medium">
           Name
           <Input
             aria-label="Name"
@@ -993,7 +1011,7 @@ function AddSecretForm(props: {
         </label>
         {isIdentity ? (
           <>
-            <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
+            <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs font-medium">
               Audience
               <Input
                 aria-label="Audience"
@@ -1006,7 +1024,7 @@ function AddSecretForm(props: {
                 onChange={(event) => setValue(event.currentTarget.value.trim())}
               />
             </label>
-            <label className="flex flex-col gap-1 text-xs font-medium sm:w-28">
+            <label className="flex flex-col gap-1 text-xs font-medium sm:w-28 sm:shrink-0">
               Lifetime (min)
               <Input
                 aria-label="Lifetime in minutes"
@@ -1018,19 +1036,8 @@ function AddSecretForm(props: {
               />
             </label>
           </>
-        ) : isTemplate ? null : (
-          <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
-            Value
-            <SecretValueArea
-              aria-label="Value"
-              disabled={pending}
-              visible={isVariable}
-              value={value}
-              onValueChange={setValue}
-            />
-          </label>
-        )}
-        <label className="flex flex-col gap-1 text-xs font-medium sm:w-48">
+        ) : null}
+        <label className="flex flex-col gap-1 text-xs font-medium sm:w-48 sm:shrink-0">
           Delivery
           <DeliverySelect
             label="Delivery"
@@ -1040,6 +1047,23 @@ function AddSecretForm(props: {
             onChange={setDelivery}
           />
         </label>
+      </div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        {isIdentity || isTemplate ? (
+          <span className="flex-1" />
+        ) : (
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs font-medium">
+            Value
+            <SecretValueArea
+              aria-label="Value"
+              className="[&_textarea]:min-h-8.5 sm:[&_textarea]:min-h-7.5"
+              disabled={pending}
+              visible={isVariable}
+              value={value}
+              onValueChange={setValue}
+            />
+          </label>
+        )}
         <Button
           disabled={pending || blocked || name.length === 0 || value.length === 0}
           size="sm"

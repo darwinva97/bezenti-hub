@@ -16,6 +16,7 @@ import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { ChangedFilesCard } from "./ChangedFilesTree";
+import { uploadIssueText, useUploadIssue } from "../../environments/primary/useHubEnvironments";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
 import { useAssistantMessageText, useProject, useThreadShell } from "../../state/entities";
 import { MessageCopyButton } from "./MessageCopyButton";
@@ -388,6 +389,8 @@ function AssistantChangedFilesSectionInner({
       : null,
   );
   const onFileContextMenu = useFileContextMenuHandler(ctx.activeThreadEnvironmentId);
+  // Why the Hub keeps not getting this machine's checkpoints, when it says.
+  const uploadIssue = useUploadIssue(thread?.activeEnvironmentId, thread?.projectId);
 
   return (
     <ChangedFilesCard
@@ -395,6 +398,9 @@ function AssistantChangedFilesSectionInner({
       files={checkpointFiles}
       totals={checkpointFileTotals(turnSummary)}
       notUploaded={turnSummary.status === "ready" && turnSummary.uploadedToHub === false}
+      notUploadedReason={
+        uploadIssue === null ? null : uploadIssueText(uploadIssue, activeProject?.title ?? null)
+      }
       allDirectoriesExpanded={allDirectoriesExpanded}
       resolvedTheme={resolvedTheme}
       onToggleAllDirectories={() =>

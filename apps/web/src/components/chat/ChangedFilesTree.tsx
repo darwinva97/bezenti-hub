@@ -37,6 +37,8 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   onFileContextMenu?: ChangedFileContextMenuHandler | undefined;
   /** The turn's checkpoint is not in the Hub's repository yet. */
   notUploaded?: boolean;
+  /** Why the Hub keeps not getting it (`uploadIssueText`); null while it simply retries. */
+  notUploadedReason?: string | null;
 }) {
   const {
     runId,
@@ -48,6 +50,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
     onOpenTurnDiff,
     onFileContextMenu,
     notUploaded,
+    notUploadedReason,
   } = props;
   const syncTimelineLayout = useSyncLayout();
   const hiddenFileCount = totals.count - files.length;
@@ -81,8 +84,8 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
               >
                 Checkpoint not uploaded yet
               </TooltipTrigger>
-              <TooltipPopup side="top">
-                The Hub does not have these changes yet; it keeps retrying.
+              <TooltipPopup side="top" className="max-w-sm">
+                {notUploadedReason ?? "The Hub does not have these changes yet; it keeps retrying."}
               </TooltipPopup>
             </Tooltip>
           )}

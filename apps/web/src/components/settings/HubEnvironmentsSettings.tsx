@@ -1,6 +1,7 @@
 import {
   environmentUseDescription,
   shownEnvironmentStatus,
+  uploadIssueText,
 } from "@t3tools/client-runtime/environment/hub-environments";
 import { type HubEnvironmentSummary, isListedMachine, type SpaceId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
@@ -15,6 +16,7 @@ import {
 } from "../../environments/primary/hubEnvironments";
 import { errorMessageOf } from "../../lib/errorMessage";
 import { useCurrentSpace } from "../../state/currentSpace";
+import { useProjects } from "../../state/entities";
 import { EnvironmentStatusBadge } from "../EnvironmentStatusDot";
 import { Button } from "../ui/button";
 import {
@@ -42,6 +44,7 @@ function describe(
   environment: HubEnvironmentSummary,
   viewer: { readonly userId: string | undefined; readonly isOwner: boolean },
   spaceName: (spaceId: string | null | undefined) => string | null,
+  projectName: (projectId: string) => string | null,
 ) {
   const parts = [
     environmentUseDescription(environment, {
@@ -92,6 +95,18 @@ function describe(
           {`Providers: ${providers.join(", ")}`}
         </>
       ) : null}
+      {(environment.uploadIssues ?? []).map((issue) => (
+        <span
+          key={`${issue.projectId}:${issue.threadId ?? ""}`}
+          className="mt-1 block text-warning-foreground"
+          data-upload-issue={issue.kind}
+        >
+          {uploadIssueText(issue, projectName(issue.projectId))}
+          {issue.nextAttemptAt === null
+            ? null
+            : ` Tries again at ${new Date(issue.nextAttemptAt).toLocaleTimeString()}.`}
+        </span>
+      ))}
     </>
   );
 }
@@ -108,6 +123,9 @@ export function HubEnvironmentsSettings({ scope }: { readonly scope?: OwnedResou
   const canOpen = usePrimaryActsForInstallation();
   const signedIn = session.data?.authenticated === true;
   const isOwner = signedIn && session.data?.isOwner === true;
+  const projects = useProjects();
+  const projectName = (projectId: string) =>
+    projects.find((project) => project.id === projectId)?.title ?? null;
   // Optional in the session: a session from before the Installation had an Owner names no User.
   const userId = signedIn ? session.data?.userId : undefined;
   // A machine lent to a Space is its lender's: nobody here renames, removes or rededicates it.
@@ -267,7 +285,7 @@ export function HubEnvironmentsSettings({ scope }: { readonly scope?: OwnedResou
               }
               description={
                 <>
-                  {describe(sandbox, { userId, isOwner }, spaceName)}
+                  {describe(sandbox, { userId, isOwner }, spaceName, projectName)}
                   {sandbox.startError ? (
                     <>
                       <br />
@@ -327,7 +345,7 @@ export function HubEnvironmentsSettings({ scope }: { readonly scope?: OwnedResou
                     />
                   </span>
                 }
-                description={describe(environment, { userId, isOwner }, spaceName)}
+                description={describe(environment, { userId, isOwner }, spaceName, projectName)}
                 control={
                   (canOpen && scope !== undefined) ||
                   (manages(environment) && environment.kind !== "sandbox") ? (

@@ -7,6 +7,8 @@ import {
   type EnvironmentId,
   HUB_MACHINE_ENVIRONMENT_ID,
   type HubEnvironmentSummary,
+  type HubRepositoryUploadIssue,
+  type ProjectId,
   NO_ENVIRONMENT_ADVICE,
   type OrchestrationV2ThreadMove,
   type OrchestrationV2ThreadMoveStep,
@@ -236,6 +238,34 @@ export interface ActiveEnvironmentView {
 }
 
 /** The words for a Thread whose Environment was removed. */
+/**
+ * Why the Hub's copy of a Project is not getting a machine's checkpoints, in words: what the
+ * machine's Settings row and a turn's «not uploaded yet» say. Null project name: one the viewer
+ * does not see.
+ */
+export function uploadIssueText(issue: HubRepositoryUploadIssue, projectName: string | null) {
+  const what = projectName === null ? "a Project" : `«${projectName}»`;
+  const why =
+    issue.kind === "too-large"
+      ? "its checkpoints are larger than the Hub accepts in one upload"
+      : issue.kind === "refused"
+        ? "the Hub refuses its checkpoints"
+        : "uploading its checkpoints keeps failing";
+  const waiting = `${issue.pendingCheckpoints} checkpoint${issue.pendingCheckpoints === 1 ? "" : "s"} waiting`;
+  return `Hub copy of ${what} isn't updating: ${why} (${waiting}). ${issue.detail}`;
+}
+
+/** The machine's upload issue for the Project, if its uploads there keep failing. */
+export function uploadIssueOf(
+  list: ReadonlyArray<HubEnvironmentSummary>,
+  environmentId: EnvironmentId | null | undefined,
+  projectId: ProjectId | null | undefined,
+): HubRepositoryUploadIssue | null {
+  if (environmentId == null || projectId == null) return null;
+  const environment = list.find((entry) => entry.id === environmentId);
+  return environment?.uploadIssues?.find((issue) => issue.projectId === projectId) ?? null;
+}
+
 export const NEEDS_ENVIRONMENT_LABEL = "Needs an environment";
 /** The words for a Thread whose turn waits for its machine to come back. */
 export const PAUSED_OFFLINE_LABEL = "Paused, environment offline";

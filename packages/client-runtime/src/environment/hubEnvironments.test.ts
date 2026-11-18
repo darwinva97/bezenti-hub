@@ -5,6 +5,7 @@ import {
   type HubEnvironmentStatus,
   type HubEnvironmentSummary,
   type OrchestrationV2ThreadMove,
+  ProjectId,
   ProviderInstanceId,
   SpaceId,
   UserId,
@@ -28,6 +29,8 @@ import {
   placeableEnvironments,
   providersOnEnvironment,
   threadEnvironmentState,
+  uploadIssueOf,
+  uploadIssueText,
 } from "./hubEnvironments.ts";
 
 const laptopId = EnvironmentId.make("env-laptop");
@@ -464,5 +467,33 @@ describe("the same names, labels and colours on every client", () => {
       "Another User's personal machine",
     );
     expect(environmentUseDescription(laptop)).toBe("Personal machine");
+  });
+});
+
+describe("uploadIssueText", () => {
+  const issue = {
+    projectId: ProjectId.make("project:aliados"),
+    kind: "too-large" as const,
+    detail: "The Hub (or a proxy in front of it) refused a part with HTTP 413.",
+    since: "2026-11-18T03:00:00.000Z",
+    nextAttemptAt: "2026-11-18T05:00:00.000Z",
+    pendingCheckpoints: 41,
+  };
+
+  it("says which Project's Hub copy is not updating, why, and what git or the Hub said", () => {
+    expect(uploadIssueText(issue, "aliados")).toBe(
+      "Hub copy of «aliados» isn't updating: its checkpoints are larger than the Hub accepts in one upload (41 checkpoints waiting). The Hub (or a proxy in front of it) refused a part with HTTP 413.",
+    );
+    expect(uploadIssueText({ ...issue, kind: "failing", pendingCheckpoints: 1 }, null)).toContain(
+      "Hub copy of a Project isn't updating: uploading its checkpoints keeps failing (1 checkpoint waiting).",
+    );
+  });
+
+  it("finds a machine's issue for a Project", () => {
+    const machine = { id: EnvironmentId.make("laptop"), uploadIssues: [issue] };
+    const list = [machine] as unknown as ReadonlyArray<HubEnvironmentSummary>;
+    expect(uploadIssueOf(list, machine.id, issue.projectId)).toEqual(issue);
+    expect(uploadIssueOf(list, machine.id, ProjectId.make("project:other"))).toBeNull();
+    expect(uploadIssueOf(list, null, issue.projectId)).toBeNull();
   });
 });

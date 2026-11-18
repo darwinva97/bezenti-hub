@@ -2,10 +2,13 @@ import {
   type ActiveEnvironmentView,
   activeEnvironmentOf,
   makeHubEnvironmentsPoller,
+  uploadIssueOf,
 } from "@t3tools/client-runtime/environment/hub-environments";
 import {
   type EnvironmentId,
   type HubEnvironmentSummary,
+  type HubRepositoryUploadIssue,
+  type ProjectId,
   type ProviderInstanceId,
   previewThreadPlacement,
   type UserId,
@@ -33,6 +36,7 @@ export {
   providersOnEnvironment,
   shownEnvironmentStatus,
   threadEnvironmentState,
+  uploadIssueText,
 } from "@t3tools/client-runtime/environment/hub-environments";
 
 // One list for every component that shows where Threads run, fetched while any of them is mounted.
@@ -53,6 +57,19 @@ export function useActiveEnvironment(
   const read = () => JSON.stringify(activeEnvironmentOf(poller.snapshot(), environmentId));
   const key = useSyncExternalStore(poller.subscribe, read, read);
   return JSON.parse(key) as ActiveEnvironmentView | null;
+}
+
+/**
+ * Why a machine's checkpoints of a Project keep not reaching the Hub, kept live like
+ * `useActiveEnvironment`: only a change of it re-renders. Null when they do (or nobody says).
+ */
+export function useUploadIssue(
+  environmentId: EnvironmentId | null | undefined,
+  projectId: ProjectId | null | undefined,
+): HubRepositoryUploadIssue | null {
+  const read = () => JSON.stringify(uploadIssueOf(poller.snapshot(), environmentId, projectId));
+  const key = useSyncExternalStore(poller.subscribe, read, read);
+  return JSON.parse(key) as HubRepositoryUploadIssue | null;
 }
 
 /**

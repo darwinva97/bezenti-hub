@@ -27,7 +27,11 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { spaceLabel, subscriptionTermsWarning } from "./grantText";
+import { offerLinkOf, spaceLabel, subscriptionTermsWarning } from "./grantText";
+
+/** «Lend to» a Space not in the list: by a lending link (Grants ticket 06). */
+const BY_LINK = "by-link";
+const BY_LINK_LABEL = "Someone else's Space: make a link";
 
 const PERIODS: ReadonlyArray<readonly [GrantCapPeriod, string]> = [
   ["day", "a day"],
@@ -189,6 +193,10 @@ export function LendAiAccountDialog({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // Grants ticket 06: a lending link for a Space not in the list, shown once.
+  const createOffer = useAtomCommand(grantsEnvironment.createOffer, "make a lending link");
+  const [link, setLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const loadTargets = useEffectEvent((target: EnvironmentId) =>
     targetsCommand({
@@ -213,13 +221,30 @@ export function LendAiAccountDialog({
   }, [environmentId]);
 
   const target = targets?.find((entry) => entry.spaceId === spaceId);
+  const byLink = spaceId === BY_LINK;
   const limits = limitsOf(draft);
 
+  const makeLink = async (caps: AiAccountGrantLimits) => {
+    if (environmentId === null) return;
+    const made = await createOffer({
+      environmentId,
+      input: { resource: { kind: "ai-account", aiAccountId: account.id }, limits: caps },
+    });
+    if (made._tag !== "Success") throw squashAtomCommandFailure(made);
+    setLink(offerLinkOf(made.value, window.location.origin));
+    setDone("Link made. Copy it now: it is not shown again.");
+  };
+
   const submit = async () => {
-    if (target === undefined || typeof limits === "string") return;
+    if (typeof limits === "string" || (target === undefined && !byLink)) return;
     setPending(true);
     setError(null);
     try {
+      if (byLink) {
+        await makeLink(limits);
+        return;
+      }
+      if (target === undefined) return;
       const grant = await giveGrant(
         {
           resource: { kind: "ai-account", aiAccountId: account.id },
@@ -234,9 +259,21 @@ export function LendAiAccountDialog({
           : `Waiting for ${spaceLabel(target)} to accept it.`,
       );
     } catch (cause) {
-      setError(errorMessageOf(cause, "The loan did not go through."));
+      setError(
+        errorMessageOf(cause, byLink ? "The link was not made." : "The loan did not go through."),
+      );
     } finally {
       setPending(false);
+    }
+  };
+
+  const copyLink = async () => {
+    if (link === null) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+    } catch {
+      setError("Could not copy: select the link and copy it.");
     }
   };
 
@@ -262,14 +299,20 @@ export function LendAiAccountDialog({
             <div className="flex flex-col gap-3">
               <label className="flex flex-col gap-1 text-xs font-medium">
                 Lend to
-                <Select value={spaceId} onValueChange={(next) => setSpaceId(String(next ?? ""))}>
+                <Select
+                  value={spaceId}
+                  disabled={done !== null}
+                  onValueChange={(next) => setSpaceId(String(next ?? ""))}
+                >
                   <SelectTrigger aria-label="Lend to">
                     <SelectValue>
-                      {target
-                        ? spaceLabel(target)
-                        : targets === null
-                          ? "Loading…"
-                          : "Choose a Space"}
+                      {byLink
+                        ? BY_LINK_LABEL
+                        : target
+                          ? spaceLabel(target)
+                          : targets === null
+                            ? "Loading…"
+                            : "Choose a Space"}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
@@ -278,10 +321,34 @@ export function LendAiAccountDialog({
                         {spaceLabel(entry)}
                       </SelectItem>
                     ))}
+                    {targets === null ? null : (
+                      <SelectItem value={BY_LINK}>{BY_LINK_LABEL}</SelectItem>
+                    )}
                   </SelectPopup>
                 </Select>
               </label>
               <CapsFields draft={draft} disabled={pending || done !== null} onChange={setDraft} />
+              {byLink && link === null ? (
+                <p className="text-xs text-muted-foreground">
+                  Whoever opens the link chooses one of their Spaces where they decide on loans, and
+                  accepting it there starts the loan. It works once, for 7 days; you can cancel it
+                  in Loans until then.
+                </p>
+              ) : null}
+              {link === null ? null : (
+                <div className="flex items-center gap-2">
+                  <Input
+                    aria-label="Lending link"
+                    nativeInput
+                    readOnly
+                    value={link}
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                  <Button size="sm" type="button" variant="outline" onClick={() => void copyLink()}>
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                </div>
+              )}
               {account.type === "subscription" ? (
                 <p className="text-xs text-warning" role="note">
                   {subscriptionTermsWarning(account.provider)}
@@ -312,10 +379,12 @@ export function LendAiAccountDialog({
             </Button>
             {done === null ? (
               <Button
-                disabled={pending || target === undefined || typeof limits === "string"}
+                disabled={
+                  pending || (target === undefined && !byLink) || typeof limits === "string"
+                }
                 type="submit"
               >
-                Lend
+                {byLink ? "Make link" : "Lend"}
               </Button>
             ) : null}
           </DialogFooter>

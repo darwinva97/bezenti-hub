@@ -1,6 +1,7 @@
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 
 import { SignInSurface } from "../components/auth/SignInSurface";
+import { GRANT_OFFER_PATH, hasPendingGrantOffer } from "../components/grants/grantOfferLink";
 
 export const Route = createFileRoute("/sign-in")({
   beforeLoad: ({ context }) => {
@@ -17,7 +18,8 @@ function SignInRouteView() {
     <SignInSurface
       onSignedIn={() => {
         // Recreate the connection so WebSocket and cached scopes use the new session cookie.
-        router.history.replace("/");
+        // A lending link opened before signing in comes back (its token waits in the tab).
+        router.history.replace(hasPendingGrantOffer() ? GRANT_OFFER_PATH : "/");
         router.history.flush();
         window.location.reload();
       }}

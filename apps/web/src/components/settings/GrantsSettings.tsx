@@ -41,6 +41,8 @@ import {
   gib,
   hostLimitsNotice,
   limitsText,
+  offerStatusText,
+  recipientLabel,
   spaceLabel,
   subscriptionTermsWarning,
 } from "./grantText";
@@ -439,9 +441,7 @@ export function groupLentLoans(grants: ReadonlyArray<Grant>): ReadonlyArray<Lent
               name: lentName(first),
               kind: first.resource.kind,
               provider: first.aiAccount?.provider ?? "",
-              loans: loans.toSorted((a, b) =>
-                targetLabel(a, "a Space").localeCompare(targetLabel(b, "a Space")),
-              ),
+              loans: loans.toSorted((a, b) => recipientLabel(a).localeCompare(recipientLabel(b))),
             },
           ];
     })
@@ -452,6 +452,13 @@ export function groupLentLoans(grants: ReadonlyArray<Grant>): ReadonlyArray<Lent
         a.name.localeCompare(b.name),
     );
 }
+
+/** A group's header count: the Spaces it went to, and its lending links still open. */
+const lentCountText = (group: LentGroup) => {
+  const spaces = group.loans.filter((grant) => grant.target !== null).length;
+  const open = group.loans.filter((grant) => grant.offer?.status === "open").length;
+  return `lent to ${spaces}${open === 0 ? "" : ` · ${open} open link${open === 1 ? "" : "s"}`}`;
+};
 
 /** Groups start open while the User has few loans, closed when there are many. */
 const OPEN_GROUPS_UP_TO = 6;
@@ -599,7 +606,8 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
 
   /** The «⋯» menu of one loan lent by the User: what they may do with it, as before. */
   const lentActions = (grant: Grant, label: string) => {
-    const isAi = grant.resource.kind === "ai-account";
+    // A link nobody applied has no use to view.
+    const isAi = grant.resource.kind === "ai-account" && grant.target !== null;
     const mayCap = mayChange && isAi && grant.can.setLimits;
     const mayEnd = mayChange && (grant.can.revoke || grant.can.cancel);
     if (!isAi && !mayEnd) return null;
@@ -730,18 +738,21 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
             >
               <Chevron aria-hidden className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate text-sm font-medium">{group.name}</span>{" "}
-              <span className="shrink-0 text-xs text-muted-foreground">
-                lent to {group.loans.length}
-              </span>
+              <span className="shrink-0 text-xs text-muted-foreground">{lentCountText(group)}</span>
             </button>
             {open ? (
               <ul aria-label={`${group.name} is lent to`} className="pb-1">
                 {group.loans.map((grant) => {
-                  const recipient = targetLabel(grant, "a Space");
+                  const recipient = recipientLabel(grant);
+                  // A link nobody applied says why it works or not; an applied one is a loan.
+                  const unapplied =
+                    grant.offer !== undefined && grant.offer.status !== "used" ? grant.offer : null;
                   const detail = [
-                    grant.state === "active"
-                      ? null
-                      : `${STATE_LABELS[grant.state]}${grant.endReason === null ? "" : ` (${END_LABELS[grant.endReason]})`}`,
+                    unapplied !== null
+                      ? offerStatusText(unapplied)
+                      : grant.state === "active"
+                        ? null
+                        : `${STATE_LABELS[grant.state]}${grant.endReason === null ? "" : ` (${END_LABELS[grant.endReason]})`}`,
                     limitsText(grant.limits),
                     ...loanStatusParts(grant),
                   ]

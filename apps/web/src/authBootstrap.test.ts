@@ -396,7 +396,7 @@ describe("resolveInitialServerAuthGateState", () => {
     expect(testApi.calls.browserSession).toEqual([{ credential: "rejected-token" }]);
   });
 
-  it.each(["reset", "invite"])(
+  it.each(["reset", "invite", "grants/offer"])(
     "leaves a /%s link's token for its page instead of pairing with it",
     async (page) => {
       const testApi = await installAuthApi({

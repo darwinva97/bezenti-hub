@@ -257,3 +257,58 @@ it("tells an account with no passkey or authenticator app to add one, and disabl
   await expect.element(page.getByRole("button", { name: "Confirm and accept" })).toBeDisabled();
   await expect.element(page.getByText("Current password")).not.toBeInTheDocument();
 });
+
+// Grants ticket 06: lending links among the loans given, and a subscription's terms when deciding.
+it("lists a resource's lending links with why each works or not, and cancels an open one", async () => {
+  loans.received = [];
+  loans.failWith = null;
+  loans.setPhase("connected");
+  const link = (id: string, status: "open" | "expired", canCancel: boolean): Grant =>
+    ({
+      ...grant(id, "acct-1", "Claude", "unused"),
+      target: null,
+      state: "offered",
+      offer: { expiresAt: "2026-11-25T00:00:00.000Z", status },
+      can: { cancel: canCancel, revoke: false, decide: false, return: false, setLimits: false },
+    }) as unknown as Grant;
+  loans.given = [
+    grant("g1", "acct-1", "Claude", "Acme"),
+    link("g2", "open", true),
+    link("g3", "expired", false),
+  ];
+  await using _screen = await render(<GrantsSettings />);
+
+  const header = page.getByRole("button", { name: /^Claude\s*lent to 1 · 1 open link$/ });
+  await expect.element(header).toHaveAttribute("aria-expanded", "true");
+  const list = page.getByRole("list", { name: "Claude is lent to" });
+  await expect.poll(() => list.getByRole("listitem").elements().length).toBe(3);
+  await expect.element(page.getByText(/^Open link, works once until /)).toBeVisible();
+  await expect.element(page.getByText(/^Link expired unused/)).toBeVisible();
+  await page
+    .getByRole("button", { name: "Actions for Claude lent to Lending link" })
+    .first()
+    .click();
+  await expect.element(page.getByRole("menuitem", { name: "Cancel" })).toBeVisible();
+});
+
+it("warns whoever decides on a lent subscription of its provider's terms", async () => {
+  loans.given = [];
+  loans.received = [
+    {
+      ...grant("g1", "acct-9", "Ana Claude", "Acme"),
+      lender: { kind: "user", id: "user-ana", name: "Ana" },
+      state: "pending",
+      aiAccount: { provider: "claude", type: "subscription" },
+      can: { cancel: false, revoke: false, decide: true, return: false, setLimits: false },
+    },
+  ];
+  await using _screen = await render(<GrantsSettings />);
+
+  await expect.element(page.getByRole("heading", { name: "Waiting for you" })).toBeVisible();
+  await expect
+    .element(
+      page.getByText(/The terms of claude forbid sharing this account; it may be suspended\./),
+    )
+    .toBeVisible();
+  loans.received = [];
+});

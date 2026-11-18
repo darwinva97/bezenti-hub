@@ -1,8 +1,12 @@
 import { formatSharePercent } from "@t3tools/client-runtime/ai-usage-view";
 import type {
   AiUsageQuotaShare,
+  Grant,
   GrantCapUse,
+  GrantCreatedOffer,
   GrantLimits,
+  GrantOfferPreview,
+  GrantOfferSpace,
   GrantSpaceRef,
   SandboxHostReport,
 } from "@t3tools/contracts";
@@ -74,3 +78,46 @@ export const quotaShareText = (share: AiUsageQuotaShare) =>
   } (approx.)${
     share.usedPercent === undefined ? "" : ` · account at ${Math.round(share.usedPercent)}%`
   } · resets ${new Date(share.resetsAt).toLocaleString()}`;
+
+// Grants ticket 06: lending links.
+
+/** The link to hand out: on the Hub's public address, else on the address this page is on. */
+export const offerLinkOf = (created: Pick<GrantCreatedOffer, "path" | "url">, origin: string) =>
+  created.url ?? `${origin}${created.path}`;
+
+/** A lending link's state, to its lender; the date in local time. */
+export const offerStatusText = (offer: NonNullable<Grant["offer"]>) => {
+  switch (offer.status) {
+    case "open":
+      return `Open link, works once until ${new Date(offer.expiresAt).toLocaleString()}`;
+    case "expired":
+      return "Link expired unused";
+    case "cancelled":
+      return "Link cancelled";
+    case "used":
+      return "Applied through a link";
+  }
+};
+
+/** Who a lent loan went to: its Space, or the link nobody applied yet. */
+export const recipientLabel = (grant: Grant) =>
+  grant.target !== null
+    ? spaceLabel(grant.target)
+    : grant.offer === undefined
+      ? "a Space"
+      : "Lending link";
+
+/** A Space to apply a link to, as the select names it. */
+export const offerSpaceLabel = (space: GrantOfferSpace) =>
+  space.alreadyGranted ? `${spaceLabel(space)} (already lent there)` : spaceLabel(space);
+
+/** What whoever applies a link is told before they do: what the lender sees, and a subscription's terms. */
+export const offerWarnings = (preview: Extract<GrantOfferPreview, { status: "valid" }>) => {
+  const lender = preview.lender.name ?? "Its lender";
+  return [
+    `${lender} sees how much each person in the Space uses it, never prompts or Threads, and can take it back at any time.`,
+    ...(preview.resource.aiAccount?.type === "subscription"
+      ? [subscriptionTermsWarning(preview.resource.aiAccount.provider)]
+      : []),
+  ];
+};

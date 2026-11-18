@@ -1,7 +1,15 @@
-import type { SandboxHostReport } from "@t3tools/contracts";
+import type { Grant, GrantOfferPreview, SandboxHostReport, SpaceId } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 
-import { hostLimitsNotice, quotaShareText } from "./grantText";
+import {
+  hostLimitsNotice,
+  offerLinkOf,
+  offerSpaceLabel,
+  offerStatusText,
+  offerWarnings,
+  quotaShareText,
+  recipientLabel,
+} from "./grantText";
 
 const host = (overrides: Partial<SandboxHostReport> = {}): SandboxHostReport => ({
   ready: true,
@@ -66,4 +74,67 @@ it("says how much of a quota window went through the loan, approximately, and wh
   expect(quotaShareText({ ...share, of: "own", sharePercent: 0.2 })).toMatch(
     /^Weekly quota: ≈ <1% by you \(approx\.\)/u,
   );
+});
+
+// Grants ticket 06: lending links.
+it("hands out a link on the Hub's public address, else on this page's", () => {
+  const path = "/grants/offer#token=abc";
+  expect(offerLinkOf({ path, url: "https://hub.example/grants/offer#token=abc" }, "http://x")).toBe(
+    "https://hub.example/grants/offer#token=abc",
+  );
+  expect(offerLinkOf({ path, url: null }, "http://localhost:3773")).toBe(
+    "http://localhost:3773/grants/offer#token=abc",
+  );
+});
+
+it("tells the lender why a link is dead, and names a link nobody applied", () => {
+  const expiresAt = "2026-11-25T00:00:00.000Z";
+  expect(offerStatusText({ expiresAt, status: "expired" })).toBe("Link expired unused");
+  expect(offerStatusText({ expiresAt, status: "cancelled" })).toBe("Link cancelled");
+  expect(offerStatusText({ expiresAt, status: "used" })).toBe("Applied through a link");
+  expect(offerStatusText({ expiresAt, status: "open" })).toMatch(/^Open link, works once until /);
+  const link = { target: null, offer: { expiresAt, status: "open" } } as unknown as Grant;
+  expect(recipientLabel(link)).toBe("Lending link");
+  const used = {
+    target: {
+      spaceId: "personal:bob",
+      kind: "personal",
+      name: "Personal",
+      ownerDisplayName: "Bob",
+    },
+    offer: { expiresAt, status: "used" },
+  } as unknown as Grant;
+  expect(recipientLabel(used)).toBe("Bob (personal)");
+});
+
+it("warns whoever applies a subscription's link of its terms, and of what the lender sees", () => {
+  const preview = {
+    status: "valid",
+    resource: {
+      kind: "ai-account",
+      name: "Ana Claude",
+      aiAccount: { provider: "claude", type: "subscription" },
+    },
+    lender: { kind: "user", name: "Ana" },
+    limits: { kind: "ai-account", tokens: null, requests: null },
+    expiresAt: "2026-11-25T00:00:00.000Z",
+    spaces: [],
+  } as Extract<GrantOfferPreview, { status: "valid" }>;
+  expect(offerWarnings(preview)).toEqual([
+    "Ana sees how much each person in the Space uses it, never prompts or Threads, and can take it back at any time.",
+    "The terms of claude forbid sharing this account; it may be suspended.",
+  ]);
+  const apiKey = {
+    ...preview,
+    resource: { ...preview.resource, aiAccount: { provider: "claude", type: "api-key" } },
+  } as Extract<GrantOfferPreview, { status: "valid" }>;
+  expect(offerWarnings(apiKey)).toHaveLength(1);
+  expect(
+    offerSpaceLabel({
+      spaceId: "org-acme" as SpaceId,
+      kind: "organization",
+      name: "Acme",
+      alreadyGranted: true,
+    }),
+  ).toBe("Acme (already lent there)");
 });

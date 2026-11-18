@@ -50,5 +50,18 @@ export function createGrantsEnvironmentAtoms<R, E>(
       label: "environment-data:grants:dismiss-migration-review",
       tag: WS_METHODS.grantsDismissMigrationReview,
     }),
+    // Grants ticket 06: lending links, made by the lender and applied by whoever holds one.
+    createOffer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:grants:create-offer",
+      tag: WS_METHODS.grantsCreateOffer,
+    }),
+    readOffer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:grants:read-offer",
+      tag: WS_METHODS.grantsReadOffer,
+    }),
+    claimOffer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:grants:claim-offer",
+      tag: WS_METHODS.grantsClaimOffer,
+    }),
   };
 }

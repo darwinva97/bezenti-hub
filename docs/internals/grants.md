@@ -8,7 +8,7 @@ machines: `.scratch/grants/issues/machines-design.md`; AI accounts:
 
 ## The row
 
-`grants` (migration 135): the resource (`resource_kind`, `resource_id`), its lender (the owner when
+`grants` (migration 135, rebuilt by 147): the resource (`resource_kind`, `resource_id`), its lender (the owner when
 it was lent), the destination (`target_kind`, `target_id`), `state`, `end_reason` and
 `limits_json` (`GrantLimits` in `packages/contracts/src/grants.ts`; a machine's are CPUs, memory,
 processes and threads, and disk, each required and at least the Sandbox floors; an AI account's are
@@ -23,6 +23,8 @@ they are the history.
 | Change          | From                 | To                                                               | Who (AccessPolicy)              |
 | --------------- | -------------------- | ---------------------------------------------------------------- | ------------------------------- |
 | give            | (new)                | `pending`, or `active` when the lender also decides there        | `grant.give`                    |
+| createOffer     | (new)                | `offered`, no destination (a lending link)                       | `grant.offer`                   |
+| claimOffer      | `offered`, unexpired | `active` in the Space it is applied to                           | `grant.decide` there            |
 | accept / reject | `pending`            | `active` / `rejected`                                            | `grant.decide`                  |
 | cancel          | `offered`, `pending` | `cancelled`                                                      | `grant.cancel`                  |
 | end             | `active`             | `ended` (`revoked` by the lender, `returned` by the destination) | `grant.revoke` / `grant.return` |
@@ -49,7 +51,7 @@ stays `active` and unused: its Sandbox runs no turn and takes no Thread (`spaceR
 
 `decideGrant` in [AccessPolicy](../../apps/server/src/auth/AccessPolicy.ts):
 
-- The lender's side (`give`, `cancel`, `revoke`, `setLimits`, `viewGiven`) is the resource's owner
+- The lender's side (`give`, `offer`, `cancel`, `revoke`, `setLimits`, `viewGiven`) is the resource's owner
   only: a User, or an Organization's Admins (`GrantResource.lender`). The Owner has no bypass: they
   lend their own resources and nobody else's. An archived or frozen Organization gives nothing new
   but its Admins still take back what it lent; a gone one lends nothing.
@@ -74,12 +76,47 @@ owner. Ending a Grant thus refuses the gateway's next request: a Thread still na
 told «Switch AI account», as when any account stops being usable there (nothing is rewritten). The
 picker names a lent account «<name> · from <lender>». Accepting one needs no strong factor.
 
+## Lending links
+
+To lend to a Space the lender cannot name (no directory of Spaces exists), the lender makes a
+**lending link** (Grants ticket 06; design `.scratch/grants/issues/06-design.md`). Only AI accounts
+for now: a machine's loan made active needs its decider's strong factor, which a link does not ask
+for yet.
+
+- `grants.createOffer` (`grant.offer`: the lender's side only, no destination) writes an `offered`
+  row with no destination, the loan's limits, `offer_expires_at` seven days on and
+  `offer_token_hash`, the SHA-256 of 32 random bytes. The token is answered once, as
+  `/grants/offer#token=<token>` (on `T3CODE_PUBLIC_URL` when set, else the client's origin): the
+  fragment never reaches a server, a log or a Referer. At most ten open links per resource
+  (`too-many-offers`). Audited `grant.offer`, never with the token or its hash.
+- `grants.readOffer` needs a signed-in User. A used, cancelled, expired or unknown link, one whose
+  account was deleted or changed owner, or one whose maker can no longer `grant.offer` it (an Admin
+  who lost the role, a User turned off) is just `invalid`. Otherwise: what is lent, by whom, with
+  which limits, and the reader's Spaces where they hold `grant.decide` (never the lender's own),
+  each flagged `alreadyGranted`. No ids, no credential, no usage.
+- `grants.claimOffer` re-checks all that in one transaction, then the destination's rule
+  (`grant.decide`, not archived or frozen, not the lender's own Space) and `already-granted`, and
+  moves the row to `active` in that Space only while it is still `offered` and unexpired: of two
+  people applying it at once, one gets it. A refusal leaves the link usable elsewhere. Audited
+  `grant.accept` with `via: link`. From there it is an ordinary loan.
+- Guessing: an unknown token counts against the User, applying a dead link against that link
+  (`signInThrottle`: five free, then 30 s doubling to 15 min, `throttled`). Reading a dead link
+  counts against nobody.
+- The lender sees each link in their given loans (`Grant.offer`: `open`, `expired`, `used`,
+  `cancelled`) and cancels an open one (`grants.cancel`). A link with no destination is decided on
+  the lender's side only. Migration 147 lets a link with no destination be `cancelled` (135 allowed
+  a missing destination only while `offered`); a removed lender's links are cancelled too.
+- The web app leaves `/grants/offer`'s `#token=` alone at start-up (it is not a pairing
+  credential), keeps it in the tab's sessionStorage through signing in, and drops it from the
+  address bar.
+
 ## Doors
 
 - WS: `grants.listGiven`, `grants.listReceived`, `grants.targets`, `grants.reject`,
   `grants.cancel`, `grants.end`, `grants.setLimits` (writes need `access:write`); the Owner's
   `grants.migrationReviews` and `grants.dismissMigrationReview` (allowances that became loans,
-  docs/internals/ai-gateway.md).
+  docs/internals/ai-gateway.md); lending links' `grants.createOffer` and `grants.claimOffer`
+  (`access:write`) and `grants.readOffer` (`access:read`).
 - HTTP: `POST /api/grants/give` and `POST /api/grants/accept`. When a machine's Grant would become
   active (accepting it, or giving it where the lender also decides) the request must carry a
   strong factor (`reauth`: passkey, or password and authenticator code), checked only after Grants
@@ -90,7 +127,10 @@ picker names a lent account «<name> · from <lender>». Accepting one needs no 
 ## Clients
 
 Web, Settings → AI accounts: **Lend…** on each non-direct account the User manages
-(`LendAiAccountDialog`; a subscription shows the provider-terms warning). Settings → Environments:
+(`LendAiAccountDialog`; a subscription shows the provider-terms warning; «Someone else's Space: make
+a link» makes a lending link and shows it once). `/grants/offer` (`GrantOfferSurface`) shows a
+link's loan, what the lender sees and a subscription's terms, and applies it to a Space the User
+picks. Settings → Environments:
 **Lend…** on the User's own personal machines
 (`LendMachineDialog`: the Space from `grants.targets`, the limits, what the machine said of itself
 and the lender's risks; the strong factor when the loan starts active) and the **Loans** section

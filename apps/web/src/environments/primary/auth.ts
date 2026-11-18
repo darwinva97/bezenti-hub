@@ -453,8 +453,11 @@ export async function revokeOtherServerClientSessions(): Promise<number> {
   }
 }
 
-/** Pages whose `#token=` is not a pairing credential: Owner reset links and Invitations. */
-const PAGES_WITH_THEIR_OWN_TOKEN = new Set(["/reset", "/invite"]);
+/**
+ * Pages whose `#token=` is not a pairing credential: Owner reset links, Invitations and lending
+ * links (Grants ticket 06).
+ */
+const PAGES_WITH_THEIR_OWN_TOKEN = new Set(["/reset", "/invite", "/grants/offer"]);
 const ownsUrlToken = (pathname: string) =>
   PAGES_WITH_THEIR_OWN_TOKEN.has(pathname.replace(/\/+$/, ""));
 

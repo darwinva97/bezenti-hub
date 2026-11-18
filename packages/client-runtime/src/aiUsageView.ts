@@ -21,6 +21,8 @@ export interface UsageGroup {
   readonly key: string;
   readonly label: string;
   readonly totals: AiUsageTotals;
+  /** The priced rows estimate in USD (Grants ticket 05); null when none of its rows is priced. */
+  readonly estimatedUsd: number | null;
 }
 
 const PROVIDER_NAMES: Readonly<Record<string, string>> = {
@@ -74,10 +76,13 @@ export function groupUsage(summary: AiUsageSummary, by: UsageGrouping): Readonly
               ]
             : [row.accountId ?? "none", accountLabel(row.accountId, accounts)];
     const previous = groups.get(key);
+    const before = previous?.estimatedUsd ?? null;
+    const usd = row.estimatedUsd ?? null;
     groups.set(key, {
       key,
       label,
       totals: addAiUsageTotals(previous?.totals ?? AI_USAGE_NO_TOTALS, row),
+      estimatedUsd: usd === null ? before : (before ?? 0) + usd,
     });
   }
   const list = [...groups.values()];
@@ -86,6 +91,18 @@ export function groupUsage(summary: AiUsageSummary, by: UsageGrouping): Readonly
     : [...list].sort(
         (a, b) => b.totals.requests - a.totals.requests || a.label.localeCompare(b.label),
       );
+}
+
+/** 0.4219 → «$0.42», 1234.567 → «$1,234.57»; a cost under a cent but above zero → «<$0.01». */
+export function formatUsd(usd: number): string {
+  if (usd > 0 && usd < 0.01) return "<$0.01";
+  return `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** A share of a quota window, in whole points; above zero but under one → «<1%». */
+export function formatSharePercent(percent: number): string {
+  if (percent > 0 && percent < 1) return "<1%";
+  return `${Math.round(percent)}%`;
 }
 
 const trim = (value: number) =>

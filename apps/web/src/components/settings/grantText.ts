@@ -1,4 +1,6 @@
+import { formatSharePercent } from "@t3tools/client-runtime/ai-usage-view";
 import type {
+  AiUsageQuotaShare,
   GrantCapUse,
   GrantLimits,
   GrantSpaceRef,
@@ -60,3 +62,15 @@ export const capUseText = (what: "tokens" | "requests", use: GrantCapUse) =>
   `${use.used.toLocaleString()} of ${use.amount.toLocaleString()} ${what} used${
     use.used >= use.amount ? " (cap reached)" : ""
   }, resets ${new Date(use.resetsAt).toLocaleString()}`;
+
+/**
+ * Grants ticket 05: about how much of a lent subscription's quota window went through the loan
+ * (or, for a borrowing Member, through them), always approximate; the lender also sees the whole
+ * account's use of it.
+ */
+export const quotaShareText = (share: AiUsageQuotaShare) =>
+  `${share.label} quota: ≈ ${formatSharePercent(share.sharePercent)} ${
+    share.of === "loan" ? "through this loan" : "by you"
+  } (approx.)${
+    share.usedPercent === undefined ? "" : ` · account at ${Math.round(share.usedPercent)}%`
+  } · resets ${new Date(share.resetsAt).toLocaleString()}`;

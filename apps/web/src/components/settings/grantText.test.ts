@@ -1,7 +1,7 @@
 import type { SandboxHostReport } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 
-import { hostLimitsNotice } from "./grantText";
+import { hostLimitsNotice, quotaShareText } from "./grantText";
 
 const host = (overrides: Partial<SandboxHostReport> = {}): SandboxHostReport => ({
   ready: true,
@@ -45,5 +45,25 @@ it("names only the limits a ready machine does not enforce, with its note", () =
     ),
   ).toBe(
     "On this machine these limits are not enforced: memory. The Hub user's cgroup has no memory controller delegated.",
+  );
+});
+
+// Grants ticket 05: a lent subscription's share of a quota window, always marked approximate.
+it("says how much of a quota window went through the loan, approximately, and when it resets", () => {
+  const share = {
+    windowId: "seven_day",
+    label: "Weekly",
+    kind: "weekly",
+    resetsAt: "2026-11-20T10:00:00.000Z",
+    sharePercent: 12.4,
+    of: "loan",
+  } as const;
+  const text = quotaShareText(share);
+  expect(text).toMatch(/^Weekly quota: ≈ 12% through this loan \(approx\.\) · resets /u);
+  expect(text).not.toContain("account at");
+  // The lender also sees the whole account's use; a borrowing Member only their own part.
+  expect(quotaShareText({ ...share, usedPercent: 64 })).toContain(" · account at 64% · ");
+  expect(quotaShareText({ ...share, of: "own", sharePercent: 0.2 })).toMatch(
+    /^Weekly quota: ≈ <1% by you \(approx\.\)/u,
   );
 });

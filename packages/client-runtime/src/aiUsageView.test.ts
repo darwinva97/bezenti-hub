@@ -4,7 +4,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   dayBefore,
+  formatSharePercent,
   formatTokens,
+  formatUsd,
   groupUsage,
   threadNoGatewayUsage,
   uncountedUsage,
@@ -33,6 +35,7 @@ const summary = {
       accountId: "a1",
       model: "m",
       ...totals(2, 20, 10),
+      estimatedUsd: 0.25,
     },
     {
       day: "2026-11-01",
@@ -41,6 +44,7 @@ const summary = {
       accountId: "a1",
       model: "m",
       ...totals(1, 11, 7),
+      estimatedUsd: 0.5,
     },
     {
       day: "2026-11-02",
@@ -49,6 +53,7 @@ const summary = {
       accountId: null,
       model: null,
       ...totals(5),
+      estimatedUsd: null,
     },
   ],
   totals: totals(8, 31, 17),
@@ -86,6 +91,15 @@ describe("groupUsage", () => {
       "Claude account",
     ]);
   });
+
+  // Grants ticket 05: a group with no priced row has no estimate, never a zero.
+  it("adds up the estimate of the priced rows, and gives none where nothing is priced", () => {
+    expect(groupUsage(summary, "user").map((group) => [group.label, group.estimatedUsd])).toEqual([
+      ["Removed User", null],
+      ["Ada", 0.75],
+    ]);
+    expect(groupUsage(summary, "day").map((group) => group.estimatedUsd)).toEqual([0.25, 0.5]);
+  });
 });
 
 describe("formatting", () => {
@@ -116,6 +130,27 @@ describe("formatting", () => {
     expect(threadNoGatewayUsage("all")).toMatch(/^No request of this Thread went through/u);
     expect(threadNoGatewayUsage("own")).toMatch(/^No request you may see in this Thread/u);
     expect(threadNoGatewayUsage("spaces")).toContain("direct credential");
+  });
+
+  it("shows dollars to the cent, and a tiny cost as less than a cent", () => {
+    expect([0, 0.004, 0.01, 0.4219, 12.5, 1234.567].map(formatUsd)).toEqual([
+      "$0.00",
+      "<$0.01",
+      "$0.01",
+      "$0.42",
+      "$12.50",
+      "$1,234.57",
+    ]);
+  });
+
+  it("shows a quota share in whole points, and a tiny one as less than one", () => {
+    expect([0, 0.3, 1, 12.46, 100].map(formatSharePercent)).toEqual([
+      "0%",
+      "<1%",
+      "1%",
+      "12%",
+      "100%",
+    ]);
   });
 
   it("counts days back from today, inclusive", () => {

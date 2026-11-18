@@ -32,6 +32,7 @@ const state = vi.hoisted(() => ({
   updateProvider: vi.fn(),
   uninstall: vi.fn(),
   acceptUrlAuth: vi.fn(),
+  listAiAccounts: vi.fn(),
   updateSettings: vi.fn(),
   updateModelPreferences: vi.fn(),
   toggleFavorite: vi.fn(),
@@ -73,13 +74,16 @@ vi.mock(import("../../state/server"), async (original) => {
 });
 vi.mock(import("../../state/use-atom-command"), async (original) => ({
   ...(await original()),
-  useAtomCommand: ((command: { label?: string }) =>
+  useAtomCommand: ((command: { label?: string }, hookLabel?: string) =>
     ({
       refresh: state.refresh,
       update: state.updateProvider,
       uninstall: state.uninstall,
       "accept-url-auth": state.acceptUrlAuth,
-    })[command.label ?? ""] ?? vi.fn()) as never,
+    })[command.label ?? ""] ??
+    // `useHubUsesAiAccounts` reads the Hub's AI accounts once per environment and chains on the
+    // result; this device has none, so no sign-in method is disabled.
+    (hookLabel === "list the AI accounts" ? state.listAiAccounts : vi.fn())) as never,
 }));
 vi.mock(import("~/localApi"), async (original) => {
   const api = { dialogs: { confirm: state.confirm } };
@@ -245,6 +249,7 @@ async function setup() {
   state.updateProvider.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   state.uninstall.mockReset().mockResolvedValue(AsyncResult.success({}));
   state.acceptUrlAuth.mockReset().mockResolvedValue(AsyncResult.success({ accepted: true }));
+  state.listAiAccounts.mockReset().mockResolvedValue(AsyncResult.success({ accounts: [] }));
   await setProviders([]);
 }
 

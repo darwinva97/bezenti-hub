@@ -33,6 +33,7 @@ import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerHttp from "../http.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
@@ -898,6 +899,13 @@ it.effect("admits provider and OAuth client credentials and points only clients 
               ),
           }),
         ),
+        // The server-wide browser CORS layer, so its answer for `/mcp` is under test too.
+        Layer.provide(ServerHttp.layerBrowserApiCors),
+        Layer.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-origin-test-" }).pipe(
+            Layer.provide(NodeServices.layer),
+          ),
+        ),
       );
       yield* HttpRouter.serve(serverLayer, { disableListenLog: true, disableLogger: true }).pipe(
         Layer.build,
@@ -950,6 +958,44 @@ it.effect("admits provider and OAuth client credentials and points only clients 
       const deadProvider = yield* call("deadProviderToken");
       expect(deadProvider.status).toBe(401);
       expect(deadProvider.headers["www-authenticate"]).toBe('Bearer error="invalid_token"');
+      // Requests with no Origin (agents, outside clients) get no CORS headers either.
+      expect(deadProvider.headers["access-control-allow-origin"]).toBeUndefined();
+
+      // Any browser Origin is refused with 403 before credentials or CORS answer.
+      const withOrigin = (method: "POST" | "OPTIONS", token: string | undefined) =>
+        httpClient.execute(
+          HttpClientRequest.make(method)("/mcp", {
+            headers: {
+              origin: "https://untrusted.invalid",
+              accept: "application/json, text/event-stream",
+              "access-control-request-method": "POST",
+              ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+            },
+            ...(method === "POST"
+              ? {
+                  body: HttpBody.text(
+                    `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"1.0.0"}}}`,
+                    "application/json",
+                  ),
+                }
+              : {}),
+          }),
+        );
+      const seenBefore = seen.length;
+      for (const refused of [
+        yield* withOrigin("POST", providerToken),
+        yield* withOrigin("POST", clientToken),
+        yield* withOrigin("POST", undefined),
+        yield* withOrigin("OPTIONS", undefined),
+      ]) {
+        expect(refused.status).toBe(403);
+        expect(refused.headers["access-control-allow-origin"]).toBeUndefined();
+        expect(refused.headers["www-authenticate"]).toBeUndefined();
+      }
+      expect(seen.length).toBe(seenBefore);
+
+      // Without an Origin the same credential still works after the refusals.
+      expect((yield* call(providerToken)).status).toBe(200);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

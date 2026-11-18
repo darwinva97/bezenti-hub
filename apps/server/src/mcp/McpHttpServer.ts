@@ -154,6 +154,9 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
   const runtimeModeCeiling = serverSettings.managedPolicy?.limits?.maxRuntimeMode;
   return Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
     const request = yield* HttpServerRequest.HttpServerRequest;
+    // No browser Origin is allowed on this transport (DNS rebinding); refuse it before any
+    // credential is read, as the MCP spec requires. Agents and outside clients send none.
+    if (request.headers.origin !== undefined) return HttpServerResponse.empty({ status: 403 });
     const authorization = request.headers.authorization;
     const token = parseBearerToken(request) ?? "";
     const invocation =
@@ -926,6 +929,7 @@ export const layerMcpTransport = <RA, RE, RR>(registrations: Layer.Layer<RA, RE,
   McpServer.layerHttp({
     name: "T3 Code",
     version: packageJson.version,
+    // Must equal MCP_HTTP_PATH (httpCors.ts); kept literal because DoorRules.test.ts reads it.
     path: "/mcp",
     protocols: [McpProtocol.v2025_06_18],
     allowSessionTermination: true,

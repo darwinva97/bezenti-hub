@@ -2591,6 +2591,78 @@ const rows: ReadonlyArray<Row> = [
     organization,
     deny("wrong-resource"),
   ],
+  // Grants ticket 06: a lending link is offered by the lender alone; no destination is named, so
+  // none is checked (whoever applies it decides there).
+  [
+    "a User offers a link to their own AI account",
+    member,
+    "grant.offer",
+    { ...toAcme, targetKnown: false },
+    allow,
+  ],
+  [
+    "an Admin offers a link to their Organization's AI account",
+    admin,
+    "grant.offer",
+    { ...fromAcme, targetKnown: false },
+    allow,
+  ],
+  [
+    "a Member offers no link to their Organization's AI account",
+    member,
+    "grant.offer",
+    fromAcme,
+    deny("role-not-allowed"),
+  ],
+  [
+    "a Guest offers no link to their Organization's AI account",
+    guest,
+    "grant.offer",
+    fromAcme,
+    deny("role-not-allowed"),
+  ],
+  [
+    "an Admin of another Organization offers nothing of Acme's",
+    outsider,
+    "grant.offer",
+    fromAcme,
+    deny("not-yours"),
+  ],
+  [
+    "the Owner offers no link to Grace's AI account",
+    owner,
+    "grant.offer",
+    toAcme,
+    deny("not-yours"),
+  ],
+  [
+    "the Owner offers no link to an Organization's AI account they do not run",
+    owner,
+    "grant.offer",
+    fromAcme,
+    deny("not-yours"),
+  ],
+  [
+    "an archived Organization offers no link",
+    admin,
+    "grant.offer",
+    { ...fromAcme, lender: { kind: "organization", space: archivedOrganization } },
+    deny("space-archived"),
+  ],
+  [
+    "a frozen Organization offers no link",
+    admin,
+    "grant.offer",
+    { ...fromAcme, lender: { kind: "organization", space: { ...organization, frozen: true } } },
+    deny("space-frozen"),
+  ],
+  [
+    "a disabled User offers no link",
+    { ...member, inactive: true },
+    "grant.offer",
+    toAcme,
+    deny("user-inactive"),
+  ],
 ];
 
 describe("AccessPolicy.decide", () => {

@@ -469,11 +469,16 @@ import {
 import {
   Grant,
   GrantError,
+  GrantClaimOfferInput,
+  GrantCreatedOffer,
+  GrantCreateOfferInput,
   GrantDismissMigrationReviewInput,
   GrantList,
   GrantListGivenInput,
   GrantMigrationReviews,
   GrantMigrationReviewsInput,
+  GrantOfferPreview,
+  GrantReadOfferInput,
   GrantListReceivedInput,
   GrantRefInput,
   GrantSetLimitsInput,
@@ -648,6 +653,11 @@ export const WS_METHODS = {
   // Grants ticket 02: the Owner's review of AI account allowances «to a User» that narrowed.
   grantsMigrationReviews: "grants.migrationReviews",
   grantsDismissMigrationReview: "grants.dismissMigrationReview",
+  // Grants ticket 06: lending links. An AI account's needs no strong factor (machines are not
+  // lent by link yet); applying one is accepting it.
+  grantsCreateOffer: "grants.createOffer",
+  grantsReadOffer: "grants.readOffer",
+  grantsClaimOffer: "grants.claimOffer",
   secretProvidersTest: "secretProviders.test",
   secretProvidersImpact: "secretProviders.impact",
   secretProvidersScopesList: "secretProviders.scopes.list",
@@ -2205,6 +2215,21 @@ const WsGrantsSetLimitsRpc = Rpc.make(WS_METHODS.grantsSetLimits, {
   success: Grant,
   error: GrantRpcError,
 });
+const WsGrantsCreateOfferRpc = Rpc.make(WS_METHODS.grantsCreateOffer, {
+  payload: GrantCreateOfferInput,
+  success: GrantCreatedOffer,
+  error: GrantRpcError,
+});
+const WsGrantsReadOfferRpc = Rpc.make(WS_METHODS.grantsReadOffer, {
+  payload: GrantReadOfferInput,
+  success: GrantOfferPreview,
+  error: GrantRpcError,
+});
+const WsGrantsClaimOfferRpc = Rpc.make(WS_METHODS.grantsClaimOffer, {
+  payload: GrantClaimOfferInput,
+  success: Grant,
+  error: GrantRpcError,
+});
 
 const VaultRpcError = Schema.Union([VaultError, EnvironmentAuthorizationError]);
 const WsVaultsGroupsListRpc = Rpc.make(WS_METHODS.vaultsGroupsList, {
@@ -2439,6 +2464,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsGrantsSetLimitsRpc,
   WsGrantsMigrationReviewsRpc,
   WsGrantsDismissMigrationReviewRpc,
+  WsGrantsCreateOfferRpc,
+  WsGrantsReadOfferRpc,
+  WsGrantsClaimOfferRpc,
   WsSecretProvidersTestRpc,
   WsSecretProvidersImpactRpc,
   WsSecretProvidersScopesListRpc,

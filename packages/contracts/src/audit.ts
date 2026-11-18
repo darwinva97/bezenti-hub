@@ -82,6 +82,7 @@ export const AuditAction = Schema.Literals([
   "identity.issue",
   // Grants: a resource lent to a Space, decided, taken back or returned.
   "grant.give",
+  "grant.offer",
   "grant.accept",
   "grant.reject",
   "grant.cancel",
@@ -311,7 +312,30 @@ export const AUDIT_DETAIL_KEYS = {
     "requestsPeriod",
     "via",
   ],
-  "grant.accept": ["resourceKind", "resourceId", "resourceName", "lenderId", "targetSpaceId"],
+  /**
+   * Grants ticket 06: a lending link made, with what it lends and its limits and expiry; never
+   * the link's token or its hash.
+   */
+  "grant.offer": [
+    "resourceKind",
+    "resourceId",
+    "resourceName",
+    "lenderId",
+    "expiresAt",
+    "tokensAmount",
+    "tokensPeriod",
+    "requestsAmount",
+    "requestsPeriod",
+  ],
+  /** `via` `link` when it was accepted by applying a lending link. */
+  "grant.accept": [
+    "resourceKind",
+    "resourceId",
+    "resourceName",
+    "lenderId",
+    "targetSpaceId",
+    "via",
+  ],
   "grant.reject": ["resourceKind", "resourceId", "resourceName", "lenderId", "targetSpaceId"],
   "grant.cancel": [
     "resourceKind",

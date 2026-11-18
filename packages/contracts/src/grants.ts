@@ -6,7 +6,13 @@
 import * as Schema from "effect/Schema";
 
 import { AiAccountId, AiAccountProvider, AiAccountType } from "./aiAccounts.ts";
-import { EnvironmentId, makeEntityId, SpaceId, UserId } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  makeEntityId,
+  SpaceId,
+  TrimmedNonEmptyString,
+  UserId,
+} from "./baseSchemas.ts";
 import { GrantCap, GrantCapState } from "./grantCaps.ts";
 import { SandboxHostReport } from "./hubEnvironments.ts";
 import { AuthReauth } from "./userAccounts.ts";
@@ -18,7 +24,7 @@ export const GrantResourceKind = Schema.Literals(["environment", "ai-account", "
 export type GrantResourceKind = typeof GrantResourceKind.Type;
 
 /**
- * `offered`: a lending link not applied yet (later); `pending`: waiting for the destination;
+ * `offered`: a lending link not applied yet; `pending`: waiting for the destination;
  * `active`: in use; `rejected`, `cancelled` and `ended` are history.
  */
 export const GrantState = Schema.Literals([
@@ -131,6 +137,16 @@ export const Grant = Schema.Struct({
       caps: Schema.optionalKey(GrantCapState),
     }),
   ),
+  /**
+   * A lending link's (Grants ticket 06), to its lender: when it expires and whether it is still
+   * open, expired, used (then the Grant has its destination) or cancelled. Never its token.
+   */
+  offer: Schema.optionalKey(
+    Schema.Struct({
+      expiresAt: Schema.String,
+      status: Schema.Literals(["open", "expired", "used", "cancelled"]),
+    }),
+  ),
   /** What the viewer may do with it now. */
   can: Schema.Struct({
     cancel: Schema.Boolean,
@@ -234,6 +250,74 @@ export const GrantAcceptRequest = Schema.Struct({
 });
 export type GrantAcceptRequest = typeof GrantAcceptRequest.Type;
 
+/** How long a lending link works, and how many may be open per resource. */
+export const GRANT_OFFER_DAYS = 7;
+export const GRANT_OPEN_OFFERS_PER_RESOURCE = 10;
+
+/** A lending link's secret, from its `#token=` fragment. */
+export const GrantOfferToken = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
+
+/** A lending link for a Space the lender does not name: works once, for `GRANT_OFFER_DAYS`. */
+export const GrantCreateOfferInput = Schema.Struct({
+  resource: GrantResourceRef,
+  limits: GrantLimits,
+});
+export type GrantCreateOfferInput = typeof GrantCreateOfferInput.Type;
+
+export const GrantCreatedOffer = Schema.Struct({
+  grant: Grant,
+  /**
+   * `/grants/offer#token=<token>`: shown once, the Hub keeps only its hash. The token rides in the
+   * fragment, so no request, log or Referer carries it.
+   */
+  path: Schema.String,
+  /** On the Hub's public address (`T3CODE_PUBLIC_URL`); null: the client's origin. */
+  url: Schema.NullOr(Schema.String),
+});
+export type GrantCreatedOffer = typeof GrantCreatedOffer.Type;
+
+export const GrantReadOfferInput = Schema.Struct({ token: GrantOfferToken });
+export type GrantReadOfferInput = typeof GrantReadOfferInput.Type;
+
+/** A Space the reader may apply a link to (they decide there). */
+export const GrantOfferSpace = Schema.Struct({
+  ...GrantSpaceRef.fields,
+  /** The resource is already lent to (or waiting for) this Space: applying it there is refused. */
+  alreadyGranted: Schema.Boolean,
+});
+export type GrantOfferSpace = typeof GrantOfferSpace.Type;
+
+/**
+ * What a signed-in User who holds a link sees: what is lent, by whom, with which limits, and
+ * their Spaces to apply it to. A used, cancelled, expired or unknown link is just `invalid`.
+ */
+export const GrantOfferPreview = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("invalid") }),
+  Schema.Struct({
+    status: Schema.Literal("valid"),
+    resource: Schema.Struct({
+      kind: GrantResourceKind,
+      name: Schema.String,
+      /** A subscription's terms forbid sharing it. */
+      aiAccount: Schema.optionalKey(
+        Schema.Struct({ provider: AiAccountProvider, type: AiAccountType }),
+      ),
+    }),
+    lender: Schema.Struct({
+      kind: Schema.Literals(["user", "organization"]),
+      name: Schema.NullOr(Schema.String),
+    }),
+    limits: GrantLimits,
+    expiresAt: Schema.String,
+    spaces: Schema.Array(GrantOfferSpace),
+  }),
+]);
+export type GrantOfferPreview = typeof GrantOfferPreview.Type;
+
+/** Applying a link is accepting it: the Grant starts active in `spaceId`. */
+export const GrantClaimOfferInput = Schema.Struct({ token: GrantOfferToken, spaceId: SpaceId });
+export type GrantClaimOfferInput = typeof GrantClaimOfferInput.Type;
+
 export const GrantErrorReason = Schema.Literals([
   "not-found",
   "not-allowed",
@@ -242,6 +326,10 @@ export const GrantErrorReason = Schema.Literals([
   "not-lendable",
   "plan-target-unavailable",
   "invalid-limits",
+  /** A resource has `GRANT_OPEN_OFFERS_PER_RESOURCE` open lending links already. */
+  "too-many-offers",
+  /** Too many links that did not work: wait (`message` says how long). */
+  "throttled",
   /** The machine said it cannot host a Sandbox now (`reason` in the message). */
   "host-not-ready",
   /** Making a machine Grant active needs a passkey or TOTP, over HTTP. */

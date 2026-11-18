@@ -162,6 +162,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "provider_scope.allow": "Changed which Vaults use a provider scope",
   "identity.issue": "Signed a workload identity token",
   "grant.give": "Lent a resource",
+  "grant.offer": "Made a lending link",
   "grant.accept": "Accepted a loan",
   "grant.reject": "Rejected a loan",
   "grant.cancel": "Cancelled a loan offer",

@@ -108,6 +108,10 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.grantsEnd]: AuthAccessWriteScope,
   [WS_METHODS.grantsSetLimits]: AuthAccessWriteScope,
   [WS_METHODS.grantsDismissMigrationReview]: AuthAccessWriteScope,
+  // Grants ticket 06: making a lending link, and applying one (accepting it). Reading one writes
+  // nothing.
+  [WS_METHODS.grantsCreateOffer]: AuthAccessWriteScope,
+  [WS_METHODS.grantsClaimOffer]: AuthAccessWriteScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

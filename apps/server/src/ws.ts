@@ -2475,6 +2475,10 @@ export const layerWsRpc = (
         [WS_METHODS.grantsSetLimits]: (input) => grants.setLimits(input),
         [WS_METHODS.grantsMigrationReviews]: (_input) => grants.migrationReviews,
         [WS_METHODS.grantsDismissMigrationReview]: (input) => grants.dismissMigrationReview(input),
+        // Grants ticket 06: lending links (AI accounts; applying one is accepting it).
+        [WS_METHODS.grantsCreateOffer]: (input) => grants.createOffer(input),
+        [WS_METHODS.grantsReadOffer]: (input) => grants.readOffer(input),
+        [WS_METHODS.grantsClaimOffer]: (input) => grants.claimOffer(input),
         [WS_METHODS.secretProvidersTest]: (input) => secretProviderScopes.test(input),
         [WS_METHODS.secretProvidersImpact]: (input) => secretProviderScopes.impact(input),
         [WS_METHODS.secretProvidersScopesList]: (_input) => secretProviderScopes.list,

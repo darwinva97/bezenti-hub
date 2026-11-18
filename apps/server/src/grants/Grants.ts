@@ -6,12 +6,19 @@
  */
 import {
   type Grant,
+  type GrantClaimOfferInput,
+  type GrantCreatedOffer,
+  type GrantCreateOfferInput,
   type GrantEndReason,
   GrantError,
   type GrantErrorReason,
   type GrantDismissMigrationReviewInput,
   type GrantGiveInput,
   GrantId,
+  GRANT_OFFER_DAYS,
+  GRANT_OPEN_OFFERS_PER_RESOURCE,
+  type GrantOfferPreview,
+  type GrantReadOfferInput,
   type GrantLimits,
   GrantLimits as GrantLimitsSchema,
   type GrantList,
@@ -32,8 +39,10 @@ import {
   type UserId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -45,6 +54,8 @@ import * as AiAccountChanges from "../ai/AiAccountChanges.ts";
 import * as GrantCaps from "../ai/GrantCaps.ts";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
+import { makeSignInThrottle } from "../auth/signInThrottle.ts";
+import * as PublicHubUrl from "../environment/PublicHubUrl.ts";
 import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
 import { invalidLimitsReason } from "../sandboxes/sandboxLimits.ts";
 import { LentSandboxDisk } from "../sandboxes/sandboxSpace.ts";
@@ -99,6 +110,19 @@ export class Grants extends Context.Service<
     readonly end: (input: GrantRefInput) => Effect.Effect<Grant, GrantError>;
     readonly setLimits: (input: GrantSetLimitsInput) => Effect.Effect<Grant, GrantError>;
     /**
+     * Grants ticket 06: a lending link for a Space the lender does not name (`grant.offer`).
+     * Works once, for seven days; only its token's hash is kept, and the token is answered once.
+     */
+    readonly createOffer: (
+      input: GrantCreateOfferInput,
+    ) => Effect.Effect<GrantCreatedOffer, GrantError>;
+    /** What a signed-in holder of a link sees; a dead or unknown one is `invalid`, nothing more. */
+    readonly readOffer: (
+      input: GrantReadOfferInput,
+    ) => Effect.Effect<GrantOfferPreview, GrantError>;
+    /** Applying a link to a Space where the caller decides: the loan starts active there. */
+    readonly claimOffer: (input: GrantClaimOfferInput) => Effect.Effect<Grant, GrantError>;
+    /**
      * Grants ticket 02, the Owner only: what an allowance «to a User» reached that its Grant does
      * not. Lending there (`give`) or dismissing removes a row; a row grants nothing.
      */
@@ -121,8 +145,12 @@ interface GrantRow {
   readonly endReason: GrantEndReason | null;
   readonly limitsJson: string;
   readonly createdAt: string;
+  readonly createdBy: string | null;
   readonly decidedAt: string | null;
   readonly endedAt: string | null;
+  /** A lending link's (Grants ticket 06): made by one, and when it stops working. */
+  readonly isOffer: number;
+  readonly offerExpiresAt: string | null;
   readonly resourceName: string | null;
   readonly lenderName: string | null;
   /** A machine's: what it last said of hosting Sandboxes. */
@@ -241,6 +269,36 @@ const denied = (decision: AccessPolicy.Decision) =>
     ? fail("not-allowed", DENIED[decision.reason] ?? "You may not do that with this loan.")
     : Effect.void;
 
+/**
+ * A lending link has no destination until it is applied: only its lender's side acts on it, and
+ * the policy reads no destination for those actions.
+ */
+const LENDER_SIDE: ReadonlySet<AccessPolicy.Action> = new Set([
+  "grant.offer",
+  "grant.cancel",
+  "grant.revoke",
+  "grant.setLimits",
+  "grant.viewGiven",
+]);
+
+/** Answered alike for a link used, cancelled, expired or never made. */
+const DEAD_LINK =
+  "This lending link no longer works: it was used, cancelled or expired, or it is wrong. Ask for a new one.";
+
+/** A link's state as its lender sees it; nothing for a loan that never was one. */
+const offerOf = (row: GrantRow, nowIso: string) => {
+  if (row.isOffer !== 1 || row.offerExpiresAt === null) return {};
+  const status =
+    row.state === "offered"
+      ? row.offerExpiresAt > nowIso
+        ? "open"
+        : "expired"
+      : row.state === "cancelled" && row.targetId === null
+        ? "cancelled"
+        : "used";
+  return { offer: { expiresAt: row.offerExpiresAt, status } as const };
+};
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const spaces = yield* SpaceDirectory.SpaceDirectory;
@@ -251,6 +309,11 @@ const make = Effect.gen(function* () {
   const accountChanges = yield* Effect.serviceOption(AiAccountChanges.AiAccountChanges);
   // How much of a lent AI account's caps is used, where the Hub runs the gateway.
   const caps = yield* Effect.serviceOption(GrantCaps.GrantCaps);
+  // Lending links (ticket 06): their tokens' hashes, the Hub's public address for their URL, and
+  // a lock on whoever keeps trying links that do not work.
+  const digest = yield* Digest.Digest;
+  const publicHubUrl = yield* PublicHubUrl.PublicHubUrl;
+  const linkThrottle = makeSignInThrottle();
 
   /** An active AI account Grant's caps now; nothing when it has none or the Hub cannot tell. */
   const capsOf = Effect.fn("Grants.capsOf")(function* (row: GrantRow, limits: GrantLimits) {
@@ -305,7 +368,8 @@ const make = Effect.gen(function* () {
       g.resource_id AS "resourceId", g.lender_kind AS "lenderKind", g.lender_id AS "lenderId",
       g.target_kind AS "targetKind", g.target_id AS "targetId", g.state AS state,
       g.end_reason AS "endReason", g.limits_json AS "limitsJson", g.created_at AS "createdAt",
-      g.decided_at AS "decidedAt", g.ended_at AS "endedAt",
+      g.created_by AS "createdBy", g.decided_at AS "decidedAt", g.ended_at AS "endedAt",
+      (g.offer_token_hash IS NOT NULL) AS "isOffer", g.offer_expires_at AS "offerExpiresAt",
       CASE g.resource_kind
         WHEN 'environment' THEN (SELECT name FROM environments WHERE environment_id = g.resource_id)
         WHEN 'ai-account' THEN (SELECT name FROM ai_accounts WHERE account_id = g.resource_id)
@@ -394,21 +458,41 @@ const make = Effect.gen(function* () {
       target,
     }) satisfies AccessPolicy.GrantResource;
 
+  /**
+   * The Grant as the policy reads it for `who`: to its destination; a link with none yet, on its
+   * lender's side only (the destination stands in, unread). Undefined: its Space is gone.
+   */
+  const policyResourceOf = (row: GrantRow, known: KnownSpaces, who: Caller) => {
+    if (row.targetId === null) {
+      return { resource: resourceOf(row, principalSpace(who), known), lenderSideOnly: true };
+    }
+    const target = known.get(row.targetId as SpaceId);
+    return target === undefined
+      ? undefined
+      : { resource: resourceOf(row, target.resource, known), lenderSideOnly: false };
+  };
+
+  const mayOn =
+    (who: Caller, found: ReturnType<typeof policyResourceOf>) => (action: AccessPolicy.Action) =>
+      found !== undefined &&
+      (!found.lenderSideOnly || LENDER_SIDE.has(action)) &&
+      AccessPolicy.isAllowed(AccessPolicy.decide(who.principal, action, found.resource));
+
   const summaryOf = Effect.fn("Grants.summaryOf")(function* (
     row: GrantRow,
     known: Effect.Success<ReturnType<typeof targetsOf>>,
     owners: ReadonlyMap<string, string>,
     who: Caller,
+    nowIso: string,
   ) {
     const limits = yield* decodeLimits(row.limitsJson).pipe(
       Effect.catch(storage("read the loan's limits")),
     );
     const target = row.targetId === null ? undefined : known.get(row.targetId as SpaceId);
-    const can = (action: AccessPolicy.Action) =>
-      target !== undefined &&
-      AccessPolicy.isAllowed(
-        AccessPolicy.decide(who.principal, action, resourceOf(row, target.resource, known)),
-      );
+    const can = mayOn(who, policyResourceOf(row, known, who));
+    const offer = offerOf(row, nowIso);
+    // An expired link is history: nothing to cancel.
+    const cancellable = offer.offer === undefined || offer.offer.status !== "expired";
     return {
       id: GrantId.make(row.grantId),
       resource: { kind: row.resourceKind, id: row.resourceId, name: row.resourceName },
@@ -438,8 +522,9 @@ const make = Effect.gen(function* () {
             },
           }
         : {}),
+      ...offer,
       can: {
-        cancel: mayTransition("cancel", row.state) && can("grant.cancel"),
+        cancel: mayTransition("cancel", row.state) && cancellable && can("grant.cancel"),
         revoke: mayTransition("end", row.state) && can("grant.revoke"),
         decide: mayTransition("accept", row.state) && can("grant.decide"),
         return: mayTransition("end", row.state) && can("grant.return"),
@@ -454,8 +539,9 @@ const make = Effect.gen(function* () {
   ) {
     const known = yield* targetsOf(rows);
     const owners = yield* personalOwnersOf(rows);
+    const nowIso = yield* now;
     const grants: Array<Grant> = [];
-    for (const row of rows) grants.push(yield* summaryOf(row, known, owners, who));
+    for (const row of rows) grants.push(yield* summaryOf(row, known, owners, who, nowIso));
     return { grants };
   });
 
@@ -603,10 +689,15 @@ const make = Effect.gen(function* () {
   });
 
   const auditOf = (
-    row: Pick<GrantRow, "grantId" | "resourceKind" | "resourceId" | "lenderId" | "targetId">,
+    row: Pick<
+      GrantRow,
+      "grantId" | "resourceKind" | "resourceId" | "lenderKind" | "lenderId" | "targetId"
+    >,
     resourceName: string | null,
   ) => ({
-    spaceId: row.targetId as SpaceId | null,
+    // Under the Space it was lent to; a link not applied yet, under its lending Organization.
+    spaceId: (row.targetId ??
+      (row.lenderKind === "organization" ? row.lenderId : null)) as SpaceId | null,
     target: {
       kind: "grant" as const,
       id: row.grantId,
@@ -633,13 +724,12 @@ const make = Effect.gen(function* () {
   /** The Grant, once the caller sees it from either side; otherwise it does not exist for them. */
   const visibleRow = Effect.fn("Grants.visibleRow")(function* (grantId: GrantId, who: Caller) {
     const row = yield* rowOf(grantId);
-    if (row === undefined || row.targetId === null) return yield* fail("not-found", NOT_FOUND);
+    if (row === undefined) return yield* fail("not-found", NOT_FOUND);
     const known = yield* targetsOf([row]);
-    const target = known.get(row.targetId as SpaceId);
-    if (target === undefined) return yield* fail("not-found", NOT_FOUND);
-    const resource = resourceOf(row, target.resource, known);
-    const can = (action: AccessPolicy.Action) =>
-      AccessPolicy.isAllowed(AccessPolicy.decide(who.principal, action, resource));
+    const found = policyResourceOf(row, known, who);
+    if (found === undefined) return yield* fail("not-found", NOT_FOUND);
+    const resource = found.resource;
+    const can = mayOn(who, found);
     if (
       !can("grant.viewGiven") &&
       !can("grant.decide") &&
@@ -704,19 +794,10 @@ const make = Effect.gen(function* () {
       ))
     `).pipe(Effect.catch(storage("read your loans")));
     const known = yield* targetsOf(rows);
-    const seen = rows.filter((row) => {
-      const target = row.targetId === null ? undefined : known.get(row.targetId as SpaceId);
-      return (
-        target !== undefined &&
-        AccessPolicy.isAllowed(
-          AccessPolicy.decide(
-            who.principal,
-            "grant.viewGiven",
-            resourceOf(row, target.resource, known),
-          ),
-        )
-      );
-    });
+    // Lending links too, which have no destination until applied.
+    const seen = rows.filter((row) =>
+      mayOn(who, policyResourceOf(row, known, who))("grant.viewGiven"),
+    );
     return yield* summaries(seen, who);
   });
 
@@ -863,6 +944,7 @@ const make = Effect.gen(function* () {
             grantId,
             resourceKind: item.kind,
             resourceId: item.resourceId,
+            lenderKind: item.lenderKind,
             lenderId: item.lenderId,
             targetId: input.spaceId,
           },
@@ -950,6 +1032,9 @@ const make = Effect.gen(function* () {
         if (!mayTransition("cancel", row.state)) return yield* illegal("cancel", row.state);
         yield* denied(AccessPolicy.decide(who.principal, "grant.cancel", resource));
         const at = yield* now;
+        if (row.state === "offered" && row.offerExpiresAt !== null && row.offerExpiresAt <= at) {
+          return yield* fail("illegal-transition", "This lending link expired already.");
+        }
         yield* move(
           row.grantId,
           row.state,
@@ -1060,6 +1145,317 @@ const make = Effect.gen(function* () {
     return yield* reread(input.grantId, who);
   });
 
+  // Grants ticket 06: lending links.
+
+  /** The lender's side of a link, which names no destination (see `policyResourceOf`). */
+  const offerResource = (lender: AccessPolicy.GrantLender, who: Caller) =>
+    ({ kind: "grant", lender, target: principalSpace(who) }) satisfies AccessPolicy.GrantResource;
+
+  // SHA-256 of 32 random bytes: looking the hash up leaks nothing about the token through timing.
+  const hashToken = (token: string) =>
+    digest.digestHex(Digest.sha256, new TextEncoder().encode(token));
+
+  const createOffer = Effect.fn("Grants.createOffer")(function* (input: GrantCreateOfferInput) {
+    const who = yield* caller;
+    // A machine's loan made active needs its decider's strong factor, which a link cannot ask for
+    // yet; Vault groups are not lent at all yet.
+    if (input.resource.kind !== "ai-account") {
+      return yield* fail(
+        "not-lendable",
+        "Only an AI account can be lent by link for now. Lend a machine to a Space you work in.",
+      );
+    }
+    const grantId = yield* newId;
+    const token = Buffer.from(yield* random.randomBytes(32)).toString("base64url");
+    const tokenHash = yield* hashToken(token);
+    yield* inTransaction(
+      "make the lending link",
+      Effect.gen(function* () {
+        const item = yield* lendable(input.resource);
+        yield* denied(
+          AccessPolicy.decide(who.principal, "grant.offer", offerResource(item.lender, who)),
+        );
+        const problem = limitsProblem(item.kind, input.limits);
+        if (problem !== undefined) return yield* fail("invalid-limits", problem);
+        const current = yield* DateTime.now;
+        const at = DateTime.formatIso(current);
+        const open = yield* sql<{ readonly n: number }>`
+          SELECT COUNT(*) AS n FROM grants
+          WHERE resource_kind = ${item.kind} AND resource_id = ${item.resourceId}
+            AND state = 'offered' AND offer_expires_at > ${at}
+        `;
+        if ((open[0]?.n ?? 0) >= GRANT_OPEN_OFFERS_PER_RESOURCE) {
+          return yield* fail(
+            "too-many-offers",
+            `This AI account has ${GRANT_OPEN_OFFERS_PER_RESOURCE} open lending links already. Cancel one or wait until one is used or expires.`,
+          );
+        }
+        const expiresAt = DateTime.formatIso(
+          DateTime.add(current, {
+            milliseconds: Duration.toMillis(Duration.days(GRANT_OFFER_DAYS)),
+          }),
+        );
+        const limitsJson = yield* encodeLimits(input.limits);
+        yield* sql`
+          INSERT INTO grants (
+            grant_id, resource_kind, resource_id, lender_kind, lender_id, target_kind, target_id,
+            state, limits_json, offer_token_hash, offer_expires_at, created_at, created_by
+          ) VALUES (
+            ${grantId}, ${item.kind}, ${item.resourceId}, ${item.lenderKind}, ${item.lenderId},
+            'space', NULL, 'offered', ${limitsJson}, ${tokenHash}, ${expiresAt}, ${at},
+            ${who.userId}
+          )
+        `;
+        const record = auditOf(
+          {
+            grantId,
+            resourceKind: item.kind,
+            resourceId: item.resourceId,
+            lenderKind: item.lenderKind,
+            lenderId: item.lenderId,
+            targetId: null,
+          },
+          item.name,
+        );
+        yield* audit.record({
+          actor: AuditLog.userActor(who.userId),
+          action: "grant.offer",
+          spaceId: record.spaceId,
+          target: record.target,
+          detail: {
+            resourceKind: item.kind,
+            resourceId: item.resourceId,
+            resourceName: item.name,
+            lenderId: item.lenderId,
+            expiresAt,
+            ...limitsDetail(input.limits),
+          },
+        });
+      }),
+    );
+    const grant = yield* reread(grantId, who);
+    // In the fragment: browsers never send it, so no request, log or Referer carries it.
+    const path = `/grants/offer#token=${token}`;
+    const origin = yield* publicHubUrl.publicHubOrigin;
+    return {
+      grant,
+      path,
+      url: Option.match(origin, {
+        onNone: () => null,
+        onSome: (base) => new URL(path, base).href,
+      }),
+    } satisfies GrantCreatedOffer;
+  });
+
+  const nowMillis = DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
+
+  /**
+   * The open link behind a token, with what it lends as it is now; none when it is unknown,
+   * used, cancelled or expired, or its lender could no longer lend it. An unknown token counts
+   * against the caller; applying a dead link counts against it; reading one, against nobody.
+   */
+  const liveOffer = Effect.fn("Grants.liveOffer")(function* (
+    token: string,
+    who: Caller,
+    mode: "read" | "claim",
+  ) {
+    const tokenHash = yield* hashToken(token);
+    const userKey = `grant-offer-user:${who.userId}`;
+    const linkKey = `grant-offer:${tokenHash}`;
+    const nowMs = yield* nowMillis;
+    const lockedUntil = linkThrottle.lockedUntil([userKey, linkKey], nowMs);
+    if (lockedUntil !== undefined) {
+      return yield* fail(
+        "throttled",
+        `Too many lending links that did not work. Try again in ${Math.ceil((lockedUntil - nowMs) / 1000)} seconds.`,
+      );
+    }
+    const [row] = yield* selectGrants(sql`g.offer_token_hash = ${tokenHash}`).pipe(
+      Effect.catch(storage("read the lending link")),
+    );
+    if (row === undefined) {
+      linkThrottle.recordFailure([userKey], nowMs);
+      return Option.none();
+    }
+    const at = yield* now;
+    const dead = () => {
+      if (mode === "claim") linkThrottle.recordFailure([linkKey], nowMs);
+      return Option.none();
+    };
+    if (row.state !== "offered" || row.offerExpiresAt === null || row.offerExpiresAt <= at) {
+      return dead();
+    }
+    // What it lends must still be the lender's and lendable, by the same rules as giving it.
+    const item = yield* lendableAiAccount(row.resourceId).pipe(Effect.option);
+    if (
+      Option.isNone(item) ||
+      item.value.lenderKind !== row.lenderKind ||
+      item.value.lenderId !== row.lenderId
+    ) {
+      return dead();
+    }
+    // Whoever made it must still be able to lend it: an Admin who no longer runs the
+    // Organization, or a User turned off, leaves a dead link.
+    if (row.createdBy === null) return dead();
+    const maker = yield* spaces.principalOf(row.createdBy as UserId).pipe(Effect.option);
+    if (
+      Option.isNone(maker) ||
+      !AccessPolicy.isAllowed(
+        AccessPolicy.decide(
+          maker.value,
+          "grant.offer",
+          offerResource(item.value.lender, {
+            userId: row.createdBy as UserId,
+            principal: maker.value,
+          }),
+        ),
+      )
+    ) {
+      return dead();
+    }
+    return Option.some({ row, item: item.value });
+  });
+
+  /** Whether `target` is the lender's own Space (what it owns already serves it there). */
+  const isLendersOwn = (row: GrantRow, target: AccessPolicy.SpaceResource) =>
+    row.lenderKind === "user"
+      ? target.kind === "personal" && target.personalOwnerUserId === row.lenderId
+      : target.id === row.lenderId;
+
+  const readOffer = Effect.fn("Grants.readOffer")(function* (input: GrantReadOfferInput) {
+    const who = yield* caller;
+    const found = yield* liveOffer(input.token, who, "read");
+    if (Option.isNone(found)) return { status: "invalid" } satisfies GrantOfferPreview;
+    const { row, item } = found.value;
+    const limits = yield* decodeLimits(row.limitsJson).pipe(
+      Effect.catch(storage("read the loan's limits")),
+    );
+    // The Spaces the reader decides in: their Personal space and the Organizations they run.
+    const ids = yield* sql<{ readonly spaceId: string }>`
+      SELECT s.space_id AS "spaceId" FROM spaces s
+      WHERE s.archived_at IS NULL AND s.frozen_at IS NULL AND (
+        (s.kind = 'personal' AND s.personal_owner_user_id = ${who.userId})
+        OR (s.kind = 'organization' AND EXISTS (
+          SELECT 1 FROM space_memberships m
+          WHERE m.space_id = s.space_id AND m.user_id = ${who.userId} AND m.role = 'admin'))
+      )
+      ORDER BY s.kind, s.name
+    `.pipe(Effect.catch(storage("read your Spaces")));
+    const rows = ids.map((entry) => ({ targetId: entry.spaceId }));
+    const known = yield* targetsOf(rows);
+    const owners = yield* personalOwnersOf(rows);
+    const lentTo = yield* sql<{ readonly targetId: string }>`
+      SELECT target_id AS "targetId" FROM grants
+      WHERE resource_kind = ${row.resourceKind} AND resource_id = ${row.resourceId}
+        AND target_kind = 'space' AND state IN ('pending', 'active')
+    `.pipe(Effect.catch(storage("read the loan")));
+    const taken = new Set(lentTo.map((entry) => entry.targetId));
+    return {
+      status: "valid",
+      resource: {
+        kind: row.resourceKind,
+        name: item.name,
+        ...(row.aiProvider !== null && row.aiType !== null
+          ? { aiAccount: { provider: row.aiProvider, type: row.aiType } }
+          : {}),
+      },
+      lender: { kind: row.lenderKind, name: row.lenderName },
+      limits,
+      expiresAt: row.offerExpiresAt ?? "",
+      spaces: ids.flatMap((entry) => {
+        const target = known.get(entry.spaceId as SpaceId);
+        if (target === undefined || isLendersOwn(row, target.resource)) return [];
+        const decides = AccessPolicy.isAllowed(
+          AccessPolicy.decide(who.principal, "grant.decide", {
+            kind: "grant",
+            lender: item.lender,
+            target: target.resource,
+          }),
+        );
+        if (!decides) return [];
+        return [
+          {
+            spaceId: target.resource.id,
+            kind: target.resource.kind,
+            name: target.name,
+            ...ownerNameOf(owners, target.resource.id),
+            alreadyGranted: taken.has(target.resource.id),
+          },
+        ];
+      }),
+    } satisfies GrantOfferPreview;
+  });
+
+  const NOT_YOUR_SPACE = "You can apply a lending link only to a Space where you decide on loans.";
+
+  const claimOffer = Effect.fn("Grants.claimOffer")(function* (input: GrantClaimOfferInput) {
+    const who = yield* caller;
+    const grantId = yield* inTransaction(
+      "apply the lending link",
+      Effect.gen(function* () {
+        const found = yield* liveOffer(input.token, who, "claim");
+        if (Option.isNone(found)) return yield* fail("not-found", DEAD_LINK);
+        const { row, item } = found.value;
+        // A Space that does not exist answers like one the caller does not decide in.
+        const known = yield* targetsOf([{ targetId: input.spaceId }]);
+        const target = known.get(input.spaceId);
+        if (target === undefined) return yield* fail("not-allowed", NOT_YOUR_SPACE);
+        if (isLendersOwn(row, target.resource)) {
+          return yield* fail("not-allowed", DENIED["wrong-resource"] ?? NOT_YOUR_SPACE);
+        }
+        // Applying it is accepting it: the destination's rule, as for any loan.
+        const decision = AccessPolicy.decide(who.principal, "grant.decide", {
+          kind: "grant",
+          lender: item.lender,
+          target: target.resource,
+        });
+        if (decision._tag === "Deny") {
+          return yield* fail(
+            "not-allowed",
+            decision.reason === "space-archived" || decision.reason === "space-frozen"
+              ? (DENIED[decision.reason] ?? NOT_YOUR_SPACE)
+              : NOT_YOUR_SPACE,
+          );
+        }
+        const live = yield* sql<{ readonly n: number }>`
+          SELECT COUNT(*) AS n FROM grants
+          WHERE resource_kind = ${row.resourceKind} AND resource_id = ${row.resourceId}
+            AND target_kind = 'space' AND target_id = ${input.spaceId}
+            AND state IN ('pending', 'active')
+        `;
+        if ((live[0]?.n ?? 0) > 0) {
+          return yield* fail("already-granted", "This AI account is already lent to that Space.");
+        }
+        const at = yield* now;
+        // Only while still open: two people applying it at once, one gets it.
+        const moved = yield* sql<{ readonly grantId: string }>`
+          UPDATE grants SET state = 'active', target_kind = 'space', target_id = ${input.spaceId},
+            decided_at = ${at}, decided_by = ${who.userId}
+          WHERE grant_id = ${row.grantId} AND state = 'offered' AND offer_expires_at > ${at}
+          RETURNING grant_id AS "grantId"
+        `;
+        if (moved.length === 0) return yield* fail("not-found", DEAD_LINK);
+        // Lent to an Organization a migrated allowance reached: that review is settled.
+        yield* sql`
+          DELETE FROM ai_account_grant_reviews
+          WHERE account_id = ${row.resourceId} AND space_id = ${input.spaceId}
+        `;
+        const record = auditOf({ ...row, targetId: input.spaceId }, item.name);
+        yield* audit.record({
+          actor: AuditLog.userActor(who.userId),
+          action: "grant.accept",
+          spaceId: record.spaceId,
+          target: record.target,
+          detail: { ...record.common, via: "link" },
+        });
+        return GrantId.make(row.grantId);
+      }),
+    );
+    // Who may use the account changed: live processes are checked again.
+    if (Option.isSome(accountChanges)) yield* accountChanges.value.changed;
+    return yield* reread(grantId, who);
+  });
+
   const ownerOnly = Effect.gen(function* () {
     const who = yield* caller;
     if (!who.principal.isOwner) {
@@ -1146,6 +1542,9 @@ const make = Effect.gen(function* () {
     cancel,
     end,
     setLimits,
+    createOffer,
+    readOffer,
+    claimOffer,
   });
 });
 

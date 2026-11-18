@@ -264,17 +264,12 @@ describe("Hub con Environments: owned resources go with their owner (owned-resou
           yield* eventually(accountRows(hub, "user", ana).pipe(Effect.map((n) => n === 0))),
           "her account's row went once the gateway let it go",
         );
-        // Her loans end, the link she offered expires, the one to her Personal space ends.
+        // Her loans end, the link she offered is cancelled, the one to her Personal space ends.
         assert.deepEqual(yield* grantStates(hub), [
           ["grant-ana-account", "ended", "lender-gone"],
-          ["grant-ana-offer", "offered", null],
+          ["grant-ana-offer", "cancelled", null],
           ["grant-to-ana", "ended", "target-gone"],
         ]);
-        const [offer] = yield* hub.server.sql<{ readonly expired: number }>`
-          SELECT offer_expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS expired FROM grants
-          WHERE grant_id = 'grant-ana-offer'
-        `;
-        assert.equal(offer?.expired, 1, "her link expired");
         // Each audited with how it went.
         assert.include(yield* auditVia(hub, "ai_account.delete", "user.remove"), account);
         assert.sameMembers(yield* auditVia(hub, "vault_group.delete", "user.remove"), groups);

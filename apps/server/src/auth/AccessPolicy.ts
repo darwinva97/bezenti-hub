@@ -297,7 +297,12 @@ export type Action =
   // Grants (`GrantResource`; see `decideGrant`).
   /** Lend one's resource to a Space; decided on the resource's owner and the destination. */
   | "grant.give"
-  /** Take back a waiting Grant before it is decided. */
+  /**
+   * Offer one's resource by a lending link (Grants ticket 06): decided on its owner only; whoever
+   * applies the link decides on their own Space (`grant.decide`).
+   */
+  | "grant.offer"
+  /** Take back a waiting Grant (or an unused link) before it is decided. */
   | "grant.cancel"
   /** Take back an active Grant. */
   | "grant.revoke"
@@ -828,6 +833,7 @@ const decideAiAccount = (
 
 const GRANT_ACTIONS: ReadonlySet<Action> = new Set([
   "grant.give",
+  "grant.offer",
   "grant.cancel",
   "grant.revoke",
   "grant.setLimits",
@@ -857,9 +863,11 @@ const decideLender = (principal: Principal, action: Action, grant: GrantResource
     if (space === null || space.kind !== "organization") return deny("not-yours");
     const runs = inOrganization(principal, space, ADMIN_ONLY);
     if (runs._tag === "Deny") return runs.reason === "not-a-member" ? deny("not-yours") : runs;
-    if (action !== "grant.give") return allow;
+    if (action !== "grant.give" && action !== "grant.offer") return allow;
     if (space.archived) return deny("space-archived");
     if (space.frozen) return deny("space-frozen");
+    // A link names no destination: whoever applies it decides on theirs.
+    if (action === "grant.offer") return allow;
     // An Organization's own resources already serve it.
     if (target.id === space.id) return deny("wrong-resource");
   }
@@ -871,6 +879,7 @@ const decideLender = (principal: Principal, action: Action, grant: GrantResource
 /** The lender's side of a Grant (`decideLender`). */
 const LENDER_ACTIONS: ReadonlySet<Action> = new Set([
   "grant.give",
+  "grant.offer",
   "grant.cancel",
   "grant.revoke",
   "grant.setLimits",

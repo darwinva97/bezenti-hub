@@ -37,8 +37,8 @@ interface LiveRow {
 
 /**
  * Ends every live loan on the side that is gone: `pending` and `active` ones end with `reason`,
- * an `offered` one (never accepted) is cancelled, or its link expires when it has no
- * destination yet. Answers each with its lent Sandbox.
+ * an `offered` one (never accepted, a lending link) is cancelled. Answers each with its lent
+ * Sandbox.
  */
 export const endGone = Effect.fn("GrantEnding.endGone")(function* (
   sql: SqlClient.SqlClient,
@@ -71,18 +71,12 @@ export const endGone = Effect.fn("GrantEnding.endGone")(function* (
   const write = AuditLog.write(sql);
   for (const row of live) {
     const offered = row.state === "offered";
-    // An offer with no destination yet (a link) cannot be `cancelled` (the row needs one): its
-    // link expires now instead, so nobody takes it up.
+    // An offer never accepted (a lending link, with no destination yet) is cancelled.
     yield* offered
-      ? row.targetId === null
-        ? sql`
-            UPDATE grants SET offer_expires_at = ${now}
-            WHERE grant_id = ${row.grantId} AND state = 'offered'
-          `
-        : sql`
-            UPDATE grants SET state = 'cancelled', decided_at = ${now}, decided_by = NULL
-            WHERE grant_id = ${row.grantId} AND state = 'offered'
-          `
+      ? sql`
+          UPDATE grants SET state = 'cancelled', decided_at = ${now}, decided_by = NULL
+          WHERE grant_id = ${row.grantId} AND state = 'offered'
+        `
       : sql`
           UPDATE grants SET state = 'ended', end_reason = ${reason}, ended_at = ${now},
             ended_by = NULL

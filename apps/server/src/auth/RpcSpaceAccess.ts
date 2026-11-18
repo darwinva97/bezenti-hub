@@ -177,6 +177,11 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.grantsSetLimits]: GRANTS,
   [WS_METHODS.grantsMigrationReviews]: GRANTS,
   [WS_METHODS.grantsDismissMigrationReview]: GRANTS,
+  // Grants ticket 06: a lending link is made by its lender (`grant.offer`); whoever holds it reads
+  // it and applies it only to a Space where they decide (`grant.decide`).
+  [WS_METHODS.grantsCreateOffer]: GRANTS,
+  [WS_METHODS.grantsReadOffer]: GRANTS,
+  [WS_METHODS.grantsClaimOffer]: GRANTS,
   [WS_METHODS.projectsCreateFromThread]: "thread",
   // An app acts inside its Thread's live session, so it is its creator's, like a message.
   [WS_METHODS.mcpAppsCallTool]: "owned",

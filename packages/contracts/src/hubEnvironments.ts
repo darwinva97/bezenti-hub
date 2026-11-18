@@ -5,7 +5,9 @@ import {
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
+  ProjectId,
   SpaceId,
+  ThreadId,
   TrimmedNonEmptyString,
   UserId,
 } from "./baseSchemas.ts";
@@ -56,6 +58,30 @@ export const sandboxEnvironmentIdOf = (spaceId: SpaceId): EnvironmentId =>
 export const sandboxEnvironmentName = (spaceName: string) =>
   `${spaceName.slice(0, 64 - " Sandbox".length).trim()} Sandbox`;
 
+/**
+ * Why a machine's checkpoint uploads to a Project's Hub repository keep failing: `too-large`, the
+ * upload is larger than the Hub accepts (behind a proxy's request limit); `refused`, the Hub said
+ * no (credential, permissions); `failing`, anything else (network, the Hub).
+ */
+export const HubRepositoryUploadIssueKind = Schema.Literals(["too-large", "refused", "failing"]);
+export type HubRepositoryUploadIssueKind = typeof HubRepositoryUploadIssueKind.Type;
+
+/** One Hub repository a machine's uploads are failing for, as the Hub last saw it. */
+export const HubRepositoryUploadIssue = Schema.Struct({
+  projectId: ProjectId,
+  /** Set for a Thread without a Project, whose repository is its own. */
+  threadId: Schema.optionalKey(ThreadId),
+  kind: HubRepositoryUploadIssueKind,
+  /** What git or the Hub said, shortened. */
+  detail: Schema.String,
+  since: IsoDateTime,
+  /** When the Hub tries again on its own; null when only a new checkpoint or a reconnect does. */
+  nextAttemptAt: Schema.NullOr(IsoDateTime),
+  /** Checkpoints of the repository not uploaded yet. */
+  pendingCheckpoints: NonNegativeInt,
+});
+export type HubRepositoryUploadIssue = typeof HubRepositoryUploadIssue.Type;
+
 export const HubEnvironmentSummary = Schema.Struct({
   id: EnvironmentId,
   name: HubEnvironmentName,
@@ -101,6 +127,11 @@ export const HubEnvironmentSummary = Schema.Struct({
       lenderName: Schema.NullOr(Schema.String),
     }),
   ),
+  /**
+   * Hub repositories this machine's checkpoint uploads keep failing for. Absent when none, for
+   * viewers who cannot manage the machine, and from older Hubs.
+   */
+  uploadIssues: Schema.optionalKey(Schema.Array(HubRepositoryUploadIssue)),
 });
 export type HubEnvironmentSummary = typeof HubEnvironmentSummary.Type;
 

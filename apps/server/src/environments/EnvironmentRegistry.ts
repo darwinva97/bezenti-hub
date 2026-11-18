@@ -60,6 +60,7 @@ import * as Stream from "effect/Stream";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import { base64UrlEncode } from "../auth/utils.ts";
+import * as HubRepositoryUploadIssues from "../checkpointing/HubRepositoryUploadIssues.ts";
 import * as HubRunsAgents from "../environment/HubRunsAgents.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import type * as SandboxRuntime from "../sandboxes/SandboxRuntime.ts";
@@ -696,6 +697,8 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
   const spaces = yield* SpaceDirectory.SpaceDirectory;
   const audit = yield* AuditLog.AuditLog;
   const connections = yield* EnvironmentConnections.EnvironmentConnections;
+  // Why a machine's checkpoint uploads keep failing, shown to whoever manages it.
+  const uploadIssues = yield* HubRepositoryUploadIssues.HubRepositoryUploadIssues;
   const random = yield* SecureRandom.SecureRandom;
   const digester = yield* Digest.Digest;
   const hubId = yield* (yield* ServerEnvironment.ServerEnvironmentIdentity).getEnvironmentId;
@@ -976,7 +979,12 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
         row.mode !== "lent" &&
         row.kind !== "sandbox" &&
         AccessPolicy.isAllowed(decide(principal, "environment.rename", resource));
-      summaries.push({ ...summary, canManage });
+      const issues = canManage ? yield* uploadIssues.of(summary.id) : [];
+      summaries.push({
+        ...summary,
+        canManage,
+        ...(issues.length === 0 ? {} : { uploadIssues: issues }),
+      });
     }
     const made = new Set(rows.flatMap((row) => (isHubSandbox(row) ? [row.spaceId] : [])));
     // Without a runtime that can run them, Sandboxes not made yet are not offered.
@@ -2493,6 +2501,7 @@ export const layerWith = (options: RegistryOptions = {}) =>
   Layer.effect(EnvironmentRegistry, make(options)).pipe(
     Layer.provide(AuditLog.layer),
     Layer.provideMerge(EnvironmentConnections.layer),
+    Layer.provideMerge(HubRepositoryUploadIssues.layer),
   );
 
 /** The registry without Sandboxes (tests, the join flow); the Hub machine runs Threads as provided. */
@@ -2540,4 +2549,5 @@ export const layerWithSandboxes = <E, R>(
     Layer.provideMerge(Sandboxes.layer.pipe(Layer.provide(runtime))),
     Layer.provide(AuditLog.layer),
     Layer.provideMerge(EnvironmentConnections.layer),
+    Layer.provideMerge(HubRepositoryUploadIssues.layer),
   );

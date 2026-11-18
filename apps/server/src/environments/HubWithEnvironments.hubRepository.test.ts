@@ -1,4 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
   CheckpointId,
@@ -12,12 +13,16 @@ import {
   SpaceId,
   ThreadId,
 } from "@t3tools/contracts";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
 import * as HubRepository from "../checkpointing/HubRepository.ts";
+import * as HubRepositoryUploadIssues from "../checkpointing/HubRepositoryUploadIssues.ts";
 import { addMember } from "../auth/UserAuth.testkit.ts";
 import * as RemoteEnvironments from "../environment/RemoteEnvironments.ts";
 import { ClaudeProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
@@ -25,6 +30,7 @@ import { checkpointRefForScopeOrdinal } from "../orchestration-v2/CheckpointServ
 import * as CheckpointUploadService from "../orchestration-v2/CheckpointUploadService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as EnvironmentRegistry from "./EnvironmentRegistry.ts";
 import {
   connectProtocolEnvironment,
@@ -45,25 +51,40 @@ import {
   withEditingTurns,
 } from "./HubWithEnvironments.scenarios.testkit.ts";
 
-/** Ready checkpoints of a Thread (turns 1..count) that the Hub repository does not have yet. */
-const seedCheckpoints = Effect.fn(function* (hub: Hub, threadId: ThreadId, count: number) {
+/**
+ * Ready checkpoints of a Thread (turns 1..count) that the Hub repository does not have yet, in a
+ * scope named `name` whose workspace is `cwd`.
+ */
+const seedCheckpoints = Effect.fn(function* (
+  hub: Hub,
+  threadId: ThreadId,
+  count: number,
+  options: {
+    readonly name?: string;
+    readonly cwd?: string;
+    readonly refs?: ReadonlyArray<CheckpointRef>;
+  } = {},
+) {
+  const name = options.name ?? "protocol";
   const projection = yield* hub
     .service(Orchestrator.OrchestratorV2)
     .getThreadProjection(threadId)
     .pipe(Effect.orDie);
   const now = projection.thread.createdAt;
-  const scopeId = CheckpointScopeId.make("scope:protocol");
-  const nodeId = NodeId.make("node:protocol");
+  const scopeId = CheckpointScopeId.make(`scope:${name}`);
+  const nodeId = NodeId.make(`node:${name}`);
   const seeded = Array.from({ length: count }, (_, index) => ({
     ordinal: index + 1,
-    ref: CheckpointRef.make(`refs/t3/orchestration-v2/checkpoints/protocol/ordinal/${index + 1}`),
-    checkpointId: CheckpointId.make(`checkpoint:protocol:${index + 1}`),
+    ref:
+      options.refs?.[index] ??
+      CheckpointRef.make(`refs/t3/orchestration-v2/checkpoints/${name}/ordinal/${index + 1}`),
+    checkpointId: CheckpointId.make(`checkpoint:${name}:${index + 1}`),
   }));
   yield* hub.server.eventSink
     .write({
       events: [
         {
-          id: EventId.make("event:protocol-scope"),
+          id: EventId.make(`event:${name}-scope`),
           type: "checkpoint-scope.created",
           threadId,
           occurredAt: now,
@@ -77,12 +98,12 @@ const seedCheckpoints = Effect.fn(function* (hub: Hub, threadId: ThreadId, count
             kind: "root_run",
             ordinalWithinParent: 0,
             advancesAppRunCount: true,
-            cwd: "/remote/projects/protocol",
+            cwd: options.cwd ?? "/remote/projects/protocol",
             createdAt: now,
           },
         },
         ...seeded.map((checkpoint) => ({
-          id: EventId.make(`event:protocol-checkpoint:${checkpoint.ordinal}`),
+          id: EventId.make(`event:${name}-checkpoint:${checkpoint.ordinal}`),
           type: "checkpoint.captured" as const,
           threadId,
           occurredAt: now,
@@ -124,6 +145,33 @@ const answerNext = Effect.fn(function* (
   assert.deepEqual({ method: frame.method, payload: frame.payload }, { method, payload });
   yield* machine.connection.receive({ type: "response", requestId: frame.requestId, result });
 });
+
+/** No request with `method` reaches the machine for a while. */
+const assertNoRequest = Effect.fn(function* (
+  machine: { readonly nextFrame: Effect.Effect<Record<string, unknown>> },
+  method: string,
+  wait: Duration.Input = "600 millis",
+) {
+  const frame = yield* machine.nextFrame.pipe(
+    Effect.repeat({ until: (next) => next.method === method }),
+    Effect.timeoutOption(wait),
+  );
+  assert.isTrue(Option.isNone(frame), `unexpected ${method}`);
+});
+
+/** What git says when a proxy in front of the Hub refuses a push's size. */
+const PUSH_TOO_LARGE = {
+  _tag: "failure",
+  error: {
+    _tag: "VcsProcessExitError",
+    operation: "HubRepository.push",
+    command: "git push",
+    cwd: "/remote/projects/protocol",
+    exitCode: 1,
+    detail:
+      "error: RPC failed; HTTP 413 curl 22 The requested URL returned error: 413\nsend-pack: unexpected disconnect while reading sideband packet",
+  },
+} as const;
 
 const PUSH_FAILED = {
   _tag: "failure",
@@ -443,24 +491,30 @@ describe("Hub repository", () => {
       });
       yield* hub.service(CheckpointUploadService.CheckpointUploads).request(opened.threadId);
 
-      // The batch fails, so each ref goes on its own: the one this checkout lacks is set aside.
+      // The batch fails on a ref the checkout lacks: the machine is asked which it has (no push
+      // per ref), the missing one is set aside and the rest go in one push.
       yield* answerNext(
         opened.machine,
         "checkpoint.push",
         transfer([first.ref, second.ref]),
         PUSH_FAILED,
       );
-      yield* answerNext(opened.machine, "checkpoint.push", transfer([first.ref]), {
-        _tag: "success",
-        value: null,
-      });
-      yield* answerNext(opened.machine, "checkpoint.push", transfer([second.ref]), PUSH_FAILED);
+      yield* answerNext(
+        opened.machine,
+        "checkpoint.hasRef",
+        { cwd: "/remote/projects/protocol", checkpointRef: first.ref },
+        { _tag: "success", value: true },
+      );
       yield* answerNext(
         opened.machine,
         "checkpoint.hasRef",
         { cwd: "/remote/projects/protocol", checkpointRef: second.ref },
         { _tag: "success", value: false },
       );
+      yield* answerNext(opened.machine, "checkpoint.push", transfer([first.ref]), {
+        _tag: "success",
+        value: null,
+      });
       yield* awaitUploaded(hub, opened.threadId, 1);
       const stored = yield* hub.server.sql<{ readonly id: string; readonly uploaded: number }>`
         SELECT checkpoint_id AS id, uploaded_to_hub AS uploaded
@@ -472,4 +526,318 @@ describe("Hub repository", () => {
       ]);
     }).pipe(Effect.scoped),
   );
+
+  it.live("a repository refused as too large backs off as a whole, and the machine says why", () =>
+    Effect.gen(function* () {
+      const hub = yield* makeHub();
+      const opened = yield* openProtocolSession(hub);
+      const [first, second] = yield* seedCheckpoints(hub, opened.threadId, 2);
+      assert.isDefined(second);
+      const uploads = hub.service(CheckpointUploadService.CheckpointUploads);
+      yield* uploads.request(opened.threadId);
+
+      // The batch is too large; the newest alone is tried once, then nothing per ref.
+      const batch = yield* opened.machine.nextFrame;
+      assert.deepEqual((batch.payload as { checkpointRefs: unknown }).checkpointRefs, [
+        first.ref,
+        second.ref,
+      ]);
+      yield* opened.machine.connection.receive({
+        type: "response",
+        requestId: batch.requestId,
+        result: PUSH_TOO_LARGE,
+      });
+      const alone = yield* opened.machine.nextFrame;
+      assert.equal(alone.method, "checkpoint.push");
+      assert.lengthOf(
+        (alone.payload as { checkpointRefs: ReadonlyArray<unknown> }).checkpointRefs,
+        1,
+      );
+      yield* opened.machine.connection.receive({
+        type: "response",
+        requestId: alone.requestId,
+        result: PUSH_TOO_LARGE,
+      });
+
+      // The machine's list says why, for whoever manages it.
+      const issues = hub.service(HubRepositoryUploadIssues.HubRepositoryUploadIssues);
+      const recorded = yield* issues
+        .of(opened.environmentId)
+        .pipe(Effect.repeat({ until: (found) => found.length > 0 }), Effect.timeout("5 seconds"));
+      assert.lengthOf(recorded, 1);
+      assert.equal(recorded[0]!.projectId, ProjectId.make("project:protocol"));
+      assert.equal(recorded[0]!.kind, "too-large");
+      assert.equal(recorded[0]!.pendingCheckpoints, 2);
+      assert.include(recorded[0]!.detail, "413");
+      assert.isNotNull(recorded[0]!.nextAttemptAt);
+
+      // A new checkpoint's request and a reconnect push nothing before the repository's retry.
+      yield* uploads.request(opened.threadId);
+      yield* assertNoRequest(opened.machine, "checkpoint.push");
+      yield* opened.machine.disconnect;
+      const back = yield* connectProtocolEnvironment(hub, {
+        environmentId: opened.environmentId,
+        instanceId: opened.instanceId,
+        driver: CLAUDE,
+        capabilities: ClaudeProviderCapabilitiesV2,
+      });
+      yield* assertNoRequest(back, "checkpoint.push");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("one machine uploads to one repository at a time, whichever Threads ask", () =>
+    Effect.gen(function* () {
+      const hub = yield* makeHub();
+      const opened = yield* openProtocolSession(hub);
+      const other = ThreadId.make("thread:protocol-other");
+      yield* hub.service(Orchestrator.OrchestratorV2).dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("command:protocol-other"),
+        threadId: other,
+        projectId: ProjectId.make("project:protocol"),
+        title: "Protocol, again",
+        modelSelection: { instanceId: opened.instanceId, model: "claude-sonnet-4-6" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        activeEnvironmentId: opened.environmentId,
+      });
+      yield* seedCheckpoints(hub, opened.threadId, 1);
+      yield* seedCheckpoints(hub, other, 1, { name: "other" });
+      const uploads = hub.service(CheckpointUploadService.CheckpointUploads);
+      yield* uploads.request(opened.threadId);
+      yield* uploads.request(other);
+
+      const firstPush = yield* opened.machine.nextFrame;
+      assert.equal(firstPush.method, "checkpoint.push");
+      // The other Thread's upload waits for this one to end.
+      yield* assertNoRequest(opened.machine, "checkpoint.push");
+      yield* opened.machine.connection.receive({
+        type: "response",
+        requestId: firstPush.requestId,
+        result: { _tag: "success", value: null },
+      });
+      const secondPush = yield* opened.machine.nextFrame;
+      assert.equal(secondPush.method, "checkpoint.push");
+      assert.notDeepEqual(secondPush.payload, firstPush.payload);
+      yield* opened.machine.connection.receive({
+        type: "response",
+        requestId: secondPush.requestId,
+        result: { _tag: "success", value: null },
+      });
+      yield* awaitUploaded(hub, opened.threadId, 1);
+      yield* awaitUploaded(hub, other, 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("an upload too large for one request goes in parts and arrives whole", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("claudeAgent");
+      const hub = yield* makeHub();
+      // Every upload goes in parts, of 64 KiB.
+      const laptop = yield* hub.join({
+        name: "Laptop",
+        adapters: idleAdapters(instanceId),
+        packUploads: { partBytes: 64 * 1024, smartPushMaxBytes: 0 },
+      });
+      const projectId = ProjectId.make("project:large");
+      const { workspaceRoot } = yield* seedProject(hub.server, {
+        projectId,
+        title: "Large",
+        defaultModelSelection: null,
+      });
+      const threadId = ThreadId.make("thread:large");
+      yield* hub.service(Orchestrator.OrchestratorV2).dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("command:thread-large"),
+        threadId,
+        projectId,
+        title: "Large",
+        modelSelection: { instanceId, model: "claude-sonnet-4-6" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        activeEnvironmentId: laptop.environmentId,
+      });
+      const checkpointRef = yield* checkpointRefForScopeOrdinal({
+        scopeId: CheckpointScopeId.make("scope:large"),
+        ordinalWithinScope: 1,
+      }).pipe(Effect.provide(NodeCrypto.layer));
+      // A checkpoint whose one file is larger than a part, and does not compress.
+      const large = `${workspaceRoot}/large.bin`;
+      yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
+        fs.writeFile(large, noise(300 * 1024)),
+      ).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
+      const blob = (yield* git(workspaceRoot, ["hash-object", "-w", large])).stdout.trim();
+      const treeId = (yield* gitWithInput(
+        workspaceRoot,
+        ["mktree"],
+        `100644 blob ${blob}\tlarge.bin\n`,
+      )).stdout.trim();
+      const commit = (yield* git(workspaceRoot, [
+        "-c",
+        "user.email=hub@example.com",
+        "-c",
+        "user.name=Hub",
+        "commit-tree",
+        treeId,
+        "-p",
+        "HEAD",
+        "-m",
+        "Checkpoint",
+      ])).stdout.trim();
+      yield* git(workspaceRoot, ["update-ref", checkpointRef, commit]);
+      yield* seedCheckpoints(hub, threadId, 1, {
+        name: "large",
+        cwd: workspaceRoot,
+        refs: [checkpointRef],
+      });
+
+      yield* hub.service(CheckpointUploadService.CheckpointUploads).request(threadId);
+      yield* awaitUploaded(hub, threadId, 1);
+
+      // The Hub has it whole: a fresh repository fetches the commit and the file is the same.
+      const remote = HubRepository.withEnvironmentCredential(
+        HubRepository.hubRepositoryUrl(hub.server.url, { projectId }),
+        laptop.credential,
+      );
+      const fresh = `${workspaceRoot}-fresh`;
+      yield* git(workspaceRoot, ["init", "-q", fresh]);
+      const fetched = yield* git(fresh, ["fetch", "-q", remote.url, checkpointRef], {
+        env: remote.env ?? {},
+      });
+      assert.equal(fetched.exitCode, 0, fetched.stderr);
+      assert.equal((yield* git(fresh, ["rev-parse", "FETCH_HEAD"])).stdout.trim(), commit);
+      assert.equal((yield* git(fresh, ["rev-parse", "FETCH_HEAD:large.bin"])).stdout.trim(), blob);
+      // It went in parts, and the machine kept no pack of it.
+      const uploadsFolder = `${workspaceRoot}/.git/t3-hub-uploads`;
+      const left = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
+        fs.readDirectory(uploadsFolder),
+      ).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
+      assert.deepEqual(left, []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("parts resume where the Hub is, and an apply is checked like a push", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("claudeAgent");
+      const hub = yield* makeHub();
+      const laptop = yield* hub.join({ name: "Laptop", adapters: idleAdapters(instanceId) });
+      const { projectId, headRef, commit } = yield* threadOnMachine(hub, laptop);
+      const base = `${HubRepository.hubRepositoryUrl(hub.server.url, { projectId })}/packs/${"a".repeat(40)}`;
+      const send = (request: HttpClientRequest.HttpClientRequest) =>
+        HttpClient.HttpClient.pipe(
+          Effect.flatMap((client) =>
+            client.execute(HttpClientRequest.bearerToken(request, laptop.credential)),
+          ),
+          Effect.flatMap((response) =>
+            response.text.pipe(Effect.map((text) => ({ status: response.status, text }))),
+          ),
+          Effect.provide(FetchHttpClient.layer),
+          Effect.orDie,
+        );
+      const part = (offset: number, text: string) =>
+        send(
+          HttpClientRequest.post(`${base}?offset=${offset}`).pipe(
+            HttpClientRequest.bodyText(text, "application/octet-stream"),
+          ),
+        );
+      assert.deepEqual(yield* part(0, "abc"), {
+        status: 200,
+        text: '{"state":"receiving","size":3}',
+      });
+      // The same part again, or one that does not start where the Hub is: the Hub says where.
+      assert.deepEqual(yield* part(0, "abc"), {
+        status: 409,
+        text: '{"state":"receiving","size":3}',
+      });
+      assert.deepEqual(yield* part(7, "xyz"), {
+        status: 409,
+        text: '{"state":"receiving","size":3}',
+      });
+      assert.deepEqual(yield* part(3, "de"), {
+        status: 200,
+        text: '{"state":"receiving","size":5}',
+      });
+      assert.deepEqual(yield* send(HttpClientRequest.get(base)), {
+        status: 200,
+        text: '{"state":"receiving","size":5}',
+      });
+      const apply = (ref: string) =>
+        send(
+          HttpClientRequest.post(`${base}/apply`).pipe(
+            HttpClientRequest.bodyJsonUnsafe({ size: 5, updates: [{ ref, newOid: commit }] }),
+          ),
+        );
+      // Outside the Threads it runs, nothing is applied.
+      assert.equal((yield* apply("refs/heads/main")).status, 403);
+      // Its own Thread's ref: applied, and refused by git as no pack.
+      const started = yield* apply(headRef);
+      assert.equal(started.status, 202);
+      const ended = yield* send(HttpClientRequest.get(base)).pipe(
+        Effect.repeat({ until: (status) => !status.text.includes('"applying"') }),
+        Effect.timeout("10 seconds"),
+      );
+      assert.include(ended.text, '"state":"failed"');
+    }).pipe(Effect.scoped),
+  );
 });
+
+/** A Thread of a new Project on `machine`, with a commit of its own as its head ref. */
+const threadOnMachine = Effect.fn(function* (hub: Hub, machine: TestEnvironment) {
+  const instanceId = ProviderInstanceId.make("claudeAgent");
+  const projectId = ProjectId.make("project:packs");
+  const { workspaceRoot } = yield* seedProject(hub.server, {
+    projectId,
+    title: "Packs",
+    defaultModelSelection: null,
+  });
+  const threadId = ThreadId.make("thread:packs");
+  yield* hub.service(Orchestrator.OrchestratorV2).dispatch({
+    type: "thread.create",
+    createdBy: "user",
+    creationSource: "web",
+    commandId: CommandId.make("command:thread-packs"),
+    threadId,
+    projectId,
+    title: "Packs",
+    modelSelection: { instanceId, model: "claude-sonnet-4-6" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    activeEnvironmentId: machine.environmentId,
+  });
+  const commit = (yield* git(workspaceRoot, ["rev-parse", "HEAD"])).stdout.trim();
+  return {
+    threadId,
+    projectId,
+    headRef: `${HubRepository.threadRefPrefixes(threadId)[0]}head`,
+    commit,
+  };
+});
+
+/** Bytes that do not compress (xorshift), so the pack is as large as the file. */
+const noise = (length: number) => {
+  const bytes = new Uint8Array(length);
+  let state = 0x9e3779b9;
+  for (let index = 0; index < length; index += 1) {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    bytes[index] = state & 0xff;
+  }
+  return bytes;
+};
+
+/** Git with `stdin`. */
+const gitWithInput = (cwd: string, args: ReadonlyArray<string>, stdin: string) =>
+  Effect.flatMap(VcsProcess.VcsProcess, (vcs) =>
+    vcs.run({ operation: "HubRepository.test.git", command: "git", cwd, args, stdin }),
+  ).pipe(Effect.provide(VcsProcess.layer.pipe(Layer.provide(NodeServices.layer))), Effect.orDie);

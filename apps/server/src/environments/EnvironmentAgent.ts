@@ -57,6 +57,7 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as MachineAssets from "../assets/MachineAssets.ts";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
+import { makePackUploader } from "../checkpointing/HubPackUploadClient.ts";
 import * as HubRepository from "../checkpointing/HubRepository.ts";
 import * as ScratchWorkspace from "../environment/ScratchWorkspace.ts";
 import * as ServerConfig from "../config.ts";
@@ -181,6 +182,8 @@ export interface EnvironmentAgentInput {
   readonly hubUrl: string;
   /** The Environment credential, for the Hub repository; without it nothing is uploaded. */
   readonly credential: string | undefined;
+  /** Sizes of large uploads to the Hub repository in parts (tests make them small). */
+  readonly packUploads?: { readonly partBytes?: number; readonly smartPushMaxBytes?: number };
 }
 
 export const make = Effect.fn("EnvironmentAgent.make")(function* (input: EnvironmentAgentInput) {
@@ -439,6 +442,12 @@ export const make = Effect.fn("EnvironmentAgent.make")(function* (input: Environ
               ),
             ),
     unavailable: "This machine cannot reach the Hub repository.",
+    // An upload too large for one request (a proxy in front of the Hub) goes in parts.
+    uploader: makePackUploader({
+      fileSystem,
+      joinPath: (...segments) => NodePath.join(...segments),
+      ...input.packUploads,
+    }),
   });
 
   /** Fetches from the Hub, by hash, the attachments a turn needs and this machine lacks. */

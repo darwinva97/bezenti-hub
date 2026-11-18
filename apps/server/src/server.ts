@@ -53,6 +53,7 @@ import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as HubPackUploads from "./checkpointing/HubPackUploads.ts";
 import * as HubRepository from "./checkpointing/HubRepository.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
@@ -605,7 +606,8 @@ const layerAuth = Layer.mergeAll(
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(layerCheckpointStore),
   // Each Project's checkpoints on the Hub: uploads, diffs and `/api/git` read the same folder.
-  Layer.provideMerge(HubRepository.layer),
+  // Large uploads in parts (a proxy in front of the Hub refuses large request bodies).
+  Layer.provideMerge(HubPackUploads.layer.pipe(Layer.provideMerge(HubRepository.layer))),
   Layer.provide(layerGitWorkflow),
   Layer.provide(
     RunFinalizationService.layerObserver.pipe(

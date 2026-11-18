@@ -165,12 +165,32 @@ The Hub keeps one bare repository per Project under `<state dir>/hub-repositorie
 ([HubRepository](../../apps/server/src/checkpointing/HubRepository.ts)), so a turn's checkpoint
 outlives the machine that captured it. After `checkpoint.capture` commits, the
 [uploader](../../apps/server/src/orchestration-v2/CheckpointUploadService.ts) asks the Thread's
-Active environment to push the refs of every ready checkpoint not yet uploaded, in batches that
-fall back to one ref at a time, and marks each pushed one with `checkpoint.uploaded` (column
-`uploaded_to_hub`, migration 097). It runs outside the effect lane, so a slow or failing upload
-never holds back the Thread's next turn: failures retry with backoff, at once when an Environment
-connects, and from the projection after a restart. A ref the current machine lacks (captured on
-the one the Thread left) is set aside until the Thread runs elsewhere instead of failing the rest.
+Active environment to push the refs of every ready checkpoint not yet uploaded, in batches, and
+marks each pushed one with `checkpoint.uploaded` (column `uploaded_to_hub`, migration 097). It
+runs outside the effect lane, so a slow or failing upload never holds back the Thread's next turn.
+A machine uploads to one repository at a time, whichever Threads ask, and a failure backs off the
+repository as a whole (30 s doubling, up to 30 minutes, or 2 hours when the upload is too large or
+refused): a new checkpoint, another Thread or a connect pushes nothing there before its next
+attempt. A transient failure lets the machine's next connect try once more; a machine that was not
+there to push retries when it connects; everything pending retries from the projection after a
+restart. Why a repository keeps failing is kept per machine (`HubRepositoryUploadIssues`) and
+shown in its Settings row and in a turn's «Checkpoint not uploaded yet». A ref the current
+machine lacks (captured on the one the Thread left) is set aside until the Thread runs elsewhere
+instead of failing the rest: the machine is asked which refs it has, never sent a push per ref.
+
+An upload too large for one request goes in parts. A proxy in front of the Hub may cap request
+bodies (Cloudflare's: 100 MB, which a whole worktree's checkpoint can pass on its own), so above
+64 MiB of new objects (estimated with `rev-list --disk-usage`), or after a push refused with 413,
+the machine packs what the Hub lacks into one file in its git folder (`t3-hub-uploads/`, named
+from what it carries) and sends it in parts of at most 32 MiB to `/api/git/<repo>/packs/<id>`
+([HubPackUploads](../../apps/server/src/checkpointing/HubPackUploads.ts)). The Hub appends a part
+only at the size it already has and answers that size, so a part sent again, after a drop or a
+restart, resumes where the Hub is; then `apply` runs on (polled, so no request outlives a proxy's
+response timeout): the route checks the refs as it checks a push's, `index-pack` takes the pack
+into the repository, `rev-list` checks every object the refs reach is there, and `update-ref`
+sets them at once. One object larger than a part is no different: parts are bytes. Transfers
+from one checkout run one at a time on the machine, so a request the Hub sends again waits for
+the one still running.
 It is tracked per checkpoint, not as an ordinal per scope, because a rollback reuses its ordinals:
 a mark is written only if the checkpoint still has the ref and capture time that were pushed.
 

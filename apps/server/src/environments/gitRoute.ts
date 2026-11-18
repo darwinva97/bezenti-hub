@@ -1,8 +1,8 @@
 /**
- * `/api/git/<projectId>` and `/api/git/thread/<threadId>` (a Thread without a Project): the Hub
- * repository over git smart HTTP, relayed to `git http-backend`. A machine sees and writes the refs
- * of Threads it runs and reads the copy of the Hub's checkout (`refs/t3/project/`), in Projects
- * where its owner may start Threads (a Sandbox: in its own Space); nobody deletes.
+ * `/api/git/<projectId>` and `/api/git/thread/<threadId>`: the Hub repository over git smart HTTP
+ * (`git http-backend`), and large uploads in parts under `packs/` (`HubPackUploads`). A machine
+ * writes the refs of Threads it runs and reads the Hub's checkout copy (`refs/t3/project/`), in
+ * Projects where its owner may start Threads (a Sandbox: its own Space); nobody deletes.
  */
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -21,6 +21,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as RemoteEnvironments from "../environment/RemoteEnvironments.ts";
+import * as HubPackUploads from "../checkpointing/HubPackUploads.ts";
 import * as HubRepository from "../checkpointing/HubRepository.ts";
 import { checkpointRefForScopeOrdinal } from "../orchestration-v2/CheckpointService.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
@@ -185,6 +186,7 @@ const checkUpdates = (
 // One span per request is enough; git's own work happens in the subprocess.
 const makeHandler = Effect.fnUntraced(function* (deps: {
   readonly repositories: HubRepository.HubRepositories["Service"];
+  readonly packUploads: Option.Option<HubPackUploads.HubPackUploads["Service"]>;
   readonly registry: EnvironmentRegistry.EnvironmentRegistry["Service"];
   readonly spaces: SpaceDirectory.SpaceDirectory["Service"];
   readonly visibility: SpaceVisibility.SpaceVisibility["Service"];
@@ -208,6 +210,25 @@ const makeHandler = Effect.fnUntraced(function* (deps: {
           : null;
     return service !== null && SERVICES.has(service) ? service : null;
   };
+  // `packs/<uploadId>` (GET: its status; POST: a part) and `packs/<uploadId>/apply` (POST).
+  const packOf = (endpoint: string) => {
+    if (Option.isNone(deps.packUploads)) return null;
+    const [segment, uploadId, action, ...extra] = endpoint.split("/");
+    if (segment !== HubPackUploads.PACK_UPLOADS_SEGMENT || extra.length > 0) return null;
+    if (uploadId === undefined || !HubPackUploads.PACK_UPLOAD_ID.test(uploadId)) return null;
+    if (action === undefined) {
+      return request.method === "GET"
+        ? { uploadId, action: "status" as const }
+        : request.method === "POST"
+          ? { uploadId, action: "append" as const }
+          : null;
+    }
+    return action === "apply" && request.method === "POST"
+      ? { uploadId, action: "apply" as const }
+      : null;
+  };
+  const isEndpoint = (endpoint: string) =>
+    serviceOf(endpoint) !== null || packOf(endpoint) !== null;
   // `<projectId>/<endpoint>`, or `thread/<threadId>/<endpoint>` for a Thread's own repository.
   const segments = url.value.pathname
     .slice(HubRepository.HUB_REPOSITORY_ROUTE_PREFIX.length + 1)
@@ -215,11 +236,12 @@ const makeHandler = Effect.fnUntraced(function* (deps: {
   const asThread =
     segments[0] === HubRepository.THREAD_REPOSITORY_SEGMENT &&
     segments.length >= 3 &&
-    serviceOf(segments.slice(2).join("/")) !== null;
+    isEndpoint(segments.slice(2).join("/"));
   const [encodedId, ...rest] = asThread ? segments.slice(1) : segments;
   const endpoint = rest.join("/");
   const service = serviceOf(endpoint);
-  if (encodedId === undefined || encodedId.length === 0 || service === null) {
+  const pack = packOf(endpoint);
+  if (encodedId === undefined || encodedId.length === 0 || (service === null && pack === null)) {
     return HttpServerResponse.text("Not Found", { status: 404 });
   }
   if (!isSecureEnvironmentTransport(request)) {
@@ -317,6 +339,20 @@ const makeHandler = Effect.fnUntraced(function* (deps: {
     return HttpServerResponse.text("Forbidden", { status: 403 });
   }
   yield* deps.repositories.ensure(key.value);
+  if (pack !== null && Option.isSome(deps.packUploads)) {
+    return yield* handlePack({
+      uploads: deps.packUploads.value,
+      spaces: deps.spaces,
+      remote: deps.remote,
+      maxRequestBytes: deps.maxRequestBytes,
+      owner: check.environmentId,
+      key: key.value,
+      moveEpoch,
+      writable: prefixes.writable,
+      granted,
+      pack,
+    });
+  }
   // A new checkout's fetch (only that: routine fetches never wait on it) first has the Hub copy
   // its own checkout of the Project, from the top of a repository today's rule trusts; from any
   // other, nothing. Every machine the Hub sends `fromHub` to sends the header (contract 9).
@@ -503,6 +539,112 @@ const makeHandler = Effect.fnUntraced(function* (deps: {
   );
 });
 
+const ZERO_OBJECT_ID = "0".repeat(40);
+const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
+const decodeApply = Schema.decodeUnknownEffect(HubPackUploads.PackApplyRequest);
+
+/**
+ * A large upload in parts (`HubPackUploads`): its status, a part, or applying it. The machine was
+ * checked as for a push; the refs it sets are checked as a push's (`checkUpdates`) before any of
+ * the pack reaches the repository.
+ */
+const handlePack = Effect.fnUntraced(function* (input: {
+  readonly uploads: HubPackUploads.HubPackUploads["Service"];
+  readonly spaces: SpaceDirectory.SpaceDirectory["Service"];
+  readonly remote: Option.Option<RemoteEnvironments.RemoteEnvironments["Service"]>;
+  readonly maxRequestBytes: number;
+  readonly owner: EnvironmentId;
+  readonly key: HubRepository.HubRepositoryKey;
+  readonly moveEpoch: number;
+  readonly writable: ReadonlyArray<string>;
+  readonly granted: ReadonlyArray<string>;
+  readonly pack: { readonly uploadId: string; readonly action: "status" | "append" | "apply" };
+}) {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const { uploads, owner, key, pack } = input;
+  const json = (body: HubPackUploads.PackUploadStatus, status = 200) =>
+    HttpServerResponse.json(body, { status });
+  if (pack.action === "status") {
+    return yield* json(yield* uploads.status(owner, key, pack.uploadId));
+  }
+  if (pack.action === "append") {
+    const url = requestUrl(request);
+    const offset = Number(Option.getOrUndefined(url)?.searchParams.get("offset") ?? Number.NaN);
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+    const appended = yield* uploads.append(owner, key, pack.uploadId, {
+      offset,
+      body: request.stream.pipe(
+        Stream.mapError((cause) => new HubPackUploads.PackBodyError({ cause })),
+      ),
+      maxBytes: input.maxRequestBytes,
+    });
+    if (appended._tag === "tooLarge") {
+      return HttpServerResponse.text("Payload Too Large", { status: 413 });
+    }
+    return yield* json(
+      { state: "receiving", size: appended.size },
+      appended._tag === "offset" ? 409 : 200,
+    );
+  }
+  const body = yield* request.json.pipe(Effect.flatMap(decodeApply), Effect.option);
+  if (
+    Option.isNone(body) ||
+    body.value.updates.length === 0 ||
+    !Number.isSafeInteger(body.value.size) ||
+    body.value.updates.some(
+      (update) => !update.ref.startsWith("refs/") || !OBJECT_ID.test(update.newOid),
+    )
+  ) {
+    return HttpServerResponse.text("Bad Request", { status: 400 });
+  }
+  const updates = body.value.updates;
+  const checked = checkUpdates(
+    updates.map((update) => ({ oldOid: ZERO_OBJECT_ID, newOid: update.newOid, ref: update.ref })),
+    { writable: input.writable, granted: input.granted },
+  );
+  if (checked.refusal !== undefined) {
+    return yield* json({ state: "failed", size: 0, error: checked.refusal }, 403);
+  }
+  if (checked.usedGrants.length > 0) {
+    for (const ref of checked.usedGrants) {
+      const taken = Option.isSome(input.remote)
+        ? yield* input.remote.value.takeRecoveryGrant(owner, ref)
+        : false;
+      if (!taken) {
+        return yield* json({ state: "failed", size: 0, error: `${ref} was not asked for.` }, 403);
+      }
+    }
+    if (checked.usedGrants.length === updates.length && body.value.size > GRANTED_PUSH_MAX_BYTES) {
+      return HttpServerResponse.text("Payload Too Large", { status: 413 });
+    }
+  }
+  // While the Project moves to another Space nothing is applied; a move that starts during the
+  // apply ends it, as it ends a push.
+  const scope = yield* Scope.make();
+  const held = yield* input.spaces
+    .holdProjectAccess(key.projectId, input.moveEpoch)
+    .pipe(Effect.provideService(Scope.Scope, scope));
+  if (Option.isNone(held)) {
+    yield* Scope.close(scope, Exit.void);
+    return HttpServerResponse.text("The Project is moving to another Space. Try again.", {
+      status: 503,
+    });
+  }
+  const status = yield* uploads.apply(owner, key, pack.uploadId, body.value, {
+    lost: held.value.pipe(
+      Effect.andThen(
+        Effect.fail(
+          new HubPackUploads.PackAccessLost({ detail: "The Project moved to another Space." }),
+        ),
+      ),
+    ),
+    release: Scope.close(scope, Exit.void),
+  });
+  return yield* json(status, status.state === "applying" ? 202 : 200);
+});
+
 /**
  * The ref namespaces the machine may see and write in the Project's repository: those of the
  * Threads it is the Active environment of. The target of a Thread's running move may also read
@@ -572,6 +714,7 @@ export const layer = HttpRouter.use((router) =>
     if (Option.isNone(repositories)) return;
     const handler = makeHandler({
       repositories: repositories.value,
+      packUploads: yield* Effect.serviceOption(HubPackUploads.HubPackUploads),
       registry: yield* EnvironmentRegistry.EnvironmentRegistry,
       spaces: yield* SpaceDirectory.SpaceDirectory,
       visibility: yield* SpaceVisibility.SpaceVisibility,

@@ -205,3 +205,89 @@ it.effect("a failed copy counts for no clone: the next one copies again", () =>
     assert.equal(copies, 2);
   }),
 );
+
+it("an upload failure is classified by what git or the Hub said", () => {
+  const classify = (detail: string, tag = "VcsProcessExitError") =>
+    HubRepository.classifyPushFailure({ _tag: tag, detail });
+  // A proxy's limit (Cloudflare answers 413 with a page of its own).
+  assert.equal(
+    classify(
+      "error: RPC failed; HTTP 413 curl 22 The requested URL returned error: 413\nsend-pack: unexpected disconnect while reading sideband packet",
+    ),
+    "tooLarge",
+  );
+  assert.equal(
+    classify("The Hub (or a proxy in front of it) refused a part with HTTP 413"),
+    "tooLarge",
+  );
+  assert.equal(
+    classify(
+      "error: RPC failed; curl 55 Send failure: Connection reset by peer\nsend-pack: unexpected disconnect while reading sideband packet",
+    ),
+    "transient",
+  );
+  assert.equal(classify("error: src refspec refs/t3/x does not match any"), "missingRef");
+  assert.equal(
+    classify(
+      "fatal: unable to access 'https://hub/api/git/p/': The requested URL returned error: 403",
+    ),
+    "refused",
+  );
+  assert.equal(
+    classify("The Hub must be updated to accept uploads over 64 MiB (this one is 392 MiB)."),
+    "refused",
+  );
+  assert.equal(classify("anything", "EnvironmentExecutorUnavailableError"), "unavailable");
+  // A clone retries on the same network failures.
+  assert.isTrue(
+    HubRepository.isTransientHubFailure({
+      _tag: "VcsProcessExitError",
+      detail: "error: RPC failed; curl 92 HTTP/2 stream 7 was not closed cleanly: PROTOCOL_ERROR",
+    }),
+  );
+});
+
+it.effect("one transfer at a time per checkout: a resent push waits for the one running", () =>
+  Effect.gen(function* () {
+    let running = 0;
+    let most = 0;
+    const pushes: Array<string> = [];
+    const vcs = VcsProcess.VcsProcess.of({
+      run: (input) =>
+        Effect.gen(function* () {
+          if (input.args.includes("push")) {
+            running += 1;
+            most = Math.max(most, running);
+            pushes.push(input.cwd);
+            // Gives the other push every chance to start beside this one.
+            for (let turn = 0; turn < 20; turn += 1) yield* Effect.yieldNow;
+            running -= 1;
+          }
+          return {
+            exitCode: 0 as never,
+            stdout: "",
+            stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          };
+        }),
+    });
+    const transfers = HubRepository.makeCheckoutTransfers({
+      vcs,
+      remoteOf: () => Effect.succeed({ url: "/hub/project.git" }),
+      unavailable: "none",
+    });
+    const push = (cwd: string) =>
+      transfers.push({
+        cwd,
+        projectId: ProjectId.make("project"),
+        checkpointRefs: ["refs/t3/a" as never],
+      });
+    yield* Effect.all([push("/checkout"), push("/checkout")], { concurrency: "unbounded" });
+    assert.equal(most, 1);
+    // Different checkouts do not wait on each other.
+    yield* Effect.all([push("/one"), push("/two")], { concurrency: "unbounded" });
+    assert.equal(most, 2);
+    assert.lengthOf(pushes, 4);
+  }),
+);

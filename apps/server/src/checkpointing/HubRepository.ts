@@ -143,6 +143,8 @@ export const hubRepositoryUrl = (hubUrl: string, key: HubRepositoryKey) =>
 export interface HubRemote {
   readonly url: string;
   readonly env?: Readonly<Record<string, string>>;
+  /** The Environment credential, for requests `t3` makes itself (a large upload in parts). */
+  readonly credential?: string;
 }
 
 const PROTOCOL_VARIABLE = "T3CODE_HUB_GIT_PROTOCOL";
@@ -169,7 +171,10 @@ export const withEnvironmentCredential = (url: string, credential: string): HubR
   const target = new URL(url);
   return {
     url,
+    credential,
     env: {
+      // Git's own words, whatever the machine's locale: `classifyPushFailure` reads them.
+      LC_ALL: "C",
       GIT_TERMINAL_PROMPT: "0",
       GIT_CONFIG_COUNT: "3",
       GIT_CONFIG_KEY_0: "credential.helper",
@@ -196,6 +201,7 @@ export const gitRead = (
     readonly cwd: string;
     readonly args: ReadonlyArray<string>;
     readonly absent?: ReadonlyArray<number>;
+    readonly stdin?: string;
   },
 ) =>
   vcs
@@ -204,6 +210,7 @@ export const gitRead = (
       command: "git",
       cwd: input.cwd,
       args: [...input.args],
+      ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
       allowNonZeroExit: true,
     })
     .pipe(
@@ -226,13 +233,16 @@ export const gitRead = (
     );
 
 /** Git with git's own message on failure; it names the URL, never the credential. */
-const gitIn = (
+export const gitIn = (
   vcs: VcsProcess.VcsProcess["Service"],
   input: {
     readonly operation: string;
     readonly cwd: string;
     readonly args: ReadonlyArray<string>;
     readonly remote?: HubRemote;
+    readonly stdin?: string;
+    readonly env?: Readonly<Record<string, string>>;
+    readonly maxOutputBytes?: number;
   },
 ) =>
   vcs
@@ -241,7 +251,11 @@ const gitIn = (
       command: "git",
       cwd: input.cwd,
       args: ["-c", "gc.auto=0", ...input.args],
-      ...(input.remote?.env === undefined ? {} : { env: { ...input.remote.env } }),
+      ...(input.remote?.env === undefined && input.env === undefined
+        ? {}
+        : { env: { ...input.remote?.env, ...input.env } }),
+      ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+      ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
       timeoutMs: TRANSFER_TIMEOUT_MS,
       allowNonZeroExit: true,
     })
@@ -280,15 +294,15 @@ const existingRefs = Effect.fn("HubRepository.existingRefs")(function* (
   return new Set(listed.stdout.split("\n").filter((line) => line.length > 0));
 });
 
-/** Uploads the refs, replacing what the repository had under the same names (recovered ones excepted). */
-export const pushRefs = Effect.fn("HubRepository.pushRefs")(function* (input: {
-  readonly cwd: string;
-  readonly remote: HubRemote;
-  readonly refs: ReadonlyArray<CheckpointRef>;
-}) {
-  if (input.refs.length === 0) return;
-  const vcs = yield* VcsProcess.VcsProcess;
-  yield* gitIn(vcs, {
+/** Recovered and set-aside refs are created once and never forced over. */
+export const isCreateOnlyRef = (ref: string) => ref.startsWith("refs/t3/recovered/");
+
+/** One `git push` over smart HTTP (or to the repository on disk), every ref in one request. */
+const smartPush = (
+  vcs: VcsProcess.VcsProcess["Service"],
+  input: { readonly cwd: string; readonly remote: HubRemote; readonly refs: ReadonlyArray<string> },
+) =>
+  gitIn(vcs, {
     operation: "HubRepository.push",
     cwd: input.cwd,
     remote: input.remote,
@@ -300,13 +314,155 @@ export const pushRefs = Effect.fn("HubRepository.pushRefs")(function* (input: {
       "--recurse-submodules=no",
       "--quiet",
       input.remote.url,
-      // Recovered and set-aside refs are created once and never forced over.
-      ...input.refs.map((ref) =>
-        ref.startsWith("refs/t3/recovered/") ? `${ref}:${ref}` : `+${ref}:${ref}`,
-      ),
+      ...input.refs.map((ref) => (isCreateOnlyRef(ref) ? `${ref}:${ref}` : `+${ref}:${ref}`)),
     ],
   });
+
+/**
+ * Above this many bytes of new objects an upload goes in parts (`HubPackUpload`) instead of one
+ * `git push`: a proxy in front of the Hub (Cloudflare's: 100 MB) refuses a larger request body.
+ */
+export const SMART_PUSH_MAX_BYTES = 64 * 1024 * 1024;
+
+/** Uploads large pushes in parts; only a machine that reaches the Hub over HTTP has one. */
+export interface PackUploader {
+  /** Above this many bytes (estimated) an upload goes in parts: `SMART_PUSH_MAX_BYTES`. */
+  readonly smartPushMaxBytes: number;
+  readonly upload: (input: {
+    readonly cwd: string;
+    readonly remote: HubRemote;
+    readonly refs: ReadonlyArray<string>;
+    /** Commits the Hub advertised to this machine that it also has: what the upload leaves out. */
+    readonly remoteTips: ReadonlyArray<string>;
+  }) => Effect.Effect<void, VcsError, VcsProcess.VcsProcess>;
+}
+
+/**
+ * The commits the Hub repository advertises to this machine that the checkout also has: what an
+ * upload need not carry.
+ */
+const remoteTipsPresent = Effect.fn("HubRepository.remoteTipsPresent")(function* (
+  vcs: VcsProcess.VcsProcess["Service"],
+  cwd: string,
+  remote: HubRemote,
+) {
+  const listed = yield* gitIn(vcs, {
+    operation: "HubRepository.lsRemote",
+    cwd,
+    remote,
+    args: ["ls-remote", remote.url],
+  });
+  const advertised = [
+    ...new Set(
+      listed.stdout
+        .split("\n")
+        .map((line) => line.split("\t")[0]?.trim() ?? "")
+        .filter((oid) => OBJECT_ID.test(oid)),
+    ),
+  ];
+  if (advertised.length === 0) return [];
+  const checked = yield* gitIn(vcs, {
+    operation: "HubRepository.lsRemote",
+    cwd,
+    args: ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+    stdin: `${advertised.join("\n")}\n`,
+  });
+  return checked.stdout
+    .split("\n")
+    .map((line) => line.trim().split(" "))
+    .filter(([oid, type]) => oid !== undefined && OBJECT_ID.test(oid) && type !== "missing")
+    .map(([oid]) => oid!);
 });
+
+const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
+
+/** `git rev-list` arguments on stdin: the tips, then what to leave out. */
+const revisionsInput = (tips: ReadonlyArray<string>, exclude: ReadonlyArray<string>) =>
+  `${[...tips, ...(exclude.length === 0 ? [] : ["--not", ...exclude])].join("\n")}\n`;
+
+/**
+ * About how many bytes an upload of `refs` carries: the size on disk of the objects the Hub lacks.
+ * Null when this git cannot say (before 2.31).
+ */
+const estimateUploadBytes = Effect.fn("HubRepository.estimateUploadBytes")(function* (
+  vcs: VcsProcess.VcsProcess["Service"],
+  cwd: string,
+  refs: ReadonlyArray<string>,
+  remoteTips: ReadonlyArray<string>,
+) {
+  const counted = yield* gitRead(vcs, {
+    operation: "HubRepository.estimateUpload",
+    cwd,
+    args: ["rev-list", "--objects", "--disk-usage", "--stdin"],
+    stdin: revisionsInput(refs, remoteTips),
+    absent: [],
+  }).pipe(Effect.orElseSucceed(() => null));
+  const bytes = counted === null ? Number.NaN : Number.parseInt(counted, 10);
+  return Number.isFinite(bytes) ? bytes : null;
+});
+
+/**
+ * Uploads the refs, replacing what the repository had under the same names (recovered ones
+ * excepted). Over HTTP with an uploader, one too large for a single request (estimated, or refused
+ * as such) goes in parts.
+ */
+export const pushRefs = Effect.fn("HubRepository.pushRefs")(function* (input: {
+  readonly cwd: string;
+  readonly remote: HubRemote;
+  readonly refs: ReadonlyArray<CheckpointRef>;
+  readonly uploader?: PackUploader | undefined;
+}) {
+  if (input.refs.length === 0) return;
+  const vcs = yield* VcsProcess.VcsProcess;
+  const uploader = input.uploader;
+  if (uploader === undefined || input.remote.credential === undefined) {
+    return yield* smartPush(vcs, input);
+  }
+  const remoteTips = yield* remoteTipsPresent(vcs, input.cwd, input.remote);
+  const estimated = yield* estimateUploadBytes(vcs, input.cwd, input.refs, remoteTips);
+  yield* Effect.annotateCurrentSpan({ "hubRepository.estimatedBytes": estimated ?? -1 });
+  const inParts = uploader.upload({
+    cwd: input.cwd,
+    remote: input.remote,
+    refs: input.refs,
+    remoteTips,
+  });
+  if (estimated !== null && estimated > uploader.smartPushMaxBytes) {
+    yield* Effect.annotateCurrentSpan({ "hubRepository.transport": "parts" });
+    return yield* inParts;
+  }
+  const pushed = yield* Effect.result(smartPush(vcs, input));
+  if (pushed._tag === "Success") return;
+  if (classifyPushFailure(pushed.failure) !== "tooLarge") return yield* pushed.failure;
+  yield* Effect.annotateCurrentSpan({ "hubRepository.transport": "parts" });
+  return yield* inParts;
+});
+
+/**
+ * Why an upload failed, for how soon it is tried again: the machine was not there (`unavailable`),
+ * the checkout lacks a ref (`missingRef`), too large for the Hub or a proxy (`tooLarge`), the Hub
+ * said no (`refused`), or anything else: network, 5xx, a timeout (`transient`).
+ */
+export type HubPushFailure = "unavailable" | "missingRef" | "tooLarge" | "refused" | "transient";
+
+const MISSING_REF_FAILURE =
+  /src refspec\b.*\bdoes not match any|does not point to a valid object|unknown revision|bad revision|not a valid object name|invalid refspec/iu;
+const TOO_LARGE_FAILURE =
+  /\b413\b|payload too large|request entity too large|larger than the hub accepts/iu;
+const REFUSED_FAILURE =
+  /returned error: 40[134]\b|\b40[134] (unauthorized|forbidden|not found)|authentication failed|is not a ref of a thread|is not allowed|already exists: recovered|was not asked for|must be updated to accept/iu;
+
+export const classifyPushFailure = (error: {
+  readonly _tag: string;
+  readonly detail?: string | undefined;
+}): HubPushFailure => {
+  if (error._tag === "EnvironmentExecutorUnavailableError") return "unavailable";
+  const detail = error.detail ?? "";
+  if (TOO_LARGE_FAILURE.test(detail)) return "tooLarge";
+  if (MISSING_REF_FAILURE.test(detail)) return "missingRef";
+  if (REFUSED_FAILURE.test(detail)) return "refused";
+  return "transient";
+};
 
 /** Downloads the refs the repository at `cwd` lacks; the ones it has are left as they are. */
 export const fetchMissingRefs = Effect.fn("HubRepository.fetchMissingRefs")(function* (input: {
@@ -494,7 +650,7 @@ export const isTransientHubFailure = (error: { readonly _tag: string; readonly d
     TRANSIENT_GIT_FAILURE.test(error.detail ?? ""));
 
 const TRANSIENT_GIT_FAILURE =
-  /returned error: 5\d\d|could not resolve host|failed to connect|connection (refused|reset|timed out)|timed out|rpc failed|early eof|unexpected disconnect|empty reply|remote end hung up|operation too slow/iu;
+  /returned error: 5\d\d|could not resolve host|failed to connect|connection (refused|reset|timed out)|timed out|rpc failed|early eof|unexpected disconnect|empty reply|remote end hung up|operation too slow|(send|recv) failure|not closed cleanly/iu;
 
 export interface CheckoutTransferInput extends HubRepositoryKey {
   /** A folder of the checkout (or scratch workspace) on this machine. */
@@ -522,13 +678,36 @@ export interface CheckoutTransfers {
 
 /**
  * Transfers from this machine's checkouts to the Hub repository `remoteOf` names: on disk for the
- * Hub machine, over HTTP with the credential for a joined one. Without one, each says why.
+ * Hub machine, over HTTP with the credential for a joined one. Without one, each says why. One
+ * transfer at a time per checkout: a request the Hub sends again (after a reconnect) waits for
+ * the one still running instead of packing the same objects beside it.
  */
 export const makeCheckoutTransfers = (input: {
   readonly vcs: VcsProcess.VcsProcess["Service"] | undefined;
   readonly remoteOf: ((key: HubRepositoryKey) => Effect.Effect<HubRemote, VcsError>) | undefined;
   readonly unavailable: string;
+  /** Large uploads in parts, over HTTP; without one every upload is a single `git push`. */
+  readonly uploader?: PackUploader | undefined;
 }): CheckoutTransfers => {
+  const locks = new Map<string, { readonly lock: Semaphore.Semaphore; users: number }>();
+  const oneAtATime =
+    (cwd: string) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+      Effect.suspend(() => {
+        const entry = locks.get(cwd) ?? { lock: Semaphore.makeUnsafe(1), users: 0 };
+        locks.set(cwd, entry);
+        entry.users += 1;
+        return entry.lock
+          .withPermits(1)(effect)
+          .pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                entry.users -= 1;
+                if (entry.users === 0 && locks.get(cwd) === entry) locks.delete(cwd);
+              }),
+            ),
+          );
+      });
   const transfer =
     (
       operation: string,
@@ -547,11 +726,12 @@ export const makeCheckoutTransfers = (input: {
       }
       return remoteOf(keyOf(request)).pipe(
         Effect.flatMap((remote) => run({ cwd: request.cwd, remote, refs: request.checkpointRefs })),
+        oneAtATime(request.cwd),
         Effect.provideService(VcsProcess.VcsProcess, vcs),
       );
     };
   return {
-    push: transfer("HubRepository.push", pushRefs),
+    push: transfer("HubRepository.push", (args) => pushRefs({ ...args, uploader: input.uploader })),
     fetch: transfer("HubRepository.fetch", fetchMissingRefs),
     fetchPrefix: (request) => {
       const { vcs, remoteOf } = input;
@@ -568,6 +748,7 @@ export const makeCheckoutTransfers = (input: {
         Effect.flatMap((remote) =>
           fetchRefPrefix({ cwd: request.cwd, remote, prefix: request.prefix }),
         ),
+        oneAtATime(request.cwd),
         Effect.provideService(VcsProcess.VcsProcess, vcs),
       );
     },

@@ -8,7 +8,7 @@ machines: `.scratch/grants/issues/machines-design.md`; AI accounts:
 
 ## The row
 
-`grants` (migration 135, rebuilt by 147): the resource (`resource_kind`, `resource_id`), its lender (the owner when
+`grants` (migration 135, rebuilt by 148): the resource (`resource_kind`, `resource_id`), its lender (the owner when
 it was lent), the destination (`target_kind`, `target_id`), `state`, `end_reason` and
 `limits_json` (`GrantLimits` in `packages/contracts/src/grants.ts`; a machine's are CPUs, memory,
 processes and threads, and disk, each required and at least the Sandbox floors; an AI account's are
@@ -104,7 +104,7 @@ for yet.
   counts against nobody.
 - The lender sees each link in their given loans (`Grant.offer`: `open`, `expired`, `used`,
   `cancelled`) and cancels an open one (`grants.cancel`). A link with no destination is decided on
-  the lender's side only. Migration 147 lets a link with no destination be `cancelled` (135 allowed
+  the lender's side only. Migration 148 lets a link with no destination be `cancelled` (135 allowed
   a missing destination only while `offered`); a removed lender's links are cancelled too.
 - The web app leaves `/grants/offer`'s `#token=` alone at start-up (it is not a pairing
   credential), keeps it in the tab's sessionStorage through signing in, and drops it from the

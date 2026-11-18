@@ -136,7 +136,7 @@ import Migration0144 from "./Migrations/144_OwnedResourcesGone.ts";
 import Migration0145 from "./Migrations/145_AiAccountAllowancesToGrants.ts";
 import Migration0146 from "./Migrations/146_AiUsageGrant.ts";
 import Migration0147 from "./Migrations/147_AiUsageUncachedInput.ts";
-import Migration0148 from "./Migrations/147_GrantOffersCancellable.ts";
+import Migration0148 from "./Migrations/148_GrantOffersCancellable.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],

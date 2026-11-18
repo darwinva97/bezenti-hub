@@ -14,7 +14,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 146 });
+      yield* runMigrations({ toMigrationInclusive: 147 });
       const insert = (
         id: string,
         state: string,
@@ -40,7 +40,7 @@ it.effect(
       `.pipe(Effect.flip);
       assert.equal(before._tag, "SqlError");
 
-      yield* runMigrations({ toMigrationInclusive: 147 });
+      yield* runMigrations({ toMigrationInclusive: 148 });
 
       // Every row came across as it was.
       const rows = yield* sql<{

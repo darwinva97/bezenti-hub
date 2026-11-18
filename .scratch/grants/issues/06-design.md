@@ -1,12 +1,12 @@
 # Design: lending links (Grants 06)
 
-Branch `feat/grants06` (base `public-hub-1` 6f1a3b141a). Extends `Grants.ts`, `decideGrant` and the `grants` row (135). One migration, **147** (placeholder; renumber at integration).
+Branch `feat/grants06` (base `public-hub-1` 6f1a3b141a). Extends `Grants.ts`, `decideGrant` and the `grants` row (135). One migration, **148** (designed as 147; renumbered after grants 05 took 147).
 
-## Migration 135's CHECK, and 147
+## Migration 135's CHECK, and 148
 
 135 has `CHECK (target_id IS NOT NULL OR state = 'offered')`. An unclaimed link has no destination, so **cancelling a link (`offered → cancelled`) breaks the CHECK**. That is why `GrantEnding.endGone` "expires" a removed lender's links instead of cancelling them. 06 needs a lender-side Cancel, so:
 
-- **147 `GrantOffersCancellable`** rebuilds `grants` (SQLite cannot alter a CHECK) as `target_id IS NOT NULL OR state IN ('offered','cancelled')`.
+- **148 `GrantOffersCancellable`** rebuilds `grants` (SQLite cannot alter a CHECK) as `target_id IS NOT NULL OR state IN ('offered','cancelled')`.
   - Same columns, rows, `offer_token_hash UNIQUE` and the four indexes. No table has an FK to `grants`.
   - The test: rows and indexes survive; a link can become `cancelled` with no destination; `pending`/`active`/`ended` with no destination are still refused.
 - `GrantEnding` then **cancels** a removed lender's links (audited `grant.cancel`, as today), and `HubWithEnvironments.ownedRemovals.test.ts` expects `cancelled` instead of an expired `offered`.
@@ -66,7 +66,7 @@ Branch `feat/grants06` (base `public-hub-1` 6f1a3b141a). Extends `Grants.ts`, `d
 
 ## Tests (red first)
 
-- `147_*.test.ts`.
+- `148_*.test.ts`.
 - `AccessPolicy.test.ts` `grant.offer`: User owner ✓; Organization Admin ✓; Member, Guest, Owner-not-Admin, another Space's Admin ✗; archived/frozen Organization ✗.
 - `GrantOffers.test.ts` (Grants service, real SQLite):
   - used, expired (`TestClock` +7d), cancelled and unknown links all fail, and read answers `invalid`;

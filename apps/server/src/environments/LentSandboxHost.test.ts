@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
@@ -26,7 +27,13 @@ import {
   type SandboxStartOptions,
 } from "../sandboxes/SandboxRuntime.ts";
 import type { JoinedHubState } from "./joinedHubState.ts";
-import { type LentAnswer, lentSandboxIdOf, superviseLentSandboxes } from "./LentSandboxHost.ts";
+import {
+  hostReportOf,
+  type LentAnswer,
+  LIMITS_UNKNOWN_NOTE,
+  lentSandboxIdOf,
+  superviseLentSandboxes,
+} from "./LentSandboxHost.ts";
 
 const joined: JoinedHubState = {
   hubUrl: "https://hub.example.com",
@@ -244,5 +251,43 @@ it.effect("removed from the Hub, every lent Sandbox and home goes and it stops a
     yield* round;
     yield* Fiber.join(fiber);
     assert.include(runtime.deleted, lentSandboxIdOf("grant-acme"));
+  }),
+);
+
+it.effect(
+  "a machine with no Sandbox runtime says its limits are not known yet, not unenforced",
+  () =>
+    Effect.gen(function* () {
+      const report = yield* hostReportOf({
+        runtime: Option.none(),
+        refusal: "Podman is here but the Sandbox image is not.",
+        reachablePorts: [443, 22],
+        cpus: 4,
+        memoryBytes: 8 * GIB,
+      });
+      assert.deepInclude(report, {
+        ready: false,
+        reason: "Podman is here but the Sandbox image is not.",
+        limitSupport: { cpus: false, memory: false, pids: false, note: LIMITS_UNKNOWN_NOTE },
+        reachablePorts: [22, 443],
+      });
+    }),
+);
+
+it.effect("a machine with a Sandbox runtime reports the limits its runtime enforces", () =>
+  Effect.gen(function* () {
+    const support = { cpus: false, memory: true, pids: true, note: "no cpu controller" };
+    const runtime = SandboxRuntime.of({
+      ...makeRuntime().runtime,
+      limitSupport: Effect.succeed(support),
+    });
+    const report = yield* hostReportOf({
+      runtime: Option.some(runtime),
+      refusal: undefined,
+      reachablePorts: [],
+      cpus: 4,
+      memoryBytes: 8 * GIB,
+    });
+    assert.deepInclude(report, { ready: true, reason: null, limitSupport: support });
   }),
 );

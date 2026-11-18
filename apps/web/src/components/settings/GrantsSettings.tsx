@@ -35,7 +35,14 @@ import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { emptyStepUp, StepUpFields, toStepUp } from "./AccountSettingsSection";
-import { capUseText, gib, limitsText, spaceLabel, subscriptionTermsWarning } from "./grantText";
+import {
+  capUseText,
+  gib,
+  hostLimitsNotice,
+  limitsText,
+  spaceLabel,
+  subscriptionTermsWarning,
+} from "./grantText";
 import { ChangeCapsDialog } from "./LendAiAccountDialog";
 import { LoanUsage } from "./LoanUsage";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -65,18 +72,6 @@ const lenderSees = (grant: Grant) =>
     ? `${grant.lender.name ?? "Its lender"} sees how much each person here uses it, never prompts or Threads.${grant.aiAccount?.type === "subscription" ? ` ${subscriptionTermsWarning(grant.aiAccount.provider)}` : ""}`
     : lenderSeesEverything(grant.lender.name ?? "Its lender");
 
-/** Which limits the machine's cgroups do not enforce, in words; null when it enforces them all. */
-const unenforced = (host: SandboxHostReport) => {
-  const missing = [
-    host.limitSupport.cpus ? null : "CPU",
-    host.limitSupport.memory ? null : "memory",
-    host.limitSupport.pids ? null : "processes",
-  ].filter((entry) => entry !== null);
-  return missing.length === 0
-    ? null
-    : `On this machine these limits are not enforced: ${missing.join(", ")}.${host.limitSupport.note === null ? "" : ` ${host.limitSupport.note}`}`;
-};
-
 /** A machine's hosting state as its last report says it. */
 function HostState({ host }: { readonly host: SandboxHostReport | null }) {
   if (host === null) {
@@ -87,7 +82,7 @@ function HostState({ host }: { readonly host: SandboxHostReport | null }) {
       </p>
     );
   }
-  const notEnforced = unenforced(host);
+  const notEnforced = hostLimitsNotice(host);
   return (
     <div className="flex flex-col gap-1 text-xs">
       {host.ready ? null : (

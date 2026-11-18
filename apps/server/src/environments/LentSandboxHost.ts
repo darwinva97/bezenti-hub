@@ -11,9 +11,11 @@ import {
   type SandboxHostReport,
   SpaceId,
 } from "@t3tools/contracts";
+import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -342,8 +344,15 @@ export const superviseLentSandboxes = Effect.fn("LentSandboxHost.supervise")(fun
   }
 });
 
+/**
+ * What a machine with no Sandbox runtime says of its limits: none enforced, since nothing runs,
+ * but not because its cgroups lack them; Podman is asked once the runtime starts.
+ */
+export const LIMITS_UNKNOWN_NOTE =
+  "Which limits this machine enforces is known once it can run Sandboxes.";
+
 /** Builds the host report from what the runtime and the machine say now. */
-const hostReportOf = Effect.fn("LentSandboxHost.hostReportOf")(function* (input: {
+export const hostReportOf = Effect.fn("LentSandboxHost.hostReportOf")(function* (input: {
   readonly runtime: Option.Option<SandboxRuntime["Service"]>;
   readonly refusal: string | undefined;
   readonly reachablePorts: ReadonlyArray<number>;
@@ -353,7 +362,7 @@ const hostReportOf = Effect.fn("LentSandboxHost.hostReportOf")(function* (input:
   const runtime = Option.getOrUndefined(input.runtime);
   const support =
     runtime === undefined
-      ? { cpus: false, memory: false, pids: false, note: null }
+      ? { cpus: false, memory: false, pids: false, note: LIMITS_UNKNOWN_NOTE }
       : yield* runtime.limitSupport;
   const space = runtime === undefined ? null : yield* runtime.hostSpace;
   return {
@@ -399,19 +408,38 @@ export const layer = (joined: JoinedHubState) =>
       let runtime = Option.none<SandboxRuntime["Service"]>();
       let unavailable: string | undefined;
       let recheck = false;
+      /** Logged once per change, not each round: why this machine hosts nothing. */
+      const unavailableNow = Effect.fn("LentSandboxHost.unavailableNow")(function* (
+        why: string,
+        cause?: Cause.Cause<unknown>,
+      ) {
+        if (why !== unavailable) {
+          const message = `This machine cannot host lent Sandboxes: ${why}`;
+          yield* cause === undefined
+            ? Effect.logWarning(message)
+            : Effect.logWarning(message, cause);
+        }
+        unavailable = why;
+      });
       /** The runtime once it can run; asked again each round while it cannot. */
       const currentRuntime = Effect.gen(function* () {
         if (Option.isSome(runtime)) return runtime;
         const checked = yield* dedicatedRuntimeFromConfig(joined.hubUrl, { recheck, rootDir });
         recheck = true;
         if (Result.isFailure(checked)) {
-          unavailable = checked.failure.message;
+          yield* unavailableNow(checked.failure.message);
           return runtime;
         }
-        const built = yield* Layer.buildWithScope(checked.success, scope).pipe(Effect.option);
-        if (Option.isNone(built)) {
-          unavailable = "its Sandbox runtime could not start; see the server log.";
+        const built = yield* Layer.buildWithScope(checked.success, scope).pipe(Effect.exit);
+        if (Exit.isFailure(built)) {
+          yield* unavailableNow(
+            "its Sandbox runtime could not start; see the server log.",
+            built.cause,
+          );
           return runtime;
+        }
+        if (unavailable !== undefined) {
+          yield* Effect.logInfo("This machine can host lent Sandboxes again.");
         }
         unavailable = undefined;
         runtime = Option.some(Context.get(built.value, SandboxRuntime));

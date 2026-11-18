@@ -81,9 +81,20 @@ picker names a lent account «<name> · from <lender>». Accepting one needs no 
 ## Lending links
 
 To lend to a Space the lender cannot name (no directory of Spaces exists), the lender makes a
-**lending link** (Grants ticket 06; design `.scratch/grants/issues/06-design.md`). Only AI accounts
-for now: a machine's loan made active needs its decider's strong factor, which a link does not ask
-for yet.
+**lending link** (Grants ticket 06; design `.scratch/grants/issues/06-design.md`). AI accounts and,
+since Grants ticket 15, machines; never a Vault group (its lender's strong factor is asked at giving,
+which a link skips).
+
+- A machine's link is made by its owner without a strong factor (as giving it pending), with the
+  same rules as giving it (a personal machine, its limits, `host-not-ready` when it said it cannot
+  run a Sandbox). Applying it makes the loan active, so it goes the way accepting one does: over
+  HTTP, `POST /api/grants/claim-offer` runs `Grants.prepareClaim` (every check but the move), then
+  the decider's strong factor (`confirmStrongFactor`), then `claimOffer`, which checks it all again
+  and opens the Sandbox (`openLentSandbox`) in the same transaction as the move, through the code
+  accepting uses (`requireDecidersFactor`, `madeActive`): a Sandbox that cannot be opened leaves the
+  link `offered`. The WS `grants.claimOffer` carries no factor, so it refuses a machine's link
+  (`strong-factor-required`); AI accounts' links still apply there. A machine's link dies with the
+  machine (revoked, no longer personal, another owner) and with its owner's right to lend it.
 
 - `grants.createOffer` (`grant.offer`: the lender's side only, no destination) writes an `offered`
   row with no destination, the loan's limits, `offer_expires_at` seven days on and
@@ -144,10 +155,11 @@ are kept as history, like the Grant; a removed User's rows stay, as their AI usa
   AI accounts in docs/internals/ai-gateway.md, Vault groups in docs/internals/secrets.md); lending
   links' `grants.createOffer` and `grants.claimOffer` (`access:write`) and `grants.readOffer`
   (`access:read`); a lent Vault group's `grants.vaultUsage` (`access:read`).
-- HTTP: `POST /api/grants/give` and `POST /api/grants/accept`. When a machine's Grant would become
-  active (accepting it, or giving it where the lender also decides), or a Vault group is given, the
+- HTTP: `POST /api/grants/give`, `POST /api/grants/accept` and `POST /api/grants/claim-offer`. When
+  a machine's Grant would become active (accepting it, applying its link, or giving it where the
+  lender also decides), or a Vault group is given, the
   request must carry a strong factor (`reauth`: passkey, or password and authenticator code), checked only after Grants
-  allowed the change (`prepareGive`/`prepareAccept`) and required again by the change itself, so
+  allowed the change (`prepareGive`/`prepareAccept`/`prepareClaim`) and required again by the change itself, so
   the WS side can never make one active.
 - No MCP tool: lending is a person's decision of trust.
 
@@ -157,10 +169,12 @@ Web, Settings → AI accounts: **Lend…** on each non-direct account the User m
 (`LendAiAccountDialog`; a subscription shows the provider-terms warning; «Someone else's Space: make
 a link» makes a lending link and shows it once). `/grants/offer` (`GrantOfferSurface`) shows a
 link's loan, what the lender sees and a subscription's terms, and applies it to a Space the User
-picks. Settings → Environments:
+picks; a machine's link says what its lender sees and asks the strong factor (an account without a
+passkey or authenticator app is sent to Settings → Account). Settings → Environments:
 **Lend…** on the User's own personal machines
 (`LendMachineDialog`: the Space from `grants.targets`, the limits, what the machine said of itself
-and the lender's risks; the strong factor when the loan starts active) and the **Loans** section
+and the lender's risks; the strong factor when the loan starts active; «Someone else's Space: make a
+link» makes a lending link and shows it once) and the **Loans** section
 (`GrantsSettings`: waiting loans to accept with a strong factor or reject, borrowed machines to give
 back, lent ones to take back or cancel, with the Sandbox's state and disk). A lent machine shows in
 the Space's lists as «Lent to <Space> by <lender>, who sees everything that runs on it»

@@ -62,6 +62,15 @@ const SWEPT_ELSEWHERE: Record<string, string> = {
   "ws:grants.cancel": "Grants.test.ts",
   "ws:grants.end": "Grants.test.ts and HubWithEnvironments.lent.test.ts",
   "ws:grants.setLimits": "Grants.test.ts",
+  // Grants tickets 02, 06, 07 and 15: the Owner's reviews, lending links (a machine's applied over
+  // HTTP with a strong factor) and a lent Vault group's use, per role.
+  "ws:grants.migrationReviews": "Grants.test.ts: the Owner only",
+  "ws:grants.dismissMigrationReview": "Grants.test.ts: the Owner only",
+  "ws:grants.createOffer": "GrantOffers.test.ts: the lender's side only, per kind",
+  "ws:grants.readOffer": "GrantOffers.test.ts: a signed-in User, invalid when dead",
+  "ws:grants.claimOffer": "GrantOffers.test.ts: who decides; a machine's refused here",
+  "http:grants.claimOffer": "GrantOffers.test.ts: who decides, a strong factor, its Sandbox",
+  "ws:grants.vaultUsage": "Grants.test.ts and VaultDoors.test.ts: lender and borrowing Admins",
   "raw:environments/JoinedHub.ts": "a machine's own health check: no Hub data",
   "raw:environments/connectRoute.ts": "EnvironmentConnection.test.ts: the machine's credential",
   "raw:environments/gitRoute.ts": "HubWithEnvironments.lent.test.ts: its own Space's alone",

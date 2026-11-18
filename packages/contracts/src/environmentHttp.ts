@@ -84,7 +84,7 @@ import {
   MasterKeyBackupResult,
   MasterKeyStatus,
 } from "./vaults.ts";
-import { Grant, GrantAcceptRequest, GrantGiveRequest } from "./grants.ts";
+import { Grant, GrantAcceptRequest, GrantClaimOfferRequest, GrantGiveRequest } from "./grants.ts";
 import {
   ChangeHubEnvironmentModeRequest,
   EnvironmentJoinApproveRequest,
@@ -1575,6 +1575,15 @@ class EnvironmentGrantsHttpApi extends HttpApiGroup.make("grants")
     HttpApiEndpoint.post("accept", "/api/grants/accept", {
       headers: OptionalBearerHeaders,
       payload: GrantAcceptRequest,
+      success: Grant,
+      error: EnvironmentGrantsErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    // Grants ticket 15: applying a lending link, with the strong factor a machine's needs.
+    HttpApiEndpoint.post("claimOffer", "/api/grants/claim-offer", {
+      headers: OptionalBearerHeaders,
+      payload: GrantClaimOfferRequest,
       success: Grant,
       error: EnvironmentGrantsErrors,
     }).middleware(EnvironmentAuthenticatedAuth),

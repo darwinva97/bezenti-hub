@@ -22,6 +22,7 @@ const loans = vi.hoisted(() => ({
   accepted: [] as Array<{ readonly grantId: string; readonly useAsDefault: boolean | undefined }>,
   vaultUsage: { rows: [], truncated: false } as unknown,
   vaultUsageReads: [] as Array<unknown>,
+  offers: [] as Array<unknown>,
 }));
 
 vi.mock("../../state/environments", async (importOriginal) => {
@@ -82,6 +83,13 @@ vi.mock("../../state/use-atom-command", () => ({
     if (label === "read a loan's use") {
       loans.vaultUsageReads.push(target?.input);
       return Promise.resolve({ _tag: "Success", value: loans.vaultUsage });
+    }
+    if (label === "make a lending link") {
+      loans.offers.push(target?.input);
+      return Promise.resolve({
+        _tag: "Success",
+        value: { grant: {}, path: "/grants/offer#token=machine-link", url: null },
+      });
     }
     if (loans.failWith !== null && label.startsWith("list your")) {
       return Promise.resolve({ _tag: "Failure", cause: loans.failWith });
@@ -450,4 +458,41 @@ it("shows a lent group's use to its lender, and to the borrowing Space's Admins 
     .toBe(1);
   await page.getByRole("button", { name: "Use", exact: true }).click();
   await expect.poll(() => loans.vaultUsageReads).toEqual([{ grantId: "g10" }, { grantId: "g11" }]);
+});
+
+// Grants ticket 15: a machine lent by link, for a Space its lender does not know.
+it("makes a lending link of a machine with its limits, shown once to copy", async () => {
+  resetLoans();
+  loans.offers = [];
+  loans.targets = [{ spaceId: "space-A", kind: "organization", name: "A", startsActive: false }];
+  await using _screen = await render(
+    <LendMachineDialog machine={{ id: "env-m", name: "Box" } as never} onClose={() => {}} />,
+  );
+  await page.getByRole("combobox", { name: "Lend to" }).click();
+  await page.getByRole("option", { name: "Someone else's Space: make a link" }).click();
+  await expect
+    .element(page.getByText(/applying it there starts the loan at once, after they confirm/))
+    .toBeVisible();
+  // The Select's closing layer still covers the dialog for a moment: press the button itself.
+  const make = page.getByRole("button", { name: "Make link" });
+  await expect.element(make).toBeEnabled();
+  await act(async () => (make.element() as HTMLButtonElement).click());
+  const link = page.getByRole("textbox", { name: "Lending link" });
+  await expect
+    .element(link)
+    .toHaveValue(`${window.location.origin}/grants/offer#token=machine-link`);
+  await expect.element(page.getByRole("button", { name: "Copy" })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Make link" })).not.toBeInTheDocument();
+  expect(loans.offers).toEqual([
+    {
+      resource: { kind: "environment", environmentId: "env-m" },
+      limits: {
+        kind: "environment",
+        cpus: 2,
+        memoryBytes: 4 * 1024 ** 3,
+        pids: 4096,
+        diskBytes: 20 * 1024 ** 3,
+      },
+    },
+  ]);
 });

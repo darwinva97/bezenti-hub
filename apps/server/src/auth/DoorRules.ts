@@ -29,7 +29,7 @@ const MASTER_KEY = own(
 );
 /** A loan that becomes active opens a machine to another Space: a strong factor, never WS. */
 const GRANT_MAKES_ACTIVE = own(
-  "Grants.prepareGive/prepareAccept (AccessPolicy `grant.give`/`grant.decide`) before the strong factor in the request (UserDirectory.confirmStrongFactor) when a machine's loan becomes active, then Grants.give/accept, which check it all again in their transaction and audit `grant.*`; access:write; no MCP door",
+  "Grants.prepareGive/prepareAccept/prepareClaim (AccessPolicy `grant.give`/`grant.decide`; a link's, also live and unthrottled) before the strong factor in the request (UserDirectory.confirmStrongFactor) when a machine's loan becomes active, then Grants.give/accept/claimOffer, which check it all again in their transaction and audit `grant.*`; access:write; no MCP door",
 );
 const WEBHOOK = own("the task's secret token in the path; runs as the task's creator");
 const THREAD_READ = own(
@@ -143,6 +143,7 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "vaults.masterKeyStatus": MASTER_KEY,
   "grants.give": GRANT_MAKES_ACTIVE,
   "grants.accept": GRANT_MAKES_ACTIVE,
+  "grants.claimOffer": GRANT_MAKES_ACTIVE,
   "webhooks.webhookGet": WEBHOOK,
   "webhooks.webhookPatch": WEBHOOK,
   "webhooks.webhookPost": WEBHOOK,

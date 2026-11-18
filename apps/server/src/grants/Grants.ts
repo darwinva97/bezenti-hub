@@ -138,8 +138,21 @@ export class Grants extends Context.Service<
     readonly readOffer: (
       input: GrantReadOfferInput,
     ) => Effect.Effect<GrantOfferPreview, GrantError>;
-    /** Applying a link to a Space where the caller decides: the loan starts active there. */
-    readonly claimOffer: (input: GrantClaimOfferInput) => Effect.Effect<Grant, GrantError>;
+    /**
+     * Refuses as `claimOffer` would and says whether applying it needs a strong factor (a
+     * machine's: it becomes active), before the door asks for one.
+     */
+    readonly prepareClaim: (
+      input: GrantClaimOfferInput,
+    ) => Effect.Effect<{ readonly needsStrongFactor: boolean }, GrantError>;
+    /**
+     * Applying a link to a Space where the caller decides: the loan starts active there, as
+     * accepting it would (a machine's with the decider's strong factor, its Sandbox opened).
+     */
+    readonly claimOffer: (
+      input: GrantClaimOfferInput,
+      proof?: FactorProof,
+    ) => Effect.Effect<Grant, GrantError>;
     /**
      * Grants ticket 15: a lent Vault group's use, by day, User and name (names and counts only).
      * For its lender (`grant.viewGiven`) and whoever runs the borrowing Space (`grant.return`: its
@@ -789,6 +802,22 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * A machine that said it cannot host a Sandbox is refused with why; one that never said (an
+   * older one) is lent, and the lists say it cannot host one yet. Giving, making a link, applying.
+   */
+  const hostReady = Effect.fn("Grants.hostReady")(function* (environmentId: string) {
+    const host = yield* registry
+      .sandboxHostOf(EnvironmentId.make(environmentId))
+      .pipe(Effect.catch(storage("read the machine")));
+    if (Option.isSome(host) && !host.value.ready) {
+      return yield* fail(
+        "host-not-ready",
+        `This machine cannot run a Sandbox for another Space now: ${host.value.reason ?? "it did not say why."}`,
+      );
+    }
+  });
+
   const checkGive = Effect.fn("Grants.checkGive")(function* (input: GrantGiveInput, who: Caller) {
     if (input.planId !== undefined) {
       return yield* fail(
@@ -799,19 +828,7 @@ const make = Effect.gen(function* () {
     const item = yield* lendable(input.resource);
     const problem = limitsProblem(item.kind, input.limits);
     if (problem !== undefined) return yield* fail("invalid-limits", problem);
-    if (input.resource.kind === "environment") {
-      // A machine that said it cannot host a Sandbox is refused with why; one that never said
-      // (an older one) is lent, and the lists say it cannot host one yet.
-      const host = yield* registry
-        .sandboxHostOf(input.resource.environmentId)
-        .pipe(Effect.catch(storage("read the machine")));
-      if (Option.isSome(host) && !host.value.ready) {
-        return yield* fail(
-          "host-not-ready",
-          `This machine cannot run a Sandbox for another Space now: ${host.value.reason ?? "it did not say why."}`,
-        );
-      }
-    }
+    if (input.resource.kind === "environment") yield* hostReady(input.resource.environmentId);
     const known = yield* targetsOf([{ targetId: input.spaceId }]);
     const target = known.get(input.spaceId);
     if (target === undefined) return yield* fail("not-found", "That Space does not exist.");
@@ -1149,7 +1166,47 @@ const make = Effect.gen(function* () {
     const { row, can } = yield* visibleRow(input.grantId, who);
     if (!mayTransition("accept", row.state)) return yield* illegal("accept", row.state);
     if (!can("grant.decide")) return yield* fail("not-allowed", DENIED["role-not-allowed"] ?? "");
-    return { needsStrongFactor: row.resourceKind === "environment" };
+    return { needsStrongFactor: decidingNeedsFactor(row.resourceKind) };
+  });
+
+  /**
+   * Deciding for the destination makes the loan active there: a machine's needs the decider's
+   * strong factor, whether they accept it or apply its link (Grants ticket 15).
+   */
+  const decidingNeedsFactor = (kind: GrantResourceKind) => kind === "environment";
+  const requireDecidersFactor = (kind: GrantResourceKind, proof: FactorProof) =>
+    decidingNeedsFactor(kind) && !proof.strongFactor
+      ? fail("strong-factor-required", "Accepting a machine needs a passkey or authenticator code.")
+      : Effect.void;
+
+  /**
+   * In the transaction that made the loan active in `spaceId` (accepting it or applying its
+   * link): a machine runs a Sandbox for the Space, an Environment of its own; a Vault group's
+   * rows from before go, and it may become the Space's last default. A failure undoes it all.
+   */
+  const madeActive = Effect.fn("Grants.madeActive")(function* (
+    row: GrantRow,
+    spaceId: string,
+    by: UserId,
+    choice: DefaultChoice,
+  ) {
+    if (row.resourceKind === "environment") {
+      yield* registry.openLentSandbox({
+        grantId: row.grantId,
+        hostEnvironmentId: EnvironmentId.make(row.resourceId),
+        spaceId: SpaceId.make(spaceId),
+      });
+    }
+    if (row.resourceKind === "vault-group") {
+      yield* vaultGroupActive({
+        vaultId: row.resourceId,
+        vaultName: row.resourceName,
+        spaceId,
+        useAsDefault: choice.useAsDefault === true,
+        by,
+        via: "grant.accept",
+      });
+    }
   });
 
   /** A decision by the destination: accept or reject. */
@@ -1165,12 +1222,7 @@ const make = Effect.gen(function* () {
         const { row, resource } = yield* visibleRow(input.grantId, who);
         if (!mayTransition(op, row.state)) return yield* illegal(op, row.state);
         yield* denied(AccessPolicy.decide(who.principal, "grant.decide", resource));
-        if (op === "accept" && row.resourceKind === "environment" && !proof.strongFactor) {
-          return yield* fail(
-            "strong-factor-required",
-            "Accepting a machine needs a passkey or authenticator code.",
-          );
-        }
+        if (op === "accept") yield* requireDecidersFactor(row.resourceKind, proof);
         const at = yield* now;
         const to = TRANSITIONS[op].to ?? row.state;
         yield* move(
@@ -1178,23 +1230,8 @@ const make = Effect.gen(function* () {
           row.state,
           sql`state = ${to}, decided_at = ${at}, decided_by = ${who.userId}`,
         );
-        // An accepted machine runs a Sandbox for the Space, an Environment of its own.
-        if (op === "accept" && row.resourceKind === "environment" && row.targetId !== null) {
-          yield* registry.openLentSandbox({
-            grantId: row.grantId,
-            hostEnvironmentId: EnvironmentId.make(row.resourceId),
-            spaceId: SpaceId.make(row.targetId),
-          });
-        }
-        if (op === "accept" && row.resourceKind === "vault-group" && row.targetId !== null) {
-          yield* vaultGroupActive({
-            vaultId: row.resourceId,
-            vaultName: row.resourceName,
-            spaceId: row.targetId,
-            useAsDefault: input.useAsDefault === true,
-            by: who.userId,
-            via: "grant.accept",
-          });
+        if (op === "accept" && row.targetId !== null) {
+          yield* madeActive(row, row.targetId, who.userId, input);
         }
         const record = auditOf(row, row.resourceName);
         yield* audit.record({
@@ -1362,12 +1399,12 @@ const make = Effect.gen(function* () {
 
   const createOffer = Effect.fn("Grants.createOffer")(function* (input: GrantCreateOfferInput) {
     const who = yield* caller;
-    // A machine's loan made active needs its decider's strong factor, which a link cannot ask for
-    // yet; a Vault group's needs its lender's at giving (Grants ticket 07), which a link skips.
-    if (input.resource.kind !== "ai-account") {
+    // A Vault group's loan needs its lender's strong factor at giving (Grants ticket 07), which a
+    // link skips. A machine's is asked of whoever applies its link (Grants ticket 15).
+    if (input.resource.kind === "vault-group") {
       return yield* fail(
         "not-lendable",
-        "Only an AI account can be lent by link for now. Lend a machine or a Vault group to a Space you work in.",
+        "A Vault group is not lent by link: lend it to a Space you work in.",
       );
     }
     const grantId = yield* newId;
@@ -1382,6 +1419,7 @@ const make = Effect.gen(function* () {
         );
         const problem = limitsProblem(item.kind, input.limits);
         if (problem !== undefined) return yield* fail("invalid-limits", problem);
+        if (item.kind === "environment") yield* hostReady(item.resourceId);
         const current = yield* DateTime.now;
         const at = DateTime.formatIso(current);
         const open = yield* sql<{ readonly n: number }>`
@@ -1392,7 +1430,7 @@ const make = Effect.gen(function* () {
         if ((open[0]?.n ?? 0) >= GRANT_OPEN_OFFERS_PER_RESOURCE) {
           return yield* fail(
             "too-many-offers",
-            `This AI account has ${GRANT_OPEN_OFFERS_PER_RESOURCE} open lending links already. Cancel one or wait until one is used or expires.`,
+            `This ${item.kind === "environment" ? "machine" : "AI account"} has ${GRANT_OPEN_OFFERS_PER_RESOURCE} open lending links already. Cancel one or wait until one is used or expires.`,
           );
         }
         const expiresAt = DateTime.formatIso(
@@ -1491,7 +1529,13 @@ const make = Effect.gen(function* () {
       return dead();
     }
     // What it lends must still be the lender's and lendable, by the same rules as giving it.
-    const item = yield* lendableAiAccount(row.resourceId).pipe(Effect.option);
+    const lendableNow: Effect.Effect<Lendable, GrantError> =
+      row.resourceKind === "environment"
+        ? lendableEnvironment(row.resourceId)
+        : row.resourceKind === "ai-account"
+          ? lendableAiAccount(row.resourceId)
+          : lendableVaultGroup(row.resourceId);
+    const item = yield* Effect.option(lendableNow);
     if (
       Option.isNone(item) ||
       item.value.lenderKind !== row.lenderKind ||
@@ -1593,44 +1637,70 @@ const make = Effect.gen(function* () {
 
   const NOT_YOUR_SPACE = "You can apply a lending link only to a Space where you decide on loans.";
 
-  const claimOffer = Effect.fn("Grants.claimOffer")(function* (input: GrantClaimOfferInput) {
+  /** Everything applying a link checks, but the move itself: the destination's rule, as accepting. */
+  const checkClaim = Effect.fn("Grants.checkClaim")(function* (
+    input: GrantClaimOfferInput,
+    who: Caller,
+  ) {
+    const found = yield* liveOffer(input.token, who, "claim");
+    if (Option.isNone(found)) return yield* fail("not-found", DEAD_LINK);
+    const { row, item } = found.value;
+    // A Space that does not exist answers like one the caller does not decide in.
+    const known = yield* targetsOf([{ targetId: input.spaceId }]);
+    const target = known.get(input.spaceId);
+    if (target === undefined) return yield* fail("not-allowed", NOT_YOUR_SPACE);
+    if (isLendersOwn(row, target.resource)) {
+      return yield* fail("not-allowed", DENIED["wrong-resource"] ?? NOT_YOUR_SPACE);
+    }
+    // Applying it is accepting it: the destination's rule, as for any loan.
+    const decision = AccessPolicy.decide(who.principal, "grant.decide", {
+      kind: "grant",
+      lender: item.lender,
+      target: target.resource,
+    });
+    if (decision._tag === "Deny") {
+      return yield* fail(
+        "not-allowed",
+        decision.reason === "space-archived" || decision.reason === "space-frozen"
+          ? (DENIED[decision.reason] ?? NOT_YOUR_SPACE)
+          : NOT_YOUR_SPACE,
+      );
+    }
+    const live = yield* sql<{ readonly n: number }>`
+      SELECT COUNT(*) AS n FROM grants
+      WHERE resource_kind = ${row.resourceKind} AND resource_id = ${row.resourceId}
+        AND target_kind = 'space' AND target_id = ${input.spaceId}
+        AND state IN ('pending', 'active')
+    `.pipe(Effect.catch(storage("read the loan")));
+    if ((live[0]?.n ?? 0) > 0) {
+      return yield* fail(
+        "already-granted",
+        row.resourceKind === "environment"
+          ? "This machine is already lent to that Space."
+          : "This AI account is already lent to that Space.",
+      );
+    }
+    if (row.resourceKind === "environment") yield* hostReady(row.resourceId);
+    return { row, item };
+  });
+
+  const prepareClaim = Effect.fn("Grants.prepareClaim")(function* (input: GrantClaimOfferInput) {
+    const who = yield* caller;
+    const { row } = yield* checkClaim(input, who);
+    return { needsStrongFactor: decidingNeedsFactor(row.resourceKind) };
+  });
+
+  const claimOffer = Effect.fn("Grants.claimOffer")(function* (
+    input: GrantClaimOfferInput,
+    proof: FactorProof = { strongFactor: false },
+  ) {
     const who = yield* caller;
     const grantId = yield* inTransaction(
       "apply the lending link",
       Effect.gen(function* () {
-        const found = yield* liveOffer(input.token, who, "claim");
-        if (Option.isNone(found)) return yield* fail("not-found", DEAD_LINK);
-        const { row, item } = found.value;
-        // A Space that does not exist answers like one the caller does not decide in.
-        const known = yield* targetsOf([{ targetId: input.spaceId }]);
-        const target = known.get(input.spaceId);
-        if (target === undefined) return yield* fail("not-allowed", NOT_YOUR_SPACE);
-        if (isLendersOwn(row, target.resource)) {
-          return yield* fail("not-allowed", DENIED["wrong-resource"] ?? NOT_YOUR_SPACE);
-        }
-        // Applying it is accepting it: the destination's rule, as for any loan.
-        const decision = AccessPolicy.decide(who.principal, "grant.decide", {
-          kind: "grant",
-          lender: item.lender,
-          target: target.resource,
-        });
-        if (decision._tag === "Deny") {
-          return yield* fail(
-            "not-allowed",
-            decision.reason === "space-archived" || decision.reason === "space-frozen"
-              ? (DENIED[decision.reason] ?? NOT_YOUR_SPACE)
-              : NOT_YOUR_SPACE,
-          );
-        }
-        const live = yield* sql<{ readonly n: number }>`
-          SELECT COUNT(*) AS n FROM grants
-          WHERE resource_kind = ${row.resourceKind} AND resource_id = ${row.resourceId}
-            AND target_kind = 'space' AND target_id = ${input.spaceId}
-            AND state IN ('pending', 'active')
-        `;
-        if ((live[0]?.n ?? 0) > 0) {
-          return yield* fail("already-granted", "This AI account is already lent to that Space.");
-        }
+        const { row, item } = yield* checkClaim(input, who);
+        // As accepting: a machine's needs the decider's strong factor, after the rules above.
+        yield* requireDecidersFactor(row.resourceKind, proof);
         const at = yield* now;
         // Only while still open: two people applying it at once, one gets it.
         const moved = yield* sql<{ readonly grantId: string }>`
@@ -1641,10 +1711,14 @@ const make = Effect.gen(function* () {
         `;
         if (moved.length === 0) return yield* fail("not-found", DEAD_LINK);
         // Lent to an Organization a migrated allowance reached: that review is settled.
-        yield* sql`
-          DELETE FROM ai_account_grant_reviews
-          WHERE account_id = ${row.resourceId} AND space_id = ${input.spaceId}
-        `;
+        if (row.resourceKind === "ai-account") {
+          yield* sql`
+            DELETE FROM ai_account_grant_reviews
+            WHERE account_id = ${row.resourceId} AND space_id = ${input.spaceId}
+          `;
+        }
+        // As accepting it: a machine's Sandbox opens in this transaction.
+        yield* madeActive(row, input.spaceId, who.userId, {});
         const record = auditOf({ ...row, targetId: input.spaceId }, item.name);
         yield* audit.record({
           actor: AuditLog.userActor(who.userId),
@@ -1799,6 +1873,7 @@ const make = Effect.gen(function* () {
     setLimits,
     createOffer,
     readOffer,
+    prepareClaim,
     claimOffer,
     vaultUsage,
   });

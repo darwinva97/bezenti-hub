@@ -382,6 +382,16 @@ export type GrantVaultUsage = typeof GrantVaultUsage.Type;
 export const GrantClaimOfferInput = Schema.Struct({ token: GrantOfferToken, spaceId: SpaceId });
 export type GrantClaimOfferInput = typeof GrantClaimOfferInput.Type;
 
+/**
+ * HTTP (Grants ticket 15): applying a machine's link makes its loan active, so the request carries
+ * the decider's strong factor, as accepting one does.
+ */
+export const GrantClaimOfferRequest = Schema.Struct({
+  ...GrantClaimOfferInput.fields,
+  reauth: Schema.optionalKey(AuthReauth),
+});
+export type GrantClaimOfferRequest = typeof GrantClaimOfferRequest.Type;
+
 export const GrantErrorReason = Schema.Literals([
   "not-found",
   "not-allowed",

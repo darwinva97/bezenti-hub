@@ -120,8 +120,16 @@ export const offerSpaceLabel = (space: GrantOfferSpace) =>
   space.alreadyGranted ? `${spaceLabel(space)} (already lent there)` : spaceLabel(space);
 
 /** What whoever applies a link is told before they do: what the lender sees, and a subscription's terms. */
+/** What a borrower is told before accepting, and what the lent machine shows: the spec's words. */
+export const lenderSeesEverything = (lender: string) =>
+  `${lender} controls this machine and can see everything that runs on it: files, processes, the Secrets turns receive and each Thread's AI gateway key.`;
+
 export const offerWarnings = (preview: Extract<GrantOfferPreview, { status: "valid" }>) => {
   const lender = preview.lender.name ?? "Its lender";
+  // Grants ticket 15: a machine's link.
+  if (preview.resource.kind === "environment") {
+    return [`${lenderSeesEverything(lender)} Only accept machines of people you trust that much.`];
+  }
   return [
     `${lender} sees how much each person in the Space uses it, never prompts or Threads, and can take it back at any time.`,
     ...(preview.resource.aiAccount?.type === "subscription"

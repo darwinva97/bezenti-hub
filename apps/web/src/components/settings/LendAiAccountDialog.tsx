@@ -28,10 +28,7 @@ import {
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { offerLinkOf, spaceLabel, subscriptionTermsWarning } from "./grantText";
-
-/** «Lend to» a Space not in the list: by a lending link (Grants ticket 06). */
-const BY_LINK = "by-link";
-const BY_LINK_LABEL = "Someone else's Space: make a link";
+import { BY_LINK, BY_LINK_LABEL, OfferLinkField } from "./OfferLinkField";
 
 const PERIODS: ReadonlyArray<readonly [GrantCapPeriod, string]> = [
   ["day", "a day"],
@@ -199,7 +196,6 @@ export function LendAiAccountDialog({
   // Grants ticket 06: a lending link for a Space not in the list, shown once.
   const createOffer = useAtomCommand(grantsEnvironment.createOffer, "make a lending link");
   const [link, setLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   const loadTargets = useEffectEvent((target: EnvironmentId) =>
     targetsCommand({
@@ -270,16 +266,6 @@ export function LendAiAccountDialog({
     }
   };
 
-  const copyLink = async () => {
-    if (link === null) return;
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopied(true);
-    } catch {
-      setError("Could not copy: select the link and copy it.");
-    }
-  };
-
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogPopup className="sm:max-w-lg">
@@ -339,18 +325,10 @@ export function LendAiAccountDialog({
                 </p>
               ) : null}
               {link === null ? null : (
-                <div className="flex items-center gap-2">
-                  <Input
-                    aria-label="Lending link"
-                    nativeInput
-                    readOnly
-                    value={link}
-                    onFocus={(event) => event.currentTarget.select()}
-                  />
-                  <Button size="sm" type="button" variant="outline" onClick={() => void copyLink()}>
-                    {copied ? "Copied" : "Copy"}
-                  </Button>
-                </div>
+                <OfferLinkField
+                  link={link}
+                  onCopyFailed={() => setError("Could not copy: select the link and copy it.")}
+                />
               )}
               {account.type === "subscription" ? (
                 <p className="text-xs text-warning" role="note">

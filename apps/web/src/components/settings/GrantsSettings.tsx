@@ -41,7 +41,9 @@ import {
   capUseText,
   gib,
   hostLimitsNotice,
+  lenderSeesEverything,
   limitsText,
+  offerLinkOf,
   offerStatusText,
   recipientLabel,
   spaceLabel,
@@ -49,14 +51,12 @@ import {
 } from "./grantText";
 import { ChangeCapsDialog } from "./LendAiAccountDialog";
 import { LoanUsage } from "./LoanUsage";
+import { BY_LINK, BY_LINK_LABEL, OfferLinkField } from "./OfferLinkField";
+import { StrongFactorNotice } from "./StrongFactorNotice";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { VaultLoanUsage } from "./VaultLoanUsage";
 
 const GIB = 1024 ** 3;
-
-/** What a borrower is told before accepting, and what the lent machine shows: the spec's words. */
-const lenderSeesEverything = (lender: string) =>
-  `${lender} controls this machine and can see everything that runs on it: files, processes, the Secrets turns receive and each Thread's AI gateway key.`;
 
 /** What the lender accepts by lending. */
 const LENDER_RISKS = [
@@ -163,18 +163,6 @@ function HostState({ host }: { readonly host: SandboxHostReport | null }) {
 
 type StepUpState = ReturnType<typeof emptyStepUp>;
 
-/** An account with neither a passkey nor an authenticator app cannot confirm a machine's loan. */
-function StrongFactorNotice({ onOpenAccount }: { readonly onOpenAccount: () => void }) {
-  return (
-    <p className="text-xs text-warning" role="alert">
-      To accept a machine, add a passkey or an authenticator app to your account first.{" "}
-      <Button size="xs" type="button" variant="link" onClick={onOpenAccount}>
-        Open Settings → Account
-      </Button>
-    </p>
-  );
-}
-
 /**
  * «Lend…» on one of the User's personal machines: the Space, the limits, the lender's risks and
  * what the machine said of itself; a loan where the lender also decides starts active, with the
@@ -202,6 +190,9 @@ export function LendMachineDialog({
   const [stepUp, setStepUp] = useState<StepUpState | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Grants ticket 15: a lending link for a Space not in the list, shown once.
+  const createOffer = useAtomCommand(grantsEnvironment.createOffer, "make a lending link");
+  const [link, setLink] = useState<string | null>(null);
 
   const loadTargets = useEffectEvent((target: EnvironmentId) =>
     Promise.all([
@@ -246,6 +237,7 @@ export function LendMachineDialog({
   }, [environmentId]);
 
   const target = targets?.find((entry) => entry.spaceId === spaceId);
+  const byLink = spaceId === BY_LINK;
   const limits: EnvironmentGrantLimits = {
     kind: "environment",
     cpus: Number(cpus),
@@ -254,12 +246,30 @@ export function LendMachineDialog({
     diskBytes: Math.round(Number(disk) * GIB),
   };
   const valid =
-    target !== undefined &&
+    (target !== undefined || byLink) &&
     [limits.cpus, limits.memoryBytes, limits.pids, limits.diskBytes].every(
       (value) => Number.isFinite(value) && value > 0,
     );
 
   const submit = async () => {
+    if (byLink) {
+      if (environmentId === null) return;
+      setPending(true);
+      setError(null);
+      try {
+        const made = await createOffer({
+          environmentId,
+          input: { resource: { kind: "environment", environmentId: machine.id }, limits },
+        });
+        if (made._tag !== "Success") throw squashAtomCommandFailure(made);
+        setLink(offerLinkOf(made.value, window.location.origin));
+      } catch (cause) {
+        setError(errorMessageOf(cause, "The link was not made."));
+      } finally {
+        setPending(false);
+      }
+      return;
+    }
     if (target === undefined) return;
     setPending(true);
     setError(null);
@@ -324,14 +334,20 @@ export function LendMachineDialog({
               <HostState host={host} />
               <label className="flex flex-col gap-1 text-xs font-medium">
                 Lend to
-                <Select value={spaceId} onValueChange={(next) => setSpaceId(String(next ?? ""))}>
+                <Select
+                  value={spaceId}
+                  disabled={link !== null}
+                  onValueChange={(next) => setSpaceId(String(next ?? ""))}
+                >
                   <SelectTrigger aria-label="Lend to">
                     <SelectValue>
-                      {target
-                        ? spaceLabel(target)
-                        : targets === null
-                          ? "Loading…"
-                          : "Choose a Space"}
+                      {byLink
+                        ? BY_LINK_LABEL
+                        : target
+                          ? spaceLabel(target)
+                          : targets === null
+                            ? "Loading…"
+                            : "Choose a Space"}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
@@ -340,6 +356,9 @@ export function LendMachineDialog({
                         {spaceLabel(entry)}
                       </SelectItem>
                     ))}
+                    {targets === null ? null : (
+                      <SelectItem value={BY_LINK}>{BY_LINK_LABEL}</SelectItem>
+                    )}
                   </SelectPopup>
                 </Select>
               </label>
@@ -363,6 +382,24 @@ export function LendMachineDialog({
                     ? "You also decide for this Space: the loan starts at once, after you confirm it's you."
                     : "The loan waits until this Space accepts it."}
                 </p>
+              )}
+              {byLink && link === null ? (
+                <p className="text-xs text-muted-foreground">
+                  Whoever opens the link chooses one of their Spaces where they decide on loans;
+                  applying it there starts the loan at once, after they confirm it's them. It works
+                  once, for 7 days; you can cancel it in Loans until then.
+                </p>
+              ) : null}
+              {link === null ? null : (
+                <>
+                  <OfferLinkField
+                    link={link}
+                    onCopyFailed={() => setError("Could not copy: select the link and copy it.")}
+                  />
+                  <p className="text-xs" role="status">
+                    Link made. Copy it now: it is not shown again.
+                  </p>
+                </>
               )}
               {account !== null && stepUp !== null && lacksStrongFactor(account) ? (
                 <StrongFactorNotice
@@ -392,19 +429,25 @@ export function LendMachineDialog({
           </DialogPanel>
           <DialogFooter>
             <Button disabled={pending} type="button" variant="ghost" onClick={onClose}>
-              Cancel
+              {link === null ? "Cancel" : "Close"}
             </Button>
-            <Button
-              disabled={
-                pending ||
-                !valid ||
-                host?.ready === false ||
-                (target?.startsActive === true && account !== null && lacksStrongFactor(account))
-              }
-              type="submit"
-            >
-              {target?.startsActive === true && account !== null ? "Confirm and lend" : "Lend"}
-            </Button>
+            {link === null ? (
+              <Button
+                disabled={
+                  pending ||
+                  !valid ||
+                  host?.ready === false ||
+                  (target?.startsActive === true && account !== null && lacksStrongFactor(account))
+                }
+                type="submit"
+              >
+                {byLink
+                  ? "Make link"
+                  : target?.startsActive === true && account !== null
+                    ? "Confirm and lend"
+                    : "Lend"}
+              </Button>
+            ) : null}
           </DialogFooter>
         </form>
       </DialogPopup>

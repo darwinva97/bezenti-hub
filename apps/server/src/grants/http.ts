@@ -1,8 +1,8 @@
 /**
- * Giving and accepting a loan over HTTP. Grants decides who may; when the loan of a machine would
- * become active, or a Vault group is given, the request must also carry a strong factor (passkey
- * or authenticator code), checked only after Grants allowed it, so nobody else's proof is ever
- * checked.
+ * Giving, accepting and applying a lending link over HTTP. Grants decides who may; when the loan
+ * of a machine would become active (accepting it, or applying its link), or a Vault group is
+ * given, the request must also carry a strong factor (passkey or authenticator code), checked only
+ * after Grants allowed it, so nobody else's proof is ever checked.
  */
 import {
   AuthAccessWriteScope,
@@ -108,6 +108,20 @@ export const layer = HttpApiBuilder.group(
           return yield* grants
             .accept({ ...input, ...choice }, proof)
             .pipe(asSession, Effect.catch(failGrant));
+        }),
+      )
+      .handle(
+        "claimOffer",
+        Effect.fn("environment.grants.claimOffer")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const principal = yield* requireEnvironmentScope(AuthAccessWriteScope);
+          const asSession = CommandActor.actAsSession(principal);
+          const { reauth, ...input } = args.payload;
+          // As accepting: the same checks first, then the proof, then the change, which checks
+          // them all again in its transaction.
+          const plan = yield* grants.prepareClaim(input).pipe(asSession, Effect.catch(failGrant));
+          const proof = yield* proofOf(principal, plan.needsStrongFactor, reauth);
+          return yield* grants.claimOffer(input, proof).pipe(asSession, Effect.catch(failGrant));
         }),
       );
   }),

@@ -1,4 +1,4 @@
-import type { Grant, GrantGiveInput, GrantId } from "@t3tools/contracts";
+import type { Grant, GrantClaimOfferInput, GrantGiveInput, GrantId } from "@t3tools/contracts";
 
 import { request, type StepUp, toReauth } from "./userAccounts";
 
@@ -38,6 +38,25 @@ export async function acceptGrant(
           ...(reauth === undefined ? {} : { reauth }),
           ...(options.useAsDefault === undefined ? {} : { useAsDefault: options.useAsDefault }),
         },
+      }),
+    "Confirming it's you failed: check your password, code or passkey.",
+  );
+}
+
+/**
+ * Grants ticket 15: applies a lending link to a Space the User decides for. A machine's makes its
+ * loan active, so it carries the strong factor (`stepUp`); an AI account's needs none.
+ */
+export async function claimGrantOffer(
+  input: GrantClaimOfferInput,
+  stepUp: StepUp | undefined,
+): Promise<Grant> {
+  const reauth = stepUp === undefined ? undefined : await toReauth(stepUp);
+  return request(
+    (client) =>
+      client.grants.claimOffer({
+        headers: {},
+        payload: { ...input, ...(reauth === undefined ? {} : { reauth }) },
       }),
     "Confirming it's you failed: check your password, code or passkey.",
   );

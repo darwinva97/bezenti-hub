@@ -24,6 +24,7 @@ import {
   bootstrapOwner,
   joinOrganization,
   makeAuthenticator,
+  passkeyReauth,
   serveAuthHttp,
 } from "../auth/UserAuth.testkit.ts";
 import * as Grants from "./Grants.ts";
@@ -60,11 +61,12 @@ const hub = Effect.gen(function* () {
   yield* server.sql`
     DELETE FROM space_memberships WHERE space_id = ${globexId} AND user_id = ${ownerId}
   `;
+  const cookies = new Map<string, string>([[ownerId, owner]]);
   const person = Effect.fn(function* (
     id: string,
     membership?: { readonly spaceId: SpaceId; readonly role: "admin" | "member" | "guest" },
   ) {
-    yield* addMember(server, { id, displayName: id });
+    cookies.set(id, yield* addMember(server, { id, displayName: id }));
     if (membership !== undefined) {
       yield* joinOrganization(server, membership.spaceId, id, membership.role);
     }
@@ -134,6 +136,8 @@ const hub = Effect.gen(function* () {
     `;
   return {
     server,
+    authenticator,
+    cookies,
     ownerId,
     acmeId,
     globexId,
@@ -431,90 +435,69 @@ describe("Lending links", () => {
       }),
   );
 
-  it.effect(
-    "only the lender makes a link, never of a direct account or a machine, ten at most",
-    () =>
-      Effect.gen(function* () {
-        const h = yield* hub;
-        const key = yield* h.aiAccount("ana-key", { kind: "user", id: h.ana }, "api-key");
-        const acmes = yield* h.aiAccount("acme-key", { kind: "organization", id: h.acmeId });
-        const direct = yield* h.aiAccount("ana-direct", { kind: "user", id: h.ana }, "direct");
-        const refused = (who: UserId, aiAccountId: string, limits: unknown = NO_CAP) =>
-          h.offer(who, aiAccountId, limits).pipe(
-            Effect.flip,
-            Effect.map((error) => error.reason),
-          );
-        // Not the Owner, nor an Admin, for Ana's; not a Member, a Guest or another Organization's
-        // Admin for Acme's.
-        assert.equal(yield* refused(h.ownerId, key), "not-allowed");
-        assert.equal(yield* refused(h.adam, key), "not-allowed");
-        assert.equal(yield* refused(h.ana, acmes), "not-allowed");
-        assert.equal(yield* refused(h.linus, acmes), "not-allowed");
-        assert.equal(yield* refused(h.gus, acmes), "not-allowed");
-        // Acme's Admins do, and any of them sees and cancels it; its Members do not see it.
-        const acmeLink = yield* h.offer(h.adam, acmes);
-        const ownerSees = yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ownerId));
-        assert.include(
-          ownerSees.grants.map((grant) => grant.id as string),
-          acmeLink.grant.id,
+  it.effect("only the lender makes a link, never of a direct account, ten at most", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const key = yield* h.aiAccount("ana-key", { kind: "user", id: h.ana }, "api-key");
+      const acmes = yield* h.aiAccount("acme-key", { kind: "organization", id: h.acmeId });
+      const direct = yield* h.aiAccount("ana-direct", { kind: "user", id: h.ana }, "direct");
+      const refused = (who: UserId, aiAccountId: string, limits: unknown = NO_CAP) =>
+        h.offer(who, aiAccountId, limits).pipe(
+          Effect.flip,
+          Effect.map((error) => error.reason),
         );
-        const anaSees = yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ana));
-        assert.notInclude(
-          anaSees.grants.map((grant) => grant.id as string),
-          acmeLink.grant.id,
-        );
-        const byMember = yield* h.grants
-          .cancel({ grantId: acmeLink.grant.id })
-          .pipe(CommandActor.actAs(h.ana), Effect.flip);
-        assert.equal(byMember.reason, "not-found");
-        const byOwner = yield* h.grants
-          .cancel({ grantId: acmeLink.grant.id })
-          .pipe(CommandActor.actAs(h.ownerId));
-        assert.equal(byOwner.state, "cancelled");
-        // Never a direct account, nor a machine, nor limits of another kind.
-        assert.equal(yield* refused(h.ana, direct), "not-lendable");
-        yield* h.server.sql`
-        INSERT INTO environments (environment_id, name, kind, mode, owner_user_id, space_id,
-          credential_hash, credential_issued_at, registered_at)
-        VALUES ('ana-vps', 'ana-vps box', 'external', 'personal', ${h.ana}, NULL, 'hash-vps',
-          ${at}, ${at})
-      `;
-        const machine = yield* h.grants
-          .createOffer({
-            resource: { kind: "environment", environmentId: "ana-vps" as never },
-            limits: {
-              kind: "environment",
-              cpus: 1,
-              memoryBytes: 2 ** 31,
-              pids: 256,
-              diskBytes: 2 ** 33,
-            },
-          })
-          .pipe(CommandActor.actAs(h.ana), Effect.flip);
-        assert.equal(machine.reason, "not-lendable");
-        assert.equal(
-          yield* refused(h.ana, key, {
-            kind: "environment",
-            cpus: 1,
-            memoryBytes: 1,
-            pids: 1,
-            diskBytes: 1,
-          }),
-          "invalid-limits",
-        );
+      // Not the Owner, nor an Admin, for Ana's; not a Member, a Guest or another Organization's
+      // Admin for Acme's.
+      assert.equal(yield* refused(h.ownerId, key), "not-allowed");
+      assert.equal(yield* refused(h.adam, key), "not-allowed");
+      assert.equal(yield* refused(h.ana, acmes), "not-allowed");
+      assert.equal(yield* refused(h.linus, acmes), "not-allowed");
+      assert.equal(yield* refused(h.gus, acmes), "not-allowed");
+      // Acme's Admins do, and any of them sees and cancels it; its Members do not see it.
+      const acmeLink = yield* h.offer(h.adam, acmes);
+      const ownerSees = yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ownerId));
+      assert.include(
+        ownerSees.grants.map((grant) => grant.id as string),
+        acmeLink.grant.id,
+      );
+      const anaSees = yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ana));
+      assert.notInclude(
+        anaSees.grants.map((grant) => grant.id as string),
+        acmeLink.grant.id,
+      );
+      const byMember = yield* h.grants
+        .cancel({ grantId: acmeLink.grant.id })
+        .pipe(CommandActor.actAs(h.ana), Effect.flip);
+      assert.equal(byMember.reason, "not-found");
+      const byOwner = yield* h.grants
+        .cancel({ grantId: acmeLink.grant.id })
+        .pipe(CommandActor.actAs(h.ownerId));
+      assert.equal(byOwner.state, "cancelled");
+      // Never a direct account, nor limits of another kind (machines: «Lending links of machines»).
+      assert.equal(yield* refused(h.ana, direct), "not-lendable");
+      assert.equal(
+        yield* refused(h.ana, key, {
+          kind: "environment",
+          cpus: 1,
+          memoryBytes: 1,
+          pids: 1,
+          diskBytes: 1,
+        }),
+        "invalid-limits",
+      );
 
-        // Ten open links per account; a cancelled or expired one does not count.
-        const made: Array<GrantCreatedOffer> = [];
-        for (let index = 0; index < GRANT_OPEN_OFFERS_PER_RESOURCE; index += 1) {
-          made.push(yield* h.offer(h.ana, key));
-        }
-        assert.equal(yield* refused(h.ana, key), "too-many-offers");
-        yield* h.grants.cancel({ grantId: made[0]!.grant.id }).pipe(CommandActor.actAs(h.ana));
+      // Ten open links per account; a cancelled or expired one does not count.
+      const made: Array<GrantCreatedOffer> = [];
+      for (let index = 0; index < GRANT_OPEN_OFFERS_PER_RESOURCE; index += 1) {
         made.push(yield* h.offer(h.ana, key));
-        assert.equal(yield* refused(h.ana, key), "too-many-offers");
-        yield* TestClock.adjust(Duration.days(7));
-        yield* h.offer(h.ana, key);
-      }),
+      }
+      assert.equal(yield* refused(h.ana, key), "too-many-offers");
+      yield* h.grants.cancel({ grantId: made[0]!.grant.id }).pipe(CommandActor.actAs(h.ana));
+      made.push(yield* h.offer(h.ana, key));
+      assert.equal(yield* refused(h.ana, key), "too-many-offers");
+      yield* TestClock.adjust(Duration.days(7));
+      yield* h.offer(h.ana, key);
+    }),
   );
 
   it.effect("without a signed-in User a link reveals nothing; guessing is throttled", () =>
@@ -541,6 +524,298 @@ describe("Lending links", () => {
       // Later she may again.
       yield* TestClock.adjust(Duration.minutes(2));
       valid(yield* h.read(h.grecia, token));
+    }),
+  );
+});
+
+// Grants ticket 15 (follow-up of 06): a machine lent by link. Applying it makes the loan active, so
+// it needs the decider's strong factor (over HTTP, as accepting) and opens their Sandbox.
+
+const CLAIM = "/api/grants/claim-offer";
+const MACHINE_LIMITS = {
+  kind: "environment",
+  cpus: 1,
+  memoryBytes: 2 ** 31,
+  pids: 256,
+  diskBytes: 2 ** 33,
+} as const;
+/** A proof no one could pass: a refusal must come before it is checked, or because of it. */
+const BOGUS_REAUTH = { method: "password", password: "nope", totpCode: "000000" };
+
+type Hub = Effect.Success<typeof hub>;
+
+const machineOf = Effect.fn(function* (h: Hub, id: string, ownerUserId: UserId) {
+  yield* h.server.sql`
+    INSERT INTO environments (environment_id, name, kind, mode, owner_user_id, space_id,
+      credential_hash, credential_issued_at, registered_at)
+    VALUES (${id}, ${`${id} box`}, 'external', 'personal', ${ownerUserId}, NULL, ${`hash-${id}`},
+      ${at}, ${at})
+  `;
+  return id;
+});
+const machineOffer = (h: Hub, who: UserId, environmentId: string) =>
+  h.grants
+    .createOffer({
+      resource: { kind: "environment", environmentId: environmentId as never },
+      limits: MACHINE_LIMITS,
+    })
+    .pipe(CommandActor.actAs(who));
+const claimOverHttp = (h: Hub, who: UserId, token: string, spaceId: string, reauth?: unknown) =>
+  h.server.request(CLAIM, {
+    cookie: h.cookies.get(who) ?? "",
+    body: { token, spaceId, ...(reauth === undefined ? {} : { reauth }) },
+  });
+/** The Sandboxes the Hub opened for a Grant (Environments of their own). */
+const sandboxesOf = (h: Hub, grantId: string) =>
+  h.server.sql<{ readonly environmentId: string; readonly spaceId: string | null }>`
+    SELECT environment_id AS "environmentId", space_id AS "spaceId" FROM environments
+    WHERE grant_id = ${grantId} AND revoked_at IS NULL
+  `;
+
+describe("Lending links of machines", () => {
+  it.effect(
+    "a machine's link is made without a factor; applying it needs the decider's and opens their Sandbox",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* hub;
+        const vps = yield* machineOf(h, "ana-vps", h.ana);
+        const created = yield* machineOffer(h, h.ana, vps);
+        assert.equal(created.grant.state, "offered");
+        assert.equal(created.grant.resource.kind, "environment");
+        const token = h.tokenOf(created);
+
+        // Grecia shares no Space with Ana: she reads what is lent and her Space to apply it to.
+        const preview = valid(yield* h.read(h.grecia, token));
+        assert.deepEqual(preview.resource, { kind: "environment", name: "ana-vps box" });
+        assert.deepEqual(preview.limits, MACHINE_LIMITS);
+        assert.notInclude(JSON.stringify(preview), "hash-ana-vps");
+
+        // Over WS (no factor can ride there) and over HTTP without one, or a wrong one: refused,
+        // nothing opened, and the link still works.
+        assert.equal(yield* h.refusal(h.ownerId, token, h.acmeId), "strong-factor-required");
+        assert.equal((yield* claimOverHttp(h, h.ownerId, token, h.acmeId)).status, 403);
+        assert.equal(
+          (yield* claimOverHttp(h, h.ownerId, token, h.acmeId, BOGUS_REAUTH)).status,
+          403,
+        );
+        assert.equal((yield* h.stateOf(created.grant.id))?.state, "offered");
+        assert.deepEqual(yield* sandboxesOf(h, created.grant.id), []);
+
+        // The Owner runs Acme: with their passkey it is applied there, and Acme's Sandbox opens.
+        const claimed = yield* claimOverHttp(
+          h,
+          h.ownerId,
+          token,
+          h.acmeId,
+          yield* passkeyReauth(h.server, h.authenticator),
+        );
+        assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+        assert.equal(claimed.body.state, "active");
+        assert.deepEqual(yield* h.stateOf(created.grant.id), {
+          state: "active",
+          targetId: h.acmeId,
+          decidedBy: h.ownerId,
+        });
+        const opened = yield* sandboxesOf(h, created.grant.id);
+        assert.deepEqual(
+          opened.map((sandbox) => sandbox.spaceId),
+          [h.acmeId],
+        );
+        const audit = yield* h.audited(created.grant.id);
+        assert.deepEqual(
+          audit.map((row) => row.action),
+          ["grant.offer", "grant.accept"],
+        );
+        assert.equal(JSON.parse(audit[1]?.detail ?? "{}").via, "link");
+        for (const row of audit) assert.notInclude(row.detail, token);
+
+        // Once: nobody applies it again.
+        assert.deepEqual(yield* h.read(h.grecia, token), { status: "invalid" });
+        const again = yield* claimOverHttp(
+          h,
+          h.ownerId,
+          token,
+          personal(h.ownerId),
+          yield* passkeyReauth(h.server, h.authenticator),
+        );
+        assert.equal(again.status, 404);
+      }),
+  );
+
+  it.effect("only someone who decides in a Space applies a machine's link there", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const vps = yield* machineOf(h, "ana-vps", h.ana);
+      const created = yield* machineOffer(h, h.ana, vps);
+      const token = h.tokenOf(created);
+      // Refused before any factor is asked for: Acme's Member (its lender) and Guest, a stranger
+      // and Globex's Admin in Acme; the Owner where they do not decide; the lender in her own.
+      for (const [who, spaceId] of [
+        [h.ana, h.acmeId],
+        [h.linus, h.acmeId],
+        [h.grecia, h.acmeId],
+        [h.gus, h.acmeId],
+        [h.ownerId, h.globexId],
+        [h.ownerId, personal(h.grecia)],
+        [h.ana, personal(h.ana)],
+      ] as const) {
+        assert.equal(yield* h.refusal(who, token, spaceId), "not-allowed", `${who} in ${spaceId}`);
+        assert.equal(
+          (yield* claimOverHttp(h, who, token, spaceId, BOGUS_REAUTH)).status,
+          403,
+          `${who} in ${spaceId} over HTTP`,
+        );
+      }
+      assert.equal((yield* h.stateOf(created.grant.id))?.state, "offered");
+      // The Owner in their own Personal space: theirs to decide on.
+      const mine = yield* claimOverHttp(
+        h,
+        h.ownerId,
+        token,
+        personal(h.ownerId),
+        yield* passkeyReauth(h.server, h.authenticator),
+      );
+      assert.equal(mine.status, 200, JSON.stringify(mine.body));
+      assert.equal(
+        (mine.body.target as { readonly spaceId?: string } | undefined)?.spaceId,
+        personal(h.ownerId),
+      );
+    }),
+  );
+
+  it.effect(
+    "a machine's link dies with the machine, its personal mode or its lender's sign-in; ten open at most",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* hub;
+        const dead = Effect.fn(function* (token: string) {
+          assert.deepEqual(yield* h.read(h.grecia, token), { status: "invalid" });
+          assert.equal(yield* h.refusal(h.grecia, token, personal(h.grecia)), "not-found");
+        });
+        const revoked = yield* machineOf(h, "ana-revoked", h.ana);
+        const revokedToken = h.tokenOf(yield* machineOffer(h, h.ana, revoked));
+        yield* h.server
+          .sql`UPDATE environments SET revoked_at = ${at} WHERE environment_id = ${revoked}`;
+        yield* dead(revokedToken);
+
+        const dedicated = yield* machineOf(h, "ana-dedicated", h.ana);
+        const dedicatedToken = h.tokenOf(yield* machineOffer(h, h.ana, dedicated));
+        yield* h.server
+          .sql`UPDATE environments SET mode = 'dedicated', owner_user_id = NULL, space_id = ${h.acmeId}
+            WHERE environment_id = ${dedicated}`;
+        yield* dead(dedicatedToken);
+
+        // Nobody but its owner makes a link of it; a dedicated machine has none.
+        const vps = yield* machineOf(h, "ana-vps", h.ana);
+        for (const who of [h.ownerId, h.adam]) {
+          const refused = yield* machineOffer(h, who, vps).pipe(Effect.flip);
+          assert.equal(refused.reason, "not-allowed");
+        }
+        assert.equal(
+          (yield* machineOffer(h, h.ana, dedicated).pipe(Effect.flip)).reason,
+          "not-lendable",
+        );
+        // Ten open links per machine.
+        const made: Array<string> = [];
+        for (let index = 0; index < GRANT_OPEN_OFFERS_PER_RESOURCE; index += 1) {
+          made.push(h.tokenOf(yield* machineOffer(h, h.ana, vps)));
+        }
+        const tooMany = yield* machineOffer(h, h.ana, vps).pipe(Effect.flip);
+        assert.equal(tooMany.reason, "too-many-offers");
+        assert.include(tooMany.message, "machine");
+
+        // Ana turned off: she can no longer lend it, so none of her links work.
+        yield* h.server.sql`UPDATE users SET disabled_at = ${at} WHERE user_id = ${h.ana}`;
+        yield* dead(made[0]!);
+      }),
+  );
+
+  it.effect("a machine that cannot run a Sandbox now refuses its link; the link stays usable", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const vps = yield* machineOf(h, "ana-vps", h.ana);
+      const created = yield* machineOffer(h, h.ana, vps);
+      const token = h.tokenOf(created);
+      const host = (ready: boolean) =>
+        JSON.stringify({
+          ready,
+          reason: ready ? null : "Docker is not running.",
+          limitSupport: { cpus: true, memory: true, pids: true, note: null },
+          reachablePorts: [],
+          hostCpus: 4,
+          hostMemoryBytes: 2 ** 33,
+          hostFreeBytes: null,
+          hostTotalBytes: null,
+        });
+      yield* h.server.sql`
+        UPDATE environments SET sandbox_host_json = ${host(false)} WHERE environment_id = ${vps}
+      `;
+      // Refused before the factor is checked: the wrong one is never read.
+      const refused = yield* claimOverHttp(h, h.ownerId, token, h.acmeId, BOGUS_REAUTH);
+      assert.equal(refused.status, 409, JSON.stringify(refused.body));
+      assert.include(JSON.stringify(refused.body), "Docker is not running.");
+      assert.equal((yield* h.stateOf(created.grant.id))?.state, "offered");
+      // Making a new link of it is refused alike.
+      assert.equal((yield* machineOffer(h, h.ana, vps).pipe(Effect.flip)).reason, "host-not-ready");
+      yield* h.server.sql`
+        UPDATE environments SET sandbox_host_json = ${host(true)} WHERE environment_id = ${vps}
+      `;
+      const claimed = yield* claimOverHttp(
+        h,
+        h.ownerId,
+        token,
+        h.acmeId,
+        yield* passkeyReauth(h.server, h.authenticator),
+      );
+      assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+    }),
+  );
+
+  it.effect("a Sandbox that cannot be opened leaves the link offered and no loan active", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const vps = yield* machineOf(h, "ana-vps", h.ana);
+      const created = yield* machineOffer(h, h.ana, vps);
+      const token = h.tokenOf(created);
+      // Opening the Sandbox fails inside the transaction that would make the loan active.
+      yield* h.server.sql`
+        CREATE TRIGGER no_lent_sandbox BEFORE INSERT ON environments
+        WHEN NEW.grant_id IS NOT NULL
+        BEGIN SELECT RAISE(ABORT, 'no Sandbox today'); END
+      `;
+      const failed = yield* claimOverHttp(
+        h,
+        h.ownerId,
+        token,
+        h.acmeId,
+        yield* passkeyReauth(h.server, h.authenticator),
+      );
+      assert.equal(failed.status, 500, JSON.stringify(failed.body));
+      assert.deepEqual(yield* h.stateOf(created.grant.id), {
+        state: "offered",
+        targetId: null,
+        decidedBy: null,
+      });
+      const active = yield* h.server.sql<{ readonly n: number }>`
+        SELECT COUNT(*) AS n FROM grants WHERE resource_id = ${vps} AND state = 'active'
+      `;
+      assert.equal(active[0]?.n, 0);
+      assert.deepEqual(yield* sandboxesOf(h, created.grant.id), []);
+      assert.deepEqual(
+        (yield* h.audited(created.grant.id)).map((row) => row.action),
+        ["grant.offer"],
+      );
+      // Once it can open, the same link applies.
+      yield* h.server.sql`DROP TRIGGER no_lent_sandbox`;
+      const claimed = yield* claimOverHttp(
+        h,
+        h.ownerId,
+        token,
+        h.acmeId,
+        yield* passkeyReauth(h.server, h.authenticator),
+      );
+      assert.equal(claimed.status, 200, JSON.stringify(claimed.body));
+      assert.equal((yield* sandboxesOf(h, created.grant.id)).length, 1);
     }),
   );
 });

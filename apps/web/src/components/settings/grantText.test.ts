@@ -131,6 +131,14 @@ it("warns whoever applies a subscription's link of its terms, and of what the le
     resource: { ...preview.resource, aiAccount: { provider: "claude", type: "api-key" } },
   } as Extract<GrantOfferPreview, { status: "valid" }>;
   expect(offerWarnings(apiKey)).toHaveLength(1);
+  // Grants ticket 15: a machine's link says what its lender sees.
+  const machine = {
+    ...preview,
+    resource: { kind: "environment", name: "Ana's box" },
+  } as Extract<GrantOfferPreview, { status: "valid" }>;
+  expect(offerWarnings(machine)).toEqual([
+    "Ana controls this machine and can see everything that runs on it: files, processes, the Secrets turns receive and each Thread's AI gateway key. Only accept machines of people you trust that much.",
+  ]);
   expect(
     offerSpaceLabel({
       spaceId: "org-acme" as SpaceId,

@@ -1,12 +1,22 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, GrantOfferPreview } from "@t3tools/contracts";
+import type { AuthAccount, EnvironmentId, GrantOfferPreview } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useState } from "react";
 
+import { claimGrantOffer } from "../../environments/primary/grants";
+import { fetchAccount } from "../../environments/primary/userAccounts";
 import { errorMessageOf } from "../../lib/errorMessage";
 import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { grantsEnvironment } from "../../state/grants";
 import { useAtomCommand } from "../../state/use-atom-command";
+import {
+  emptyStepUp,
+  lacksStrongFactor,
+  type StepUpState,
+  StepUpFields,
+  toStepUp,
+} from "../settings/AccountSettingsSection";
+import { StrongFactorNotice } from "../settings/StrongFactorNotice";
 import { limitsText, offerSpaceLabel, offerWarnings, spaceLabel } from "../settings/grantText";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -80,6 +90,9 @@ function GrantOffer({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // Grants ticket 15: a machine's link asks the decider's strong factor, as accepting one does.
+  const [account, setAccount] = useState<AuthAccount | null>(null);
+  const [stepUp, setStepUp] = useState<StepUpState | null>(null);
 
   const load = useEffectEvent(() => readOffer({ environmentId, input: { token } }));
   const show = useEffectEvent((read: Awaited<ReturnType<typeof readOffer>>) => {
@@ -89,6 +102,15 @@ function GrantOffer({
     }
     if (read.value.status === "invalid") forgetGrantOfferToken();
     setPreview(read.value);
+    if (read.value.status === "valid" && read.value.resource.kind === "environment") {
+      void fetchAccount().then(
+        (found) => {
+          setAccount(found);
+          setStepUp(emptyStepUp(found));
+        },
+        (cause: unknown) => setError(errorMessageOf(cause, "Could not read your account.")),
+      );
+    }
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the Hub what the link lends once the session is up.
   useEffect(() => {
@@ -119,19 +141,30 @@ function GrantOffer({
   }
   const offer: Valid = preview;
   const chosen = offer.spaces.find((space) => space.spaceId === spaceId);
+  const machine = offer.resource.kind === "environment";
+  // A machine's link cannot be applied without a strong factor: none enrolled, or not read yet.
+  const factorMissing = machine && (account === null || lacksStrongFactor(account));
 
   const apply = async () => {
     if (chosen === undefined || chosen.alreadyGranted) return;
     setPending(true);
     setError(null);
     try {
-      const claimed = await claimOffer({
-        environmentId,
-        input: { token, spaceId: chosen.spaceId },
-      });
-      if (claimed._tag !== "Success") throw squashAtomCommandFailure(claimed);
+      const input = { token, spaceId: chosen.spaceId };
+      if (machine) {
+        if (account === null || stepUp === null) return;
+        // Over HTTP, with the strong factor: applying it makes the loan active.
+        await claimGrantOffer(input, toStepUp(account, stepUp));
+      } else {
+        const claimed = await claimOffer({ environmentId, input });
+        if (claimed._tag !== "Success") throw squashAtomCommandFailure(claimed);
+      }
       forgetGrantOfferToken();
-      setDone(`Lent to ${spaceLabel(chosen)}: its Threads can use it now.`);
+      setDone(
+        machine
+          ? `Lent to ${spaceLabel(chosen)}: its Threads can run in a Sandbox on it now.`
+          : `Lent to ${spaceLabel(chosen)}: its Threads can use it now.`,
+      );
     } catch (cause) {
       setError(errorMessageOf(cause, "The link did not apply."));
     } finally {
@@ -143,7 +176,7 @@ function GrantOffer({
     <StandalonePage>
       <StandalonePageHeader
         title={`${offer.lender.name ?? "Someone"} lends you ${offer.resource.name}`}
-        description={`An AI account for your Threads, through the AI gateway · ${limitsText(offer.limits)}. The link works once, until ${new Date(offer.expiresAt).toLocaleString()}.`}
+        description={`${machine ? "A machine: your Space gets a Sandbox of its own on it" : "An AI account for your Threads, through the AI gateway"} · ${limitsText(offer.limits)}. The link works once, until ${new Date(offer.expiresAt).toLocaleString()}.`}
       />
       <div className="mt-6 flex flex-col gap-3">
         {offerWarnings(offer).map((warning) => (
@@ -186,12 +219,27 @@ function GrantOffer({
                 </SelectPopup>
               </Select>
             </label>
+            {machine && account !== null && lacksStrongFactor(account) ? (
+              <StrongFactorNotice
+                onOpenAccount={() =>
+                  void navigate({ to: "/settings/user/$section", params: { section: "account" } })
+                }
+              />
+            ) : null}
+            {machine && account !== null && stepUp !== null && !lacksStrongFactor(account) ? (
+              <StepUpFields
+                account={account}
+                disabled={pending}
+                value={stepUp}
+                onChange={setStepUp}
+              />
+            ) : null}
             <div>
               <Button
-                disabled={pending || chosen === undefined || chosen.alreadyGranted}
+                disabled={pending || chosen === undefined || chosen.alreadyGranted || factorMissing}
                 onClick={() => void apply()}
               >
-                Accept the loan
+                {machine ? "Confirm and accept" : "Accept the loan"}
               </Button>
             </div>
           </>

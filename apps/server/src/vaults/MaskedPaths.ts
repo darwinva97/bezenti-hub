@@ -422,6 +422,7 @@ export const HTTP_DOOR_RULES: Record<string, DoorRule> = {
   "vaults.masterKeyBackupConfirm": none("the master key's status, never a Secret's value"),
   "grants.give": none("a loan: resource and Space names, state and limits"),
   "grants.accept": none("a loan: resource and Space names, state and limits"),
+  "grants.claimOffer": none("a loan: resource and Space names, state and limits"),
   "webhooks.webhookPost": none("webhooks coming in"),
   "webhooks.webhookPut": none("webhooks coming in"),
   "webhooks.webhookPatch": none("webhooks coming in"),

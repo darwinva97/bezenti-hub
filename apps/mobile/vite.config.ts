@@ -47,6 +47,7 @@ const reactTests = [
   "src/features/ai-accounts/AiAccounts.test.tsx",
   "src/features/ai-accounts/ThreadAiAccountStrip.test.tsx",
   "src/features/threads/SecretRequestCard.test.tsx",
+  "src/features/threads/ThreadScreenHost.test.tsx",
 ];
 
 const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;

@@ -957,9 +957,16 @@ function ThreadRouteContent(
       />
 
       <>
-        <ThreadEnvironmentNotice thread={selectedThread} runsOn={runsOn} />
-        <ThreadSecrets environmentId={selectedThread.environmentId} threadId={selectedThread.id} />
         <ThreadScreenBinding
+          notices={
+            <>
+              <ThreadEnvironmentNotice thread={selectedThread} runsOn={runsOn} />
+              <ThreadSecrets
+                environmentId={selectedThread.environmentId}
+                threadId={selectedThread.id}
+              />
+            </>
+          }
           header={
             props.inspectorPresentation ? null : (
               <ThreadHeader

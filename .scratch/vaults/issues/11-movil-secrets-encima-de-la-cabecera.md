@@ -6,7 +6,7 @@ Causa: en `apps/mobile/src/features/threads/ThreadRouteScreen.tsx:955`, `<Thread
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done in branch fix/mobilesecrets (unverified on a device: layout covered by a jsdom test of the order only; the real-Android capture is still pending)
 
 - [ ] Reproducir en un test de `ThreadRouteScreen` (o de la composición de la pantalla): con un Thread que tiene Secrets, la cabecera es lo primero bajo la barra de estado y «Secrets» queda debajo de ella.
 - [ ] `ThreadSecrets` y `ThreadEnvironmentNotice` se dibujan debajo de `ThreadHeader`, dentro del área segura (por ejemplo, como contenido bajo la cabecera de `ThreadScreenBinding`, no como hermanos anteriores), en iOS y Android, con y sin cabecera nativa de cristal (`usesNativeHeaderGlass`) y con el inspector abierto (`inspectorPresentation`, donde no hay cabecera).

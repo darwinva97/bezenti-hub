@@ -12,7 +12,7 @@ import { ScreenContent } from "../../components/ui/ScreenContent";
 import { ThreadDetailScreen, type ThreadDetailScreenProps } from "./ThreadDetailScreen";
 
 type ThreadScreenContent =
-  | { readonly props: ThreadDetailScreenProps }
+  | { readonly props: ThreadDetailScreenProps; readonly notices?: ReactNode }
   | { readonly fallback: ReactNode; readonly header?: ReactNode };
 
 function createThreadScreenStore() {
@@ -42,7 +42,10 @@ function ThreadScreenOutlet() {
   return (
     <>
       {"props" in content ? content.props.header : content.header}
-      <ScreenContent surface="canvas">{body}</ScreenContent>
+      <ScreenContent surface="canvas">
+        {"props" in content ? content.notices : null}
+        {body}
+      </ScreenContent>
     </>
   );
 }
@@ -61,11 +64,18 @@ export function ThreadScreenHost({ children }: { readonly children: ReactNode })
   );
 }
 
-export function ThreadScreenBinding(props: ThreadDetailScreenProps) {
+/**
+ * `notices` (the environment notice, the Thread's Secrets) draw under the header, inside the
+ * screen content. Rendered as siblings of the route they sat above the header, in the status bar.
+ */
+export function ThreadScreenBinding(
+  props: ThreadDetailScreenProps & { readonly notices?: ReactNode },
+) {
+  const { notices, ...screenProps } = props;
   const store = useContext(ThreadScreenContext)!;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes the route's thread screen props to the external store the outlet reads
   useLayoutEffect(() => {
-    store.publish({ props });
+    store.publish({ props: screenProps, notices });
   });
   return null;
 }

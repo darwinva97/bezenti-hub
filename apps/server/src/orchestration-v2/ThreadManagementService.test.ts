@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
   CommandId,
+  EnvironmentId,
   MessageId,
   type OrchestrationV2Command,
   type OrchestrationV2Run,

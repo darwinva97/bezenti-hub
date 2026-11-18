@@ -116,6 +116,7 @@ export function LendMachineDialog({
 }) {
   const environmentId = usePrimaryEnvironmentId();
   const targetsCommand = useAtomCommand(grantsEnvironment.targets, "list where you may lend");
+  const givenCommand = useAtomCommand(grantsEnvironment.listGiven, "list your loans");
   const [targets, setTargets] = useState<ReadonlyArray<GrantTarget> | null>(null);
   const [host, setHost] = useState<SandboxHostReport | null>(null);
   const [spaceId, setSpaceId] = useState<string>("");
@@ -129,14 +130,30 @@ export function LendMachineDialog({
   const [error, setError] = useState<string | null>(null);
 
   const loadTargets = useEffectEvent((target: EnvironmentId) =>
-    targetsCommand({
-      environmentId: target,
-      input: { resource: { kind: "environment", environmentId: machine.id } },
-    }),
+    Promise.all([
+      targetsCommand({
+        environmentId: target,
+        input: { resource: { kind: "environment", environmentId: machine.id } },
+      }),
+      givenCommand({ environmentId: target, input: {} }),
+    ]),
   );
-  const applyTargets = useEffectEvent((found: Awaited<ReturnType<typeof targetsCommand>>) => {
+  const applyTargets = useEffectEvent(([found, given]: Awaited<ReturnType<typeof loadTargets>>) => {
     if (found._tag === "Success") {
-      setTargets(found.value.targets);
+      // A Space with a pending or active loan of this machine cannot get a second one: leave it out.
+      const lentTo = new Set(
+        given._tag === "Success"
+          ? given.value.grants
+              .filter(
+                (grant) =>
+                  grant.resource.kind === "environment" &&
+                  grant.resource.id === machine.id &&
+                  (grant.state === "pending" || grant.state === "active"),
+              )
+              .map((grant) => grant.target?.spaceId)
+          : [],
+      );
+      setTargets(found.value.targets.filter((entry) => !lentTo.has(entry.spaceId)));
       setHost(found.value.host);
     } else {
       setError(errorMessageOf(squashAtomCommandFailure(found), "Could not list the Spaces."));

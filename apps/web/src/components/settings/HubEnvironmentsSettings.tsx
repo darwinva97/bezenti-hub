@@ -5,7 +5,7 @@ import {
 } from "@t3tools/client-runtime/environment/hub-environments";
 import { type HubEnvironmentSummary, isListedMachine, type SpaceId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import { usePrimaryActsForInstallation, usePrimarySessionState } from "../../environments/primary";
 import {
@@ -17,6 +17,9 @@ import {
 import { errorMessageOf } from "../../lib/errorMessage";
 import { useCurrentSpace } from "../../state/currentSpace";
 import { useProjects } from "../../state/entities";
+import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
+import { grantsEnvironment } from "../../state/grants";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { EnvironmentStatusBadge } from "../EnvironmentStatusDot";
 import { Button } from "../ui/button";
 import {
@@ -45,6 +48,7 @@ function describe(
   viewer: { readonly userId: string | undefined; readonly isOwner: boolean },
   spaceName: (spaceId: string | null | undefined) => string | null,
   projectName: (projectId: string) => string | null,
+  lentTo = 0,
 ) {
   const parts = [
     environmentUseDescription(environment, {
@@ -52,6 +56,7 @@ function describe(
       viewerUserId: viewer.userId,
     }),
     environment.os,
+    lentTo === 0 ? null : `Lent to ${lentTo} ${lentTo === 1 ? "Space" : "Spaces"}`,
     environment.lastSeenAt === null
       ? "never connected"
       : environment.kind === "hub"
@@ -152,6 +157,32 @@ export function HubEnvironmentsSettings({ scope }: { readonly scope?: OwnedResou
     environment.mode === "personal" &&
     environment.ownerUserId === userId;
   const [lending, setLending] = useState<HubEnvironmentSummary>();
+  // One machine may be lent to several Spaces, a Sandbox each: how many, by machine.
+  const primaryId = usePrimaryEnvironmentId();
+  const connected = useEnvironment(primaryId)?.connection.phase === "connected";
+  const listGiven = useAtomCommand(grantsEnvironment.listGiven, "list your loans");
+  const [lentCounts, setLentCounts] = useState<Readonly<Record<string, number>>>({});
+  const loadLent = useEffectEvent((target: NonNullable<typeof primaryId>) =>
+    listGiven({ environmentId: target, input: {} }),
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads how many Spaces borrow each machine; again when the Lend dialog closes.
+  useEffect(() => {
+    if (primaryId === null || !connected || lending !== undefined) return;
+    let current = true;
+    void loadLent(primaryId).then((result) => {
+      if (!current || result._tag !== "Success") return;
+      const counts: Record<string, number> = {};
+      for (const grant of result.value.grants) {
+        if (grant.resource.kind !== "environment") continue;
+        if (grant.state !== "pending" && grant.state !== "active") continue;
+        counts[grant.resource.id] = (counts[grant.resource.id] ?? 0) + 1;
+      }
+      setLentCounts(counts);
+    });
+    return () => {
+      current = false;
+    };
+  }, [primaryId, connected, lending]);
   const [environments, setEnvironments] = useState<ReadonlyArray<HubEnvironmentSummary> | null>(
     null,
   );
@@ -345,7 +376,13 @@ export function HubEnvironmentsSettings({ scope }: { readonly scope?: OwnedResou
                     />
                   </span>
                 }
-                description={describe(environment, { userId, isOwner }, spaceName, projectName)}
+                description={describe(
+                  environment,
+                  { userId, isOwner },
+                  spaceName,
+                  projectName,
+                  lentCounts[environment.id] ?? 0,
+                )}
                 control={
                   (canOpen && scope !== undefined) ||
                   (manages(environment) && environment.kind !== "sandbox") ? (

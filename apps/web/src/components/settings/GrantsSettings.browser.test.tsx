@@ -155,6 +155,15 @@ it("shows the Space's name, not its id, in the closed Lend to select", async () 
   await expect.element(trigger).not.toHaveTextContent("personal:");
 });
 
+const machineGrant = (id: string, state: string, space: string): Grant =>
+  ({
+    ...grant(id, "env-m", "Box", space),
+    resource: { kind: "environment", id: "env-m", name: "Box" },
+    state,
+    limits: { kind: "environment", cpus: 1, memoryBytes: 1, pids: 1, diskBytes: 1 },
+    can: { cancel: false, revoke: true, decide: state === "pending", return: false },
+  }) as unknown as Grant;
+
 const resetLoans = () => {
   loans.given = [];
   loans.received = [];
@@ -181,6 +190,26 @@ it("keeps the footer buttons inside the dialog popup, with the body scrolling", 
     expect(box.bottom).toBeLessThanOrEqual(popupBox.bottom + 1);
     expect(box.bottom).toBeLessThanOrEqual(window.innerHeight);
   }
+});
+
+it("leaves out of Lend to the Spaces that already have a pending or active loan of the machine", async () => {
+  resetLoans();
+  loans.targets = ["a", "b", "c"].map((id) => ({
+    spaceId: `space-${id.toUpperCase()}`,
+    kind: "organization",
+    name: id.toUpperCase(),
+    startsActive: false,
+  }));
+  loans.given = [machineGrant("g1", "active", "A"), machineGrant("g2", "rejected", "C")];
+  await using _screen = await render(
+    <LendMachineDialog machine={{ id: "env-m", name: "Box" } as never} onClose={() => {}} />,
+  );
+  await page.getByRole("combobox", { name: "Lend to" }).click();
+  await expect.element(page.getByRole("option", { name: "B", exact: true })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: "C", exact: true })).toBeVisible();
+  await expect
+    .element(page.getByRole("option", { name: "A", exact: true }))
+    .not.toBeInTheDocument();
 });
 
 it("loads the loans only once the Hub session is up, and says nothing while it connects", async () => {

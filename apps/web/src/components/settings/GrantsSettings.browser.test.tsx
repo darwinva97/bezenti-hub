@@ -1,8 +1,9 @@
 import type { Grant } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { GrantsSettings, groupLentLoans, LendMachineDialog } from "./GrantsSettings";
 
 const loans = vi.hoisted(() => ({
@@ -180,4 +181,33 @@ it("keeps the footer buttons inside the dialog popup, with the body scrolling", 
     expect(box.bottom).toBeLessThanOrEqual(popupBox.bottom + 1);
     expect(box.bottom).toBeLessThanOrEqual(window.innerHeight);
   }
+});
+
+it("loads the loans only once the Hub session is up, and says nothing while it connects", async () => {
+  resetLoans();
+  loans.given = [grant("g1", "acct-1", "Claude", "Bezenti")];
+  loans.phase = "connecting";
+  loans.failWith = Cause.fail({
+    _tag: "EnvironmentRpcUnavailableError",
+    message: "Hub is not connected.",
+  });
+  await using _screen = await render(<GrantsSettings />);
+  await expect.element(page.getByText("Something went wrong")).not.toBeInTheDocument();
+  expect(loans.listCalls).toBe(0);
+
+  loans.failWith = null;
+  await act(async () => loans.setPhase("connected"));
+  await expect.element(page.getByRole("heading", { name: "Lent by you" })).toBeVisible();
+});
+
+it("offers Try again on a real error", async () => {
+  resetLoans();
+  loans.failWith = Cause.fail(new Error("The Hub said no."));
+  await using _screen = await render(<GrantsSettings />);
+  await expect.element(page.getByText("Something went wrong")).toBeVisible();
+  loans.failWith = null;
+  loans.given = [grant("g1", "acct-1", "Claude", "Bezenti")];
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect.element(page.getByRole("heading", { name: "Lent by you" })).toBeVisible();
+  await expect.element(page.getByText("Something went wrong")).not.toBeInTheDocument();
 });

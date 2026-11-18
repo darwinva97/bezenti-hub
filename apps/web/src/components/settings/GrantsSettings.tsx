@@ -18,7 +18,7 @@ import { Fragment, useEffect, useEffectEvent, useState } from "react";
 import { acceptGrant, giveGrant } from "../../environments/primary/grants";
 import { fetchAccount } from "../../environments/primary/userAccounts";
 import { errorMessageOf } from "../../lib/errorMessage";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { grantsEnvironment } from "../../state/grants";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
@@ -435,6 +435,8 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   const [received, setReceived] = useState<ReadonlyArray<Grant> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // Right after a page load or a Hub restart the session is not up yet: wait for it, then load.
+  const connected = useEnvironment(environmentId)?.connection.phase === "connected";
   const [accepting, setAccepting] = useState<{
     readonly grant: Grant;
     readonly account: AuthAccount;
@@ -473,10 +475,16 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
     if (mine._tag === "Success") setGiven(mine.value.grants);
     if (ours._tag === "Success") setReceived(ours.value.grants);
     const failed = mine._tag === "Success" ? ours : mine;
+    if (failed._tag === "Success") {
+      setError(null);
+      return;
+    }
+    const cause = squashAtomCommandFailure(failed);
+    // A session that is not up yet is not an error to show: the load runs again once it is.
     setError(
-      failed._tag === "Success"
+      (cause as { readonly _tag?: string } | null)?._tag === "EnvironmentRpcUnavailableError"
         ? null
-        : errorMessageOf(squashAtomCommandFailure(failed), "Could not read the loans."),
+        : errorMessageOf(cause, "Could not read the loans."),
     );
   };
   const loadLoans = useEffectEvent(fetchLoans);
@@ -484,6 +492,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   const reload = async () => showLoans(await fetchLoans(environmentId));
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the User's loans from the Hub when the section opens.
   useEffect(() => {
+    if (!connected) return;
     let cancelled = false;
     void loadLoans(environmentId).then((loans) => {
       if (!cancelled) applyLoans(loans);
@@ -491,7 +500,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
     return () => {
       cancelled = true;
     };
-  }, [environmentId]);
+  }, [environmentId, connected]);
 
   const run = async (change: () => Promise<unknown>) => {
     setPending(true);
@@ -705,7 +714,17 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
           </div>
         );
       })}
-      {error === null ? null : <SettingsRow title="Something went wrong" description={error} />}
+      {error === null ? null : (
+        <SettingsRow
+          title="Something went wrong"
+          description={error}
+          control={
+            <Button size="xs" variant="outline" onClick={() => void reload()}>
+              Try again
+            </Button>
+          }
+        />
+      )}
       {capping !== null ? (
         <ChangeCapsDialog
           environmentId={environmentId}

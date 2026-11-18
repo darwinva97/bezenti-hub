@@ -12,6 +12,7 @@ import type {
   SandboxHostReport,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon } from "lucide-react";
 import { Fragment, useEffect, useEffectEvent, useState } from "react";
 
 import { acceptGrant, giveGrant } from "../../environments/primary/grants";
@@ -31,6 +32,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { emptyStepUp, StepUpFields, toStepUp } from "./AccountSettingsSection";
 import { capUseText, gib, limitsText, spaceLabel, subscriptionTermsWarning } from "./grantText";
@@ -316,16 +318,9 @@ const END_LABELS: Record<NonNullable<Grant["endReason"]>, string> = {
   "owner-changed": "it changed owner",
 };
 
-/** One loan's limits, Sandbox state and disk, as both sides see them. */
-const loanDescription = (grant: Grant, side: "given" | "received") => {
-  const where =
-    side === "given"
-      ? `to ${targetLabel(grant, "a Space")}`
-      : `by ${grant.lender.name ?? "another User"}`;
-  const parts = [
-    `${STATE_LABELS[grant.state]}${grant.endReason === null ? "" : ` (${END_LABELS[grant.endReason]})`} ${where}`,
-    limitsText(grant.limits),
-  ];
+/** What an active loan adds to its description: cap use and, for a machine, its Sandbox and disk. */
+const loanStatusParts = (grant: Grant) => {
+  const parts: string[] = [];
   const caps = grant.aiAccount?.caps;
   if (caps !== undefined && grant.state === "active") {
     if (caps.tokens !== null) parts.push(capUseText("tokens", caps.tokens));
@@ -343,8 +338,77 @@ const loanDescription = (grant: Grant, side: "given" | "received") => {
       parts.push(`The machine cannot run it now: ${machine.host.reason ?? "unknown"}`);
     }
   }
+  return parts;
+};
+
+/** One loan's limits, Sandbox state and disk, as both sides see them. */
+const loanDescription = (grant: Grant, side: "given" | "received") => {
+  const where =
+    side === "given"
+      ? `to ${targetLabel(grant, "a Space")}`
+      : `by ${grant.lender.name ?? "another User"}`;
+  const parts = [
+    `${STATE_LABELS[grant.state]}${grant.endReason === null ? "" : ` (${END_LABELS[grant.endReason]})`} ${where}`,
+    limitsText(grant.limits),
+  ];
+  parts.push(...loanStatusParts(grant));
   return parts.join(" · ");
 };
+
+/** The loans of one lent resource (an AI account or a machine), with who it is lent to. */
+export interface LentGroup {
+  readonly key: string;
+  readonly name: string;
+  readonly kind: Grant["resource"]["kind"];
+  readonly provider: string;
+  readonly loans: ReadonlyArray<Grant>;
+}
+
+const lentName = (grant: Grant) => grant.resource.name ?? `Your ${nounOf(grant)}`;
+
+/**
+ * The loans a User made, one group per lent resource (keyed by its id, never by its name), sorted
+ * by kind, provider and name; a group's loans by recipient.
+ */
+export function groupLentLoans(grants: ReadonlyArray<Grant>): ReadonlyArray<LentGroup> {
+  const byResource = new Map<string, Grant[]>();
+  for (const grant of grants) {
+    const key = `${grant.resource.kind}:${grant.resource.id}`;
+    byResource.set(key, [...(byResource.get(key) ?? []), grant]);
+  }
+  return [...byResource.entries()]
+    .flatMap(([key, loans]) => {
+      const first = loans[0];
+      return first === undefined
+        ? []
+        : [
+            {
+              key,
+              name: lentName(first),
+              kind: first.resource.kind,
+              provider: first.aiAccount?.provider ?? "",
+              loans: loans.toSorted((a, b) =>
+                targetLabel(a, "a Space").localeCompare(targetLabel(b, "a Space")),
+              ),
+            },
+          ];
+    })
+    .toSorted(
+      (a, b) =>
+        a.kind.localeCompare(b.kind) ||
+        a.provider.localeCompare(b.provider) ||
+        a.name.localeCompare(b.name),
+    );
+}
+
+/** Groups start open while the User has few loans, closed when there are many. */
+const OPEN_GROUPS_UP_TO = 6;
+
+function LoanGroupTitle({ children }: { readonly children: string }) {
+  return (
+    <h3 className="px-3 pt-3 pb-1 text-xs font-medium text-muted-foreground sm:px-4">{children}</h3>
+  );
+}
 
 /**
  * Settings → Environments → «Loans»: machines and AI accounts the User (or an Organization they
@@ -378,6 +442,8 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   const [capping, setCapping] = useState<Grant | null>(null);
   // Grants ticket 04: one AI account loan's use, opened from its row.
   const [usageOf, setUsageOf] = useState<string | null>(null);
+  // Groups the User opened or closed by hand, by resource; the rest follow the default.
+  const [groupToggles, setGroupToggles] = useState<Readonly<Record<string, boolean>>>({});
   const loanUseButton = (grant: Grant) =>
     grant.resource.kind === "ai-account" ? (
       <Button
@@ -391,7 +457,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
     ) : null;
   const usagePanel = (grant: Grant) =>
     usageOf === grant.id ? (
-      <div className="px-4 pb-3">
+      <div className="px-4 pb-3 sm:pl-10">
         <LoanUsage environmentId={environmentId} grant={grant} />
       </div>
     ) : null;
@@ -466,8 +532,63 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   if (given === null && received === null && error === null) return null;
   if ((given ?? []).length === 0 && (received ?? []).length === 0 && error === null) return null;
 
+  const lentGroups = groupLentLoans(given ?? []);
+  const lentCount = (given ?? []).length;
+
+  /** The «⋯» menu of one loan lent by the User: what they may do with it, as before. */
+  const lentActions = (grant: Grant, label: string) => {
+    const isAi = grant.resource.kind === "ai-account";
+    const mayCap = mayChange && isAi && grant.can.setLimits;
+    const mayEnd = mayChange && (grant.can.revoke || grant.can.cancel);
+    if (!isAi && !mayEnd) return null;
+    return (
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button
+              aria-label={`Actions for ${label}`}
+              size="icon-xs"
+              type="button"
+              variant="ghost"
+            />
+          }
+        >
+          <EllipsisIcon />
+        </MenuTrigger>
+        <MenuPopup align="end" sideOffset={6}>
+          {isAi ? (
+            <MenuItem onClick={() => setUsageOf(usageOf === grant.id ? null : grant.id)}>
+              View use
+            </MenuItem>
+          ) : null}
+          {mayCap ? (
+            <MenuItem disabled={pending} onClick={() => setCapping(grant)}>
+              Caps…
+            </MenuItem>
+          ) : null}
+          {mayEnd ? (
+            <MenuItem
+              disabled={pending}
+              variant="destructive"
+              onClick={() =>
+                grant.can.cancel
+                  ? void run(() =>
+                      settle(commands.cancel({ environmentId, input: { grantId: grant.id } })),
+                    )
+                  : setEnding(grant)
+              }
+            >
+              {grant.can.cancel ? "Cancel" : "Take back"}
+            </MenuItem>
+          ) : null}
+        </MenuPopup>
+      </Menu>
+    );
+  };
+
   return (
     <SettingsSection id="grants" title="Loans">
+      {waiting.length === 0 ? null : <LoanGroupTitle>Waiting for you</LoanGroupTitle>}
       {waiting.map((grant) => (
         <SettingsRow
           key={grant.id}
@@ -502,6 +623,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
           }
         />
       ))}
+      {borrowed.length === 0 ? null : <LoanGroupTitle>Borrowed by your Spaces</LoanGroupTitle>}
       {borrowed.map((grant) => (
         <Fragment key={grant.id}>
           <SettingsRow
@@ -532,52 +654,55 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
           {usagePanel(grant)}
         </Fragment>
       ))}
-      {(given ?? []).map((grant) => (
-        <Fragment key={grant.id}>
-          <SettingsRow
-            title={`${grant.resource.name ?? `Your ${nounOf(grant)}`}`}
-            description={loanDescription(grant, "given")}
-            control={
-              <div className="flex gap-1">
-                {loanUseButton(grant)}
-                {mayChange && (grant.can.revoke || grant.can.cancel || grant.can.setLimits) ? (
-                  <div className="flex gap-1">
-                    {grant.resource.kind === "ai-account" && grant.can.setLimits ? (
-                      <Button
-                        disabled={pending}
-                        size="xs"
-                        variant="outline"
-                        onClick={() => setCapping(grant)}
-                      >
-                        Caps…
-                      </Button>
-                    ) : null}
-                    {grant.can.revoke || grant.can.cancel ? (
-                      <Button
-                        disabled={pending}
-                        size="xs"
-                        variant="destructive-outline"
-                        onClick={() =>
-                          grant.can.cancel
-                            ? void run(() =>
-                                settle(
-                                  commands.cancel({ environmentId, input: { grantId: grant.id } }),
-                                ),
-                              )
-                            : setEnding(grant)
-                        }
-                      >
-                        {grant.can.cancel ? "Cancel" : "Take back"}
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            }
-          />
-          {usagePanel(grant)}
-        </Fragment>
-      ))}
+      {lentGroups.length === 0 ? null : <LoanGroupTitle>Lent by you</LoanGroupTitle>}
+      {lentGroups.map((group) => {
+        const open = groupToggles[group.key] ?? lentCount <= OPEN_GROUPS_UP_TO;
+        const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
+        return (
+          <div key={group.key} className="border-t border-border/60 first:border-t-0">
+            <button
+              aria-expanded={open}
+              className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-4"
+              type="button"
+              onClick={() => setGroupToggles({ ...groupToggles, [group.key]: !open })}
+            >
+              <Chevron aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">{group.name}</span>{" "}
+              <span className="shrink-0 text-xs text-muted-foreground">
+                lent to {group.loans.length}
+              </span>
+            </button>
+            {open ? (
+              <ul aria-label={`${group.name} is lent to`} className="pb-1">
+                {group.loans.map((grant) => {
+                  const recipient = targetLabel(grant, "a Space");
+                  const detail = [
+                    grant.state === "active"
+                      ? null
+                      : `${STATE_LABELS[grant.state]}${grant.endReason === null ? "" : ` (${END_LABELS[grant.endReason]})`}`,
+                    limitsText(grant.limits),
+                    ...loanStatusParts(grant),
+                  ]
+                    .filter((part) => part !== null)
+                    .join(" · ");
+                  return (
+                    <li key={grant.id}>
+                      <div className="flex items-start gap-2 py-1 pr-2 pl-9 sm:pr-3 sm:pl-10">
+                        <div className="min-w-0 flex-1">
+                          <p className="min-w-0 truncate text-sm">{recipient}</p>
+                          <p className="text-xs break-words text-muted-foreground">{detail}</p>
+                        </div>
+                        {lentActions(grant, `${group.name} lent to ${recipient}`)}
+                      </div>
+                      {usagePanel(grant)}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+          </div>
+        );
+      })}
       {error === null ? null : <SettingsRow title="Something went wrong" description={error} />}
       {capping !== null ? (
         <ChangeCapsDialog

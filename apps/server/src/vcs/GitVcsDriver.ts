@@ -858,6 +858,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "--git-common-dir",
         "--git-path",
         "index",
+        // Relative and one line ("../../" or empty), whatever the path's characters.
+        "--show-cdup",
         "--verify",
         "--quiet",
         "HEAD",
@@ -867,11 +869,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     const headExists = result.exitCode === 0;
     const headChecked = headExists || result.exitCode === 1;
     const lines = result.stdout.split("\n");
-    const [gitCommonDir = "", indexPath = ""] = lines;
-    if (headChecked && lines.length === (headExists ? 4 : 3) && lines.at(-1) === "") {
+    const [gitCommonDir = "", indexPath = "", cdup = ""] = lines;
+    if (headChecked && lines.length === (headExists ? 5 : 4) && lines.at(-1) === "") {
       return {
         gitCommonDir: gitCommonDir.trim(),
         indexPath: indexPath.trim(),
+        cdup: cdup.trim(),
         headExists,
       };
     }
@@ -880,6 +883,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     return {
       gitCommonDir: yield* resolveGitCommonDir(cwd),
       indexPath: undefined,
+      cdup: undefined,
       headExists: headChecked ? headExists : yield* hasHeadCommit(cwd),
     };
   });
@@ -928,34 +932,6 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     return yield* fileSystem.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
   });
 
-  /** Which of `paths` (relative to `cwd`) Git ignores under `config`. */
-  const ignoredAmong = Effect.fn("GitVcsDriver.ignoredAmong")(function* (input: {
-    readonly operation: string;
-    readonly cwd: string;
-    readonly paths: ReadonlyArray<string>;
-    readonly config: ReadonlyArray<string>;
-  }) {
-    if (input.paths.length === 0) return new Set<string>();
-    const result = yield* execute({
-      operation: input.operation,
-      cwd: input.cwd,
-      args: [...input.config, ...longPaths, "check-ignore", "-z", "--stdin"],
-      stdin: `${input.paths.join("\0")}\0`,
-      allowNonZeroExit: true,
-      maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
-    });
-    if (result.exitCode !== 0 && result.exitCode !== 1) {
-      return yield* new VcsProcessExitError({
-        operation: input.operation,
-        command: "git check-ignore",
-        cwd: input.cwd,
-        exitCode: result.exitCode,
-        detail: result.stderr.trim() || "git check-ignore failed",
-      });
-    }
-    return new Set(splitNullSeparatedGitStdoutPaths(result));
-  });
-
   /**
    * What a checkpoint command leaves out (`CheckpointExclusions`): an excludes file beside the
    * temporary index, read only through `-c core.excludesFile` so the user's own Git is unchanged,
@@ -969,15 +945,18 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       readonly excludesPath: string;
       /** The index the untracked files are relative to; the user's own when absent. */
       readonly env?: NodeJS.ProcessEnv;
+      /** `rev-parse --show-cdup`, when the caller already read it. */
+      readonly cdup?: string | undefined;
     }) {
-      const { operation, cwd } = input;
-      const location = yield* execute({
-        operation,
-        cwd,
-        args: ["rev-parse", "--show-toplevel", "--show-prefix"],
-      });
-      const [top = "", prefix = ""] = location.stdout.split("\n");
-      const { excludesPath } = input;
+      const { operation, cwd, excludesPath } = input;
+      const cdup =
+        input.cdup ??
+        (yield* execute({ operation, cwd, args: ["rev-parse", "--show-cdup"] })).stdout.trim();
+      // Git counts the way up from the physical cwd, which can differ from a symlink.
+      const physicalCwd = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
+      const top = path.resolve(physicalCwd, cdup);
+      const levels = cdup.split("/").filter((segment) => segment === "..").length;
+      const prefix = levels === 0 ? [] : path.resolve(physicalCwd).split(/[\\/]/).slice(-levels);
       yield* fileSystem
         .writeFileString(
           excludesPath,
@@ -997,9 +976,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         );
       // A workspace inside a default folder (say `dist/app`) keeps only the user's rules: Git
       // refuses to add from an ignored directory.
-      const insideDefaultFolder = prefix
-        .split("/")
-        .some((segment) => CheckpointExclusions.isDefaultExcludedFolder(`${segment}/`));
+      const insideDefaultFolder = prefix.some((segment) =>
+        CheckpointExclusions.isDefaultExcludedFolder(`${segment}/`),
+      );
       const excludesConfig = insideDefaultFolder ? [] : ["-c", `core.excludesFile=${excludesPath}`];
       const untracked = yield* execute({
         operation,
@@ -1061,6 +1040,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     readonly operation: string;
     readonly cwd: string;
     readonly top: string;
+    readonly excludesPath: string;
     readonly excludesConfig: ReadonlyArray<string>;
     readonly env: NodeJS.ProcessEnv;
   }) {
@@ -1089,18 +1069,44 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     const candidates = splitNullSeparatedGitStdoutPaths(listed).filter(
       CheckpointExclusions.isDefaultExcludedFolder,
     );
-    const lookup = { operation: input.operation, cwd: input.top, paths: candidates };
-    // A `!dist/` of the user's brings one back; one the user ignores was never in a checkpoint.
-    const ignoredWithDefaults = yield* ignoredAmong({ ...lookup, config: input.excludesConfig });
-    const ignoredByUser = yield* ignoredAmong({ ...lookup, config: [] });
-    return candidates
-      .filter((entry) => ignoredWithDefaults.has(entry) && !ignoredByUser.has(entry))
-      .toSorted();
+    if (candidates.length === 0) return [];
+    // Left out only when the deciding rule is one of the defaults: the first lines of the
+    // excludes file, not negated. A `!dist/` or the user's own rule for it decides otherwise.
+    const matches = yield* execute({
+      operation: input.operation,
+      cwd: input.top,
+      args: [...input.excludesConfig, ...longPaths, "check-ignore", "-v", "-z", "--stdin"],
+      stdin: `${candidates.join("\0")}\0`,
+      allowNonZeroExit: true,
+      maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+    });
+    if (matches.exitCode !== 0 && matches.exitCode !== 1) {
+      return yield* new VcsProcessExitError({
+        operation: input.operation,
+        command: "git check-ignore",
+        cwd: input.top,
+        exitCode: matches.exitCode,
+        detail: matches.stderr.trim() || "git check-ignore failed",
+      });
+    }
+    // -v -z prints source, line, pattern and path for each.
+    const fields = matches.stdout.split("\0");
+    const folders: Array<string> = [];
+    for (let index = 0; index + 3 < fields.length; index += 4) {
+      const [source = "", line = "", pattern = "", entry = ""] = fields.slice(index, index + 4);
+      if (
+        path.normalize(source) === path.normalize(input.excludesPath) &&
+        Number(line) <= CheckpointExclusions.CHECKPOINT_DEFAULT_EXCLUDED_FOLDERS.length &&
+        !pattern.startsWith("!")
+      )
+        folders.push(entry);
+    }
+    return folders.toSorted();
   });
 
   /**
-   * Runs `args` on `pathspecs`, read from stdin where the subcommand supports it. An older Git
-   * takes them as arguments while they fit the command line, and fails otherwise.
+   * Runs `args` on `pathspecs`: as arguments while they fit the command line, as before the size
+   * rule, else from stdin where the subcommand supports it, else it fails.
    */
   const executeWithPathspecs = Effect.fn("GitVcsDriver.executeWithPathspecs")(function* (
     input: Parameters<typeof execute>[0] & {
@@ -1109,7 +1115,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     },
   ) {
     const { subcommand, pathspecs, ...rest } = input;
-    if (pathspecs.length <= 1) {
+    if (pathspecArgsFit(pathspecs)) {
       return yield* execute({ ...rest, args: [...rest.args, "--", ...pathspecs] });
     }
     const help = yield* execute({
@@ -1129,14 +1135,17 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     return yield* execute({ ...rest, args: [...rest.args, "--", ...pathspecs] });
   });
 
+  const pathspecArgsFit = (pathspecs: ReadonlyArray<string>) =>
+    pathspecs.reduce((bytes, pathspec) => bytes + Buffer.byteLength(pathspec) + 1, 0) <=
+    CheckpointExclusions.CHECKPOINT_PATHSPEC_ARGS_MAX_BYTES;
+
   const requirePathspecArgsFit = (
     operation: string,
     cwd: string,
     command: string,
     pathspecs: ReadonlyArray<string>,
   ) =>
-    pathspecs.reduce((bytes, pathspec) => bytes + Buffer.byteLength(pathspec) + 1, 0) >
-    CheckpointExclusions.CHECKPOINT_PATHSPEC_ARGS_MAX_BYTES
+    !pathspecArgsFit(pathspecs)
       ? Effect.fail(
           new VcsProcessExitError({
             operation,
@@ -1163,7 +1172,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "-c",
         "splitIndex.sharedIndexExpire=never",
       ];
-      const { gitCommonDir, indexPath, headExists } = yield* resolveCaptureRepository(input.cwd);
+      const { gitCommonDir, indexPath, cdup, headExists } = yield* resolveCaptureRepository(
+        input.cwd,
+      );
       const indexId = yield* random.uuidV4();
       const tempIndexPath = path.join(gitCommonDir, `t3-checkpoint-index-${indexId}`);
       const excludesPath = path.join(gitCommonDir, `t3-checkpoint-excludes-${indexId}`);
@@ -1419,6 +1430,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           cwd: input.cwd,
           excludesPath,
           env: commitEnv,
+          cdup,
         });
         const stageFiles = (nestedRepositories: ReadonlyArray<string>) =>
           executeWithPathspecs({
@@ -1552,6 +1564,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           operation,
           cwd: input.cwd,
           top: leftOut.top,
+          excludesPath,
           excludesConfig: leftOut.excludesConfig,
           env: commitEnv,
         }).pipe(

@@ -465,6 +465,22 @@ it.effect.each([
     }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
+/**
+ * The nested-repository discovery a failed `add` triggers. Capture also lists untracked files
+ * before staging and default folders after it (CheckpointExclusions), always with --full-name.
+ */
+const isNestedRepositoryDiscovery = (args: ReadonlyArray<string>) =>
+  args.includes("--others") && !args.includes("--full-name");
+
+/** The private index, its lock and the generated excludes file are gone. */
+const checkpointScratchFiles = Effect.fn("test.checkpointScratchFiles")(function* (cwd: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return (yield* fs.readDirectory(path.join(cwd, ".git"))).filter((name) =>
+    name.startsWith("t3-checkpoint-"),
+  );
+});
+
 it.effect.each([
   { phase: "add", nestedRecovery: false, expireRecovery: false },
   { phase: "update-ref", nestedRecovery: false, expireRecovery: false },
@@ -495,7 +511,7 @@ it.effect.each([
       const captureProcess = yield* VcsProcess.make.pipe(
         Effect.provideService(ProcessRunner.ProcessRunner, {
           run: (input) => {
-            if (input.args.includes("--others")) discoveries += 1;
+            if (isNestedRepositoryDiscovery(input.args)) discoveries += 1;
             if (input.env?.GIT_INDEX_FILE) privateIndexes.add(input.env.GIT_INDEX_FILE);
             const initialStage =
               phase === "add" &&
@@ -567,6 +583,7 @@ it.effect.each([
         assert.isFalse(yield* fs.exists(index));
         assert.isFalse(yield* fs.exists(`${index}.lock`));
       }
+      assert.deepEqual(yield* checkpointScratchFiles(cwd), []);
       assert.deepEqual(yield* fs.readFile(path.join(cwd, ".git", "index")), originalIndex);
     }).pipe(Effect.scoped, Effect.provide(layerGitCaptureContract)),
 );
@@ -586,7 +603,7 @@ it.effect("checkpoint recovery preserves interruption and removes the private in
         run: (input) => {
           if (input.args.includes("add") && input.args.includes("-A"))
             privateIndex = input.env?.GIT_INDEX_FILE;
-          return input.args.includes("--others")
+          return isNestedRepositoryDiscovery(input.args)
             ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
             : liveProcess.run(input);
         },
@@ -601,8 +618,41 @@ it.effect("checkpoint recovery preserves interruption and removes the private in
     assert.isTrue(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
     assert.isDefined(privateIndex);
     assert.isFalse(yield* fs.exists(privateIndex!));
+    assert.deepEqual(yield* checkpointScratchFiles(cwd), []);
     assert.isFalse(yield* driver.checkpoints.hasCheckpointRef({ cwd, checkpointRef }));
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
+);
+
+it.effect.each(["before staging", "after the ref"] as const)(
+  "checkpoint interrupted while listing what it leaves out (%s) removes its private files",
+  (moment) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const liveProcess = yield* VcsProcess.VcsProcess;
+      const driver = yield* GitVcsDriver.makeVcsDriverShape();
+      const cwd = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-checkpoint-exclusions-interrupt-",
+      });
+      const { checkpointRef } = yield* makeCheckpointFixture(driver, cwd);
+      const entered = yield* Deferred.make<void>();
+      const captureDriver = yield* GitVcsDriver.makeVcsDriverShape().pipe(
+        Effect.provideService(VcsProcess.VcsProcess, {
+          run: (input) =>
+            input.args.includes("--full-name") &&
+            input.args.includes(moment === "before staging" ? "--exclude-standard" : "--ignored")
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+              : liveProcess.run(input),
+        }),
+      );
+      const fiber = yield* captureDriver.checkpoints
+        .captureCheckpoint({ cwd, checkpointRef })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(entered);
+      yield* Fiber.interrupt(fiber);
+      const exit = yield* Fiber.await(fiber);
+      assert.isTrue(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+      assert.deepEqual(yield* checkpointScratchFiles(cwd), []);
+    }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
 it.effect.each(
@@ -1010,14 +1060,21 @@ it.effect.each(["committed", "unborn"] as const)(
       const commands = yield* captureRecordingGitCommands(cwd, checkpointRef);
 
       assert.deepStrictEqual(commands, [
+        // Also --show-cdup, for the size rule's paths.
         "rev-parse",
         "config",
         ...(head === "committed" ? ["read-tree", "ls-files"] : []),
         "check-ignore",
+        // CheckpointExclusions: the user's core.excludesFile, kept beside the default folders in
+        // the checkpoint's own excludes file, and the untracked files whose size it checks.
+        "config",
+        "ls-files",
         "add",
         "write-tree",
         "commit-tree",
         "update-ref",
+        // The default folders the checkpoint left out, for its report.
+        "ls-files",
       ]);
       assert.strictEqual((yield* git(["show", `${checkpointRef}:file.txt`])).stdout, "unstaged\n");
       const [, ...parents] = (yield* git([
@@ -1073,16 +1130,21 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         "read-tree",
         "ls-files",
         "check-ignore",
+        // CheckpointExclusions, as above, plus the --show-cdup the single rev-parse gave there.
+        "rev-parse",
+        "config",
+        "ls-files",
         "add",
         "write-tree",
         "commit-tree",
         "update-ref",
+        "ls-files",
       ]);
       assert.strictEqual((yield* git(["show", `${checkpointRef}:file.txt`])).stdout, "unstaged\n");
       assert.deepEqual(yield* fileSystem.readFile(path.join(cwd, ".git", "index")), originalIndex);
       assert.deepStrictEqual(
         (yield* fileSystem.readDirectory(path.join(cwd, ".git"))).filter((name) =>
-          name.startsWith("t3-checkpoint-index-"),
+          name.startsWith("t3-checkpoint-"),
         ),
         [],
       );

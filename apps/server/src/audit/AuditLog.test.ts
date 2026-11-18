@@ -631,6 +631,8 @@ it.effect(
         "identity.issue",
         // grants/Grants.test.ts (Grants ticket 01)
         "grant.give",
+        // grants/GrantOffers.test.ts (Grants ticket 06): a lending link.
+        "grant.offer",
         "grant.accept",
         "grant.reject",
         "grant.cancel",

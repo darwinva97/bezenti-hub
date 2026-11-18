@@ -67,7 +67,7 @@ catalog:
   react-dom: 19.3.0
   tailwindcss: 4.3.3
   tldts: 7.4.2
-  undici: 8.11.2
+  undici: 8.12.4
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
   vite-plus: 1.4.0
   ws: 8.22.0
@@ -112,6 +112,7 @@ overrides:
   react-native-keyboard-controller: 1.22.8
   react-native-pdf-jsi: 5.0.0
   react-native-webview: 14.0.1
+  react-native-svg: 15.16.0
   "@expo/ui": 58.0.20
   "@expo/fingerprint": 0.21.5
   app-builder-lib: 26.16.1
@@ -235,6 +236,8 @@ patchedDependencies:
   app-builder-lib@26.16.1: patches/app-builder-lib@26.16.1.patch
   # A failed Artifacts.cached effect hangs every later caller: https://github.com/alchemy-run/alchemy/issues/2981
   alchemy@2.0.0-beta.85: patches/alchemy@2.0.0-beta.85.patch
+  # Android: a marker orient other than "auto" or a number (auto-start-reverse) no longer throws.
+  react-native-svg@15.16.0: patches/react-native-svg@15.16.0.patch
 
 # Unmet peers fail resolution, so a pin outside a dependency's peer range is
 # caught when the lockfile changes instead of scrolling past as a warning.
@@ -274,3 +277,4 @@ minimumReleaseAgeExclude:
   - "@effect/tsgo-win32-arm64@0.67.1"
   - "@effect/tsgo-win32-x64@0.67.1"
   - "@effect/tsgo@0.67.1"
+  - "@anthropic-ai/claude-agent-sdk@0.3.321"

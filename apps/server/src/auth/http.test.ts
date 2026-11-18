@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -22,7 +23,9 @@ import * as HttpRouter from "effect/http/HttpRouter";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as AppSignInHttp from "./appSignInHttp.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import { makeDpopKey } from "./dpop.testkit.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import { layerTestPeer } from "./clientConnection.testkit.ts";
 import * as AuthHttp from "./http.ts";
@@ -234,4 +237,131 @@ it.effect(
         (environment) => Effect.promise(() => environment.dispose()),
       );
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+// Token requests are unauthenticated until their grant is checked, so their proofs are checked
+// but never recorded: recording would let anyone write replay state to disk. Proofs need
+// wall-clock time, as the web handler runs on its own runtime.
+const recordingRequestContext = (random: SecureRandom.SecureRandom["Service"]) => {
+  const written: Array<string> = [];
+  const recordingSecretStore = ServerSecretStore.ServerSecretStore.of({
+    get: () => Effect.succeedNone,
+    set: () => Effect.void,
+    create: (name) => Effect.sync(() => void written.push(name)),
+    getOrCreateRandom: () => Effect.die("Not used by these routes."),
+    remove: () => Effect.void,
+  });
+  const context = Context.make(SecureRandom.SecureRandom, random).pipe(
+    Context.add(ServerSecretStore.ServerSecretStore, recordingSecretStore),
+  );
+  return { context, written };
+};
+
+it.live("checks token-endpoint DPoP proofs without writing replay state", () =>
+  Effect.gen(function* () {
+    const { context, written } = recordingRequestContext(yield* SecureRandom.SecureRandom);
+    const url = "http://127.0.0.1/oauth/token";
+    const key = makeDpopKey();
+    const iat = Math.floor((yield* DateTime.now).epochMilliseconds / 1_000);
+    const tokenRequest = (subjectToken: string, proof: string) =>
+      new Request(url, {
+        method: "POST",
+        headers: { host: "127.0.0.1", dpop: proof },
+        body: new URLSearchParams({
+          grant_type: AuthTokenExchangeGrantType,
+          subject_token: subjectToken,
+          subject_token_type: AuthEnvironmentBootstrapTokenType,
+          requested_token_type: AuthAccessTokenType,
+        }),
+      });
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      (environment) =>
+        Effect.promise(async () => {
+          const unknownToken = await environment.handler(
+            tokenRequest("not-a-pairing-token", key.sign({ method: "POST", url, token: "", iat })),
+            context,
+          );
+          expect(unknownToken.status).toBe(401);
+          expect(await unknownToken.json()).not.toHaveProperty("dpopFailureReason");
+
+          const accepted = await environment.handler(
+            tokenRequest(DEV_TOKEN, key.sign({ method: "POST", url, token: "", iat })),
+            context,
+          );
+          expect(accepted.status).toBe(200);
+          expect(await accepted.json()).toMatchObject({ token_type: "DPoP" });
+
+          const badProof = await environment.handler(
+            tokenRequest(DEV_TOKEN, "not-a-proof"),
+            context,
+          );
+          expect(badProof.status).toBe(401);
+          expect(badProof.headers.get("www-authenticate")).toBe("DPoP");
+          expect(written).toEqual([]);
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+class AppSignInTestApi extends HttpApi.make("environment").add(
+  EnvironmentHttpApi.groups.appSignIn,
+) {}
+
+it.live("checks app sign-in DPoP proofs without writing replay state", () =>
+  Effect.gen(function* () {
+    const { context, written } = recordingRequestContext(yield* SecureRandom.SecureRandom);
+    const layerConfig = layerConfigWith();
+    const layerAppSignInRoutes = HttpApiBuilder.layer(AppSignInTestApi).pipe(
+      Layer.provide(AppSignInHttp.layer),
+      Layer.provide(layerTestPeer),
+      Layer.provideMerge(
+        EnvironmentAuth.layer.pipe(
+          Layer.provide(ManagedPolicy.layerTest()),
+          Layer.provide(ServerSecretStore.layer),
+          Layer.provide(ServerEnvironment.layerIdentity),
+          Layer.provide(layerConfig),
+        ),
+      ),
+      Layer.provide(SqlitePersistence.layerMemory),
+      Layer.provide(layerConfig),
+      Layer.provideMerge(
+        HttpPlatform.layer.pipe(
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Layer.provideMerge(Etag.layerWeak),
+        ),
+      ),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+    );
+    const url = "http://127.0.0.1/api/auth/app-sign-in/token";
+    const key = makeDpopKey();
+    const iat = Math.floor((yield* DateTime.now).epochMilliseconds / 1_000);
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => HttpRouter.toWebHandler(layerAppSignInRoutes, { disableLogger: true })),
+      (environment) =>
+        Effect.promise(async () => {
+          // A valid proof with a code nobody approved: refused, and nothing written.
+          const madeUpCode = await environment.handler(
+            new Request(url, {
+              method: "POST",
+              headers: {
+                host: "127.0.0.1",
+                dpop: key.sign({ method: "POST", url, token: "", iat }),
+              },
+              body: new URLSearchParams({
+                grant_type: "authorization_code",
+                code: "a-code-nobody-approved",
+                code_verifier: "v".repeat(43),
+                redirect_uri: "http://127.0.0.1:53111/callback",
+              }),
+            }),
+            context,
+          );
+          expect(madeUpCode.status).toBe(401);
+          expect(written).toEqual([]);
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

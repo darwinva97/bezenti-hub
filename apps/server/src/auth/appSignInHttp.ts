@@ -13,7 +13,7 @@ import {
   failEnvironmentInternal,
   failEnvironmentInvalidRequest,
 } from "./http.ts";
-import { verifyRequestDpopProof } from "./dpop.ts";
+import { checkRequestDpopProof } from "./dpop.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
 
 const handlers = HttpApiBuilder.group(
@@ -47,8 +47,11 @@ const handlers = HttpApiBuilder.group(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const request = yield* HttpServerRequest.HttpServerRequest;
+            // Checked, not recorded: the code is spent the first time it is presented and the
+            // session issued is bound to the proof's key, so a replayed proof gains nothing.
+            // Recording it would let anyone write replay state to disk with a made-up code.
             const proofKeyThumbprint = args.headers.dpop
-              ? yield* verifyRequestDpopProof({ request })
+              ? (yield* checkRequestDpopProof({ request })).thumbprint
               : undefined;
             yield* appendCredentialResponseHeaders;
             return yield* appSignIn.exchange({

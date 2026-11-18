@@ -14,6 +14,7 @@ import * as Predicate from "effect/Predicate";
 import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
 import { createExclusively, writeAtomically } from "./atomicFile.ts";
@@ -441,8 +442,25 @@ const makeWith = Effect.fn("ServerSecretStore.make")(function* (mode: StoreMode)
       Effect.withSpan("ServerSecretStore.create"),
     );
 
+  const emptySecretRepair = yield* Semaphore.make(1);
+  const isMissingOrNonEmpty = (secret: Option.Option<Uint8Array>) =>
+    Option.isNone(secret) || secret.value.byteLength > 0;
+
   const getOrCreateRandom: ServerSecretStore["Service"]["getOrCreateRandom"] = (name, bytes) =>
     get(name).pipe(
+      // Older builds could persist a 0-byte secret, which is never a usable key (an empty HMAC
+      // key is public). Re-read under the permit, and keep it until an interrupted removal
+      // settles, so a caller that saw the empty secret cannot remove a key another one created.
+      Effect.filterOrElse(isMissingOrNonEmpty, () =>
+        emptySecretRepair.withPermits(1)(
+          get(name).pipe(
+            Effect.filterOrElse(isMissingOrNonEmpty, () =>
+              remove(name).pipe(Effect.as(Option.none<Uint8Array>())),
+            ),
+            Effect.uninterruptible,
+          ),
+        ),
+      ),
       Effect.flatMap(
         Option.match({
           onSome: Effect.succeed,

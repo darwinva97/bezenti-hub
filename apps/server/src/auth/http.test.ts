@@ -27,7 +27,7 @@ import * as AppSignInHttp from "./appSignInHttp.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import { makeDpopKey } from "./dpop.testkit.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
-import { layerTestPeer } from "./clientConnection.testkit.ts";
+import { layerTestPeer, TEST_PEER_HEADER } from "./clientConnection.testkit.ts";
 import * as AuthHttp from "./http.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import { parsePreviewOrigin, type PreviewOriginPattern } from "../preview/PreviewOrigin.ts";
@@ -393,6 +393,62 @@ it.effect.each(["DPoP", "dpop"])("challenges a refused %s request with DPoP", (s
           );
           expect(refused.status).toBe(401);
           expect(refused.headers.get("www-authenticate")).toBe("DPoP");
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+// Behind a reverse proxy the cookies are `Secure` only when a trusted proxy (loopback by
+// default, `T3CODE_TRUSTED_PROXIES`) says the client used HTTPS; from anyone else
+// `X-Forwarded-Proto` is ignored.
+it.effect("only a trusted proxy's X-Forwarded-Proto makes the session cookies Secure", () =>
+  Effect.gen(function* () {
+    const random = yield* SecureRandom.SecureRandom;
+    const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
+      get: () => Effect.succeedNone,
+      set: () => Effect.void,
+      create: () => Effect.void,
+      getOrCreateRandom: () => Effect.die("Not used by these routes."),
+      remove: () => Effect.void,
+    });
+    const requestContext = Context.make(SecureRandom.SecureRandom, random).pipe(
+      Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
+    );
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      (environment) =>
+        Effect.tryPromise(async () => {
+          const signIn = (peer: string) =>
+            environment
+              .handler(
+                postJson(
+                  "/api/auth/browser-session",
+                  { credential: DEV_TOKEN },
+                  {
+                    [TEST_PEER_HEADER]: peer,
+                    "x-forwarded-proto": "https",
+                    "x-forwarded-for": "192.168.1.77",
+                  },
+                ),
+                requestContext,
+              )
+              .then((response) => {
+                expect(response.status).toBe(200);
+                const cookies = response.headers.getSetCookie();
+                return cookies.find((cookie) => cookie.includes("t3_dev_session_"));
+              });
+
+          // From the local proxy: the client used HTTPS.
+          const trusted = await signIn("127.0.0.1");
+          expect(trusted).toMatch(/; Secure/i);
+          expect(trusted).toMatch(/^__Host-/);
+
+          // From a LAN peer that is not a trusted proxy: its headers count for nothing.
+          const untrusted = await signIn("192.168.1.50");
+          expect(untrusted).toBeDefined();
+          expect(untrusted).not.toMatch(/; Secure/i);
+          expect(untrusted).not.toMatch(/^__Host-/);
         }),
       (environment) => Effect.promise(() => environment.dispose()),
     );

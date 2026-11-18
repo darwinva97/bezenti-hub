@@ -3,6 +3,7 @@
  * Grants ticket 01 at the AI gateway: an AI account lent to a Space by an active Grant is used
  * there, after the Space's own; a waiting, rejected or ended Grant gives nothing, and ending one
  * refuses the next request. A disabled lender or an archived lending Organization lends nothing.
+ * A lending link (ticket 06) applied by someone who shares no Space with the lender works alike.
  */
 import { assert, it } from "@effect/vitest";
 import { type AiAccountId, SpaceId, type UserId } from "@t3tools/contracts";
@@ -187,5 +188,38 @@ it.live.skipIf(!posix || platform === undefined)(
         UPDATE ai_accounts SET owner_kind = 'user', owner_id = ${ada} WHERE account_id = ${acmes}
       `;
       assert.deepEqual(yield* ids(gus, personalOf(gus)), []);
+    }).pipe(Effect.scoped),
+);
+
+it.live.skipIf(!posix || platform === undefined)(
+  "Grants ticket 06: a lending link puts an AI account to work in a Space its lender does not know",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* hub;
+      const grants = Context.get(setup.server.services, Grants.Grants);
+      const { member: grace, globexMember: gus } = setup.people;
+      const graces = yield* accountOf(setup, grace, "Grace Claude");
+      // Grace and Gus share no Space: she makes a link, he applies it to his Personal space.
+      const created = yield* grants
+        .createOffer({ resource: { kind: "ai-account", aiAccountId: graces }, limits: NO_CAP })
+        .pipe(CommandActor.actAs(grace));
+      const token = new URLSearchParams(created.path.split("#")[1] ?? "").get("token") ?? "";
+      const claimed = yield* grants
+        .claimOffer({ token, spaceId: personalOf(gus) })
+        .pipe(CommandActor.actAs(gus));
+      assert.equal(claimed.state, "active");
+
+      // His Thread there uses her account through the gateway.
+      const gusThread = yield* setup.thread(gus, personalOf(gus), graces);
+      const used = yield* call(setup, path, { key: gusThread.key, body: messages() });
+      assert.equal(used.status, 200, used.text);
+      assert.equal(setup.upstream().at(-1)!.model, `acct-${graces}/claude-sonnet-5-5`);
+
+      // Grace revokes it: his very next request is refused, and nothing reaches upstream.
+      yield* grants.end({ grantId: claimed.id }).pipe(CommandActor.actAs(grace));
+      const before = setup.upstream().length;
+      const refused = yield* call(setup, path, { key: gusThread.key, body: messages() });
+      assert.equal(refused.status, 403);
+      assert.equal(setup.upstream().length, before);
     }).pipe(Effect.scoped),
 );

@@ -4,7 +4,7 @@ import { memo } from "react";
 import {
   chooseHubEnvironment,
   environmentUnavailableReason,
-  noPlacementReason,
+  noPlacementMessage,
   placeableEnvironments,
   useHubEnvironmentChoice,
   useHubEnvironments,
@@ -12,6 +12,7 @@ import {
   useSandboxesUnavailable,
   previewDefaultEnvironment,
 } from "../../environments/primary/useHubEnvironments";
+import { usePrimarySessionState } from "../../environments/primary";
 import { useCurrentSpace } from "../../state/currentSpace";
 import { ComposerContextLabel } from "../ComposerContextLabel";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
@@ -83,17 +84,25 @@ export function useNoPlacementMessage(input: {
   const all = useHubEnvironments();
   const ready = useHubEnvironmentsReady();
   const unavailable = useSandboxesUnavailable();
+  const viewerIsOwner = usePrimarySessionState().data?.isOwner === true;
   const chosen = useHubEnvironmentChoice(input.draftThreadId ?? "");
   if (!ready || input.draftThreadId === null) return null;
   if (chosen !== undefined) return null;
+  const placeable = placeableEnvironments(all, spaceId);
   const placed = previewDefaultEnvironment({
-    environments: placeableEnvironments(all, spaceId),
+    environments: placeable,
     preferredEnvironmentId: input.preferredEnvironmentId,
     providerInstanceId: input.providerInstanceId,
     userId,
     sandboxesUnavailable: unavailable,
   });
-  return placed === null ? noPlacementReason(unavailable) : null;
+  return placed === null
+    ? noPlacementMessage({
+        environments: placeable,
+        sandboxesUnavailable: unavailable,
+        viewerIsOwner,
+      })
+    : null;
 }
 
 /**

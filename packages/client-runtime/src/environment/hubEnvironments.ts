@@ -599,8 +599,43 @@ export function placeableEnvironments(
  * Why a new Thread has nowhere to run (no Sandboxes, and the Hub machine runs none), as the Hub
  * says it after «No Environment can run this Thread»: why there are no Sandboxes, and what to do.
  */
-export function noPlacementReason(sandboxesUnavailable: string | null): string {
+function noPlacementReason(sandboxesUnavailable: string | null): string {
   return `${sandboxesUnavailable ?? "There is no Sandbox you can run Threads in for this Space."} ${NO_ENVIRONMENT_ADVICE}`;
+}
+
+/**
+ * What the composer says when a new Thread has nowhere to run. Machines the Space has besides the
+ * Hub's own Sandbox (a lent or joined one) that are offline or reconnecting come first: that is
+ * usually brief, and nothing to do with the Hub's Sandboxes. Otherwise why there are no Sandboxes,
+ * which names a setting (`T3CODE_…`) only to the Owner.
+ */
+export function noPlacementMessage(input: {
+  readonly environments: ReadonlyArray<HubEnvironmentSummary>;
+  readonly sandboxesUnavailable: string | null;
+  readonly viewerIsOwner: boolean;
+}): string {
+  const away = input.environments.filter(
+    (environment) =>
+      environment.kind !== "hub" &&
+      (environment.lent !== undefined || environment.kind === "external") &&
+      (environment.status === "offline" || environment.status === "reconnecting"),
+  );
+  if (away.length > 0) {
+    const names = away.map((environment) => environment.name);
+    const list =
+      names.length === 1
+        ? (names[0] ?? "")
+        : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    return names.length === 1
+      ? `${list} is offline. It usually reconnects within a minute.`
+      : `${list} are offline. They usually reconnect within a minute.`;
+  }
+  const why = input.sandboxesUnavailable;
+  return noPlacementReason(
+    why !== null && !input.viewerIsOwner && why.includes("T3CODE_")
+      ? "Sandboxes are not available on this Hub."
+      : why,
+  );
 }
 
 /** What the move dialog explains before the User chooses. */

@@ -31,7 +31,7 @@ export {
   activeEnvironmentOf,
   environmentStatusLabel,
   environmentUnavailableReason,
-  noPlacementReason,
+  noPlacementMessage,
   placeableEnvironments,
   providersOnEnvironment,
   shownEnvironmentStatus,

@@ -26,6 +26,7 @@ import {
   makeHubEnvironmentsPoller,
   moveCandidates,
   moveProgressView,
+  noPlacementMessage,
   placeableEnvironments,
   providersOnEnvironment,
   threadEnvironmentState,
@@ -495,5 +496,42 @@ describe("uploadIssueText", () => {
     expect(uploadIssueOf(list, machine.id, issue.projectId)).toEqual(issue);
     expect(uploadIssueOf(list, machine.id, ProjectId.make("project:other"))).toBeNull();
     expect(uploadIssueOf(list, null, issue.projectId)).toBeNull();
+  });
+});
+
+describe("noPlacementMessage", () => {
+  const off = "Sandboxes are turned off on this Hub (T3CODE_SANDBOX_RUNTIME=off).";
+  const lent = environment({
+    id: EnvironmentId.make("env-lent"),
+    name: "Contabo-Personal86 (lent)",
+    kind: "sandbox",
+    status: "offline",
+    lent: {} as never,
+  });
+
+  it("names a lent or joined machine that is away, not the Hub's Sandboxes", () => {
+    for (const viewerIsOwner of [true, false]) {
+      expect(
+        noPlacementMessage({ environments: [lent], sandboxesUnavailable: off, viewerIsOwner }),
+      ).toBe("Contabo-Personal86 (lent) is offline. It usually reconnects within a minute.");
+    }
+    expect(
+      noPlacementMessage({
+        environments: [lent, { ...laptop, status: "reconnecting" }],
+        sandboxesUnavailable: off,
+        viewerIsOwner: false,
+      }),
+    ).toBe(
+      "Contabo-Personal86 (lent) and Laptop are offline. They usually reconnect within a minute.",
+    );
+  });
+
+  it("keeps the setting name for the Owner only when nothing else is away", () => {
+    expect(
+      noPlacementMessage({ environments: [hub], sandboxesUnavailable: off, viewerIsOwner: true }),
+    ).toContain("T3CODE_SANDBOX_RUNTIME=off");
+    expect(
+      noPlacementMessage({ environments: [hub], sandboxesUnavailable: off, viewerIsOwner: false }),
+    ).not.toContain("T3CODE_");
   });
 });

@@ -10,6 +10,7 @@ import * as NodePath from "node:path";
 
 import {
   type AiAccountError,
+  type AiAccountId,
   type AiAccountSummary,
   type AiSubscriptionProvider,
   SpaceId,
@@ -862,6 +863,25 @@ live(
       );
       yield* stack.accounts.sync;
       assert.equal((yield* ownerView(setup, stack, claude.id))?.status, "needs-sign-in");
+    }),
+);
+
+live(
+  "a signed-in subscription's quota windows are read for a loan's share (Grants ticket 05)",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* hub();
+      const { stack } = setup;
+      const claude = yield* signIn(setup, stack, "claude", "Owner Claude");
+      const windows = yield* stack.accounts.subscriptionWindows(claude.id);
+      assert.isAbove(windows?.length ?? 0, 0);
+      // Windows only: nothing of the credential.
+      assert.notInclude(JSON.stringify(windows), "@");
+      assert.isFalse(mentionsAToken(JSON.stringify(windows)));
+      // A provider whose quota is not read, and an account that is not there: nothing.
+      const google = yield* signIn(setup, stack, "antigravity", "Owner Google");
+      assert.isNull(yield* stack.accounts.subscriptionWindows(google.id));
+      assert.isNull(yield* stack.accounts.subscriptionWindows("no-such-account" as AiAccountId));
     }),
 );
 

@@ -34,6 +34,7 @@ import {
   isAiDirectProvider,
   type ResourceOwner,
   type ServerProviderUsageLimits,
+  type ServerProviderUsageWindow,
   SpaceId,
   UserId,
 } from "@t3tools/contracts";
@@ -129,6 +130,15 @@ export class AiAccounts extends Context.Service<
      * the Hub has no such subscription, and when unreadable (fails closed).
      */
     readonly ownerSubscriptionLimits: Effect.Effect<HubSubscriptionLimits | null>;
+    /**
+     * Grants ticket 05: one Claude or Codex subscription's quota windows (the same 5-minute cache),
+     * for a loan's share of them. No RPC reaches it and it checks no caller: `AiUsage` decides
+     * what it shows of them and to whom. Null when not such a signed-in subscription, while the
+     * gateway is not running, and when unreadable.
+     */
+    readonly subscriptionWindows: (
+      accountId: AiAccountId,
+    ) => Effect.Effect<ReadonlyArray<ServerProviderUsageWindow> | null>;
     /** Writes every enabled account into the running CLIProxyAPI now (the Hub does it itself). */
     readonly sync: Effect.Effect<void>;
     /**
@@ -455,6 +465,10 @@ const refuse = Effect.fn("AiAccounts.unavailable")(function* (_input: unknown) {
   return yield* UNAVAILABLE;
 });
 
+const noWindows = Effect.fn("AiAccounts.noWindows")(function* (_accountId: AiAccountId) {
+  return yield* Effect.succeed(null);
+});
+
 const holdsNothing = Effect.fn("AiAccounts.holdsNothing")(function* (
   _accountId: string,
   _key: Redacted.Redacted<string>,
@@ -471,6 +485,7 @@ const unavailable = AiAccounts.of({
   reorder: refuse,
   modelsOf: refuse,
   ownerSubscriptionLimits: Effect.succeed(null),
+  subscriptionWindows: noWindows,
   sync: Effect.void,
   loginStart: refuse,
   loginComplete: refuse,
@@ -2782,6 +2797,29 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     Effect.withSpan("AiAccounts.ownerSubscriptionLimits"),
   );
 
+  const subscriptionWindows = Effect.fn("AiAccounts.subscriptionWindows")(
+    function* (accountId: AiAccountId) {
+      const rows = yield* sql<{ readonly credentialId: string }>`
+        SELECT credential_id AS "credentialId" FROM ai_accounts
+        WHERE account_id = ${accountId} AND deleted_at IS NULL AND type = 'subscription'
+          AND provider IN ('claude', 'codex') AND credential_id IS NOT NULL
+      `;
+      const row = rows[0];
+      if (row === undefined) return null;
+      const endpoint = yield* gateway.endpoint;
+      if (Option.isNone(endpoint)) return null;
+      const limits = (yield* quotaWindows(endpoint.value)).get(
+        tokenFileNameOf(accountId, row.credentialId),
+      );
+      return limits === undefined || limits.unavailable !== undefined ? null : limits.windows;
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("AiAccounts: could not read a subscription's quota windows", {
+        cause,
+      }).pipe(Effect.as(null)),
+    ),
+  );
+
   return AiAccounts.of({
     list,
     create,
@@ -2790,6 +2828,7 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
     reorder,
     modelsOf,
     ownerSubscriptionLimits,
+    subscriptionWindows,
     sync: Effect.asVoid(syncNow),
     loginStart,
     loginComplete,

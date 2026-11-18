@@ -51,8 +51,32 @@ export const AiUsageRow = Schema.Struct({
   /** The Grant that lent the account (Grants ticket 04); null: the Space's own (or none). */
   grantId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   ...AiUsageTotals.fields,
+  /**
+   * Grants ticket 05: what the row would cost at the list price in force that day, in USD. Only
+   * `api-key` accounts; null for a subscription, no account, or a model without a price.
+   */
+  estimatedUsd: Schema.optionalKey(Schema.NullOr(Schema.Number)),
 });
 export type AiUsageRow = typeof AiUsageRow.Type;
+
+/**
+ * Grants ticket 05: about how much of one quota window of a lent subscription went through the
+ * loan: (the loan's tokens in the window / the account's tokens in the window) × the window's use.
+ * Approximate: use of the account outside this Hub is in the percentage, not in its tokens.
+ */
+export const AiUsageQuotaShare = Schema.Struct({
+  windowId: Schema.String,
+  label: Schema.String,
+  kind: Schema.Literals(["session", "weekly", "monthly", "other"]),
+  resetsAt: Schema.String,
+  /** Percentage points of the window's quota (0–100). */
+  sharePercent: Schema.Number,
+  /** `loan`: the whole loan's share; `own`: only the viewer's part of it. */
+  of: Schema.Literals(["loan", "own"]),
+  /** The whole account's use of the window; only to its lender, who sees it anyway. */
+  usedPercent: Schema.optionalKey(Schema.Number),
+});
+export type AiUsageQuotaShare = typeof AiUsageQuotaShare.Type;
 
 /** Names for the ids in the rows (a name the session may not see is left out). */
 export const AiUsageLabels = Schema.Struct({
@@ -88,6 +112,14 @@ export const AiUsageSummary = Schema.Struct({
   truncated: Schema.Boolean,
   /** How long the per-request rows (a Thread's usage) are kept, in days. */
   retentionDays: NonNegativeInt,
+  /** Grants ticket 05: the priced rows' estimate in USD; null when no row has a price. */
+  estimatedUsd: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  /** Tokens (input, output, cache write) of `api-key` use with no price, left out of it. */
+  unpricedTokens: Schema.optionalKey(NonNegativeInt),
+  /** The day the Hub's list prices were last checked (`YYYY-MM-DD`). */
+  pricesReviewedOn: Schema.optionalKey(Schema.String),
+  /** Only for one subscription loan (`grantId`) whose provider reports its quota windows. */
+  quotaShare: Schema.optionalKey(Schema.Array(AiUsageQuotaShare)),
 });
 export type AiUsageSummary = typeof AiUsageSummary.Type;
 

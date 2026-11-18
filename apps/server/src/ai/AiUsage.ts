@@ -9,6 +9,7 @@ import {
   AiUsageError,
   type AiUsageErrorReason,
   type AiUsageLabels,
+  type AiUsageQuotaShare,
   type AiUsageRow,
   type AiUsageScope,
   type AiUsageSummary,
@@ -16,6 +17,8 @@ import {
   type AiUsageTotals,
   addAiUsageTotals,
   AI_USAGE_NO_TOTALS,
+  type AiAccountType,
+  type ServerProviderUsageWindow,
   type SpaceId,
   type UserId,
 } from "@t3tools/contracts";
@@ -36,7 +39,9 @@ import * as Stream from "effect/Stream";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as AiAccounts from "./AiAccounts.ts";
 import * as AiGatewayActivity from "./AiGatewayActivity.ts";
+import { AI_PRICES, AI_PRICES_REVIEWED, type AiPrice, costUsd, priceFor } from "./aiPrices.ts";
 import * as AllowedAiAccounts from "./AllowedAiAccounts.ts";
 
 /** Per-request rows are kept this long; the daily summaries are kept for good. */
@@ -103,6 +108,12 @@ export interface AiUsageOptions {
   readonly sweepEveryMs: number;
   /** The most rows one answer carries (totals still count every request). */
   readonly maxRows?: number;
+  /** Grants ticket 05: the list prices (default: the table shipped with this release). */
+  readonly prices?: ReadonlyArray<AiPrice>;
+  /** A subscription's quota windows (default: `AiAccounts.subscriptionWindows`). */
+  readonly subscriptionWindows?: (
+    accountId: AiAccountId,
+  ) => Effect.Effect<ReadonlyArray<ServerProviderUsageWindow> | null>;
 }
 
 const DEFAULT_OPTIONS: AiUsageOptions = {
@@ -138,7 +149,39 @@ interface SummaryRow {
   readonly outputTokens: number;
   readonly cacheReadTokens: number;
   readonly cacheWriteTokens: number;
+  /** Input not read from the cache; null: unknown (summaries from before it was kept). */
+  readonly uncachedInputTokens: number | null;
 }
+
+/** What pricing needs of a row, or of a day, account and model's sum. */
+type CostRow = Pick<
+  SummaryRow,
+  | "day"
+  | "accountId"
+  | "model"
+  | "inputTokens"
+  | "outputTokens"
+  | "cacheReadTokens"
+  | "cacheWriteTokens"
+  | "uncachedInputTokens"
+>;
+
+/**
+ * Input not read from the cache, per request. An Anthropic-shaped answer's input leaves the cache
+ * out; OpenAI's and Gemini's count it in. The same rule as migration 147's backfill.
+ */
+const uncachedInputOf = (
+  shape: AiGatewayActivity.GatewayRequestRecord["shape"],
+  usage: AiGatewayActivity.GatewayRequestRecord["usage"],
+) => {
+  const input = usage?.inputTokens ?? 0;
+  return shape === "anthropic" ? input : Math.max(0, input - (usage?.cacheReadTokens ?? 0));
+};
+
+/** The same, in SQL over `ai_usage` rows (a Thread's, or a truncated answer's sums). */
+const UNCACHED_INPUT_SQL = `CASE WHEN input_tokens IS NULL THEN 0
+  WHEN shape = 'anthropic' THEN input_tokens
+  ELSE MAX(input_tokens - COALESCE(cache_read_tokens, 0), 0) END`;
 
 const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
   {
@@ -146,6 +189,9 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
     const activity = yield* AiGatewayActivity.AiGatewayActivity;
     const spaces = yield* SpaceDirectory.SpaceDirectory;
     const allowed = yield* AllowedAiAccounts.AllowedAiAccounts;
+    const prices = options.prices ?? AI_PRICES;
+    const windowsOf =
+      options.subscriptionWindows ?? (yield* AiAccounts.AiAccounts).subscriptionWindows;
     const random = yield* SecureRandom.SecureRandom;
     const outcomes = yield* PubSub.unbounded<AiUsageWriteOutcome>();
 
@@ -177,14 +223,15 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
           ${request.failovers}, ${usage?.inputTokens ?? null}, ${usage?.outputTokens ?? null},
           ${usage?.cacheReadTokens ?? null}, ${usage?.cacheWriteTokens ?? null}, ${grantId})
       `;
+      // A summary whose uncached input is unknown (from before migration 147) stays unknown.
       yield* sql`
         INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model, grant_id, requests,
           failed_requests, unknown_requests, input_tokens, output_tokens,
-          cache_read_tokens, cache_write_tokens)
+          cache_read_tokens, cache_write_tokens, uncached_input_tokens)
         VALUES (${day}, ${request.userId}, ${request.spaceId}, ${accountId}, ${model},
           ${grantId ?? ""}, 1, ${failed ? 1 : 0}, ${unknown ? 1 : 0}, ${usage?.inputTokens ?? 0},
           ${usage?.outputTokens ?? 0}, ${usage?.cacheReadTokens ?? 0},
-          ${usage?.cacheWriteTokens ?? 0})
+          ${usage?.cacheWriteTokens ?? 0}, ${uncachedInputOf(request.shape, usage)})
         ON CONFLICT (day, user_id, space_id, account_id, model, grant_id) DO UPDATE SET
           requests = requests + 1,
           failed_requests = failed_requests + excluded.failed_requests,
@@ -192,7 +239,8 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
           input_tokens = input_tokens + excluded.input_tokens,
           output_tokens = output_tokens + excluded.output_tokens,
           cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
-          cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens
+          cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+          uncached_input_tokens = uncached_input_tokens + excluded.uncached_input_tokens
       `;
     });
 
@@ -257,9 +305,9 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
             taken,
             (entry) => sql`
               INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model, requests,
-                failed_requests)
+                failed_requests, uncached_input_tokens)
               VALUES (${entry.day}, ${entry.userId}, ${entry.spaceId}, '', '', ${entry.count},
-                ${entry.count})
+                ${entry.count}, 0)
               ON CONFLICT (day, user_id, space_id, account_id, model, grant_id) DO UPDATE SET
                 requests = requests + excluded.requests,
                 failed_requests = failed_requests + excluded.failed_requests
@@ -444,6 +492,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         can,
         everything,
         readSpaces,
+        administered,
         scope,
         visible,
         visibleThreads,
@@ -451,9 +500,151 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       };
     });
 
+    /** Each account's provider and kind, for pricing (only `api-key` has a price). */
+    const accountKinds = (accountIds: ReadonlyArray<string>) =>
+      accountIds.length === 0
+        ? Effect.succeed(
+            new Map<
+              string,
+              { readonly provider: AiAccountProvider; readonly type: AiAccountType }
+            >(),
+          )
+        : sql<{
+            readonly id: string;
+            readonly provider: AiAccountProvider;
+            readonly type: AiAccountType;
+          }>`
+            SELECT account_id AS "id", provider, type FROM ai_accounts
+            WHERE ${sql.in("account_id", accountIds)}
+          `.pipe(
+            Effect.map((rows) => new Map(rows.map((row) => [row.id, row] as const))),
+            Effect.catch(storage("read the AI accounts")),
+          );
+
+    /**
+     * Grants ticket 05: a row's cost at the list price of its day, or null (not `api-key`, no
+     * price, or an uncached input nobody kept); `unpriced`: `api-key` tokens left out.
+     */
+    const priceRow = (
+      kinds: ReadonlyMap<string, { readonly provider: AiAccountProvider; readonly type: string }>,
+      row: CostRow,
+    ): { readonly usd: number | null; readonly unpriced: number } => {
+      const account = kinds.get(row.accountId);
+      if (account === undefined || account.type !== "api-key") return { usd: null, unpriced: 0 };
+      const price = priceFor(prices, account.provider, row.model, row.day);
+      if (price === null || row.uncachedInputTokens === null) {
+        return { usd: null, unpriced: row.inputTokens + row.outputTokens + row.cacheWriteTokens };
+      }
+      return {
+        usd: costUsd(price, {
+          uncachedInputTokens: row.uncachedInputTokens,
+          outputTokens: row.outputTokens,
+          cacheReadTokens: row.cacheReadTokens,
+          cacheWriteTokens: row.cacheWriteTokens,
+        }),
+        unpriced: 0,
+      };
+    };
+
+    const priceAll = (
+      kinds: ReadonlyMap<string, { readonly provider: AiAccountProvider; readonly type: string }>,
+      rows: ReadonlyArray<CostRow>,
+    ) => {
+      let usd: number | null = null;
+      let unpriced = 0;
+      for (const row of rows) {
+        const priced = priceRow(kinds, row);
+        if (priced.usd !== null) usd = (usd ?? 0) + priced.usd;
+        unpriced += priced.unpriced;
+      }
+      return { usd, unpriced };
+    };
+
+    /**
+     * Grants ticket 05: (loan's tokens in a window / the account's) × the window's percentage, the
+     * loan's tokens being those the viewer may see; the percentage only to the lender. Windows of
+     * one model are left out (their tokens would be that model's). docs: ai-gateway.md.
+     */
+    const quotaShareOf = Effect.fn("AiUsage.quotaShareOf")(function* (
+      grantId: string,
+      view: Effect.Success<ReturnType<typeof viewer>>,
+    ) {
+      const found = yield* sql<{
+        readonly accountId: string;
+        readonly targetId: string | null;
+        readonly type: AiAccountType;
+      }>`
+        SELECT g.resource_id AS "accountId", g.target_id AS "targetId", a.type
+        FROM grants g JOIN ai_accounts a ON a.account_id = g.resource_id
+        WHERE g.grant_id = ${grantId} AND g.resource_kind = 'ai-account'
+          AND g.target_kind = 'space'
+      `.pipe(Effect.catch(storage("read the loan")));
+      const grant = found[0];
+      if (grant === undefined || grant.type !== "subscription" || grant.targetId === null) {
+        return undefined;
+      }
+      const target = grant.targetId as SpaceId;
+      const lender = view.given.some((given) => given.grantId === grantId);
+      if (!view.everything && !lender && !view.readSpaces.has(target)) return undefined;
+      const windows = yield* windowsOf(grant.accountId as AiAccountId);
+      if (windows === null) return undefined;
+      const now = yield* Clock.currentTimeMillis;
+      const whole = view.everything || lender || view.administered.includes(target);
+      const counted = sql.literal(
+        `COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
+          + COALESCE(cache_write_tokens, 0)), 0)`,
+      );
+      const shares: Array<AiUsageQuotaShare> = [];
+      for (const window of windows) {
+        if (
+          window.resetsAt === undefined ||
+          window.windowDurationMins === undefined ||
+          window.id.startsWith("seven_day_")
+        ) {
+          continue;
+        }
+        const resetsAt = Option.match(DateTime.make(window.resetsAt), {
+          onNone: () => Number.NaN,
+          onSome: DateTime.toEpochMillis,
+        });
+        // A window already reset: its percentage is stale, and says nothing of the new one.
+        if (!(resetsAt > now)) continue;
+        const fromAt = DateTime.formatIso(
+          DateTime.makeUnsafe(resetsAt - window.windowDurationMins * 60_000),
+        );
+        const tokens = (loanOnly: boolean) =>
+          sql<{ readonly tokens: number }>`
+            SELECT ${counted} AS tokens FROM ai_usage
+            WHERE ${sql.and([
+              sql`account_id = ${grant.accountId}`,
+              sql`at >= ${fromAt}`,
+              ...(loanOnly ? [sql`grant_id = ${grantId}`, view.visible] : []),
+            ])}
+          `.pipe(
+            Effect.map((rows) => rows[0]?.tokens ?? 0),
+            Effect.catch(storage("read the AI usage")),
+          );
+        const accountTokens = yield* tokens(false);
+        const loanTokens = yield* tokens(true);
+        shares.push({
+          windowId: window.id,
+          label: window.label,
+          kind: window.kind,
+          resetsAt: window.resetsAt,
+          sharePercent:
+            accountTokens === 0
+              ? 0
+              : Math.min(100, (loanTokens * window.usedPercent) / accountTokens),
+          of: whole ? "loan" : "own",
+          ...(lender ? { usedPercent: window.usedPercent } : {}),
+        });
+      }
+      return shares.length === 0 ? undefined : shares;
+    });
+
     const summary = Effect.fn("AiUsage.summary")(function* (input: AiUsageSummaryInput) {
-      const { userId, can, everything, readSpaces, scope, visible, visibleThreads, given } =
-        yield* viewer();
+      const view = yield* viewer();
+      const { userId, can, everything, readSpaces, scope, visible, visibleThreads, given } = view;
 
       const now = yield* Clock.currentTimeMillis;
       // Days are checked as given: an impossible one (2026-02-31) is refused, never rolled over.
@@ -495,7 +686,8 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
                 model, grant_id AS "grantId", requests, failed_requests AS "failedRequests",
                 unknown_requests AS "unknownRequests", input_tokens AS "inputTokens",
                 output_tokens AS "outputTokens", cache_read_tokens AS "cacheReadTokens",
-                cache_write_tokens AS "cacheWriteTokens"
+                cache_write_tokens AS "cacheWriteTokens",
+                uncached_input_tokens AS "uncachedInputTokens"
               FROM ai_usage_daily WHERE ${sql.and(filters)}
               ORDER BY day DESC, space_id, user_id, account_id, model, grant_id
               LIMIT ${maxRows + 1}
@@ -510,7 +702,8 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
                 COALESCE(SUM(input_tokens), 0) AS "inputTokens",
                 COALESCE(SUM(output_tokens), 0) AS "outputTokens",
                 COALESCE(SUM(cache_read_tokens), 0) AS "cacheReadTokens",
-                COALESCE(SUM(cache_write_tokens), 0) AS "cacheWriteTokens"
+                COALESCE(SUM(cache_write_tokens), 0) AS "cacheWriteTokens",
+                COALESCE(SUM(${sql.literal(UNCACHED_INPUT_SQL)}), 0) AS "uncachedInputTokens"
               FROM ai_usage WHERE ${sql.and(filters)}
               GROUP BY day, user_id, space_id, COALESCE(account_id, ''), COALESCE(model, ''),
                 COALESCE(grant_id, '')
@@ -519,6 +712,39 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
             `.pipe(Effect.catch(storage("read the AI usage")));
       const truncated = rows.length > maxRows;
       const kept = truncated ? rows.slice(0, maxRows) : rows;
+
+      // Cut rows must not undercount the estimate either: then it is priced from sums of its own.
+      const costRows: ReadonlyArray<CostRow> = !truncated
+        ? kept
+        : input.threadId === undefined
+          ? yield* sql<CostRow>`
+              SELECT day, account_id AS "accountId", model,
+                COALESCE(SUM(input_tokens), 0) AS "inputTokens",
+                COALESCE(SUM(output_tokens), 0) AS "outputTokens",
+                COALESCE(SUM(cache_read_tokens), 0) AS "cacheReadTokens",
+                COALESCE(SUM(cache_write_tokens), 0) AS "cacheWriteTokens",
+                -- Unknown if any of the day's rows is.
+                CASE WHEN COUNT(uncached_input_tokens) = COUNT(*)
+                  THEN COALESCE(SUM(uncached_input_tokens), 0) END AS "uncachedInputTokens"
+              FROM ai_usage_daily WHERE ${sql.and(filters)}
+              GROUP BY day, account_id, model
+            `.pipe(Effect.catch(storage("read the AI usage")))
+          : yield* sql<CostRow>`
+              SELECT day, COALESCE(account_id, '') AS "accountId", COALESCE(model, '') AS "model",
+                COALESCE(SUM(input_tokens), 0) AS "inputTokens",
+                COALESCE(SUM(output_tokens), 0) AS "outputTokens",
+                COALESCE(SUM(cache_read_tokens), 0) AS "cacheReadTokens",
+                COALESCE(SUM(cache_write_tokens), 0) AS "cacheWriteTokens",
+                COALESCE(SUM(${sql.literal(UNCACHED_INPUT_SQL)}), 0) AS "uncachedInputTokens"
+              FROM ai_usage WHERE ${sql.and(filters)}
+              GROUP BY day, COALESCE(account_id, ''), COALESCE(model, '')
+            `.pipe(Effect.catch(storage("read the AI usage")));
+      const kinds = yield* accountKinds([
+        ...new Set(
+          [...kept, ...costRows].flatMap((row) => (row.accountId === "" ? [] : [row.accountId])),
+        ),
+      ]);
+      const cost = priceAll(kinds, costRows);
 
       const outRows: Array<AiUsageRow> = kept.map((row) => ({
         day: row.day,
@@ -534,6 +760,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         outputTokens: row.outputTokens,
         cacheReadTokens: row.cacheReadTokens,
         cacheWriteTokens: row.cacheWriteTokens,
+        estimatedUsd: priceRow(kinds, row).usd,
       }));
       // Cut rows must not undercount: the totals then come from a query of their own.
       const totals = !truncated
@@ -567,6 +794,10 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
           );
 
       const labels = yield* labelsOf(userId, everything, can, readSpaces, outRows, given);
+      const quotaShare =
+        input.grantId === undefined || input.threadId !== undefined
+          ? undefined
+          : yield* quotaShareOf(input.grantId, view);
       return {
         fromDay,
         toDay,
@@ -576,6 +807,10 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         labels,
         truncated,
         retentionDays: options.retentionDays,
+        estimatedUsd: cost.usd,
+        unpricedTokens: cost.unpriced,
+        pricesReviewedOn: AI_PRICES_REVIEWED,
+        ...(quotaShare === undefined ? {} : { quotaShare }),
       } satisfies AiUsageSummary;
     });
 

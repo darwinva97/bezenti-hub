@@ -423,6 +423,49 @@ month, or explicitly none; requests per period, optionally. `ai/GrantCaps.ts` ch
 - **Shown:** the picker («<name> · from <lender> · 40% of daily cap» or «cap reached») and the Loans
   lists (used of each cap and its reset), from the same check.
 
+## Estimated cost and quota share of lent AI accounts (Grants ticket 05)
+
+Shown, never enforced: neither is a cap or a bill. `AiUsage.summary` adds them; `LoanUsage` shows
+them to both sides of a loan.
+
+- **The price table** is `ai/aiPrices.ts`: entries `{ provider, model, validFrom, input, output,
+  cacheRead, cacheWrite, source }`, in USD per million tokens. `model` is a name or a prefix
+  ending in `*`, matched case-insensitively, with a `[1m]`-style suffix dropped. Each name ships
+  as itself and its dated snapshots (`<name>-20*`), never as a bare prefix, so a model released
+  later stays unpriced instead of borrowing a price. A day is valued at the entry in force that
+  day: the longest matching pattern, then the latest `validFrom` no later than the day.
+- **Updating it** happens with the Hub's releases, and nothing is downloaded (ADR 0007):
+  - Read the provider's public pricing page and change the table in a release.
+  - A price change is a **new entry** with a later `validFrom`; never edit an old entry's numbers, or the past would be rewritten.
+  - Put the page and the day it was read in `source`, and move `AI_PRICES_REVIEWED`, which the UI shows as «list prices as of».
+  - A model whose price is not on a public page gets no entry: it shows as «no price».
+  - Entries start on the day they were first checked, so earlier days have no price rather than an invented one.
+  - Prices a provider has announced for later go in now, with their own `validFrom`.
+- **Rates in the table:**
+  - Only the base Standard, short-context rates: long-context, batch, regional, priority and fast tiers are not modelled.
+  - For Claude, the 5-minute cache-write rate.
+  - For OpenAI, Gemini and xAI, a cache-write rate equal to input, because their answers report no cache writes.
+  - Vertex AI and OpenAI-compatible accounts have no entries, since their prices are not on the pages read.
+- **What is priced:** only `api-key` accounts. A subscription's rows and rows with no account have
+  `estimatedUsd: null`. An `api-key` row with no price, or with an unknown uncached input, goes into
+  `unpricedTokens` (input + output + cache write).
+- **Cached input.** An Anthropic-shaped answer's input leaves cache reads out, while OpenAI's and
+  Gemini's count them in. So the writer keeps each daily row's input not read from the cache
+  (`uncached_input_tokens`, migration 147): input for the anthropic shape, and `input − cache read`
+  for the others. That is what the input rate applies to; cache reads get the cache-read rate.
+  - Migration 147 backfilled the column from the per-request rows where they still add up to the daily input.
+  - Older rows are NULL and unpriced.
+  - A Thread's rows compute the same value from each request's shape.
+- **Truncated rows:** when the rows are cut (`maxRows`), the estimate is priced from per-day,
+  account and model sums, so it still covers everything.
+- **Quota share of a lent subscription:**
+  - **When:** only with the `grantId` filter, for a Claude or Codex subscription whose provider reports quota windows (`AiAccounts.subscriptionWindows`, the same 5-minute read as the Owner's list).
+  - **Which windows:** those with a reset time and a length, not yet reset, and not tied to one model (`seven_day_<model>`).
+  - **The share:** `(loan's tokens since the window began / the account's tokens since then) × the window's used percentage`. Both counts come from `ai_usage` and count tokens as the caps do. It is marked «approx.».
+  - **Who sees what:** the loan's tokens are those the viewer may see, so a borrowing Member gets their own part (`of: own`), and the lender, an Admin of the borrowing Space or the Owner gets the whole loan's. The account's own percentage goes only to its lender (`usedPercent`). The account's token counts are never returned.
+  - **Why it is approximate:** use of the account outside this Hub is in the percentage but not in the tokens, so it overstates the share.
+  - **No data:** with no windows, nothing is shown.
+
 ## Local CLI keys (spec 4 ticket 10)
 
 A User points Claude Code or Codex on their own machine at the Hub with a **User key**: Settings →

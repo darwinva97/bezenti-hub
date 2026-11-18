@@ -3,9 +3,13 @@ import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
-import { GrantsSettings, groupLentLoans } from "./GrantsSettings";
+import { GrantsSettings, groupLentLoans, LendMachineDialog } from "./GrantsSettings";
 
-const loans = vi.hoisted(() => ({ given: [] as unknown[], received: [] as unknown[] }));
+const loans = vi.hoisted(() => ({
+  given: [] as unknown[],
+  received: [] as unknown[],
+  targets: [] as unknown[],
+}));
 
 vi.mock("../../state/environments", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/environments")>()),
@@ -16,6 +20,7 @@ vi.mock("../../state/grants", () => ({
     end: { permissionAtom: () => ({}) },
     listGiven: {},
     listReceived: {},
+    targets: {},
     reject: {},
     cancel: {},
   },
@@ -25,13 +30,14 @@ vi.mock("@effect/atom-react", async (importOriginal) => ({
   useAtomValue: () => true,
 }));
 vi.mock("../../state/use-atom-command", () => ({
-  // The label tells the commands apart; only the two lists answer here.
+  // The label tells the commands apart; only the two lists and the targets answer here.
   useAtomCommand: (_command: unknown, label: string) => () =>
     Promise.resolve({
       _tag: "Success",
-      value: {
-        grants: label === "list your loans" ? loans.given : loans.received,
-      },
+      value:
+        label === "list where you may lend"
+          ? { targets: loans.targets, host: null }
+          : { grants: label === "list your loans" ? loans.given : loans.received },
     }),
 }));
 vi.mock("./LoanUsage", () => ({ LoanUsage: () => <p>usage panel</p> }));
@@ -92,4 +98,26 @@ it("shows three loans of one account as one group with three recipient lines", a
   await userEvent.keyboard("{Escape}");
   await header.click();
   await expect.element(header).toHaveAttribute("aria-expanded", "false");
+});
+
+it("shows the Space's name, not its id, in the closed Lend to select", async () => {
+  loans.targets = [
+    {
+      spaceId: "personal:83ad563e-cd0b-4a3f-b140-2c4cbff2f4be",
+      kind: "personal",
+      name: "Grecia",
+      ownerDisplayName: "Grecia Alvarez Garrafa",
+      startsActive: false,
+    },
+  ];
+  await render(
+    <LendMachineDialog machine={{ id: "env-m", name: "Box" } as never} onClose={() => {}} />,
+  );
+
+  const trigger = page.getByRole("combobox", { name: "Lend to" });
+  await trigger.click();
+  await page.getByRole("option", { name: "Grecia Alvarez Garrafa (personal)" }).click();
+
+  await expect.element(trigger).toHaveTextContent("Grecia Alvarez Garrafa (personal)");
+  await expect.element(trigger).not.toHaveTextContent("personal:");
 });

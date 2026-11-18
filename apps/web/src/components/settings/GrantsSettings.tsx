@@ -239,7 +239,13 @@ export function LendMachineDialog({
                 Lend to
                 <Select value={spaceId} onValueChange={(next) => setSpaceId(String(next ?? ""))}>
                   <SelectTrigger aria-label="Lend to">
-                    <SelectValue placeholder={targets === null ? "Loading…" : "Choose a Space"} />
+                    <SelectValue>
+                      {target
+                        ? spaceLabel(target)
+                        : targets === null
+                          ? "Loading…"
+                          : "Choose a Space"}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
                     {(targets ?? []).map((entry) => (

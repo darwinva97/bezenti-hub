@@ -18,6 +18,7 @@ export * from "./vaults.ts";
 export * from "./grantCaps.ts";
 export * from "./grants.ts";
 export * from "./secretProviderScopes.ts";
+export * from "./signInSettings.ts";
 export * from "./vaultTemplates.ts";
 export * from "./sshInstall.ts";
 export * from "./environment.ts";

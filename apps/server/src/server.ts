@@ -192,6 +192,9 @@ import * as InvitationsHttp from "./spaces/invitationsHttp.ts";
 import * as InstallationUsersHttp from "./spaces/installationUsersHttp.ts";
 import * as AuditLog from "./audit/AuditLog.ts";
 import * as AuditHttp from "./audit/http.ts";
+import * as KeycloakClient from "./auth/KeycloakClient.ts";
+import * as SignInSettings from "./auth/SignInSettings.ts";
+import * as SignInSettingsHttp from "./auth/signInSettingsHttp.ts";
 import * as EnvironmentConnectRoute from "./environments/connectRoute.ts";
 import * as EnvironmentGitRoute from "./environments/gitRoute.ts";
 import * as EnvironmentRegistry from "./environments/EnvironmentRegistry.ts";
@@ -555,6 +558,9 @@ const layerAuth = Layer.mergeAll(
   layerIdentity,
   // Secret providers' scopes and «Test connection» (Vaults ticket 03), over the same reads.
   SecretProviderScopes.layer.pipe(Layer.provide(layerProviderReads), Layer.provide(AuditLog.layer)),
+  // The Owner's sign-in settings and the Keycloak realm they name (Keycloak sign-in, ticket 01):
+  // its own fetch, which never follows a redirect.
+  SignInSettings.layer.pipe(Layer.provide(KeycloakClient.layerLive), Layer.provide(AuditLog.layer)),
   // The Sandboxes' base image: built on this Hub, one build at a time.
   SandboxImage.layer,
   // CLIProxyAPI, run by the Hub on loopback (`T3CODE_AI_GATEWAY`), and the AI accounts it gets
@@ -858,6 +864,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(InvitationsHttp.layer),
       Layer.provide(InstallationUsersHttp.layer),
       Layer.provide(AuditHttp.layer),
+      Layer.provide(SignInSettingsHttp.layer),
       Layer.provide(HubEnvironmentsHttp.layer),
       Layer.provide(SandboxImageHttp.layer),
       Layer.provide(VaultsHttp.layer.pipe(Layer.provide(MasterKeyBackup.layer))),

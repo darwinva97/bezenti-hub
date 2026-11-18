@@ -64,6 +64,10 @@ import { layerTestPeer, TEST_PEER_HEADER } from "./clientConnection.testkit.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as OwnerPresence from "./OwnerPresence.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
+import * as KeycloakClient from "./KeycloakClient.ts";
+import * as KeycloakTestkit from "./Keycloak.testkit.ts";
+import * as SignInSettings from "./SignInSettings.ts";
+import * as SignInSettingsHttp from "./signInSettingsHttp.ts";
 import * as SessionStore from "./SessionStore.ts";
 import * as AuthHttp from "./http.ts";
 import * as AppSignInHttp from "./appSignInHttp.ts";
@@ -106,6 +110,7 @@ class AuthTestApi extends HttpApi.make("environment")
   .add(EnvironmentHttpApi.groups.invitations)
   .add(EnvironmentHttpApi.groups.installationUsers)
   .add(EnvironmentHttpApi.groups.audit)
+  .add(EnvironmentHttpApi.groups.signInSettings)
   .add(EnvironmentHttpApi.groups.environments)
   .add(EnvironmentHttpApi.groups.sandboxImage)
   .add(EnvironmentHttpApi.groups.vaults)
@@ -207,6 +212,33 @@ type TestRegistryOptions = EnvironmentRegistry.RegistryOptions & {
   readonly hubRunsAgents?: boolean;
 };
 
+/** The sign-in settings (Keycloak sign-in spec): over a fake realm, never the network. */
+export interface TestSignInOptions {
+  /** Where the Hub's Keycloak requests go (`Keycloak.testkit.ts`); by default, nowhere. */
+  readonly keycloakHttp?: Layer.Layer<KeycloakClient.KeycloakHttp>;
+  /** The encrypted store as the sign-in settings see it, to make it refuse a write. */
+  readonly secretStore?: (
+    store: ServerSecretStore.ServerSecretStore["Service"],
+  ) => ServerSecretStore.ServerSecretStore["Service"];
+}
+
+const layerSignInSettings = (options: TestSignInOptions = {}) =>
+  SignInSettings.layer.pipe(
+    Layer.provide(
+      KeycloakClient.layer.pipe(
+        Layer.provide(options.keycloakHttp ?? KeycloakTestkit.layerNoNetwork),
+      ),
+    ),
+    Layer.provide(
+      options.secretStore === undefined
+        ? Layer.empty
+        : Layer.effect(
+            ServerSecretStore.ServerSecretStore,
+            Effect.map(ServerSecretStore.ServerSecretStore, options.secretStore),
+          ),
+    ),
+  );
+
 const makeLayerServices = (
   config: { readonly publicUrl?: URL; readonly previewOrigin?: PreviewOriginPattern },
   sandboxRuntime?: TestSandboxRuntime,
@@ -216,6 +248,7 @@ const makeLayerServices = (
   providerReads?: Parameters<typeof ProviderReads.make>[0],
   secretFiles?: Layer.Layer<ThreadSecretFiles.ThreadSecretFiles>,
   identityIssuer?: string,
+  signIn?: TestSignInOptions,
 ) =>
   // Archive and delete reach Projects and Thread reads; no Thread in these tests runs.
   OrganizationLifecycle.layer.pipe(
@@ -277,6 +310,7 @@ const makeLayerServices = (
       Layer.mergeAll(
         Vaults.layer,
         SecretProviderScopes.layer,
+        layerSignInSettings(signIn),
         // Delivery, and the masking of what was delivered (spec 5 ticket 05), under everything.
         // Where each machine writes Secret files: the Hub machine's own only when a test gives one.
         SecretDelivery.layer.pipe(
@@ -384,6 +418,8 @@ export const serveAuthHttpWith = Effect.fn(function* (
     readonly secretFiles?: Layer.Layer<ThreadSecretFiles.ThreadSecretFiles>;
     /** `T3CODE_IDENTITY_ISSUER` (Vaults ticket 07); without it nor `publicUrl`, identity is off. */
     readonly identityIssuer?: string;
+    /** The sign-in settings' realm and store (Keycloak sign-in spec). */
+    readonly signIn?: TestSignInOptions;
   } = {},
 ) {
   const base = yield* Layer.build(
@@ -399,31 +435,34 @@ export const serveAuthHttpWith = Effect.fn(function* (
       config.providerReads,
       config.secretFiles,
       config.identityIssuer,
+      config.signIn,
     ),
   );
   const services = config.extend === undefined ? base : yield* config.extend(base);
-  const routes = HttpApiBuilder.layer(AuthTestApi).pipe(
-    Layer.provide(AuthHttp.layer),
-    Layer.provide(AppSignInHttp.layer),
-    Layer.provide(SpacesHttp.layer),
-    Layer.provide(InvitationsHttp.layer),
-    Layer.provide(InstallationUsersHttp.layer),
-    Layer.provide(AuditHttp.layer),
-    Layer.provide(HubEnvironmentsHttp.layer),
-    Layer.provide(SandboxImageHttp.layer),
-    Layer.provide(VaultsHttp.layer.pipe(Layer.provide(MasterKeyBackup.layer))),
-    Layer.provide(GrantsHttp.layer),
-    Layer.provide(ProjectHttp.layer),
-    Layer.provide(OrchestrationHttp.layer),
-    Layer.provide(PullRequestHttp.layer),
-    Layer.provide(McpOAuthHttp.layer),
-    Layer.provide(AuthHttp.layerAuthenticatedAuth),
-    Layer.provide(layerTestPeer),
-    Layer.provide(Layer.succeedContext(services)),
-    Layer.provide(HttpPlatform.layer),
-    Layer.provide(Etag.layerWeak),
-    Layer.provide(NodeServices.layer),
-  );
+  const routes = HttpApiBuilder.layer(AuthTestApi)
+    .pipe(Layer.provide(SignInSettingsHttp.layer))
+    .pipe(
+      Layer.provide(AuthHttp.layer),
+      Layer.provide(AppSignInHttp.layer),
+      Layer.provide(SpacesHttp.layer),
+      Layer.provide(InvitationsHttp.layer),
+      Layer.provide(InstallationUsersHttp.layer),
+      Layer.provide(AuditHttp.layer),
+      Layer.provide(HubEnvironmentsHttp.layer),
+      Layer.provide(SandboxImageHttp.layer),
+      Layer.provide(VaultsHttp.layer.pipe(Layer.provide(MasterKeyBackup.layer))),
+      Layer.provide(GrantsHttp.layer),
+      Layer.provide(ProjectHttp.layer),
+      Layer.provide(OrchestrationHttp.layer),
+      Layer.provide(PullRequestHttp.layer),
+      Layer.provide(McpOAuthHttp.layer),
+      Layer.provide(AuthHttp.layerAuthenticatedAuth),
+      Layer.provide(layerTestPeer),
+      Layer.provide(Layer.succeedContext(services)),
+      Layer.provide(HttpPlatform.layer),
+      Layer.provide(Etag.layerWeak),
+      Layer.provide(NodeServices.layer),
+    );
   const { handler, dispose } = HttpRouter.toWebHandler(routes, { disableLogger: true });
   yield* Effect.addFinalizer(() => Effect.promise(dispose));
   let url = "";

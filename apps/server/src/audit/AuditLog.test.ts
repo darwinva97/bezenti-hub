@@ -636,6 +636,8 @@ it.effect(
         "grant.cancel",
         "grant.end",
         "grant.limits.change",
+        // auth/SignInSettings.test.ts (Keycloak sign-in, ticket 01)
+        "signIn.settings.update",
         // No longer written (owned-resources 06: no Installation permission is left); old rows
         // stay readable.
         "installationPermission.grant",

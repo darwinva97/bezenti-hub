@@ -273,6 +273,8 @@ describe("settings modal sections", () => {
         "sandboxes",
         "hub-machine",
         "hub-defaults",
+        "registration",
+        "keycloak",
         "labs",
       ]);
     }
@@ -283,7 +285,7 @@ describe("settings modal sections", () => {
       // Secret providers are built, only hidden by a feature flag: not a reserved place.
       .filter((section) => section.component === null && section.id !== "secret-providers")
       .map((section) => section.id);
-    expect(reservedIds).toEqual(["registration", "keycloak", "plans", "terms"]);
+    expect(reservedIds).toEqual(["plans", "terms"]);
   });
 
   it("shows User settings to everyone, SnapShots on the desktop only, and what a User owns to Users", () => {

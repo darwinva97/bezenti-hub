@@ -259,6 +259,11 @@ export type Action =
   | "vault.identityEntry"
   /** Secret providers' scopes and «Test connection», decided on the Installation: the Owner. */
   | "secretProvider.manage"
+  /**
+   * Read and change the sign-in settings and «Check» the Keycloak realm (Keycloak sign-in spec,
+   * ticket 01), decided on the Installation: the Owner alone. They decide who gets in at all.
+   */
+  | "signInSettings.manage"
   /** Add, replace, rename and delete a Vault's secrets without reading them. */
   | "vault.edit"
   /**
@@ -969,7 +974,11 @@ export function decide(principal: Principal, action: Action, resource: Resource)
       ? decideEnvironmentMove(principal, resource)
       : deny("wrong-resource");
   }
-  if (action === "masterKey.backup" || action === "secretProvider.manage") {
+  if (
+    action === "masterKey.backup" ||
+    action === "secretProvider.manage" ||
+    action === "signInSettings.manage"
+  ) {
     if (resource.kind !== "installation") return deny("wrong-resource");
     return principal.isOwner ? allow : deny("owner-only");
   }

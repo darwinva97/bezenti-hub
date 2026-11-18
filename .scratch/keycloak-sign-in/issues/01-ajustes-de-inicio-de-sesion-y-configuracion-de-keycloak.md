@@ -8,10 +8,19 @@
 
 Spec: ../spec.md
 
-- [ ] Migración con `sign_in_settings` (una fila, `invitation-only` y local permitido por defecto) y `keycloak_group_mappings` (vacía; la usa el ticket 05).
-- [ ] Servicio `SignInSettings`: leer, guardar y `check`. El client secret va a `ServerSecretStore` como `keycloak-client-secret`; la lectura devuelve `clientSecretSet`, nunca el valor. Guardar sin `clientSecret` conserva el anterior.
-- [ ] `KeycloakClient` con descubrimiento (el `issuer` del documento debe ser idéntico al configurado) y carga del key set con `effect/jose` (`Jwks.layerRemote`; en loopback HTTP, descarga propia y `Jwks.makeLocal`). Un issuer HTTP fuera de loopback se rechaza al guardar.
-- [ ] Endpoints `GET/POST /api/installation/sign-in-settings` y `POST /api/installation/sign-in-settings/check`: Owner y `access:write`/`access:read`; cualquier otro recibe el mismo 403. Declarados en `HTTP_ENDPOINT_RULES`.
-- [ ] Contratos en `packages/contracts`: `SignInSettings`, su petición de cambio (secret solo de escritura), `RegistrationMode`, acción de auditoría `signIn.settings.update` (detalle sin el secret; sí «secret replaced»).
-- [ ] UI web (Owner): formulario, «Comprobar» con el error legible, URLs de redirect, back-channel logout y post-logout calculadas desde `T3CODE_PUBLIC_URL` o el origen, interruptor «Keycloak activo» (no se enciende si «Comprobar» falla).
-- [ ] Tests en la frontera del servidor con el Keycloak falso (`apps/server/src/auth/Keycloak.testkit.ts`, que reutilizan los tickets siguientes): el Owner guarda y comprueba; un Admin recibe 403; ninguna respuesta contiene el secret; descubrimiento con issuer distinto falla.
+- [x] Migración con `sign_in_settings` (una fila, `invitation-only` y local permitido por defecto) y `keycloak_group_mappings` (vacía; la usa el ticket 05).
+- [x] Servicio `SignInSettings`: leer, guardar y `check`. El client secret va a `ServerSecretStore` como `keycloak-client-secret`; la lectura devuelve `clientSecretSet`, nunca el valor. Guardar sin `clientSecret` conserva el anterior.
+- [x] `KeycloakClient` con descubrimiento (el `issuer` del documento debe ser idéntico al configurado) y carga del key set con `effect/jose` (`Jwks.layerRemote`; en loopback HTTP, descarga propia y `Jwks.makeLocal`). Un issuer HTTP fuera de loopback se rechaza al guardar.
+- [x] Endpoints `GET/POST /api/installation/sign-in-settings` y `POST /api/installation/sign-in-settings/check`: Owner y `access:write`/`access:read`; cualquier otro recibe el mismo 403. Declarados en `HTTP_ENDPOINT_RULES`.
+- [x] Contratos en `packages/contracts`: `SignInSettings`, su petición de cambio (secret solo de escritura), `RegistrationMode`, acción de auditoría `signIn.settings.update` (detalle sin el secret; sí «secret replaced»).
+- [x] UI web (Owner): formulario, «Comprobar» con el error legible, URLs de redirect, back-channel logout y post-logout calculadas desde `T3CODE_PUBLIC_URL` o el origen, interruptor «Keycloak activo» (no se enciende si «Comprobar» falla).
+- [x] Tests en la frontera del servidor con el Keycloak falso (`apps/server/src/auth/Keycloak.testkit.ts`, que reutilizan los tickets siguientes): el Owner guarda y comprueba; un Admin recibe 403; ninguna respuesta contiene el secret; descubrimiento con issuer distinto falla.
+
+Notas de implementación (rama `feat/keycloak-01`):
+
+- ADRs: el spec cita 0008, 0009 y 0012 como plataforma abierta, Keycloak y Secrets de solo escritura, pero en `docs/adr/` esos números son otros ADRs (y no hay 0012). Se siguió el texto del spec y `GLOSSARY.md` («Secret»).
+- UI: en los huecos que ya reservaba el modal de Plataforma, «Registration» (modo de registro e inicio local) y «Keycloak» (cliente, «Check», URLs), no en un diálogo aparte.
+- «Check» solo comprueba el issuer guardado (no acepta URL); encender Keycloak, o cambiarle el issuer encendido, vuelve a comprobar en el servidor y, si falla, no guarda nada. HTTP solo en loopback, en cualquier modo. «Check» pide `access:write`.
+- El client secret se escribe en el almacén cifrado después del commit: si esa escritura falla, la fila y la auditoría dicen «replaced», el Owner recibe `sign_in_secret_not_stored`, y la lectura (`clientSecretSet`, `keycloakConfig`) sigue al almacén, así que Keycloak no se enciende sin secret.
+- `groupsClaim`, `strongAcr` y `strongAmr` ya se aceptan en la petición (sin UI): los tickets 05 y 06 solo añaden UI y comportamiento.
+- Migración 151 (provisional): `sign_in_settings` y `keycloak_group_mappings`.

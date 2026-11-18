@@ -11,6 +11,7 @@ import type {
   SpaceDirectoryView,
   SpaceId,
   SpaceSummary,
+  UpdateSignInSettingsRequest,
   UserId,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
@@ -91,6 +92,20 @@ export const setInstallationUserStatus = (
 export const fetchAuditLog = (client: EnvironmentHttpClient, query: AuditLogQuery = {}) =>
   client.audit.list({ headers: {}, query });
 
+/** The Owner's sign-in settings (Keycloak sign-in, ticket 01); the client secret never comes back. */
+export const fetchSignInSettings = (client: EnvironmentHttpClient) =>
+  client.signInSettings.get({ headers: {} });
+
+/** Saves a change; `clientSecret`, Redacted, only to replace the saved one. */
+export const updateSignInSettings = (
+  client: EnvironmentHttpClient,
+  payload: UpdateSignInSettingsRequest,
+) => client.signInSettings.update({ headers: {}, payload });
+
+/** «Check»: whether the saved realm's discovery document and key set answer. */
+export const checkSignInSettings = (client: EnvironmentHttpClient) =>
+  client.signInSettings.check({ headers: {} });
+
 /** How the audit view names each action. */
 export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "owner.bootstrap": "Claimed the Hub as Owner",
@@ -108,6 +123,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "user.disable": "Disabled a User",
   "user.enable": "Turned a User back on",
   "user.remove": "Removed a User",
+  "signIn.settings.update": "Changed the sign-in settings",
   "organization.create": "Created an Organization",
   "organization.archive": "Archived an Organization",
   "organization.restore": "Restored an Organization",

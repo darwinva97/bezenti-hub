@@ -10,6 +10,12 @@ import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import {
+  KeycloakCheckResult,
+  SignInSettings,
+  UpdateSignInSettingsRequest,
+} from "./signInSettings.ts";
+
+import {
   AuthAccessTokenResult,
   AuthBrowserSessionRequest,
   AuthBrowserSessionResult,
@@ -241,6 +247,9 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "master_key_failed",
   "vaults_failed",
   "grants_failed",
+  "sign_in_settings_failed",
+  /** The settings were saved, but the client secret could not be stored: enter it again. */
+  "sign_in_secret_not_stored",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -1092,6 +1101,34 @@ class EnvironmentAuditHttpApi extends HttpApiGroup.make("audit").add(
   }).middleware(EnvironmentAuthenticatedAuth),
 ) {}
 
+// The Owner's sign-in settings (Keycloak sign-in spec, ticket 01): the Registration mode, local
+// sign-in for Members, and the Keycloak client, whose secret is write-only. Anyone but the Owner
+// gets the same 403; a session of the Owner's also needs the access scope. Bad request: a value
+// it refuses, or «Check» failing while turning Keycloak on; `message` says which, in plain words.
+class EnvironmentSignInSettingsHttpApi extends HttpApiGroup.make("signInSettings")
+  .add(
+    HttpApiEndpoint.get("get", "/api/installation/sign-in-settings", {
+      headers: OptionalBearerHeaders,
+      success: SignInSettings,
+      error: EnvironmentInstallationUserErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("update", "/api/installation/sign-in-settings", {
+      headers: OptionalBearerHeaders,
+      payload: UpdateSignInSettingsRequest,
+      success: SignInSettings,
+      error: [...EnvironmentInstallationUserErrors, EnvironmentHttpBadRequestError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("check", "/api/installation/sign-in-settings/check", {
+      headers: OptionalBearerHeaders,
+      success: KeycloakCheckResult,
+      error: EnvironmentInstallationUserErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 const EnvironmentHubEnvironmentErrors = [
   // The session has no User, or the policy refuses the change.
   EnvironmentHttpForbiddenError,
@@ -1601,6 +1638,7 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentInvitationsHttpApi)
   .add(EnvironmentInstallationUsersHttpApi)
   .add(EnvironmentAuditHttpApi)
+  .add(EnvironmentSignInSettingsHttpApi)
   .add(EnvironmentHubEnvironmentsHttpApi)
   .add(EnvironmentSandboxImageHttpApi)
   .add(EnvironmentVaultsHttpApi)

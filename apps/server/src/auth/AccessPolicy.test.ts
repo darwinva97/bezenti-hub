@@ -1434,6 +1434,38 @@ const rows: ReadonlyArray<Row> = [
     organization,
     deny("wrong-resource"),
   ],
+  // Who may sign in at all: the sign-in settings are the Owner's alone (Keycloak sign-in, 01).
+  [
+    "Owner manages the sign-in settings",
+    owner,
+    "signInSettings.manage",
+    AccessPolicy.installation,
+    allow,
+  ],
+  ...(
+    [
+      ["an Admin", admin],
+      ["a Member", member],
+      ["a Guest", guest],
+      ["a User in no Organization", personalCreator],
+    ] as const
+  ).map(
+    ([who, principal]) =>
+      [
+        `${who} does not manage the sign-in settings`,
+        principal,
+        "signInSettings.manage",
+        AccessPolicy.installation,
+        deny("owner-only"),
+      ] as const,
+  ),
+  [
+    "the sign-in settings are the Installation's, not a Space's",
+    owner,
+    "signInSettings.manage",
+    organization,
+    deny("wrong-resource"),
+  ],
   // Vaults (spec 5 «Vaults», owned-resources 03): the Owner does all; an Organization's Admins
   // manage its groups and edit them without reading Secrets; its Members and Guests see names;
   // the Owner's `default` (the Main vault) is the Owner's alone.

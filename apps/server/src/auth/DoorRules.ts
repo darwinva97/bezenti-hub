@@ -31,6 +31,10 @@ const MASTER_KEY = own(
 const GRANT_MAKES_ACTIVE = own(
   "Grants.prepareGive/prepareAccept/prepareClaim (AccessPolicy `grant.give`/`grant.decide`; a link's, also live and unthrottled) before the strong factor in the request (UserDirectory.confirmStrongFactor) when a machine's loan becomes active, then Grants.give/accept/claimOffer, which check it all again in their transaction and audit `grant.*`; access:write; no MCP door",
 );
+/** Who may sign in at all, and the Keycloak client's write-only secret. */
+const SIGN_IN_SETTINGS = own(
+  "AccessPolicy `signInSettings.manage` on the Installation (the Owner only; everyone else the same 403, before any scope is looked at), then access:read to read and access:write to change or «Check»; the client secret is write-only (never in an answer, log, span or audit entry); «Check» fetches only the saved issuer's discovery and key set (5 s, 128 KiB, no redirects, endpoints on the issuer's host); no WS or MCP door",
+);
 const WEBHOOK = own("the task's secret token in the path; runs as the task's creator");
 const THREAD_READ = own(
   "SpaceVisibility.visibleThreadIds like getThreadProjection: hidden answers thread_not_found",
@@ -98,6 +102,9 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "environments.startJoin": ENVIRONMENTS,
   "installationUsers.list": OWNER,
   "installationUsers.setStatus": OWNER,
+  "signInSettings.check": SIGN_IN_SETTINGS,
+  "signInSettings.get": SIGN_IN_SETTINGS,
+  "signInSettings.update": SIGN_IN_SETTINGS,
   "invitations.accept": INVITATIONS,
   "invitations.create": INVITATIONS,
   "invitations.join": INVITATIONS,

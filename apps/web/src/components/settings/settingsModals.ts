@@ -148,6 +148,16 @@ const SpaceArchiveSection = lazySection(() =>
 const PlatformUsersSection = lazySection(() =>
   import("./PlatformUsersSection").then((module) => ({ default: module.PlatformUsersSection })),
 );
+const PlatformRegistrationSection = lazySection(() =>
+  import("./PlatformSignInSection").then((module) => ({
+    default: module.PlatformRegistrationSection,
+  })),
+);
+const PlatformKeycloakSection = lazySection(() =>
+  import("./PlatformSignInSection").then((module) => ({
+    default: module.PlatformKeycloakSection,
+  })),
+);
 const PlatformAuditLogSection = lazySection(() =>
   import("./PlatformAuditLogSection").then((module) => ({
     default: module.PlatformAuditLogSection,
@@ -394,8 +404,21 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       component: HubDefaultsSection,
       group: 1,
     },
-    reserved("registration", "Registration", UserPlusIcon, 2),
-    reserved("keycloak", "Keycloak", KeyRoundIcon, 2),
+    // Keycloak sign-in, ticket 01: who may get a User, and the Keycloak client.
+    {
+      id: "registration",
+      label: "Registration",
+      icon: UserPlusIcon,
+      component: PlatformRegistrationSection,
+      group: 2,
+    },
+    {
+      id: "keycloak",
+      label: "Keycloak",
+      icon: KeyRoundIcon,
+      component: PlatformKeycloakSection,
+      group: 2,
+    },
     reserved("plans", "Plans", SparklesIcon, 2),
     reserved("terms", "Terms", ScrollTextIcon, 2),
     {

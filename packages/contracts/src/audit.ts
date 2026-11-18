@@ -22,6 +22,8 @@ export const AuditAction = Schema.Literals([
   "user.disable",
   "user.enable",
   "user.remove",
+  // Keycloak sign-in spec, ticket 01: the Owner's sign-in settings.
+  "signIn.settings.update",
   "organization.create",
   "organization.archive",
   "organization.restore",
@@ -106,6 +108,7 @@ export const AuditTargetKind = Schema.Literals([
   "secret_provider",
   "provider_scope",
   "grant",
+  "sign_in_settings",
 ]);
 export type AuditTargetKind = typeof AuditTargetKind.Type;
 
@@ -136,6 +139,18 @@ export const AUDIT_DETAIL_KEYS = {
   "user.disable": ["from"],
   "user.enable": ["from"],
   "user.remove": ["from"],
+  /**
+   * The fields that changed, by name, and the new Registration mode, switches and issuer. Never
+   * the client secret: `secretReplaced` says only that a new one was saved.
+   */
+  "signIn.settings.update": [
+    "changed",
+    "registrationMode",
+    "keycloakEnabled",
+    "localSignInForMembers",
+    "issuer",
+    "secretReplaced",
+  ],
   "organization.create": [],
   "organization.archive": [],
   "organization.restore": [],

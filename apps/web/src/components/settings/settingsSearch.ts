@@ -219,6 +219,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["history who did what invitations roles deletions approvals security"],
   },
   {
+    id: "platform-registration",
+    title: "Registration",
+    modal: "platform",
+    section: "registration",
+    searchTerms: ["sign up sign in register open closed invitation only local passkey password"],
+  },
+  {
+    id: "platform-keycloak",
+    title: "Keycloak",
+    modal: "platform",
+    section: "keycloak",
+    searchTerms: ["sign in sso oidc openid issuer realm client secret redirect logout"],
+  },
+  {
     id: "master-key",
     title: "Master key",
     modal: "platform",

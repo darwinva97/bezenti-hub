@@ -378,7 +378,7 @@ it("tells the lender which Secrets to rotate once a group's loan ended, by name"
           { entryId: "e2", name: "ANA_DB_PASSWORD" },
         ],
       },
-    } as Partial<Grant>),
+    } as unknown as Partial<Grant>),
   ];
   await using _screen = await render(<GrantsSettings />);
   await expect
@@ -398,7 +398,7 @@ it("warns before taking a group back that its Secrets may have been read", async
   loans.given = [
     groupGrant("g9", "active", "Acme", {
       vaultGroup: { toRotate: [{ entryId: "e1", name: "ANA_TOKEN" }] },
-    } as Partial<Grant>),
+    } as unknown as Partial<Grant>),
   ];
   await using _screen = await render(<GrantsSettings />);
   await page.getByRole("button", { name: "Actions for Ana keys lent to Acme" }).click();

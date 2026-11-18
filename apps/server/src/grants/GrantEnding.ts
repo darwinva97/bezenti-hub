@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
+import * as VaultReachLoss from "../vaults/VaultReachLoss.ts";
 
 /** Which removal ends them; recorded as the audit's `via`. */
 export type GrantEndingVia = "user.remove" | "organization.delete";
@@ -106,6 +107,13 @@ export const endGone = Effect.fn("GrantEnding.endGone")(function* (
           target,
           detail: { ...common, reason, side: "system" },
         });
+    // A lent Vault group's default and choices in that Space go with the loan (Grants ticket 07).
+    if (!offered && row.resourceKind === "vault-group" && row.targetId !== null) {
+      yield* VaultReachLoss.forgetLentReach(sql, actor, {
+        vaultId: row.resourceId,
+        spaceId: row.targetId,
+      });
+    }
   }
   return live.map((row): EndedGrant => ({
     grantId: row.grantId,

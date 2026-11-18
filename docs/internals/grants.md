@@ -1,10 +1,11 @@
 # Grants
 
 A **Grant** lends one resource to a Space, with limits, until either side ends it. Today a User's
-personal machine and an AI account (a User's or an Organization's, for the AI gateway) are lent;
-Vault groups and a Plan as destination fit the same row later. Spec: `.scratch/grants/spec.md`;
-machines: `.scratch/grants/issues/machines-design.md`; AI accounts:
-`.scratch/grants/issues/01-04-design.md`.
+personal machine, an AI account (a User's or an Organization's, for the AI gateway) and a named
+Vault group (a User's or an Organization's) are lent; a Plan as destination fits the same row
+later. Spec: `.scratch/grants/spec.md`; machines: `.scratch/grants/issues/machines-design.md`; AI
+accounts: `.scratch/grants/issues/01-04-design.md`; Vault groups:
+`.scratch/grants/issues/07-design.md`.
 
 ## The row
 
@@ -12,7 +13,8 @@ machines: `.scratch/grants/issues/machines-design.md`; AI accounts:
 it was lent), the destination (`target_kind`, `target_id`), `state`, `end_reason` and
 `limits_json` (`GrantLimits` in `packages/contracts/src/grants.ts`; a machine's are CPUs, memory,
 processes and threads, and disk, each required and at least the Sandbox floors; an AI account's are
-its caps, tokens and requests per day, ISO week or month, each `null` for no cap). A partial unique
+its caps, tokens and requests per day, ISO week or month, each `null` for no cap; a Vault
+group's are none, `{ "kind": "vault-group" }`). A partial unique
 index keeps at most one `pending` or `active` Grant per resource and destination. Ended rows stay:
 they are the history.
 
@@ -110,16 +112,31 @@ for yet.
   credential), keeps it in the tab's sessionStorage through signing in, and drops it from the
   address bar.
 
+## Vault groups
+
+Only a named group, not archived, is lent (`default` or archived → `not-lendable`): a `default` is
+its owner's Space's fixed default. Giving one always needs a strong factor, pending or active (its
+Secrets reach the borrower's agents); accepting needs none, and may also make it the Space's last
+default (`useAsDefault`, audited `vault.choose` `via: grant.accept`; the same on a give that starts
+active). `VaultReach` reads, on every call, the Space's own groups and the named groups an `active`
+Grant lends there; a lent group is read-only there (names; Variables for Admins and Members), its
+dangerous names never delivered, and nothing of it reaches a machine lent to the Space unless it is
+that machine's owner's own. Ending a loan drops that Space's default and its Projects' choices of
+the group in the same transaction (`VaultReachLoss.forgetLentReach`), and tells the lender which
+Secrets to rotate (`Grant.vaultGroup.toRotate`, to `grant.viewGiven` alone). `setLimits` is refused
+(there are none). Details: docs/internals/secrets.md, «Who reaches what».
+
 ## Doors
 
 - WS: `grants.listGiven`, `grants.listReceived`, `grants.targets`, `grants.reject`,
   `grants.cancel`, `grants.end`, `grants.setLimits` (writes need `access:write`); the Owner's
-  `grants.migrationReviews` and `grants.dismissMigrationReview` (allowances that became loans,
-  docs/internals/ai-gateway.md); lending links' `grants.createOffer` and `grants.claimOffer`
-  (`access:write`) and `grants.readOffer` (`access:read`).
+  `grants.migrationReviews` and `grants.dismissMigrationReview` (allowances that became loans:
+  AI accounts in docs/internals/ai-gateway.md, Vault groups in docs/internals/secrets.md); lending
+  links' `grants.createOffer` and `grants.claimOffer` (`access:write`) and `grants.readOffer`
+  (`access:read`).
 - HTTP: `POST /api/grants/give` and `POST /api/grants/accept`. When a machine's Grant would become
-  active (accepting it, or giving it where the lender also decides) the request must carry a
-  strong factor (`reauth`: passkey, or password and authenticator code), checked only after Grants
+  active (accepting it, or giving it where the lender also decides), or a Vault group is given, the
+  request must carry a strong factor (`reauth`: passkey, or password and authenticator code), checked only after Grants
   allowed the change (`prepareGive`/`prepareAccept`) and required again by the change itself, so
   the WS side can never make one active.
 - No MCP tool: lending is a person's decision of trust.

@@ -2,10 +2,18 @@
  * Grants ticket 01 (machines): lending a personal machine to a Space, deciding on it and ending
  * it, by the people the policy names, with a strong factor whenever a machine's loan becomes active.
  */
-import { GrantId, type GrantState, SpaceId, UserId } from "@t3tools/contracts";
+import {
+  GrantId,
+  type GrantState,
+  ProjectId,
+  SpaceId,
+  UserId,
+  type VaultGroupId,
+} from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 
 import * as CommandActor from "../auth/CommandActor.ts";
 import {
@@ -16,6 +24,8 @@ import {
   passkeyReauth,
   serveAuthHttp,
 } from "../auth/UserAuth.testkit.ts";
+import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as Vaults from "../vaults/Vaults.ts";
 import * as Grants from "./Grants.ts";
 
 const GIVE = "/api/grants/give";
@@ -689,5 +699,302 @@ describe("Grants of AI accounts", () => {
       const revoked = yield* h.grants.end({ grantId }).pipe(CommandActor.actAs(h.ownerId));
       assert.deepEqual([revoked.state, revoked.endReason], ["ended", "revoked"]);
     }),
+  );
+});
+
+// Grants ticket 07: lending a named Vault group. Its Secrets reach the borrower's agents, so giving
+// one always needs a strong factor; the loan is read-only where it lands.
+const VAULT_LIMITS = { kind: "vault-group" } as const;
+const PROVEN = { strongFactor: true } as const;
+type Hub = Effect.Success<typeof hub>;
+
+/** Ana's named group with a Secret and a Variable, as she makes it. */
+const anasGroup = Effect.fn(function* (h: Hub, name = "Ana keys") {
+  // Acme's roles as the policy reads them: an Admin acts as one with a strong factor of their own.
+  yield* h.server.sql`
+    INSERT OR IGNORE INTO user_passkeys (credential_id, user_id, public_key, sign_count, transports,
+      rp_id, created_at)
+    VALUES ('adam-key', ${h.adam.id}, 'key', 0, '[]', '127.0.0.1', '2026-01-01T00:00:00.000Z')
+  `;
+  yield* Context.get(h.server.services, SpaceDirectory.SpaceDirectory).membershipsChanged([
+    h.ana.id,
+    h.adam.id,
+    h.linus.id,
+  ]);
+  const vaults = Context.get(h.server.services, Vaults.Vaults);
+  const as = CommandActor.actAs(h.ana.id);
+  const group = yield* vaults.create({ name, owner: { kind: "user", userId: h.ana.id } }).pipe(as);
+  const secret = yield* vaults
+    .putEntry({ vaultId: group.id, name: "ANA_TOKEN", value: Redacted.make("ana-token-0707") })
+    .pipe(as);
+  yield* vaults
+    .putEntry({
+      vaultId: group.id,
+      name: "ANA_REGION",
+      value: Redacted.make("eu-west-1"),
+      class: "variable",
+    })
+    .pipe(as);
+  return { vaults, group: group.id, secret: secret.entry.id };
+});
+
+const lendGroup = (
+  h: Hub,
+  by: UserId,
+  vaultGroupId: VaultGroupId,
+  spaceId: string,
+  proof: { readonly strongFactor: boolean } = PROVEN,
+) =>
+  h.grants
+    .give(
+      {
+        resource: { kind: "vault-group", vaultGroupId },
+        spaceId: SpaceId.make(spaceId),
+        limits: VAULT_LIMITS,
+      },
+      proof,
+    )
+    .pipe(CommandActor.actAs(by));
+
+const acmeDefaults = (h: Hub) =>
+  h.server.sql<{ readonly groupId: string }>`
+    SELECT group_id AS "groupId" FROM space_default_vaults WHERE space_id = ${h.acmeId}
+    ORDER BY position
+  `.pipe(Effect.map((rows) => rows.map((row) => row.groupId)));
+
+describe("Grants of Vault groups", () => {
+  it.effect("giving a Vault group always needs a strong factor, over HTTP and the service", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const { group } = yield* anasGroup(h);
+      const unproven = yield* lendGroup(h, h.ana.id, group, h.acmeId, {
+        strongFactor: false,
+      }).pipe(Effect.flip);
+      assert.equal(unproven.reason, "strong-factor-required");
+      // Over HTTP the door asks for one even though the loan would wait for Acme.
+      const prepared = yield* h.grants
+        .prepareGive({
+          resource: { kind: "vault-group", vaultGroupId: group },
+          spaceId: h.acmeId,
+          limits: VAULT_LIMITS,
+        })
+        .pipe(CommandActor.actAs(h.ana.id));
+      assert.isTrue(prepared.needsStrongFactor);
+      const overHttp = yield* h.server.request(GIVE, {
+        cookie: h.ana.cookie,
+        body: {
+          resource: { kind: "vault-group", vaultGroupId: group },
+          spaceId: h.acmeId,
+          limits: VAULT_LIMITS,
+        },
+      });
+      assert.equal(overHttp.status, 403);
+      const count = yield* h.server.sql<{ readonly n: number }>`
+        SELECT COUNT(*) AS n FROM grants WHERE resource_kind = 'vault-group'
+      `;
+      assert.equal(count[0]?.n, 0);
+      // The Owner, with a passkey, lends one of theirs over HTTP.
+      const owners = yield* Context.get(h.server.services, Vaults.Vaults)
+        .create({ name: "Owner keys", owner: { kind: "user", userId: h.ownerId } })
+        .pipe(CommandActor.actAs(h.ownerId));
+      const given = yield* h.server.request(GIVE, {
+        cookie: h.owner,
+        body: {
+          resource: { kind: "vault-group", vaultGroupId: owners.id },
+          spaceId: `personal:${h.ana.id}`,
+          limits: VAULT_LIMITS,
+          reauth: yield* passkeyReauth(h.server, h.authenticator),
+        },
+      });
+      assert.equal(given.status, 200, JSON.stringify(given.body));
+      assert.equal(given.body.state, "pending");
+    }),
+  );
+
+  it.effect("Ana lends her group to Acme; an Admin accepts it, also as a default of Acme", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const { group } = yield* anasGroup(h);
+      const given = yield* lendGroup(h, h.ana.id, group, h.acmeId);
+      assert.equal(given.state, "pending");
+      assert.deepEqual(given.resource, { kind: "vault-group", id: group, name: "Ana keys" });
+      // Ana, a Member, and Linus, a Guest, do not decide for Acme; Adam does.
+      for (const who of [h.ana.id, h.linus.id]) {
+        const refused = yield* h.grants
+          .accept({ grantId: given.id }, { strongFactor: false })
+          .pipe(CommandActor.actAs(who), Effect.flip);
+        assert.oneOf(refused.reason, ["not-allowed", "not-found"]);
+      }
+      // Accepting a Vault group needs no strong factor: nothing of Acme's leaves.
+      const prepared = yield* h.grants
+        .prepareAccept({ grantId: given.id })
+        .pipe(CommandActor.actAs(h.adam.id));
+      assert.isFalse(prepared.needsStrongFactor);
+      const accepted = yield* h.grants
+        .accept({ grantId: given.id, useAsDefault: true }, { strongFactor: false })
+        .pipe(CommandActor.actAs(h.adam.id));
+      assert.equal(accepted.state, "active");
+      assert.deepEqual(yield* acmeDefaults(h), [group]);
+      assert.deepEqual(yield* h.audited(given.id), ["grant.give", "grant.accept"]);
+      const chosen = yield* h.server.sql<{ readonly detail: string }>`
+        SELECT detail_json AS detail FROM audit_log
+        WHERE action = 'vault.choose' AND target_id = ${group}
+      `;
+      assert.deepEqual(
+        chosen.map((row) => JSON.parse(row.detail)),
+        [{ scope: "space", choice: "default", position: 0, via: "grant.accept" }],
+      );
+      // A second live loan of it to Acme is refused; there are no limits to change.
+      const again = yield* lendGroup(h, h.ana.id, group, h.acmeId).pipe(Effect.flip);
+      assert.equal(again.reason, "already-granted");
+      const limits = yield* h.grants
+        .setLimits({ grantId: given.id, limits: VAULT_LIMITS })
+        .pipe(CommandActor.actAs(h.ana.id), Effect.flip);
+      assert.equal(limits.reason, "invalid-limits");
+      assert.isFalse(accepted.can.setLimits);
+      // Acme's Admin sees it borrowed, without what the lender is told to rotate.
+      const received = yield* h.grants
+        .listReceived({ spaceId: h.acmeId })
+        .pipe(CommandActor.actAs(h.adam.id));
+      assert.deepEqual(
+        received.grants.map((grant) => [grant.id, grant.state]),
+        [[given.id, "active"]],
+      );
+      assert.isUndefined(received.grants[0]?.vaultGroup);
+      const lent = yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ana.id));
+      assert.deepEqual(
+        lent.grants[0]?.vaultGroup?.toRotate.map((entry) => entry.name),
+        ["ANA_TOKEN"],
+      );
+    }),
+  );
+
+  it.effect("a `default` or archived group is not lent; only its owner's side lends it", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const { vaults, group } = yield* anasGroup(h);
+      const [anasDefault] = yield* h.server.sql<{ readonly groupId: VaultGroupId }>`
+        SELECT group_id AS "groupId" FROM vault_groups
+        WHERE owner_kind = 'user' AND owner_id = ${h.ana.id} AND is_default = 1
+      `;
+      assert.equal(
+        (yield* lendGroup(h, h.ana.id, anasDefault!.groupId, h.acmeId).pipe(Effect.flip)).reason,
+        "not-lendable",
+      );
+      const archived = yield* vaults
+        .create({ name: "Old", owner: { kind: "user", userId: h.ana.id } })
+        .pipe(CommandActor.actAs(h.ana.id));
+      yield* vaults
+        .update({ vaultId: archived.id, archived: true })
+        .pipe(CommandActor.actAs(h.ana.id));
+      assert.equal(
+        (yield* lendGroup(h, h.ana.id, archived.id, h.acmeId).pipe(Effect.flip)).reason,
+        "not-lendable",
+      );
+      // Adam runs Acme, not Ana's Vault; the Owner does not lend it either.
+      for (const who of [h.adam.id, h.ownerId]) {
+        assert.equal(
+          (yield* lendGroup(h, who, group, h.acmeId).pipe(Effect.flip)).reason,
+          "not-allowed",
+        );
+      }
+      // Into her own Personal space: it is hers already.
+      assert.equal(
+        (yield* lendGroup(h, h.ana.id, group, `personal:${h.ana.id}`).pipe(Effect.flip)).reason,
+        "not-allowed",
+      );
+      // Acme's own group: lent by its Admins, never by a Member.
+      const acmes = yield* vaults
+        .create({ name: "Acme keys", owner: { kind: "organization", spaceId: h.acmeId } })
+        .pipe(CommandActor.actAs(h.adam.id));
+      assert.equal(
+        (yield* lendGroup(h, h.ana.id, acmes.id, `personal:${h.adam.id}`).pipe(Effect.flip)).reason,
+        "not-allowed",
+      );
+      const toAna = yield* lendGroup(h, h.adam.id, acmes.id, `personal:${h.ana.id}`);
+      assert.equal(toAna.state, "pending");
+      assert.deepEqual(toAna.lender, { kind: "organization", id: h.acmeId, name: "Acme" });
+    }),
+  );
+
+  it.effect(
+    "revoking or returning ends it and drops Acme's default and choices in the same transaction",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* hub;
+        const { vaults, group, secret } = yield* anasGroup(h);
+        const given = yield* lendGroup(h, h.ana.id, group, h.acmeId);
+        yield* h.grants
+          .accept({ grantId: given.id, useAsDefault: true }, { strongFactor: false })
+          .pipe(CommandActor.actAs(h.adam.id));
+        const made = yield* h.server.request("/api/projects/mutate", {
+          cookie: h.adam.cookie,
+          body: {
+            type: "project.create",
+            commandId: "create-acme-web",
+            projectId: "acme-web",
+            title: "acme-web",
+            workspaceRoot: h.server.newProjectFolder("acme-web"),
+            spaceId: h.acmeId,
+          },
+        });
+        assert.equal(made.status, 200, JSON.stringify(made.body));
+        yield* vaults
+          .setProjectChoice({
+            projectId: ProjectId.make("acme-web"),
+            vaultId: group,
+            choice: "add",
+          })
+          .pipe(CommandActor.actAs(h.adam.id));
+
+        const revoked = yield* h.grants
+          .end({ grantId: given.id })
+          .pipe(CommandActor.actAs(h.ana.id));
+        assert.deepEqual([revoked.state, revoked.endReason], ["ended", "revoked"]);
+        assert.deepEqual(yield* acmeDefaults(h), []);
+        const choices = yield* h.server.sql<{ readonly n: number }>`
+          SELECT COUNT(*) AS n FROM project_vault_choices WHERE group_id = ${group}
+        `;
+        assert.equal(choices[0]?.n, 0);
+        const dropped = yield* h.server.sql<{ readonly detail: string; readonly space: string }>`
+          SELECT detail_json AS detail, space_id AS space FROM audit_log
+          WHERE action = 'vault.choose' AND json_extract(detail_json, '$.via') = 'grant.end'
+          ORDER BY audit_id
+        `;
+        assert.deepEqual(
+          dropped.map((row) => [row.space, JSON.parse(row.detail).scope]),
+          [
+            [h.acmeId, "space"],
+            [h.acmeId, "project"],
+          ],
+        );
+        // The lender is told to rotate the Secret, until its value is replaced.
+        const ended = (yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ana.id))).grants;
+        assert.deepEqual(
+          ended[0]?.vaultGroup?.toRotate.map((entry) => entry.entryId),
+          [secret],
+        );
+        yield* vaults
+          .putEntry({
+            vaultId: group,
+            entryId: secret,
+            name: "ANA_TOKEN",
+            value: Redacted.make("ana-token-rotated-0808"),
+          })
+          .pipe(CommandActor.actAs(h.ana.id));
+        const rotated = (yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ana.id))).grants;
+        assert.deepEqual(rotated[0]?.vaultGroup?.toRotate, []);
+
+        // Lent again, it comes back unchosen; returned by Acme's Admin.
+        const again = yield* lendGroup(h, h.ana.id, group, h.acmeId);
+        yield* h.grants
+          .accept({ grantId: again.id }, { strongFactor: false })
+          .pipe(CommandActor.actAs(h.adam.id));
+        assert.deepEqual(yield* acmeDefaults(h), []);
+        const returned = yield* h.grants
+          .end({ grantId: again.id })
+          .pipe(CommandActor.actAs(h.adam.id));
+        assert.deepEqual([returned.state, returned.endReason], ["ended", "returned"]);
+      }),
   );
 });

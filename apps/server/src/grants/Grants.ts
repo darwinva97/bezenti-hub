@@ -1,8 +1,8 @@
 /**
  * Grants: an owner lends one resource to a Space with limits, the Space decides, and either side
  * ends it. One row per loan (`grants`, migration 135), kept as history. Each change is a row of
- * `TRANSITIONS`, decided by AccessPolicy `grant.*` and audited in its transaction. Personal
- * machines and AI accounts (for the gateway) are lent today. See docs/internals/grants.md.
+ * `TRANSITIONS`, decided by AccessPolicy `grant.*` and audited in its transaction. Machines, AI
+ * accounts and named Vault groups are lent. See docs/internals/grants.md.
  */
 import {
   type Grant,
@@ -37,6 +37,8 @@ import {
   SandboxHostReport,
   SpaceId,
   type UserId,
+  VaultEntryId,
+  VaultGroupId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
@@ -60,6 +62,7 @@ import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
 import { invalidLimitsReason } from "../sandboxes/sandboxLimits.ts";
 import { LentSandboxDisk } from "../sandboxes/sandboxSpace.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as VaultReachLoss from "../vaults/VaultReachLoss.ts";
 
 /** What a change does to a Grant. */
 export type GrantOp = "accept" | "reject" | "cancel" | "end" | "setLimits";
@@ -80,9 +83,17 @@ const TRANSITIONS: Readonly<
 export const mayTransition = (op: GrantOp, state: GrantState) =>
   TRANSITIONS[op].from.includes(state);
 
-/** Making a machine Grant active needs a strong factor: it opens the lender's machine. */
+/**
+ * Making a machine Grant active needs a strong factor: it opens the lender's machine. So does
+ * giving a Vault group, active or not: its Secrets reach the borrower's agents (Grants ticket 07).
+ */
 export interface FactorProof {
   readonly strongFactor: boolean;
+}
+
+/** Accepting (or giving active) a Vault group's loan may also make it a default of the Space. */
+export interface DefaultChoice {
+  readonly useAsDefault?: boolean | undefined;
 }
 
 export class Grants extends Context.Service<
@@ -103,7 +114,10 @@ export class Grants extends Context.Service<
     readonly prepareAccept: (
       input: GrantRefInput,
     ) => Effect.Effect<{ readonly needsStrongFactor: boolean }, GrantError>;
-    readonly accept: (input: GrantRefInput, proof: FactorProof) => Effect.Effect<Grant, GrantError>;
+    readonly accept: (
+      input: GrantRefInput & DefaultChoice,
+      proof: FactorProof,
+    ) => Effect.Effect<Grant, GrantError>;
     readonly reject: (input: GrantRefInput) => Effect.Effect<Grant, GrantError>;
     readonly cancel: (input: GrantRefInput) => Effect.Effect<Grant, GrantError>;
     /** Revoked by the lender, or returned by the destination: whichever side the caller is. */
@@ -227,19 +241,21 @@ const machineOf = (row: GrantRow) => {
 };
 
 const limitsDetail = (limits: GrantLimits) =>
-  limits.kind === "environment"
-    ? {
-        cpus: limits.cpus,
-        memoryBytes: limits.memoryBytes,
-        pids: limits.pids,
-        diskBytes: limits.diskBytes,
-      }
-    : {
-        tokensAmount: limits.tokens?.amount ?? null,
-        tokensPeriod: limits.tokens?.period ?? null,
-        requestsAmount: limits.requests?.amount ?? null,
-        requestsPeriod: limits.requests?.period ?? null,
-      };
+  limits.kind === "vault-group"
+    ? {}
+    : limits.kind === "environment"
+      ? {
+          cpus: limits.cpus,
+          memoryBytes: limits.memoryBytes,
+          pids: limits.pids,
+          diskBytes: limits.diskBytes,
+        }
+      : {
+          tokensAmount: limits.tokens?.amount ?? null,
+          tokensPeriod: limits.tokens?.period ?? null,
+          requestsAmount: limits.requests?.amount ?? null,
+          requestsPeriod: limits.requests?.period ?? null,
+        };
 
 const DENIED: Partial<Record<AccessPolicy.DenyReason, string>> = {
   "not-yours": "Only the owner of what is lent lends it (an Organization's, its Admins).",
@@ -373,6 +389,7 @@ const make = Effect.gen(function* () {
       CASE g.resource_kind
         WHEN 'environment' THEN (SELECT name FROM environments WHERE environment_id = g.resource_id)
         WHEN 'ai-account' THEN (SELECT name FROM ai_accounts WHERE account_id = g.resource_id)
+        WHEN 'vault-group' THEN (SELECT name FROM vault_groups WHERE group_id = g.resource_id)
         ELSE NULL END AS "resourceName",
       CASE g.resource_kind
         WHEN 'ai-account' THEN (SELECT provider FROM ai_accounts WHERE account_id = g.resource_id)
@@ -477,6 +494,28 @@ const make = Effect.gen(function* () {
       found !== undefined &&
       (!found.lenderSideOnly || LENDER_SIDE.has(action)) &&
       AccessPolicy.isAllowed(AccessPolicy.decide(who.principal, action, found.resource));
+  /**
+   * Grants ticket 07: the Secrets of a lent group its borrower's agents could read: those it held
+   * while active, whose value was not replaced since the loan ended (all of them while active).
+   * Names only; a Secret that is replaced, deleted or becomes a Variable leaves the list.
+   */
+  const toRotateOf = Effect.fn("Grants.toRotateOf")(function* (row: GrantRow) {
+    if (row.state !== "active" && row.state !== "ended") return [];
+    // After the loan's end, by the audit's order: a Secret added or replaced since was never read.
+    const rows = yield* sql<{ readonly entryId: string; readonly name: string }>`
+      SELECT e.entry_id AS "entryId", e.name AS name FROM vault_entries e
+      WHERE e.group_id = ${row.resourceId} AND e.kind = 'own' AND e.class = 'secret'
+        AND NOT EXISTS (SELECT 1 FROM audit_log a
+          WHERE a.action = 'secret.edit' AND a.target_kind = 'secret'
+            AND a.target_id = e.entry_id
+            AND json_extract(a.detail_json, '$.op') IN ('add', 'replace')
+            AND a.audit_id > (SELECT MAX(x.audit_id) FROM audit_log x
+              WHERE x.action = 'grant.end' AND x.target_kind = 'grant'
+                AND x.target_id = ${row.grantId}))
+      ORDER BY e.name
+    `.pipe(Effect.catch(storage("read the Secrets to rotate")));
+    return rows.map((entry) => ({ entryId: VaultEntryId.make(entry.entryId), name: entry.name }));
+  });
 
   const summaryOf = Effect.fn("Grants.summaryOf")(function* (
     row: GrantRow,
@@ -513,6 +552,9 @@ const make = Effect.gen(function* () {
       decidedAt: row.decidedAt,
       endedAt: row.endedAt,
       ...(row.resourceKind === "environment" ? { machine: machineOf(row) } : {}),
+      ...(row.resourceKind === "vault-group" && can("grant.viewGiven")
+        ? { vaultGroup: { toRotate: yield* toRotateOf(row) } }
+        : {}),
       ...(row.aiProvider !== null && row.aiType !== null
         ? {
             aiAccount: {
@@ -528,7 +570,10 @@ const make = Effect.gen(function* () {
         revoke: mayTransition("end", row.state) && can("grant.revoke"),
         decide: mayTransition("accept", row.state) && can("grant.decide"),
         return: mayTransition("end", row.state) && can("grant.return"),
-        setLimits: mayTransition("setLimits", row.state) && can("grant.setLimits"),
+        setLimits:
+          row.resourceKind !== "vault-group" &&
+          mayTransition("setLimits", row.state) &&
+          can("grant.setLimits"),
       },
     } satisfies Grant;
   });
@@ -641,10 +686,96 @@ const make = Effect.gen(function* () {
     } satisfies Lendable;
   });
 
+  /**
+   * Grants ticket 07: the Vault group to lend: a named one, not archived. A `default` is its
+   * owner's Space's fixed default and is never lent.
+   */
+  const lendableVaultGroup = Effect.fn("Grants.lendableVaultGroup")(function* (groupId: string) {
+    const [row] = yield* sql<{
+      readonly name: string;
+      readonly isDefault: number;
+      readonly archivedAt: string | null;
+      readonly ownerKind: "user" | "organization";
+      readonly ownerId: string;
+    }>`
+      SELECT name, is_default AS "isDefault", archived_at AS "archivedAt",
+        owner_kind AS "ownerKind", owner_id AS "ownerId"
+      FROM vault_groups WHERE group_id = ${groupId}
+    `.pipe(Effect.catch(storage("read the Vault group")));
+    if (row === undefined) return yield* fail("not-found", "That Vault group does not exist.");
+    if (row.isDefault === 1) {
+      return yield* fail(
+        "not-lendable",
+        "A `default` group serves its own Space only: put what you lend in a named group.",
+      );
+    }
+    if (row.archivedAt !== null) {
+      return yield* fail("not-lendable", "This group is archived: restore it to lend it.");
+    }
+    const lender: AccessPolicy.GrantLender =
+      row.ownerKind === "user"
+        ? { kind: "user", userId: row.ownerId as UserId }
+        : {
+            kind: "organization",
+            space:
+              (yield* targetsOf([{ targetId: row.ownerId }])).get(row.ownerId as SpaceId)
+                ?.resource ?? null,
+          };
+    return {
+      kind: "vault-group",
+      resourceId: groupId,
+      name: row.name,
+      lenderKind: row.ownerKind,
+      lenderId: row.ownerId,
+      lender,
+    } satisfies Lendable;
+  });
+
   const lendable = (resource: GrantGiveInput["resource"]) =>
     resource.kind === "environment"
       ? lendableEnvironment(resource.environmentId)
-      : lendableAiAccount(resource.aiAccountId);
+      : resource.kind === "ai-account"
+        ? lendableAiAccount(resource.aiAccountId)
+        : lendableVaultGroup(resource.vaultGroupId);
+
+  /** Whether giving it needs a strong factor: an active machine's, any Vault group's. */
+  const giveNeedsFactor = (kind: GrantResourceKind, startsActive: boolean) =>
+    kind === "vault-group" || (startsActive && kind === "environment");
+
+  /**
+   * Grants ticket 07, in the transaction that makes a Vault group's loan active: rows naming it
+   * in the Space from before go, and it becomes the Space's last default when asked (audited).
+   */
+  const vaultGroupActive = Effect.fn("Grants.vaultGroupActive")(function* (input: {
+    readonly vaultId: string;
+    readonly vaultName: string | null;
+    readonly spaceId: string;
+    readonly useAsDefault: boolean;
+    readonly by: UserId;
+    readonly via: "grant.give" | "grant.accept";
+  }) {
+    yield* VaultReachLoss.clearForGrant(sql, input.vaultId, input.spaceId);
+    if (!input.useAsDefault) return;
+    const [last] = yield* sql<{ readonly position: number | null }>`
+      SELECT MAX(position) AS position FROM space_default_vaults WHERE space_id = ${input.spaceId}
+    `;
+    const position = (last?.position ?? -1) + 1;
+    yield* sql`
+      INSERT INTO space_default_vaults (space_id, group_id, position)
+      VALUES (${input.spaceId}, ${input.vaultId}, ${position})
+    `;
+    yield* audit.record({
+      actor: AuditLog.userActor(input.by),
+      action: "vault.choose",
+      spaceId: SpaceId.make(input.spaceId),
+      target: {
+        kind: "vault",
+        id: input.vaultId,
+        ...(input.vaultName === null ? {} : { name: input.vaultName }),
+      },
+      detail: { scope: "space", choice: "default", position, via: input.via },
+    });
+  });
 
   const checkGive = Effect.fn("Grants.checkGive")(function* (input: GrantGiveInput, who: Caller) {
     if (input.planId !== undefined) {
@@ -771,6 +902,7 @@ const make = Effect.gen(function* () {
       | GrantError
       | SqlError
       | AuditLog.AuditLogWriteError
+      | AuditLog.AuditActorMissingError
       | Schema.SchemaError
       | EnvironmentRegistry.EnvironmentStorageError
     >,
@@ -779,6 +911,7 @@ const make = Effect.gen(function* () {
       Effect.catchTags({
         SqlError: storage(what),
         AuditLogWriteError: storage(what),
+        AuditActorMissingError: storage(what),
         SchemaError: storage(what),
         EnvironmentStorageError: storage(what),
       }),
@@ -881,7 +1014,7 @@ const make = Effect.gen(function* () {
   const prepareGive = Effect.fn("Grants.prepareGive")(function* (input: GrantGiveInput) {
     const who = yield* caller;
     const checked = yield* checkGive(input, who);
-    return { needsStrongFactor: checked.startsActive && checked.item.kind === "environment" };
+    return { needsStrongFactor: giveNeedsFactor(checked.item.kind, checked.startsActive) };
   });
 
   const give = Effect.fn("Grants.give")(function* (input: GrantGiveInput, proof: FactorProof) {
@@ -892,10 +1025,12 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         // Checked again in the transaction: a membership or the machine may have changed.
         const { item, startsActive } = yield* checkGive(input, who);
-        if (startsActive && item.kind === "environment" && !proof.strongFactor) {
+        if (giveNeedsFactor(item.kind, startsActive) && !proof.strongFactor) {
           return yield* fail(
             "strong-factor-required",
-            "Lending a machine where you also accept it needs a passkey or authenticator code.",
+            item.kind === "vault-group"
+              ? "Lending a Vault group needs a passkey or authenticator code: its Secrets reach the borrower's agents."
+              : "Lending a machine where you also accept it needs a passkey or authenticator code.",
           );
         }
         const at = yield* now;
@@ -912,7 +1047,9 @@ const make = Effect.gen(function* () {
             "already-granted",
             item.kind === "environment"
               ? "This machine is already lent to that Space."
-              : "This AI account is already lent to that Space.",
+              : item.kind === "ai-account"
+                ? "This AI account is already lent to that Space."
+                : "This Vault group is already lent to that Space.",
           );
         }
         yield* sql`
@@ -932,11 +1069,27 @@ const make = Effect.gen(function* () {
             WHERE account_id = ${item.resourceId} AND space_id = ${input.spaceId}
           `;
         }
+        if (item.kind === "vault-group") {
+          yield* sql`
+            DELETE FROM vault_group_grant_reviews
+            WHERE group_id = ${item.resourceId} AND space_id = ${input.spaceId}
+          `;
+        }
         if (startsActive && input.resource.kind === "environment") {
           yield* registry.openLentSandbox({
             grantId,
             hostEnvironmentId: input.resource.environmentId,
             spaceId: input.spaceId,
+          });
+        }
+        if (startsActive && item.kind === "vault-group") {
+          yield* vaultGroupActive({
+            vaultId: item.resourceId,
+            vaultName: item.name,
+            spaceId: input.spaceId,
+            useAsDefault: input.useAsDefault === true,
+            by: who.userId,
+            via: "grant.give",
           });
         }
         const record = auditOf(
@@ -973,7 +1126,7 @@ const make = Effect.gen(function* () {
   /** A decision by the destination: accept or reject. */
   const decideOn = Effect.fn("Grants.decideOn")(function* (
     op: "accept" | "reject",
-    input: GrantRefInput,
+    input: GrantRefInput & DefaultChoice,
     proof: FactorProof,
   ) {
     const who = yield* caller;
@@ -1004,6 +1157,16 @@ const make = Effect.gen(function* () {
             spaceId: SpaceId.make(row.targetId),
           });
         }
+        if (op === "accept" && row.resourceKind === "vault-group" && row.targetId !== null) {
+          yield* vaultGroupActive({
+            vaultId: row.resourceId,
+            vaultName: row.resourceName,
+            spaceId: row.targetId,
+            useAsDefault: input.useAsDefault === true,
+            by: who.userId,
+            via: "grant.accept",
+          });
+        }
         const record = auditOf(row, row.resourceName);
         yield* audit.record({
           actor: AuditLog.userActor(who.userId),
@@ -1016,7 +1179,10 @@ const make = Effect.gen(function* () {
     );
     return yield* reread(input.grantId, who);
   });
-  const accept = Effect.fn("Grants.accept")(function* (input: GrantRefInput, proof: FactorProof) {
+  const accept = Effect.fn("Grants.accept")(function* (
+    input: GrantRefInput & DefaultChoice,
+    proof: FactorProof,
+  ) {
     return yield* decideOn("accept", input, proof);
   });
   const reject = Effect.fn("Grants.reject")(function* (input: GrantRefInput) {
@@ -1111,11 +1277,21 @@ const make = Effect.gen(function* () {
       target: record.target,
       detail: { ...record.common, reason, side },
     });
+    // A Vault group's: the Space's default of it and its Projects' choices go with the loan.
+    if (row.resourceKind === "vault-group" && row.targetId !== null) {
+      yield* VaultReachLoss.forgetLentReach(sql, actorOf, {
+        vaultId: row.resourceId,
+        spaceId: row.targetId,
+      });
+    }
     return closed;
   });
 
   const setLimits = Effect.fn("Grants.setLimits")(function* (input: GrantSetLimitsInput) {
     const who = yield* caller;
+    if (input.limits.kind === "vault-group") {
+      return yield* fail("invalid-limits", "A Vault group's loan has no limits to change.");
+    }
     const problem = limitsProblem(input.limits.kind, input.limits);
     if (problem !== undefined) return yield* fail("invalid-limits", problem);
     yield* inTransaction(
@@ -1488,8 +1664,56 @@ const make = Effect.gen(function* () {
       JOIN spaces s ON s.space_id = r.space_id
       ORDER BY a.name, u.display_name, s.name
     `.pipe(Effect.catch(storage("read the loans to review")));
-    const known = yield* targetsOf(rows.map((row) => ({ targetId: row.spaceId })));
+    // Grants ticket 07: the Owner's named Vault groups an allowance «to a User» reached there.
+    const groupRows = yield* sql<{
+      readonly vaultGroupId: string;
+      readonly vaultGroupName: string;
+      readonly lenderKind: "user" | "organization";
+      readonly lenderId: string;
+      readonly userId: string;
+      readonly userName: string;
+      readonly spaceId: string;
+    }>`
+      SELECT r.group_id AS "vaultGroupId", v.name AS "vaultGroupName",
+        v.owner_kind AS "lenderKind", v.owner_id AS "lenderId", r.user_id AS "userId",
+        u.display_name AS "userName", r.space_id AS "spaceId"
+      FROM vault_group_grant_reviews r
+      JOIN vault_groups v ON v.group_id = r.group_id
+      JOIN users u ON u.user_id = r.user_id
+      JOIN spaces s ON s.space_id = r.space_id
+      ORDER BY v.name, u.display_name, s.name
+    `.pipe(Effect.catch(storage("read the loans to review")));
+    const known = yield* targetsOf([
+      ...rows.map((row) => ({ targetId: row.spaceId })),
+      ...groupRows.map((row) => ({ targetId: row.spaceId })),
+    ]);
+    const startsActive = (
+      row: { readonly lenderKind: "user" | "organization"; readonly lenderId: string },
+      target: AccessPolicy.SpaceResource,
+    ) =>
+      AccessPolicy.isAllowed(
+        AccessPolicy.decide(who.principal, "grant.decide", {
+          kind: "grant",
+          lender: lenderOf(row, known),
+          target,
+        }),
+      );
     return {
+      vaultGroups: groupRows.flatMap((row) => {
+        const target = known.get(row.spaceId as SpaceId);
+        if (target === undefined) return [];
+        return [
+          {
+            vaultGroupId: VaultGroupId.make(row.vaultGroupId),
+            vaultGroupName: row.vaultGroupName,
+            userId: row.userId as UserId,
+            userName: row.userName,
+            spaceId: target.resource.id,
+            spaceName: target.name,
+            startsActive: startsActive(row, target.resource),
+          },
+        ];
+      }),
       reviews: rows.flatMap((row) => {
         const target = known.get(row.spaceId as SpaceId);
         if (target === undefined) return [];
@@ -1503,13 +1727,7 @@ const make = Effect.gen(function* () {
             spaceId: target.resource.id,
             spaceName: target.name,
             usedRecently: row.usedRecently === 1,
-            startsActive: AccessPolicy.isAllowed(
-              AccessPolicy.decide(who.principal, "grant.decide", {
-                kind: "grant",
-                lender: lenderOf(row, known),
-                target: target.resource,
-              }),
-            ),
+            startsActive: startsActive(row, target.resource),
           },
         ];
       }),
@@ -1520,11 +1738,19 @@ const make = Effect.gen(function* () {
     input: GrantDismissMigrationReviewInput,
   ) {
     yield* ownerOnly;
-    yield* sql`
-      DELETE FROM ai_account_grant_reviews
-      WHERE account_id = ${input.aiAccountId} AND user_id = ${input.userId}
-        AND space_id = ${input.spaceId}
-    `.pipe(Effect.catch(storage("dismiss it")));
+    yield* (
+      "vaultGroupId" in input
+        ? sql`
+          DELETE FROM vault_group_grant_reviews
+          WHERE group_id = ${input.vaultGroupId} AND user_id = ${input.userId}
+            AND space_id = ${input.spaceId}
+        `
+        : sql`
+          DELETE FROM ai_account_grant_reviews
+          WHERE account_id = ${input.aiAccountId} AND user_id = ${input.userId}
+            AND space_id = ${input.spaceId}
+        `
+    ).pipe(Effect.catch(storage("dismiss it")));
     return yield* migrationReviews;
   });
 

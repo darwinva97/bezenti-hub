@@ -1,7 +1,8 @@
 /**
  * Giving and accepting a loan over HTTP. Grants decides who may; when the loan of a machine would
- * become active, the request must also carry a strong factor (passkey or authenticator code),
- * checked only after Grants allowed it, so nobody else's proof is ever checked.
+ * become active, or a Vault group is given, the request must also carry a strong factor (passkey
+ * or authenticator code), checked only after Grants allowed it, so nobody else's proof is ever
+ * checked.
  */
 import {
   AuthAccessWriteScope,
@@ -102,8 +103,11 @@ export const layer = HttpApiBuilder.group(
           const asSession = CommandActor.actAsSession(principal);
           const input = { grantId: args.payload.grantId };
           const plan = yield* grants.prepareAccept(input).pipe(asSession, Effect.catch(failGrant));
+          const choice = { useAsDefault: args.payload.useAsDefault };
           const proof = yield* proofOf(principal, plan.needsStrongFactor, args.payload.reauth);
-          return yield* grants.accept(input, proof).pipe(asSession, Effect.catch(failGrant));
+          return yield* grants
+            .accept({ ...input, ...choice }, proof)
+            .pipe(asSession, Effect.catch(failGrant));
         }),
       );
   }),

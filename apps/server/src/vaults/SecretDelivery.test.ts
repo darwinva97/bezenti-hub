@@ -9,6 +9,7 @@ import {
   ThreadId,
   UserId,
   SecretDeliveryError,
+  SpaceId,
   type SecretEnv,
   type VaultEntryId,
 } from "@t3tools/contracts";
@@ -29,7 +30,13 @@ import { readError, readValue } from "@t3tools/secret-provider-core/server/drive
 import * as NodeCrypto from "node:crypto";
 
 import * as CommandActor from "../auth/CommandActor.ts";
-import { bootstrapOwner, makeAuthenticator, serveAuthHttpWith } from "../auth/UserAuth.testkit.ts";
+import { lendVaultGroup } from "../grants/Grants.testkit.ts";
+import {
+  addMember,
+  bootstrapOwner,
+  makeAuthenticator,
+  serveAuthHttpWith,
+} from "../auth/UserAuth.testkit.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as DeliveredValues from "./DeliveredValues.ts";
 import {
@@ -250,6 +257,66 @@ it.effect("a name that changes how tools run goes only as the Owner set it", () 
     // Written by anyone else (a write the Owner did not make), it is never delivered.
     yield* server.sql`UPDATE vault_entries SET updated_by = 'someone-else' WHERE name = 'LD_PRELOAD_LIBS'`;
     assert.isUndefined(valueOf(yield* forTurn({ threadId, target: HUB }), "LD_PRELOAD_LIBS"));
+  }).pipe(Effect.scoped),
+);
+
+// Grants ticket 07: a lent group's values reach the borrower's processes by the same path as its
+// own, stay masked there after the loan ends, and never carry a name that changes how tools run.
+
+it.effect("a lent Secret reaches the borrower's process, stays masked once the loan ends", () =>
+  Effect.gen(function* () {
+    const { server, owner, vaults, thread, forTurn } = yield* ownersThread;
+    const ana = UserId.make("ana");
+    yield* addMember(server, { id: "ana", displayName: "Ana" });
+    const lent = yield* vaults
+      .create({ name: "Ana lends", owner: { kind: "user", userId: ana } })
+      .pipe(CommandActor.actAs(ana));
+    for (const [name, value, confirmDangerous] of [
+      ["ANA_TOKEN", "ana-lent-token-0707", undefined],
+      // Ana may set it in her own Vault; her own Personal space would receive it.
+      ["NODE_OPTIONS", "--require ./ana-hook.js", true],
+    ] as const) {
+      yield* vaults
+        .putEntry({
+          vaultId: lent.id,
+          name,
+          value: Redacted.make(value),
+          ...(confirmDangerous === undefined ? {} : { confirmDangerous }),
+        })
+        .pipe(CommandActor.actAs(ana));
+    }
+    const personal = SpaceId.make(`personal:${owner}`);
+    const grantId = yield* lendVaultGroup(server.sql, {
+      vaultId: lent.id,
+      spaceId: personal,
+      lender: { kind: "user", id: ana },
+    });
+    yield* vaults
+      .setSpaceDefaults({ spaceId: personal, vaultIds: [lent.id] })
+      .pipe(CommandActor.actAs(owner));
+    const threadId = yield* thread("thread:borrowed");
+    const delivered = yield* forTurn({ threadId, target: HUB });
+    assert.equal(valueOf(delivered, "ANA_TOKEN"), "ana-lent-token-0707");
+    assert.isUndefined(valueOf(delivered, "NODE_OPTIONS"), "a lent dangerous name never goes");
+    // The agent's list names what goes, nothing more.
+    const names = yield* Context.get(server.services, SecretDelivery.SecretDelivery).turnNames(
+      threadId,
+    );
+    assert.deepEqual(
+      names.map((entry) => entry.name),
+      ["ANA_TOKEN"],
+    );
+
+    // Revoked: the next process receives nothing of it; what the Thread printed stays masked.
+    yield* server.sql`
+      UPDATE grants SET state = 'ended', end_reason = 'revoked' WHERE grant_id = ${grantId}
+    `;
+    const after = yield* forTurn({ threadId, target: HUB });
+    assert.isUndefined(valueOf(after, "ANA_TOKEN"));
+    const masker = yield* Context.get(server.services, SecretMasker.SecretMasker).forThread(
+      threadId,
+    );
+    assert.equal(masker.mask("token ana-lent-token-0707"), "token [ANA_TOKEN]");
   }).pipe(Effect.scoped),
 );
 

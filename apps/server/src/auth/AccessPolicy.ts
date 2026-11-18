@@ -114,10 +114,11 @@ export interface VaultResource {
     | { readonly kind: "organization"; readonly space: SpaceResource | null };
   /** The owner's `default`: never deleted, renamed or archived (`vault.manage`). */
   readonly isDefault: boolean;
-  // Spec 5 ticket 03: whom the Owner allowed one of their own named groups to (none for any other
-  // group, which reaches its owner's Space without one).
-  readonly allowedSpaces: ReadonlyArray<SpaceResource>;
-  readonly allowedUsers: ReadonlyArray<UserId>;
+  /**
+   * Grants ticket 07: the Spaces an active Grant lends it to (a group reaches its owner's Space
+   * without one). Read-only there: names, and Variables for whoever may read them.
+   */
+  readonly lentTo: ReadonlyArray<SpaceResource>;
 }
 
 /**
@@ -693,9 +694,17 @@ const VAULT_ACTIONS: ReadonlySet<Action> = new Set([
 /**
  * Vault groups (owned-resources 03): nobody manages a `default`; the Owner does the rest, never
  * reading a Secret. The Owner's `default` is theirs alone; an Organization's groups its Admins'
- * to manage and edit; Members see names and Variables, Guests names. Identity: the Owner's.
+ * to manage and edit; Members see names and Variables, Guests names. Identity: the Owner's. A
+ * group lent to a Space (Grants ticket 07) is read there, never written (`decideLentVault`).
  */
 const decideVault = (principal: Principal, action: Action, vault: VaultResource): Decision => {
+  const own = decideOwnVault(principal, action, vault);
+  if (own._tag === "Allow") return own;
+  return decideLentVault(principal, action, vault) ?? own;
+};
+
+/** What a group's owner side allows: its owner, its Organization's people, the Owner. */
+const decideOwnVault = (principal: Principal, action: Action, vault: VaultResource): Decision => {
   if (action === "vault.manage" && vault.isDefault) return deny("default-group");
   // Owned-resources 04: a User's own Vault is theirs alone (Provider and identity entries stay the
   // Owner's); the Owner reads its names and Variables; nobody else sees it.
@@ -717,12 +726,8 @@ const decideVault = (principal: Principal, action: Action, vault: VaultResource)
     return deny("owner-only");
   }
   const { owner } = vault;
-  if (owner.kind === "user") {
-    if (!owner.isInstallationOwner || vault.isDefault || action === "vault.manage") {
-      return deny("owner-only");
-    }
-    return decideAllowedVault(principal, action, vault);
-  }
+  // The Owner's groups are the Owner's alone (lent ones are read where they are lent).
+  if (owner.kind === "user") return deny("owner-only");
   const space = owner.space;
   if (space === null) return deny("owner-only");
   if (space.kind !== "organization") return deny("wrong-resource");
@@ -740,46 +745,30 @@ const decideVault = (principal: Principal, action: Action, vault: VaultResource)
 };
 
 /**
- * Spec 5 ticket 03. One of the Owner's own Vaults, allowed to Spaces and Users: whoever works in
- * one of those Spaces, or is one of those Users, sees its names. An Admin edits its secrets only
- * while it reaches nothing but Organizations they run: no User, no Personal space, no other
- * Organization, so their writes stop at their Organizations.
+ * Grants ticket 07: a named group lent to Spaces by active Grants. Whoever works in an open one
+ * sees its names; its Admins and Members (a Personal space's User) read its Variables, Guests do
+ * not. Nobody there edits, manages or writes a dangerous name into it: undefined, so the owner
+ * side's refusal stands.
  */
-const decideAllowedVault = (
+const decideLentVault = (
   principal: Principal,
   action: Action,
   vault: VaultResource,
-): Decision => {
-  const open = (space: SpaceResource) => !space.archived && !space.frozen;
-  const sees = (space: SpaceResource) =>
-    open(space) &&
+): Decision | undefined => {
+  if (vault.isDefault || (action !== "vault.view" && action !== "vault.readVariables")) {
+    return undefined;
+  }
+  const works = (space: SpaceResource) =>
+    !space.archived &&
+    !space.frozen &&
     (space.kind === "personal"
       ? inPersonalSpace(principal, space)._tag === "Allow"
-      : inOrganization(principal, space)._tag === "Allow");
-  if (action === "vault.view") {
-    return vault.allowedUsers.includes(principal.userId) || vault.allowedSpaces.some(sees)
-      ? allow
-      : deny("owner-only");
-  }
-  if (action === "vault.readVariables") {
-    const works = (space: SpaceResource) =>
-      open(space) &&
-      (space.kind === "personal"
-        ? inPersonalSpace(principal, space)._tag === "Allow"
-        : inOrganization(principal, space, ROLES_THAT_CREATE_PROJECTS)._tag === "Allow");
-    return vault.allowedUsers.includes(principal.userId) || vault.allowedSpaces.some(works)
-      ? allow
-      : deny("owner-only");
-  }
-  const runs = (space: SpaceResource) =>
-    open(space) &&
-    space.kind === "organization" &&
-    inOrganization(principal, space, ADMIN_ONLY)._tag === "Allow";
-  return vault.allowedUsers.length === 0 &&
-    vault.allowedSpaces.length > 0 &&
-    vault.allowedSpaces.every(runs)
-    ? allow
-    : deny("owner-only");
+      : inOrganization(
+          principal,
+          space,
+          action === "vault.readVariables" ? ROLES_THAT_CREATE_PROJECTS : undefined,
+        )._tag === "Allow");
+  return vault.lentTo.some(works) ? allow : undefined;
 };
 
 /**

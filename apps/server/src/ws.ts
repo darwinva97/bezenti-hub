@@ -2454,7 +2454,6 @@ export const layerWsRpc = (
         [WS_METHODS.vaultsUnlinkedNoticeDismiss]: (_input) => vaults.dismissUnlinked,
         // Spec 5 ticket 03: allowances (the Owner), defaults and Project choices (the Owner and
         // the Space's Admins), and a Thread's names for the caller. Names only, never values.
-        [WS_METHODS.vaultsAllow]: (input) => vaults.allow(input),
         [WS_METHODS.vaultsChoices]: (input) => vaults.choices(input),
         [WS_METHODS.vaultsSpaceDefaultsSet]: (input) => vaults.setSpaceDefaults(input),
         [WS_METHODS.vaultsProjectChoicesSet]: (input) => vaults.setProjectChoice(input),

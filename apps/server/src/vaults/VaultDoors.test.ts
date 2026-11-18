@@ -5,14 +5,7 @@
  * Vault or secret door not called fails.
  */
 // @effect-diagnostics globalJsonInEffect:off -- answers are searched as text.
-import {
-  ProjectId,
-  SpaceId,
-  ThreadId,
-  UserId,
-  type VaultGroupId,
-  WsRpcGroup,
-} from "@t3tools/contracts";
+import { ProjectId, SpaceId, ThreadId, UserId, VaultGroupId, WsRpcGroup } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -20,6 +13,8 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 
 import * as CommandActor from "../auth/CommandActor.ts";
+import * as Grants from "../grants/Grants.ts";
+import { lendVaultGroup } from "../grants/Grants.testkit.ts";
 import { HTTP_ENDPOINT_RULES, MCP_TOOL_RULES, RAW_ROUTE_RULES } from "../auth/DoorRules.ts";
 import {
   addMember,
@@ -134,20 +129,15 @@ const team = Effect.gen(function* () {
     .create({ name: "Shared", owner: userOwner(ownerId) })
     .pipe(as(ownerId));
   yield* put(shared.id, "SHARED_KEY", SHARED);
-  yield* vaults
-    .allow({ vaultId: shared.id, subject: { kind: "space", spaceId: acmeId }, allowed: true })
-    .pipe(as(ownerId));
+  // Grants ticket 07: lent to Acme, and one lent to Grace's Personal space.
+  const lend = (vaultId: VaultGroupId, spaceId: SpaceId) =>
+    lendVaultGroup(server.sql, { vaultId, spaceId, lender: { kind: "user", id: ownerId } });
+  yield* lend(shared.id, acmeId);
   const graces = yield* vaults
     .create({ name: "Grace's", owner: userOwner(ownerId) })
     .pipe(as(ownerId));
   yield* put(graces.id, "GRACE_KEY", GRACES);
-  yield* vaults
-    .allow({
-      vaultId: graces.id,
-      subject: { kind: "user", userId: UserId.make("grace") },
-      allowed: true,
-    })
-    .pipe(as(ownerId));
+  yield* lend(graces.id, SpaceId.make("personal:grace"));
   yield* vaults
     .setSpaceDefaults({ spaceId: acmeId, vaultIds: [acme.id, shared.id] })
     .pipe(as(ownerId));
@@ -206,6 +196,7 @@ const team = Effect.gen(function* () {
     delivery,
     as,
     vaultIds: [main, acme.id, globex.id, shared.id, graces.id],
+    lend,
     main,
     acmeVault: acme.id,
     mainEntry: linked.entry.id,
@@ -296,14 +287,6 @@ it.effect(
         const scratch = made._tag === "Some" ? made.value.id : t.acmeVault;
         yield* call("ws:vaults.groups.update", v.update({ vaultId: scratch, description: "x" }));
         yield* call(
-          "ws:vaults.allow",
-          v.allow({
-            vaultId: t.vaultIds[3]!,
-            subject: { kind: "space", spaceId: t.acmeId },
-            allowed: true,
-          }),
-        );
-        yield* call(
           "ws:vaults.spaceDefaults.set",
           v.setSpaceDefaults({ spaceId: t.acmeId, vaultIds: [t.acmeVault, t.vaultIds[3]!] }),
         );
@@ -360,7 +343,7 @@ it.effect(
           .filter((answer) => answer.who === who && answer.door === door)
           .map((answer) => answer.text)
           .join("\n");
-      assert.include(textOf("grace", "ws:vaults.threadEnvironment"), '"GRACE_KEY"');
+      assert.include(textOf("grace", "ws:vaults.entries.list"), '"GRACE_KEY"');
       assert.include(textOf("grace", "ws:vaults.threadEnvironment"), '"GITHUB_TOKEN"');
       assert.include(textOf("linus", "ws:vaults.entries.list"), '"ACME_API_KEY"');
       assert.include(textOf("otto", "ws:vaults.entries.list"), '"GLOBEX_DB_URL"');
@@ -380,7 +363,7 @@ it.effect(
       // No answer names a secret its caller may not see.
       const sees = (who: string): ReadonlyArray<string> => {
         const person = t.people.find((p) => p.name === who);
-        if (who.startsWith("agent of thread:acme")) return [...ACME_NAMES, "GRACE_KEY"];
+        if (who.startsWith("agent of thread:acme")) return ACME_NAMES;
         if (who.startsWith("agent of thread:globex")) return GLOBEX_NAMES;
         if (person?.role === "owner")
           return ["OWNER_PRIVATE", ...ACME_NAMES, ...GLOBEX_NAMES, "GRACE_KEY"];
@@ -566,5 +549,164 @@ it.effect(
           .pipe(t.as(person.id), Effect.option);
         assert.isTrue(wrote._tag === "None", `${person.name} wrote into Ana's Vault`);
       }
+    }).pipe(Effect.scoped),
+);
+
+const LENT_SECRET = [
+  "-----BEGIN OPENSSH PRIVATE KEY-----",
+  "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW0707",
+  "QyNTUxOQAAACBhbmFzLWxlbnQta2V5LWZvci1hY21lLW9ubHktMDcwNwAAAJgAAAAAAAA0707",
+  "-----END OPENSSH PRIVATE KEY-----",
+].join("\n");
+const LENT_VARIABLE = "ana-lent-variable-value-0707";
+
+it.effect(
+  "Grants ticket 07: Ana's group lent to Acme gives Acme names and its Variable, never the Secret; nothing once it ends",
+  () =>
+    Effect.gen(function* () {
+      const t = yield* team;
+      const ana = UserId.make("ana");
+      yield* addMember(t.server, { id: "ana", displayName: "Ana" });
+      yield* Context.get(t.server.services, SpaceDirectory.SpaceDirectory).membershipsChanged([
+        ana,
+      ]);
+      const group = yield* t.vaults
+        .create({ name: "Ana lends", owner: userOwner(ana) })
+        .pipe(t.as(ana));
+      yield* t.vaults
+        .putEntry({ vaultId: group.id, name: "ANA_LENT_KEY", value: Redacted.make(LENT_SECRET) })
+        .pipe(t.as(ana));
+      yield* t.vaults
+        .putEntry({
+          vaultId: group.id,
+          name: "ANA_LENT_ENV",
+          value: Redacted.make(LENT_VARIABLE),
+          class: "variable",
+        })
+        .pipe(t.as(ana));
+      const grantId = yield* lendVaultGroup(t.server.sql, {
+        vaultId: group.id,
+        spaceId: t.acmeId,
+        lender: { kind: "user", id: ana },
+      });
+      yield* t.vaults
+        .setSpaceDefaults({ spaceId: t.acmeId, vaultIds: [t.acmeVault, group.id] })
+        .pipe(t.as(t.ownerId));
+      const grants = Context.get(t.server.services, Grants.Grants);
+      const limited = (userId: UserId, spaceLimit: SpaceId) =>
+        CommandActor.actAsResolved({ _tag: "User", userId, spaceLimit });
+      const byName = (name: string) => t.people.find((person) => person.name === name)!;
+      // Who sees its names, and who reads its Variable, while it is lent.
+      const sessions = [
+        { who: "ana", act: t.as(ana), names: true, variable: true },
+        { who: "owner", act: t.as(t.ownerId), names: true, variable: true },
+        { who: "ada", act: t.as(byName("ada").id), names: true, variable: true },
+        { who: "grace", act: t.as(byName("grace").id), names: true, variable: true },
+        { who: "linus", act: t.as(byName("linus").id), names: true, variable: false },
+        {
+          who: "ada limited to Acme",
+          act: limited(byName("ada").id, t.acmeId),
+          names: true,
+          variable: true,
+        },
+        ...["gus", "gina", "otto"].map((who) => ({
+          who,
+          act: t.as(byName(who).id),
+          names: false,
+          variable: false,
+        })),
+        {
+          who: "owner limited to Globex",
+          act: limited(t.ownerId, t.globexId),
+          names: false,
+          variable: false,
+        },
+      ];
+      const answers: Array<{
+        readonly who: string;
+        readonly phase: string;
+        readonly text: string;
+      }> = [];
+      const sweep = Effect.fn(function* (phase: string) {
+        for (const session of sessions) {
+          const read = Effect.fn(function* <A, E>(effect: Effect.Effect<A, E, never>) {
+            const text = yield* shown(effect.pipe(session.act));
+            answers.push({ who: session.who, phase, text });
+            return text;
+          });
+          yield* read(t.vaults.list);
+          yield* read(t.vaults.listEntries({ vaultId: group.id }));
+          for (const spaceId of [t.acmeId, t.globexId]) yield* read(t.vaults.choices({ spaceId }));
+          for (const threadId of t.threads) {
+            yield* read(
+              t.effective.threadEnvironment(
+                { threadId },
+                { variableValue: t.vaults.variableValue },
+              ),
+            );
+          }
+          yield* read(grants.listGiven);
+          yield* read(grants.listReceived({}));
+          // Nobody but Ana writes into it, nor renames, archives or deletes it.
+          if (session.who !== "ana" && session.who !== "owner") {
+            const refused = Effect.fn(function* <A, E>(write: Effect.Effect<A, E, never>) {
+              const wrote = yield* write.pipe(session.act, Effect.option);
+              assert.isTrue(wrote._tag === "None", `${session.who} wrote into Ana's lent group`);
+            });
+            yield* refused(
+              t.vaults.putEntry({
+                vaultId: group.id,
+                name: "INTRUDER",
+                value: Redacted.make(WRITTEN),
+              }),
+            );
+            yield* refused(t.vaults.update({ vaultId: group.id, name: "Taken" }));
+            yield* refused(t.vaults.remove({ vaultId: group.id }));
+          }
+        }
+        // The agent of Grace's Acme Thread: its names, the Variable's value, never the Secret.
+        answers.push({
+          who: "agent of thread:acme-grace",
+          phase,
+          text: yield* shown(t.delivery.turnNames(t.threads[0]!)),
+        });
+      });
+      yield* sweep("lent");
+      const textOf = (who: string, phase: string) =>
+        answers
+          .filter((answer) => answer.who === who && answer.phase === phase)
+          .map((answer) => answer.text)
+          .join("\n");
+      for (const session of sessions) {
+        const text = textOf(session.who, "lent");
+        assert.equal(text.includes('"ANA_LENT_KEY"'), session.names, `${session.who} names`);
+        assert.equal(text.includes(LENT_VARIABLE), session.variable, `${session.who} Variable`);
+      }
+      const agent = textOf("agent of thread:acme-grace", "lent");
+      assert.include(agent, "ANA_LENT_KEY");
+      assert.include(agent, LENT_VARIABLE);
+
+      // Once the loan ends, Acme sees nothing of it, and its Thread receives nothing from it.
+      yield* t.server.sql`
+        UPDATE grants SET state = 'ended', end_reason = 'revoked' WHERE grant_id = ${grantId}
+      `;
+      yield* sweep("ended");
+      for (const session of sessions.filter((s) => !["ana", "owner"].includes(s.who))) {
+        const text = textOf(session.who, "ended");
+        assert.notInclude(text, '"ANA_LENT_KEY"', `${session.who} after the end`);
+        assert.notInclude(text, LENT_VARIABLE, `${session.who} after the end`);
+      }
+      assert.notInclude(textOf("agent of thread:acme-grace", "ended"), "ANA_LENT_KEY");
+
+      // The Secret, whole or a line of it, is in no answer, before or after.
+      const lines = LENT_SECRET.split("\n").filter((line) => !line.startsWith("-----"));
+      assert.deepEqual(
+        answers
+          .filter(
+            ({ text }) => text.includes(LENT_SECRET) || lines.some((line) => text.includes(line)),
+          )
+          .map(({ who, phase }) => `${who} ${phase}`),
+        [],
+      );
     }).pipe(Effect.scoped),
 );

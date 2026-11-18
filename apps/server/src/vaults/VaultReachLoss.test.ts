@@ -1,9 +1,10 @@
 /**
  * Spec 5 ticket 07, «Bajas»: an Organization deleted takes its own Vaults, their values and every
- * row that names it; a User removed from the Installation loses the Vaults allowed to them. What
- * is delivered needs no row to go (EffectiveVaults recomputes it); these keep nothing behind.
+ * row that names it; a User removed from the Installation loses the loans to their Personal space
+ * (Grants ticket 07). What is delivered needs no row to go (EffectiveVaults recomputes it); these
+ * keep nothing behind.
  */
-import { ProjectId, SpaceId, UserId, type VaultError } from "@t3tools/contracts";
+import { ProjectId, SpaceId, UserId, type VaultError, type VaultGroupId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -11,6 +12,8 @@ import * as Redacted from "effect/Redacted";
 import type { SqlError } from "effect/sql/SqlError";
 
 import * as CommandActor from "../auth/CommandActor.ts";
+import * as Grants from "../grants/Grants.ts";
+import { lendVaultGroup } from "../grants/Grants.testkit.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
   addMember,
@@ -72,6 +75,18 @@ const hub = Effect.gen(function* () {
     assert.equal(made.status, 200, JSON.stringify(made.body));
     return ProjectId.make(id);
   });
+  const grants = Context.get(server.services, Grants.Grants);
+  /** One of the Owner's groups lent to a Space by an active Grant. */
+  const lend = (vaultId: VaultGroupId, spaceId: SpaceId) =>
+    lendVaultGroup(server.sql, { vaultId, spaceId, lender: { kind: "user", id: ownerId } });
+  /** A loan's state and why it ended. */
+  const loan = (grantId: string) =>
+    server.sql<{ readonly state: string; readonly endReason: string | null }>`
+      SELECT state, end_reason AS "endReason" FROM grants WHERE grant_id = ${grantId}
+    `.pipe(
+      Effect.map((rows) => `${rows[0]?.state}:${rows[0]?.endReason}`),
+      Effect.orDie,
+    );
   const count = (query: Effect.Effect<ReadonlyArray<{ readonly n: number }>, SqlError>) =>
     query.pipe(
       Effect.map((rows) => rows[0]?.n ?? 0),
@@ -88,6 +103,9 @@ const hub = Effect.gen(function* () {
     asOwner,
     vault,
     project,
+    grants,
+    lend,
+    loan,
     count,
   };
 });
@@ -103,13 +121,10 @@ it.effect("deleting an Organization deletes its Vaults, their values and every r
     const globexVault = yield* h.vault("Globex keys", h.globexId, [
       ["GLOBEX_TOKEN", "globex-token-value-0003"],
     ]);
-    // One of the Owner's, allowed to both Organizations: it stays, without Acme.
+    // One of the Owner's, lent to both Organizations: it stays, its loan to Acme ends.
     const shared = yield* h.vault("Shared tools", null, [["SHARED", "shared-value-00004"]]);
-    for (const spaceId of [h.acmeId, h.globexId]) {
-      yield* h.vaults
-        .allow({ vaultId: shared, subject: { kind: "space", spaceId }, allowed: true })
-        .pipe(h.asOwner);
-    }
+    const toAcme = yield* h.lend(shared, h.acmeId);
+    const toGlobex = yield* h.lend(shared, h.globexId);
     yield* h.vaults
       .setSpaceDefaults({ spaceId: h.acmeId, vaultIds: [acmeVault, shared] })
       .pipe(h.asOwner);
@@ -138,13 +153,6 @@ it.effect("deleting an Organization deletes its Vaults, their values and every r
       0,
     );
     assert.equal(
-      yield* h.count(sql`
-          SELECT COUNT(*) AS n FROM vault_allowances
-          WHERE group_id = ${acmeVault} OR (subject_kind = 'space' AND subject_id = ${h.acmeId})
-        `),
-      0,
-    );
-    assert.equal(
       yield* h.count(
         sql`SELECT COUNT(*) AS n FROM space_default_vaults WHERE space_id = ${h.acmeId}`,
       ),
@@ -160,7 +168,7 @@ it.effect("deleting an Organization deletes its Vaults, their values and every r
     for (const valueId of acmeValues) {
       assert.isFalse(stored.has(valueId), "no value of Acme's is left in the store");
     }
-    // The Owner's Vault and Globex's own stay as they were, Globex's allowance included.
+    // The Owner's Vault and Globex's own stay as they were, the loan to Globex included.
     assert.deepEqual(
       (yield* sql<{ readonly vaultId: string }>`
           SELECT group_id AS "vaultId" FROM vault_groups WHERE group_id IN (${shared}, ${globexVault})
@@ -168,13 +176,8 @@ it.effect("deleting an Organization deletes its Vaults, their values and every r
         `).map((row) => row.vaultId),
       [globexVault, shared],
     );
-    assert.equal(
-      yield* h.count(sql`
-          SELECT COUNT(*) AS n FROM vault_allowances
-          WHERE group_id = ${shared} AND subject_kind = 'space' AND subject_id = ${h.globexId}
-        `),
-      1,
-    );
+    assert.equal(yield* h.loan(toGlobex), "active:null");
+    assert.equal(yield* h.loan(toAcme), "ended:target-gone");
     // Recorded without a value.
     const audited = yield* sql<{ readonly targetName: string; readonly detail: string }>`
         SELECT target_name AS "targetName", detail_json AS "detail" FROM audit_log
@@ -186,14 +189,13 @@ it.effect("deleting an Organization deletes its Vaults, their values and every r
       ["Acme keys"],
     );
     assert.notInclude(audited[0]?.detail ?? "", "acme-token-value");
-    // The Owner's Vault lost Acme: recorded as taken back from it.
-    const takenBack = yield* sql<{ readonly targetId: string; readonly detail: string }>`
+    // The Owner's loan to Acme ended with it, recorded as such.
+    const ended = yield* sql<{ readonly targetId: string; readonly detail: string }>`
         SELECT target_id AS "targetId", detail_json AS "detail" FROM audit_log
-        WHERE action = 'vault.allow' ORDER BY audit_id DESC LIMIT 1
+        WHERE action = 'grant.end' ORDER BY audit_id DESC LIMIT 1
       `;
-    assert.equal(takenBack[0]?.targetId, shared);
-    assert.include(takenBack[0]?.detail ?? "", '"allowed":false');
-    assert.include(takenBack[0]?.detail ?? "", '"subjectName":"Acme"');
+    assert.equal(ended[0]?.targetId, toAcme);
+    assert.include(ended[0]?.detail ?? "", '"reason":"target-gone"');
   }),
 );
 
@@ -229,23 +231,39 @@ it.effect("deleting a Project deletes its Vault choices", () =>
 );
 
 it.effect(
-  "allowing a Vault to a Space never brings back a default or choice of it left from before",
+  "lending a Vault group to a Space never brings back a default or choice of it left from before",
   () =>
     Effect.gen(function* () {
       const h = yield* hub;
       const sql = h.server.sql;
       const tools = yield* h.vault("Tools", null, [["TOOLS_TOKEN", "tools-token-value-0006"]]);
       const web = yield* h.project("globex-web", h.globexId);
-      // Rows a Hub before ticket 07 left behind (a Project moved here, an earlier allowance).
+      // Rows left behind (a Project moved here, an earlier loan).
       yield* sql`
         INSERT INTO project_vault_choices (project_id, group_id, choice) VALUES (${web}, ${tools}, 'add')
       `;
       yield* sql`
         INSERT INTO space_default_vaults (space_id, group_id, position) VALUES (${h.globexId}, ${tools}, 0)
       `;
-      yield* h.vaults
-        .allow({ vaultId: tools, subject: { kind: "space", spaceId: h.globexId }, allowed: true })
+      // The Owner runs Globex, so the loan starts active (a Vault group's needs a strong factor).
+      yield* sql`
+        INSERT OR IGNORE INTO space_memberships (space_id, user_id, role, created_at)
+        VALUES (${h.globexId}, ${h.ownerId}, 'admin', '2026-11-01T00:00:00.000Z')
+      `;
+      yield* Context.get(h.server.services, SpaceDirectory.SpaceDirectory).membershipsChanged([
+        h.ownerId,
+      ]);
+      const given = yield* h.grants
+        .give(
+          {
+            resource: { kind: "vault-group", vaultGroupId: tools },
+            spaceId: h.globexId,
+            limits: { kind: "vault-group" },
+          },
+          { strongFactor: true },
+        )
         .pipe(h.asOwner);
+      assert.equal(given.state, "active");
       assert.equal(
         yield* h.count(
           sql`SELECT COUNT(*) AS n FROM project_vault_choices WHERE group_id = ${tools}`,
@@ -290,14 +308,19 @@ it.effect("nothing new is written for an Organization once its deletion began", 
       ),
       "not-found",
     );
-    assert.equal(
-      yield* reasonOf(
-        h.vaults
-          .allow({ vaultId: tools, subject: { kind: "space", spaceId: h.acmeId }, allowed: true })
-          .pipe(h.asOwner),
-      ),
-      "not-found",
+    const lent = yield* Effect.flip(
+      h.grants
+        .give(
+          {
+            resource: { kind: "vault-group", vaultGroupId: tools },
+            spaceId: h.acmeId,
+            limits: { kind: "vault-group" },
+          },
+          { strongFactor: true },
+        )
+        .pipe(h.asOwner),
     );
+    assert.oneOf(lent.reason, ["not-found", "not-allowed"]);
     assert.equal(
       yield* h.count(h.server.sql`SELECT COUNT(*) AS n FROM vault_groups WHERE name = 'Late'`),
       0,
@@ -305,7 +328,7 @@ it.effect("nothing new is written for an Organization once its deletion began", 
   }),
 );
 
-it.effect("removing a User takes back every Vault allowed to them; disabling keeps them", () =>
+it.effect("removing a User ends the loans to their Personal space; disabling keeps them", () =>
   Effect.gen(function* () {
     const h = yield* hub;
     const sql = h.server.sql;
@@ -319,59 +342,32 @@ it.effect("removing a User takes back every Vault allowed to them; disabling kee
       grace,
       linus,
     ]);
-    const own = Effect.fn(function* (name: string, userId: UserId) {
-      const vaultId = yield* h.vault(name, null, [["OWN_TOKEN", `${name}-value-000005`]]);
-      yield* h.vaults
-        .allow({ vaultId, subject: { kind: "user", userId }, allowed: true })
-        .pipe(h.asOwner);
-      return vaultId;
-    });
-    const gracesKeys = yield* own("graces-keys", grace);
-    yield* own("linus-keys", linus);
-    // A Vault allowed to Grace's Personal space, a default there.
     const gracesSpace = SpaceId.make("personal:grace");
-    const toPersonal = yield* h.vault("graces-space-keys", null, [
-      ["SPACE_TOKEN", "space-value-0008"],
-    ]);
-    yield* h.vaults
-      .allow({
-        vaultId: toPersonal,
-        subject: { kind: "space", spaceId: gracesSpace },
-        allowed: true,
-      })
-      .pipe(h.asOwner);
-    // A default the Owner chose there before owned-resources 04 (only Grace chooses now).
+    const toGrace = yield* h.vault("graces-keys", null, [["SPACE_TOKEN", "space-value-0008"]]);
+    const graces = yield* h.lend(toGrace, gracesSpace);
+    const toLinus = yield* h.vault("linus-keys", null, [["OWN_TOKEN", "linus-value-000005"]]);
+    const linuses = yield* h.lend(toLinus, SpaceId.make("personal:linus"));
+    // A default there, and a Project of hers in that Space which chose it.
     yield* sql`
       INSERT INTO space_default_vaults (space_id, group_id, position)
-      VALUES (${gracesSpace}, ${toPersonal}, 0)
+      VALUES (${gracesSpace}, ${toGrace}, 0)
     `;
-    // A Project of hers in that Space, which chose it.
     const at = "2026-11-01T00:00:00.000Z";
     yield* sql`
       INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at, space_id)
       VALUES ('graces-web', 'graces-web', '/w/graces-web', '[]', ${at}, ${at}, ${gracesSpace})
     `;
     yield* sql`
-      INSERT INTO project_vault_choices (project_id, group_id, choice) VALUES ('graces-web', ${toPersonal}, 'add')
+      INSERT INTO project_vault_choices (project_id, group_id, choice) VALUES ('graces-web', ${toGrace}, 'add')
     `;
-    const allowances = (userId: UserId) =>
-      h.count(sql`
-        SELECT COUNT(*) AS n FROM vault_allowances WHERE subject_kind = 'user' AND subject_id = ${userId}
-      `);
 
     const users = Context.get(h.server.services, InstallationUserService.InstallationUserService);
     yield* users.setStatus({ actorUserId: h.ownerId, userId: linus, status: "disabled" });
-    assert.equal(yield* allowances(linus), 1, "a disabled User keeps theirs");
+    assert.equal(yield* h.loan(linuses), "active:null", "a disabled User's loans wait for them");
 
     yield* users.setStatus({ actorUserId: h.ownerId, userId: grace, status: "removed" });
-    assert.equal(yield* allowances(grace), 0);
-    // Her frozen Personal space keeps no allowance nor default either.
-    assert.equal(
-      yield* h.count(sql`
-        SELECT COUNT(*) AS n FROM vault_allowances WHERE subject_kind = 'space' AND subject_id = ${gracesSpace}
-      `),
-      0,
-    );
+    assert.equal(yield* h.loan(graces), "ended:target-gone");
+    // Her frozen Personal space keeps no default nor choice either.
     assert.equal(
       yield* h.count(
         sql`SELECT COUNT(*) AS n FROM space_default_vaults WHERE space_id = ${gracesSpace}`,
@@ -386,31 +382,29 @@ it.effect("removing a User takes back every Vault allowed to them; disabling kee
     );
     const chose = yield* sql<{ readonly detail: string }>`
       SELECT detail_json AS "detail" FROM audit_log
-      WHERE action = 'vault.choose' AND target_id = ${toPersonal}
+      WHERE action = 'vault.choose' AND target_id = ${toGrace}
         AND detail_json LIKE '%"scope":"project"%'
     `;
     assert.lengthOf(chose, 1, "the dropped choice is audited");
     assert.include(chose[0]?.detail ?? "", '"choice":"inherit"');
-    // The Vault itself stays the Owner's, with its secret.
+    // The group itself stays the Owner's, with its secret.
     assert.equal(
-      yield* h.count(sql`SELECT COUNT(*) AS n FROM vault_entries WHERE group_id = ${gracesKeys}`),
+      yield* h.count(sql`SELECT COUNT(*) AS n FROM vault_entries WHERE group_id = ${toGrace}`),
       1,
     );
-    const audited = yield* sql<{ readonly targetId: string; readonly detail: string }>`
-      SELECT target_id AS "targetId", detail_json AS "detail" FROM audit_log
-      WHERE action = 'vault.allow' AND detail_json LIKE '%"allowed":false%' ORDER BY audit_id
-    `;
-    assert.deepEqual(
-      audited.map((row) => row.targetId).toSorted(),
-      [gracesKeys, toPersonal].toSorted(),
-    );
-    for (const row of audited) assert.include(row.detail, '"subjectName":"grace"');
-    // Allowing her anything now is refused.
+    // Lending her anything now is refused.
     const refused = yield* Effect.flip(
-      h.vaults
-        .allow({ vaultId: gracesKeys, subject: { kind: "user", userId: grace }, allowed: true })
+      h.grants
+        .give(
+          {
+            resource: { kind: "vault-group", vaultGroupId: toGrace },
+            spaceId: gracesSpace,
+            limits: { kind: "vault-group" },
+          },
+          { strongFactor: true },
+        )
         .pipe(h.asOwner),
     );
-    assert.equal(refused.reason, "not-found");
+    assert.oneOf(refused.reason, ["not-found", "not-allowed"]);
   }),
 );

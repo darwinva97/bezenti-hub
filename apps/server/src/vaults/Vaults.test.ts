@@ -35,6 +35,7 @@ import {
   FAKE_PROVIDER_LABEL,
   makeFakeSecretProvider,
 } from "./ProviderReads.testkit.ts";
+import { lendVaultGroup } from "../grants/Grants.testkit.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as VaultKeyCheck from "./VaultKeyCheck.ts";
 import * as Vaults from "./Vaults.ts";
@@ -1604,31 +1605,92 @@ it.effect("the Owner is told once which entries were Secret links; nobody else i
   }),
 );
 
+// Grants ticket 07: a group lent to a Space is read there, never written.
+
 it.effect(
-  "only the Owner's named groups are allowed elsewhere; never a `default` or an Organization's",
+  "a group lent to Acme is listed there as borrowed and read-only; its lender keeps it",
   () =>
     Effect.gen(function* () {
       const setup = yield* hub;
-      const { vaults, as, ownerId, acmeId, globexId, main } = setup;
-      const { acme } = yield* acmeSecrets(setup);
-      const subject = { kind: "space" as const, spaceId: globexId };
-      assert.equal(
-        yield* reasonOf(vaults.allow({ vaultId: main, subject, allowed: true }).pipe(as(ownerId))),
-        "default-group",
-      );
-      assert.equal(
-        yield* reasonOf(
-          vaults.allow({ vaultId: acme.id, subject, allowed: true }).pipe(as(ownerId)),
-        ),
-        "not-allowed",
-      );
+      const { vaults, as, ownerId, acmeId, people } = setup;
       const tools = yield* vaults.create({ name: "Tools", owner: mine(ownerId) }).pipe(as(ownerId));
-      const allowed = yield* vaults
-        .allow({ vaultId: tools.id, subject: { kind: "space", spaceId: acmeId }, allowed: true })
+      yield* vaults
+        .putEntry({ vaultId: tools.id, name: "TOOLS_TOKEN", value: Redacted.make(ACME_OWN) })
         .pipe(as(ownerId));
-      assert.deepEqual(
-        allowed.allowances.map((allowance) => allowance.name),
-        ["Acme"],
+      yield* vaults
+        .putEntry({
+          vaultId: tools.id,
+          name: "TOOLS_REGION",
+          value: Redacted.make("eu-west-1"),
+          class: "variable",
+        })
+        .pipe(as(ownerId));
+      const grantId = yield* lendVaultGroup(setup.server.sql, {
+        vaultId: tools.id,
+        spaceId: acmeId,
+        lender: { kind: "user", id: ownerId },
+      });
+      for (const who of [people.admin, people.member, people.guest]) {
+        const listed = (yield* vaults.list.pipe(as(who.id))).groups.find(
+          (group) => group.id === tools.id,
+        );
+        assert.equal(listed?.borrowed?.grantId, grantId, who.id);
+        assert.equal(listed?.borrowed?.spaceId, acmeId);
+        assert.equal(listed?.borrowed?.spaceName, "Acme");
+        assert.isFalse(listed?.canEdit);
+        assert.isFalse(listed?.canManage);
+        assert.deepEqual(listed?.allowances, []);
+      }
+      // The lender lists it as theirs, not borrowed.
+      const owners = (yield* vaults.list.pipe(as(ownerId))).groups.find(
+        (group) => group.id === tools.id,
+      );
+      assert.isUndefined(owners?.borrowed);
+      assert.isTrue(owners?.canEdit);
+      // Variables with their value to Admins and Members, names only to a Guest; a Secret never.
+      const shown = (who: UserId) =>
+        vaults.listEntries({ vaultId: tools.id }).pipe(
+          as(who),
+          Effect.map((listed) =>
+            Object.fromEntries(listed.entries.map((entry) => [entry.name, entry.value ?? null])),
+          ),
+        );
+      assert.deepEqual(yield* shown(people.member.id), {
+        TOOLS_REGION: "eu-west-1",
+        TOOLS_TOKEN: null,
+      });
+      assert.deepEqual(yield* shown(people.guest.id), { TOOLS_REGION: null, TOOLS_TOKEN: null });
+      // Nobody in Acme writes into it, its Admin included.
+      for (const who of [people.admin, people.member]) {
+        assert.equal(
+          yield* reasonOf(
+            vaults
+              .putEntry({
+                vaultId: tools.id,
+                name: "PLANTED",
+                value: Redacted.make("planted-0001"),
+              })
+              .pipe(as(who.id)),
+          ),
+          "forbidden",
+        );
+        assert.equal(
+          yield* reasonOf(vaults.update({ vaultId: tools.id, name: "Mine" }).pipe(as(who.id))),
+          "forbidden",
+        );
+      }
+      // Once the loan ends, Acme sees nothing of it.
+      yield* setup.server.sql`
+      UPDATE grants SET state = 'ended', end_reason = 'revoked' WHERE grant_id = ${grantId}
+    `;
+      assert.isUndefined(
+        (yield* vaults.list.pipe(as(people.member.id))).groups.find(
+          (group) => group.id === tools.id,
+        ),
+      );
+      assert.equal(
+        yield* reasonOf(vaults.listEntries({ vaultId: tools.id }).pipe(as(people.member.id))),
+        "not-found",
       );
     }),
 );

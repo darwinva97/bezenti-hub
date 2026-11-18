@@ -21,7 +21,6 @@ export const forgetVault = Effect.fn("VaultReachLoss.forgetVault")(function* (
   const gone = yield* sql<{ readonly valueId: string | null }>`
     DELETE FROM vault_entries WHERE group_id = ${vaultId} RETURNING value_id AS "valueId"
   `;
-  yield* sql`DELETE FROM vault_allowances WHERE group_id = ${vaultId}`;
   yield* sql`DELETE FROM space_default_vaults WHERE group_id = ${vaultId}`;
   yield* sql`DELETE FROM project_vault_choices WHERE group_id = ${vaultId}`;
   yield* sql`DELETE FROM vault_provider_scopes WHERE group_id = ${vaultId}`;
@@ -39,47 +38,73 @@ const forgetSpaceRows = Effect.fn("VaultReachLoss.forgetSpaceRows")(function* (
   vaultId: string,
   spaceId: string,
 ) {
-  yield* sql`DELETE FROM space_default_vaults WHERE space_id = ${spaceId} AND group_id = ${vaultId}`;
-  yield* sql`
+  const defaults = yield* sql<{ readonly vaultId: string }>`
+    DELETE FROM space_default_vaults WHERE space_id = ${spaceId} AND group_id = ${vaultId}
+    RETURNING group_id AS "vaultId"
+  `;
+  const choices = yield* sql<{ readonly projectId: string }>`
     DELETE FROM project_vault_choices WHERE group_id = ${vaultId} AND project_id IN (
       SELECT project_id FROM projection_projects
       WHERE ${sql.literal(projectSpaceSql("space_id"))} = ${spaceId}
     )
+    RETURNING project_id AS "projectId"
   `;
+  return { wasDefault: defaults.length > 0, projects: choices.map((row) => row.projectId) };
 });
 
 /**
- * One of the Owner's Vaults taken back from a Space: its allowance, the Space's default of it and
- * its Projects' choices of it.
+ * Grants ticket 07: a group lent to a Space whose loan ended (revoked, returned, or a side gone):
+ * that Space's default of it and its Projects' choices of it go in the same transaction, each
+ * audited under that Space (`via: grant.end`), so lending it again never brings them back unseen.
  */
-export const forgetSpaceAllowance = Effect.fn("VaultReachLoss.forgetSpaceAllowance")(function* (
+export const forgetLentReach = Effect.fn("VaultReachLoss.forgetLentReach")(function* (
   sql: SqlClient.SqlClient,
-  vaultId: string,
-  spaceId: string,
+  actor: AuditLog.AuditActor,
+  input: { readonly vaultId: string; readonly spaceId: string },
 ) {
-  yield* sql`
-    DELETE FROM vault_allowances
-    WHERE group_id = ${vaultId} AND subject_kind = 'space' AND subject_id = ${spaceId}
+  const gone = yield* forgetSpaceRows(sql, input.vaultId, input.spaceId);
+  if (!gone.wasDefault && gone.projects.length === 0) return;
+  const [vault] = yield* sql<{ readonly name: string }>`
+    SELECT name FROM vault_groups WHERE group_id = ${input.vaultId}
   `;
-  yield* forgetSpaceRows(sql, vaultId, spaceId);
+  const target = {
+    kind: "vault" as const,
+    id: input.vaultId,
+    ...(vault === undefined ? {} : { name: vault.name }),
+  };
+  const write = AuditLog.write(sql);
+  const spaceId = input.spaceId as SpaceId;
+  if (gone.wasDefault) {
+    yield* write({
+      actor,
+      action: "vault.choose",
+      spaceId,
+      target,
+      detail: { scope: "space", choice: "none", via: "grant.end" },
+    });
+  }
+  for (const projectId of gone.projects) {
+    yield* write({
+      actor,
+      action: "vault.choose",
+      spaceId,
+      target,
+      detail: { scope: "project", projectId, choice: "inherit", via: "grant.end" },
+    });
+  }
 });
 
 /**
- * One of the Owner's Vaults allowed to a Space: a default or choice of it there can only be left
- * from before (a Project that moved in, an earlier allowance), so it goes, never brought back unseen.
+ * A group lent to a Space by a Grant that becomes active: a default or choice of it there can only
+ * be left from before (a Project that moved in), so it goes, never brought back unseen.
  */
-export const clearForGrant = forgetSpaceRows;
-
-/** One of the Owner's Vaults taken back from a User. */
-export const forgetUserAllowance = (sql: SqlClient.SqlClient, vaultId: string, userId: string) =>
-  sql`
-    DELETE FROM vault_allowances
-    WHERE group_id = ${vaultId} AND subject_kind = 'user' AND subject_id = ${userId}
-  `.pipe(Effect.asVoid);
+export const clearForGrant = (sql: SqlClient.SqlClient, vaultId: string, spaceId: string) =>
+  forgetSpaceRows(sql, vaultId, spaceId).pipe(Effect.asVoid);
 
 /**
- * A User removed from the Installation: every Vault allowed to them or to their (now frozen)
- * Personal space, and that Space's defaults, each allowance audited as taken back.
+ * A User removed from the Installation: their (now frozen) Personal space's defaults and its
+ * Projects' choices, each choice audited as gone back to inherit. Their loans end with
+ * `GrantEnding.endGone`, their own Vault with `forgetUserVault`.
  */
 export const forgetUser = Effect.fn("VaultReachLoss.forgetUser")(function* (
   sql: SqlClient.SqlClient,
@@ -87,24 +112,6 @@ export const forgetUser = Effect.fn("VaultReachLoss.forgetUser")(function* (
   user: { readonly userId: UserId; readonly displayName: string },
 ) {
   const personal = `personal:${user.userId}`;
-  const allowed = yield* sql<{
-    readonly vaultId: string;
-    readonly name: string;
-    readonly subjectKind: "user" | "space";
-    readonly subjectId: string;
-  }>`
-    SELECT a.group_id AS "vaultId", v.name AS "name", a.subject_kind AS "subjectKind",
-      a.subject_id AS "subjectId"
-    FROM vault_allowances a JOIN vault_groups v ON v.group_id = a.group_id
-    WHERE (a.subject_kind = 'user' AND a.subject_id = ${user.userId})
-      OR (a.subject_kind = 'space' AND a.subject_id = ${personal})
-    ORDER BY v.name
-  `;
-  yield* sql`
-    DELETE FROM vault_allowances
-    WHERE (subject_kind = 'user' AND subject_id = ${user.userId})
-      OR (subject_kind = 'space' AND subject_id = ${personal})
-  `;
   yield* sql`DELETE FROM space_default_vaults WHERE space_id = ${personal}`;
   const choices = yield* sql<{
     readonly projectId: string;
@@ -119,20 +126,6 @@ export const forgetUser = Effect.fn("VaultReachLoss.forgetUser")(function* (
       (SELECT name FROM vault_groups g WHERE g.group_id = project_vault_choices.group_id) AS "name"
   `;
   const write = AuditLog.write(sql);
-  for (const row of allowed) {
-    yield* write({
-      actor,
-      action: "vault.allow",
-      spaceId: row.subjectKind === "space" ? (personal as SpaceId) : null,
-      target: { kind: "vault", id: row.vaultId, name: row.name },
-      detail: {
-        subjectKind: row.subjectKind,
-        subjectId: row.subjectId,
-        subjectName: user.displayName,
-        allowed: false,
-      },
-    });
-  }
   // Its Projects' choices there go back to inherit, audited like any other choice dropped.
   for (const row of choices) {
     yield* write({
@@ -147,7 +140,7 @@ export const forgetUser = Effect.fn("VaultReachLoss.forgetUser")(function* (
       detail: { scope: "project", projectId: row.projectId, choice: "inherit" },
     });
   }
-  return allowed.length;
+  return choices.length;
 });
 
 /**
@@ -186,8 +179,8 @@ export const forgetUserVault = Effect.fn("VaultReachLoss.forgetUserVault")(funct
 
 /**
  * An Organization deleted: its Vault's groups with their entries, `default` included (audited
- * `vault.delete`), the Owner's groups' allowances to it (audited as taken back), its defaults and
- * its Projects' choices. The Owner's groups themselves stay. Answers the values to remove.
+ * `vault.delete`), its defaults and its Projects' choices. Groups lent to it stay their owners';
+ * those loans end with `GrantEnding.endGone`. Answers the values to remove.
  */
 export const forgetOrganization = Effect.fn("VaultReachLoss.forgetOrganization")(function* (
   sql: SqlClient.SqlClient,
@@ -216,26 +209,6 @@ export const forgetOrganization = Effect.fn("VaultReachLoss.forgetOrganization")
       spaceId,
       target: { kind: "vault", id: vault.vaultId, name: vault.name },
       detail: { entries: gone.entries, via: "organization.delete" },
-    });
-  }
-  const allowed = yield* sql<{ readonly vaultId: string; readonly name: string }>`
-    SELECT a.group_id AS "vaultId", v.name AS "name"
-    FROM vault_allowances a JOIN vault_groups v ON v.group_id = a.group_id
-    WHERE a.subject_kind = 'space' AND a.subject_id = ${spaceId} ORDER BY v.name
-  `;
-  yield* sql`DELETE FROM vault_allowances WHERE subject_kind = 'space' AND subject_id = ${spaceId}`;
-  for (const row of allowed) {
-    yield* write({
-      actor,
-      action: "vault.allow",
-      spaceId,
-      target: { kind: "vault", id: row.vaultId, name: row.name },
-      detail: {
-        subjectKind: "space",
-        subjectId: spaceId,
-        subjectName: organization.name,
-        allowed: false,
-      },
     });
   }
   yield* sql`DELETE FROM space_default_vaults WHERE space_id = ${spaceId}`;

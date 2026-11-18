@@ -118,7 +118,6 @@ const rowsNaming = (hub: Hub, groupIds: ReadonlyArray<string>) =>
     for (const table of [
       "vault_groups",
       "vault_entries",
-      "vault_allowances",
       "space_default_vaults",
       "project_vault_choices",
       "vault_provider_scopes",

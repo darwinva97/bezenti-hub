@@ -1,9 +1,12 @@
 /**
  * The only place that computes which secrets a Thread's turn, terminal or script receives for the
- * User who starts it: value ids, never values, recomputed on every call. Rule and precedence (User,
- * then Project, then Space): docs/internals/secrets.md, «The effective set».
+ * User who starts it: value ids, never values, recomputed on every call. Rule and precedence
+ * (Project, then Space; lent groups after the Space's own): docs/internals/secrets.md, «The
+ * effective set».
  */
 import {
+  EnvironmentId,
+  type GrantId,
   parseTemplate,
   ProjectId,
   type ResourceOwner,
@@ -21,6 +24,7 @@ import {
   type VaultSource,
   type VaultThreadEnvironment,
   type VaultThreadEnvironmentInput,
+  type VaultThreadWithheld,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -57,6 +61,8 @@ export interface EffectiveVariable {
   readonly vaultId: VaultGroupId;
   readonly vaultName: string;
   readonly source: VaultSource;
+  /** The Grant lending its group to the Thread's Space; null for the Space's own (Grants 07). */
+  readonly grantId: GrantId | null;
   /**
    * The VaultValueStore entry holding the value (a link's original's): read by delivery alone.
    * A new id after every replace, so it also says whether the value changed.
@@ -105,10 +111,38 @@ export interface EffectiveSet {
     readonly vaultId: VaultGroupId;
     readonly name: string;
     readonly source: VaultSource;
+    readonly grantId: GrantId | null;
   }>;
   /** By name. */
   readonly variables: ReadonlyArray<EffectiveVariable>;
+  /**
+   * Grants ticket 07: names of lent groups never delivered, by name: one that changes how tools
+   * run, or any on a machine lent to the Space whose owner is not the group's. Names only.
+   */
+  readonly withheld: ReadonlyArray<VaultThreadWithheld>;
 }
+
+/**
+ * The machine a process starts on, when it is a Sandbox on a machine lent to the Thread's Space
+ * (Grants ticket 08): its owner (null once gone) could read what it receives.
+ */
+export interface LentMachine {
+  readonly ownerUserId: UserId | null;
+}
+
+/** Whether `environmentId` is a lent machine's Sandbox, and whose that machine is. */
+export const lentMachineOf = (sql: SqlClient.SqlClient, environmentId: EnvironmentId | string) =>
+  sql<{ readonly ownerUserId: string | null }>`
+    SELECT h.owner_user_id AS "ownerUserId" FROM environments e
+    LEFT JOIN environments h ON h.environment_id = e.host_environment_id
+    WHERE e.environment_id = ${environmentId} AND e.mode = 'lent'
+  `.pipe(
+    Effect.map((rows) =>
+      Option.map(Option.fromNullishOr(rows[0]), (row): LentMachine => ({
+        ownerUserId: row.ownerUserId === null ? null : UserId.make(row.ownerUserId),
+      })),
+    ),
+  );
 
 export class EffectiveVaults extends Context.Service<
   EffectiveVaults,
@@ -116,10 +150,12 @@ export class EffectiveVaults extends Context.Service<
     /**
      * What a turn, terminal or script of the Thread receives when `actingUserId` starts it. Fails
      * `not-found` for a missing Thread and `forbidden` when the User no longer works in its Space.
+     * On a lent machine (`lentMachine`), lent groups give only what is its owner's own.
      */
     readonly forThread: (input: {
       readonly threadId: ThreadId;
       readonly actingUserId: UserId;
+      readonly lentMachine?: LentMachine;
     }) => Effect.Effect<EffectiveSet, VaultError>;
     /**
      * `forThread` for a Thread whose creation is being written (no row to read its Space from):
@@ -342,6 +378,7 @@ const make = Effect.gen(function* () {
   const forThread = Effect.fn("EffectiveVaults.forThread")(function* (input: {
     readonly threadId: ThreadId;
     readonly actingUserId: UserId;
+    readonly lentMachine?: LentMachine;
   }) {
     const placement = yield* spaces
       .placementOf(input.threadId)
@@ -374,6 +411,7 @@ const make = Effect.gen(function* () {
     readonly actingUserId: UserId;
     readonly space: AccessPolicy.SpaceResource;
     readonly projectId: ProjectId | null;
+    readonly lentMachine?: LentMachine;
   }) {
     const { space } = input;
     // A Thread without a Project (the scratch Project's) takes no Project's choices.
@@ -393,25 +431,37 @@ const make = Effect.gen(function* () {
       return yield* fail("forbidden", "You no longer work in this Thread's Space.");
     }
 
-    const reach = yield* Effect.all(
-      {
-        spaceSide: spaceSide(space.id, projectId),
-        ownVaults: VaultReach.allowedToUser(sql, input.actingUserId),
-      },
-      { concurrency: "unbounded" },
-    ).pipe(Effect.catch(storage("read the Thread's Vaults")));
-
-    // The User's own first, then the Space side; a Vault in both counts as the User's.
-    const groups: Array<{ readonly row: VaultReach.ReachRow; readonly source: VaultSource }> = [];
-    const taken = new Set<VaultGroupId>();
-    for (const row of reach.ownVaults) {
-      if (row.archived || taken.has(row.vaultId)) continue;
-      taken.add(row.vaultId);
-      groups.push({ row, source: "user" });
-    }
-    for (const group of reach.spaceSide) {
-      if (!taken.has(group.row.vaultId)) groups.push(group);
-    }
+    // Grants ticket 07: the Space side alone (a group allowed to a User became a Grant to their
+    // Personal space, one of its defaults).
+    const groups: ReadonlyArray<{
+      readonly row: VaultReach.ReachRow;
+      readonly source: VaultSource;
+    }> = yield* spaceSide(space.id, projectId).pipe(
+      Effect.catch(storage("read the Thread's Vaults")),
+    );
+    const withheld: Array<VaultThreadWithheld> = [];
+    /** Why a lent group's entry never reaches a process here, if it does not. */
+    const withholdReason = (
+      row: VaultReach.ReachRow,
+      risk: ReturnType<typeof secretNameRisk>,
+    ): VaultThreadWithheld["reason"] | undefined => {
+      if (row.grantId === null) return undefined;
+      // A lender never changes how the borrower's tools run.
+      if (risk === "dangerous") return "lent-dangerous";
+      // A lent machine's owner could read it: only their own group goes there.
+      const machine = input.lentMachine;
+      if (
+        machine !== undefined &&
+        !(
+          row.ownerKind === "user" &&
+          machine.ownerUserId !== null &&
+          row.ownerId === machine.ownerUserId
+        )
+      ) {
+        return "lent-machine";
+      }
+      return undefined;
+    };
 
     const entries = yield* entriesOf(groups.map((group) => group.row.vaultId)).pipe(
       Effect.catch(storage("read the Thread's secrets")),
@@ -447,6 +497,12 @@ const make = Effect.gen(function* () {
         }
         const risk = secretNameRisk(entry.name);
         if (risk === "invalid" || risk === "gateway") continue;
+        // Kept out before precedence, so the Space's own entry of that name still wins.
+        const reason = withholdReason(row, risk);
+        if (reason !== undefined) {
+          withheld.push({ name: entry.name, vaultId: row.vaultId, vaultName: row.name, reason });
+          continue;
+        }
         const winner = winners.get(entry.name);
         if (winner !== undefined) {
           winner.shadowed.push({ vaultId: row.vaultId, vaultName: row.name, source });
@@ -461,6 +517,7 @@ const make = Effect.gen(function* () {
             vaultId: row.vaultId,
             vaultName: row.name,
             source,
+            grantId: row.grantId,
             valueId: provider === null && inputs === undefined ? entry.valueId : null,
             provider,
             // A template is a Variable only while every entry it names is one, whatever it says.
@@ -490,8 +547,14 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       spaceId: space.id,
       projectId: projectId === null ? null : ProjectId.make(projectId),
-      vaults: groups.map(({ row, source }) => ({ vaultId: row.vaultId, name: row.name, source })),
+      vaults: groups.map(({ row, source }) => ({
+        vaultId: row.vaultId,
+        name: row.name,
+        source,
+        grantId: row.grantId,
+      })),
       variables,
+      withheld: withheld.toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
     } satisfies EffectiveSet;
   });
 
@@ -517,7 +580,23 @@ const make = Effect.gen(function* () {
           SpaceResourceNotFoundError: () => fail("not-found", NOT_FOUND),
         }),
       );
-    const set = yield* forThread({ threadId: input.threadId, actingUserId: actor.value });
+    // On a machine lent to the Space, as its processes there would receive it (Grants ticket 07).
+    const active = yield* sql<{ readonly environmentId: string | null }>`
+      SELECT active_environment_id AS "environmentId"
+      FROM orchestration_v2_projection_threads WHERE thread_id = ${input.threadId}
+    `.pipe(Effect.catch(storage("read the Thread's machine")));
+    const activeEnvironment = active[0]?.environmentId ?? null;
+    const lentMachine =
+      activeEnvironment === null
+        ? Option.none<LentMachine>()
+        : yield* lentMachineOf(sql, EnvironmentId.make(activeEnvironment)).pipe(
+            Effect.catch(storage("read the Thread's machine")),
+          );
+    const set = yield* forThread({
+      threadId: input.threadId,
+      actingUserId: actor.value,
+      ...(Option.isSome(lentMachine) ? { lentMachine: lentMachine.value } : {}),
+    });
     // Spec 4 ticket 07: the direct AI account credential the caller's turns last received in this
     // Thread (or its root's), by name: «AI account credential». Never a value.
     const credentialRows = yield* sql<{
@@ -583,10 +662,12 @@ const make = Effect.gen(function* () {
       threadId: ThreadId.make(set.threadId),
       spaceId: set.spaceId,
       projectId: set.projectId,
-      vaults: set.vaults.map((vault) => ({
+      vaults: set.vaults.map(({ grantId, ...vault }) => ({
         ...vault,
         ownerName: ownerNames.get(vault.vaultId) ?? null,
+        ...(grantId === null ? {} : { lent: true }),
       })),
+      ...(set.withheld.length === 0 ? {} : { withheld: set.withheld }),
       variables: set.variables.map((variable) => ({
         name: variable.name,
         description: variable.description,

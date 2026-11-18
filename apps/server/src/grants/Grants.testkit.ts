@@ -45,6 +45,33 @@ export const lendAiAccount = Effect.fn("Grants.testkit.lendAiAccount")(function*
   return grantId;
 });
 
+/**
+ * Grants ticket 07: an active Grant of Vault group `vaultId` to `spaceId` by its owner `lender`,
+ * as `Grants` leaves one (for tests about what a lent group reaches); returns its id.
+ */
+export const lendVaultGroup = Effect.fn("Grants.testkit.lendVaultGroup")(function* (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly vaultId: string;
+    readonly lender: { readonly kind: "user" | "organization"; readonly id: string };
+    readonly spaceId: SpaceId | string;
+  },
+) {
+  lent += 1;
+  const grantId = `grant-test-${lent}-${input.vaultId}` as GrantId;
+  // Later loans are decided later: they come after earlier ones in a Space's order.
+  const pad = (n: number) => String(n % 60).padStart(2, "0");
+  const at = `2026-11-01T${pad(Math.floor(lent / 3600))}:${pad(Math.floor(lent / 60))}:${pad(lent)}.000Z`;
+  yield* sql`
+    INSERT INTO grants (grant_id, resource_kind, resource_id, lender_kind, lender_id,
+      target_kind, target_id, state, limits_json, created_at, created_by, decided_at, decided_by)
+    VALUES (${grantId}, 'vault-group', ${input.vaultId}, ${input.lender.kind}, ${input.lender.id},
+      'space', ${input.spaceId}, 'active', '{"kind":"vault-group"}', ${at},
+      ${input.lender.kind === "user" ? input.lender.id : null}, ${at}, NULL)
+  `;
+  return grantId;
+});
+
 /** The active Grants of an AI account, oldest first. */
 export const activeAiGrants = (sql: SqlClient.SqlClient, accountId: AiAccountId | string) =>
   sql<{ readonly grantId: GrantId; readonly spaceId: SpaceId }>`

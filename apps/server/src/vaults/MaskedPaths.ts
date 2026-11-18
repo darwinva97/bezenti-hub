@@ -93,7 +93,6 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "vaults.entries.put": none("Vault and secret names, and Variables' values; never a Secret's"),
   "vaults.entries.delete": none("Vault and secret names, and Variables' values; never a Secret's"),
   "vaults.unlinkedNotice.dismiss": none("names of entries that were Secret links; never a value"),
-  "vaults.allow": none("Vault and secret names, and Variables' values; never a Secret's"),
   "grants.listGiven": none("loans: resource and Space names, states and limits"),
   "grants.listReceived": none("loans: resource and Space names, states and limits"),
   "grants.targets": none("loans: resource and Space names, states and limits"),

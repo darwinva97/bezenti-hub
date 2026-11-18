@@ -39,6 +39,7 @@ import {
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import { lendVaultGroup } from "../grants/Grants.testkit.ts";
 import * as SecretDelivery from "./SecretDelivery.ts";
 import * as Vaults from "./Vaults.ts";
 import { orgOwner, ownersDefault, userOwner } from "./VaultGroups.testkit.ts";
@@ -109,18 +110,22 @@ const hub = Effect.gen(function* () {
   });
   const acmeVault = yield* vault("Acme secrets", acmeId);
   const globexVault = yield* vault("Globex secrets", globexId);
-  // The Owner's, allowed to both Organizations: no Admin edits it (it reaches more than theirs).
+  // The Owner's, lent to both Organizations: read-only there, never a place to save (Grants 07).
   const shared = yield* vault("Shared", null);
   for (const spaceId of [acmeId, globexId]) {
-    yield* vaults
-      .allow({ vaultId: shared, subject: { kind: "space", spaceId }, allowed: true })
-      .pipe(as(ownerId));
+    yield* lendVaultGroup(server.sql, {
+      vaultId: shared,
+      spaceId,
+      lender: { kind: "user", id: ownerId },
+    });
   }
-  // Allowed to Grace herself: she receives it, but only the Owner edits it.
+  // Lent to Grace's Personal space: she receives it there, but only the Owner edits it.
   const gracesOwn = yield* vault("Grace's", null);
-  yield* vaults
-    .allow({ vaultId: gracesOwn, subject: { kind: "user", userId: grace }, allowed: true })
-    .pipe(as(ownerId));
+  yield* lendVaultGroup(server.sql, {
+    vaultId: gracesOwn,
+    spaceId: SpaceId.make(`personal:${grace}`),
+    lender: { kind: "user", id: ownerId },
+  });
   yield* vaults.setSpaceDefaults({ spaceId: acmeId, vaultIds: [acmeVault] }).pipe(as(ownerId));
 
   /** The Hub's SecretRequests over its store and Vaults, with one pending card per Thread. */
@@ -235,24 +240,20 @@ it.effect("the card offers only the Vaults the answerer may edit that reach the 
     const acmeByHedy = yield* t.thread("thread-acme-hedy", t.hedy, t.acmeId);
     const globexByGus = yield* t.thread("thread-globex-gus", t.gus, t.globexId);
 
-    // The Owner: whatever reaches Acme (its `default` first), never the Owner's own `default`
-    // (it reaches only their own Space).
+    // The Owner: Acme's own groups (its `default` first); never the Owner's own `default` (it
+    // reaches only their own Space), nor a group lent to Acme (Grants ticket 07: an answer given
+    // in Acme stays in Acme's Vault, even the lender's).
     assert.deepStrictEqual(yield* t.targetNames(t.ownerId, acmeByOwner), [
       "default",
       "Acme secrets",
-      "Shared",
     ]);
     // An Admin: their Organization's groups; not the Owner's Shared one, nor the Owner's own.
     assert.deepStrictEqual(yield* t.targetNames(t.ada, acmeByAda), ["default", "Acme secrets"]);
-    // An Admin of both Organizations, in an Acme Thread: nothing of Globex's own; the Owner's
-    // Shared group reaches only Organizations Hedy runs, so the policy lets her edit it.
-    assert.deepStrictEqual(yield* t.targetNames(t.hedy, acmeByHedy), [
-      "default",
-      "Acme secrets",
-      "Shared",
-    ]);
+    // An Admin of both Organizations, in an Acme Thread: nothing of Globex's own, nor the Owner's
+    // Shared group lent to both (read-only where it is lent).
+    assert.deepStrictEqual(yield* t.targetNames(t.hedy, acmeByHedy), ["default", "Acme secrets"]);
     assert.deepStrictEqual(yield* t.targetNames(t.gus, globexByGus), ["default", "Globex secrets"]);
-    // A Member and a Guest edit no Vault (`vault.edit`), a Vault allowed to Grace included.
+    // A Member and a Guest edit no Vault (`vault.edit`), one lent to Grace included.
     assert.deepStrictEqual(yield* t.targetNames(t.grace, acmeByGrace), []);
     assert.deepStrictEqual(yield* t.targetNames(t.linus, acmeByLinus), []);
   }),

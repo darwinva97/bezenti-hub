@@ -1054,11 +1054,7 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:vaults:unlinked-notice:dismiss",
       tag: WS_METHODS.vaultsUnlinkedNoticeDismiss,
     }),
-    // Spec 5 ticket 03: allowances, defaults, Project choices and a Thread's secret names.
-    allowVault: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:vaults:allow",
-      tag: WS_METHODS.vaultsAllow,
-    }),
+    // Spec 5 ticket 03: defaults, Project choices and a Thread's secret names.
     vaultChoices: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:vaults:choices",
       tag: WS_METHODS.vaultsChoices,

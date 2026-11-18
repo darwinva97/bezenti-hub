@@ -12,6 +12,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
   type EnvironmentId,
+  type GrantId,
   ProjectId,
   type ProviderInstanceId,
   type SecretEnv,
@@ -33,6 +34,8 @@ import * as Stream from "effect/Stream";
 import { addMember, joinOrganization } from "../auth/UserAuth.testkit.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as EnvironmentExecutor from "../environment/EnvironmentExecutor.ts";
+import * as Grants from "../grants/Grants.ts";
+import { lendVaultGroup } from "../grants/Grants.testkit.ts";
 import * as ProjectCheckouts from "../environment/ProjectCheckouts.ts";
 import * as ThreadWorkspace from "../environment/ThreadWorkspace.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -136,16 +139,24 @@ const sharedSandbox = Effect.fn(function* () {
   yield* vaults
     .putEntry({ vaultId: acmeVault.id, name: "ACME_TOKEN", value: Redacted.make(ACME_TOKEN) })
     .pipe(asOwner);
-  yield* vaults.setSpaceDefaults({ spaceId: acme, vaultIds: [acmeVault.id] }).pipe(asOwner);
+  // Grants ticket 07: one of the Owner's groups lent to Acme, one of its defaults too.
   const graceVault = yield* vaults
     .create({ name: "Grace keys", owner: userOwner(owner) })
     .pipe(asOwner);
   yield* vaults
     .putEntry({ vaultId: graceVault.id, name: "GRACE_TOKEN", value: Redacted.make(GRACE_TOKEN) })
     .pipe(asOwner);
+  const graceLoan = yield* lendVaultGroup(hub.server.sql, {
+    vaultId: graceVault.id,
+    spaceId: acme,
+    lender: { kind: "user", id: owner },
+  });
   yield* vaults
-    .allow({ vaultId: graceVault.id, subject: { kind: "user", userId: grace }, allowed: true })
+    .setSpaceDefaults({ spaceId: acme, vaultIds: [acmeVault.id, graceVault.id] })
     .pipe(asOwner);
+  /** Its lender takes a loan back («Revoke»). */
+  const revoke = (grantId: GrantId) =>
+    hub.service(Grants.Grants).end({ grantId }).pipe(asOwner, Effect.asVoid);
 
   const project = Effect.fn(function* (id: string, spaceId: SpaceId) {
     const projectId = ProjectId.make(id);
@@ -199,6 +210,8 @@ const sharedSandbox = Effect.fn(function* () {
     adaThread,
     graceThread,
     graceVault: graceVault.id,
+    graceLoan,
+    revoke,
     acmeVault: acmeVault.id,
     project,
     thread,
@@ -217,32 +230,34 @@ const lastShell = (machine: TestEnvironment) => {
 };
 
 describe("Hub con Environments: a Thread's secrets as environment variables", () => {
-  it.live("reach each User's terminals alone, in a Sandbox two Users share", () =>
+  it.live("a group lent to Acme reaches every Acme shell, never a dangerous name of it", () =>
     Effect.gen(function* () {
       const s = yield* sharedSandbox();
       const cwd = s.acmeWeb.workspaceRoot;
-
-      yield* s.workspace.terminalOpen(
-        { threadId: s.adaThread, terminalId: "term-1", cwd },
-        { userId: s.ada },
-      );
-      const adas = lastShell(s.sandbox);
-      assert.equal(adas.ACME_TOKEN, ACME_TOKEN);
-      assert.isUndefined(adas.GRACE_TOKEN, "Grace's own Vault never reaches Ada's shell");
-
-      yield* s.workspace.terminalOpen(
-        { threadId: s.graceThread, terminalId: "term-1", cwd },
-        { userId: s.grace },
-      );
-      const graces = lastShell(s.sandbox);
-      assert.equal(graces.ACME_TOKEN, ACME_TOKEN);
-      assert.equal(graces.GRACE_TOKEN, GRACE_TOKEN);
-
-      // Ada's shell, started before, never got Grace's value either.
-      assert.isTrue(
-        s.sandbox.ptySpawns.every(
-          (spawn) => spawn.env.GRACE_TOKEN === undefined || spawn === s.sandbox.ptySpawns.at(-1),
-        ),
+      // The Owner's own dangerous name: delivered in the Owner's Space, never from a loan.
+      yield* s.vaults
+        .putEntry({
+          vaultId: s.graceVault,
+          name: "NODE_OPTIONS",
+          value: Redacted.make("--require ./lender-hook.js"),
+          confirmDangerous: true,
+        })
+        .pipe(s.asOwner);
+      for (const [threadId, userId] of [
+        [s.adaThread, s.ada],
+        [s.graceThread, s.grace],
+      ] as const) {
+        yield* s.workspace.terminalOpen({ threadId, terminalId: "term-1", cwd }, { userId });
+        const env = lastShell(s.sandbox);
+        assert.equal(env.ACME_TOKEN, ACME_TOKEN);
+        assert.equal(env.GRACE_TOKEN, GRACE_TOKEN);
+        assert.isUndefined(env.NODE_OPTIONS, "a lent dangerous name reaches no process");
+      }
+      // The agent is not told of it either.
+      const names = yield* s.hub.service(SecretDelivery.SecretDelivery).turnNames(s.graceThread);
+      assert.deepEqual(
+        names.map((entry) => entry.name),
+        ["ACME_TOKEN", "GRACE_TOKEN"],
       );
     }).pipe(Effect.scoped),
   );
@@ -280,19 +295,13 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
         s.workspace.terminalOpen({ threadId: s.graceThread, terminalId, cwd }, { userId: s.grace });
       yield* open("term-1");
       assert.equal(lastShell(s.sandbox).GRACE_TOKEN, GRACE_TOKEN);
-      yield* s.vaults
-        .allow({
-          vaultId: s.graceVault,
-          subject: { kind: "user", userId: s.grace },
-          allowed: false,
-        })
-        .pipe(s.asOwner);
+      yield* s.revoke(s.graceLoan);
 
       const spawnsBefore = s.sandbox.ptySpawns.length;
       yield* open("term-2");
       assert.equal(s.sandbox.ptySpawns.length, spawnsBefore + 1);
       const next = lastShell(s.sandbox);
-      assert.isUndefined(next.GRACE_TOKEN, "a revoked Vault reaches no new shell");
+      assert.isUndefined(next.GRACE_TOKEN, "a revoked loan reaches no new shell");
       assert.equal(next.ACME_TOKEN, ACME_TOKEN);
 
       // The running shell keeps what it started with (the accepted limit) and says so.
@@ -329,12 +338,12 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
           .setStatus({ actorUserId: s.owner, userId: s.grace, status: "removed" });
         // The machine closes the shells started with her set, whoever's Thread they are in.
         yield* s.sandbox.awaitAnswered("terminal.reconcile", sentBefore);
-        assert.isNotEmpty(graces.signals, "her shell, with her own Vault's secret, ended");
+        assert.isNotEmpty(graces.signals, "her shell, started with her set, ended");
         assert.isEmpty(adas.signals, "Ada's stays");
       }).pipe(Effect.scoped),
   );
 
-  it.live("stop reaching the Space's next shell once its allowance is taken back (ticket 07)", () =>
+  it.live("stop reaching the Space's next shell once its loan is revoked (Grants ticket 07)", () =>
     Effect.gen(function* () {
       const s = yield* sharedSandbox();
       const tools = yield* s.vaults
@@ -343,9 +352,13 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
       yield* s.vaults
         .putEntry({ vaultId: tools.id, name: "TOOLS_TOKEN", value: Redacted.make(OWNER_TOKEN) })
         .pipe(s.asOwner);
-      yield* s.vaults
-        .allow({ vaultId: tools.id, subject: { kind: "space", spaceId: s.acme }, allowed: true })
-        .pipe(s.asOwner);
+      const lend = () =>
+        lendVaultGroup(s.hub.server.sql, {
+          vaultId: tools.id,
+          spaceId: s.acme,
+          lender: { kind: "user", id: s.owner },
+        });
+      const loan = yield* lend();
       yield* s.vaults
         .setSpaceDefaults({ spaceId: s.acme, vaultIds: [s.acmeVault, tools.id] })
         .pipe(s.asOwner);
@@ -357,20 +370,13 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
       yield* open("term-1");
       assert.equal(lastShell(s.sandbox).TOOLS_TOKEN, OWNER_TOKEN);
 
-      yield* s.vaults
-        .allow({ vaultId: tools.id, subject: { kind: "space", spaceId: s.acme }, allowed: false })
-        .pipe(s.asOwner);
+      yield* s.revoke(loan);
       yield* open("term-2");
-      assert.isUndefined(
-        lastShell(s.sandbox).TOOLS_TOKEN,
-        "a taken-back Vault reaches no new shell",
-      );
+      assert.isUndefined(lastShell(s.sandbox).TOOLS_TOKEN, "a revoked loan reaches no new shell");
       assert.equal(lastShell(s.sandbox).ACME_TOKEN, ACME_TOKEN);
       assert.isTrue((yield* open("term-1")).secretsStale, "the running shell says to reopen");
-      // Allowed again, it is no default until chosen again.
-      yield* s.vaults
-        .allow({ vaultId: tools.id, subject: { kind: "space", spaceId: s.acme }, allowed: true })
-        .pipe(s.asOwner);
+      // Lent again, it is no default until chosen again.
+      yield* lend();
       yield* open("term-3");
       assert.isUndefined(lastShell(s.sandbox).TOOLS_TOKEN);
     }).pipe(Effect.scoped),
@@ -499,13 +505,6 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
       yield* open();
       assert.equal(lastShell(s.sandbox).GRACE_TOKEN, GRACE_TOKEN);
       yield* s.vaults.setSpaceDefaults({ spaceId: s.acme, vaultIds: [] }).pipe(s.asOwner);
-      yield* s.vaults
-        .allow({
-          vaultId: s.graceVault,
-          subject: { kind: "user", userId: s.grace },
-          allowed: false,
-        })
-        .pipe(s.asOwner);
       const reopened = yield* open();
       assert.isTrue(reopened.secretsStale, "no secrets now: the shell that has some is stale");
       assert.equal(s.sandbox.ptySpawns.length, 1, "it keeps running");
@@ -515,15 +514,12 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
   it.live("give a turn its Thread owner's secrets, never those of whoever continues it", () =>
     Effect.gen(function* () {
       const s = yield* sharedSandbox();
-      // A Vault of the Owner's, allowed to the Owner alone.
+      // A group of the Owner's that reaches only the Owner's own Personal space.
       const ownersOwn = yield* s.vaults
         .create({ name: "Owner keys", owner: userOwner(s.owner) })
         .pipe(s.asOwner);
       yield* s.vaults
         .putEntry({ vaultId: ownersOwn.id, name: "OWNER_ONLY", value: Redacted.make(OWNER_TOKEN) })
-        .pipe(s.asOwner);
-      yield* s.vaults
-        .allow({ vaultId: ownersOwn.id, subject: { kind: "user", userId: s.owner }, allowed: true })
         .pipe(s.asOwner);
       const delivery = s.hub.service(SecretDelivery.SecretDelivery);
       const target = {
@@ -534,7 +530,7 @@ describe("Hub con Environments: a Thread's secrets as environment variables", ()
       assert.deepEqual(
         graces.variables.map((v) => v.name),
         ["ACME_TOKEN", "GRACE_TOKEN"],
-        "Grace's Thread: her set, whoever sends the turn",
+        "Grace's Thread: Acme's set, whoever sends the turn",
       );
       // Nobody else continues it: the Owner and an Admin are refused at the door.
       const directory = s.hub.service(SpaceDirectory.SpaceDirectory);

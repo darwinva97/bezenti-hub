@@ -191,8 +191,7 @@ const vault = (
   options: {
     readonly isDefault?: boolean;
     readonly ownerUser?: string;
-    readonly allowedSpaces?: ReadonlyArray<AccessPolicy.SpaceResource>;
-    readonly allowedUsers?: ReadonlyArray<string>;
+    readonly lentTo?: ReadonlyArray<AccessPolicy.SpaceResource>;
   } = {},
 ): AccessPolicy.VaultResource => ({
   kind: "vault",
@@ -205,8 +204,7 @@ const vault = (
         }
       : { kind: "organization", space },
   isDefault: options.isDefault ?? false,
-  allowedSpaces: options.allowedSpaces ?? [],
-  allowedUsers: (options.allowedUsers ?? []).map((id) => UserId.make(id)),
+  lentTo: options.lentTo ?? [],
 });
 /** The Owner's `default` group: the Main vault before owned-resources 03. */
 const mainVault = vault(null, { isDefault: true });
@@ -220,16 +218,13 @@ const globexGuest = principal("otto", { roles: [[OTHER_ORG, "guest"]] });
 const ownersVault = vault(null);
 const orgVault = vault(organization);
 const archivedOrgVault = vault(archivedOrganization);
-// Spec 5 ticket 03: the Owner's own Vaults, allowed to Spaces and Users.
-const allowedToAcme = vault(null, { allowedSpaces: [organization] });
-const allowedToAcmeAndOther = vault(null, { allowedSpaces: [organization, otherOrganization] });
-const allowedToAcmeAndGrace = vault(null, {
-  allowedSpaces: [organization],
-  allowedUsers: ["grace"],
-});
-const allowedToGrace = vault(null, { allowedUsers: ["grace"] });
-const allowedToGracesPersonal = vault(null, { allowedSpaces: [personalOf("grace")] });
-const allowedToArchivedAcme = vault(null, { allowedSpaces: [archivedOrganization] });
+// Grants ticket 07: groups lent by active Grants to Acme, Globex, Grace's Personal space or an
+// archived Acme.
+const anasLentToAcme = vault(null, { ownerUser: "ana", lentTo: [organization] });
+const ownersLentToAcme = vault(null, { lentTo: [organization] });
+const acmesLentToGlobex = vault(organization, { lentTo: [otherOrganization] });
+const anasLentToGracesPersonal = vault(null, { ownerUser: "ana", lentTo: [personalOf("grace")] });
+const anasLentToArchivedAcme = vault(null, { ownerUser: "ana", lentTo: [archivedOrganization] });
 
 // Grants: Grace's machine lent to Acme, or to Linus's Personal space.
 const toAcme: AccessPolicy.GrantResource = {
@@ -1610,72 +1605,130 @@ const rows: ReadonlyArray<Row> = [
       deny("not-yours"),
     ]),
   ),
-  // Spec 5 ticket 03: the Owner's own Vaults reach whom the Owner allowed them to. Whoever works
-  // in an allowed Space, or is an allowed User, sees the names; an Admin edits the secrets only
-  // while the Vault reaches nothing but Organizations they run.
-  ["an Admin sees a Vault allowed to Acme", admin, "vault.view", allowedToAcme, allow],
-  ["a Member sees a Vault allowed to Acme", member, "vault.view", allowedToAcme, allow],
-  ["a Guest sees a Vault allowed to Acme", guest, "vault.view", allowedToAcme, allow],
+  // Grants ticket 07: a lent group is read-only in the Spaces it is lent to. Whoever works there
+  // sees its names; Admins and Members (not Guests) read its Variables; nobody there writes it,
+  // the Owner's lent groups included (Acme's Admins edited one allowed to Acme alone before).
+  ...([admin, member, guest] as const).map((actor): Row => [
+    `${actor.userId} sees the names of Ana's group lent to Acme`,
+    actor,
+    "vault.view",
+    anasLentToAcme,
+    allow,
+  ]),
+  ...([admin, member] as const).map((actor): Row => [
+    `${actor.userId} reads the Variables of Ana's group lent to Acme`,
+    actor,
+    "vault.readVariables",
+    anasLentToAcme,
+    allow,
+  ]),
+  ["a Guest does not read them", guest, "vault.readVariables", anasLentToAcme, deny("not-yours")],
+  ...([admin, member, guest] as const).flatMap((actor) =>
+    (
+      [
+        "vault.edit",
+        "vault.manage",
+        "vault.dangerousName",
+        "vault.providerEntry",
+        "vault.identityEntry",
+      ] as const
+    ).map((action): Row => [
+      `${actor.userId}: no ${action} on Ana's group lent to Acme`,
+      actor,
+      action,
+      anasLentToAcme,
+      deny("not-yours"),
+    ]),
+  ),
   [
-    "another Organization's Admin does not",
+    "another Organization sees nothing of it",
     outsider,
     "vault.view",
-    allowedToAcme,
-    deny("owner-only"),
+    anasLentToAcme,
+    deny("not-yours"),
   ],
-  ["an Admin edits a Vault allowed to Acme alone", admin, "vault.edit", allowedToAcme, allow],
-  ["a Member does not edit it", member, "vault.edit", allowedToAcme, deny("owner-only")],
+  ["Ana still edits what she lends", ana, "vault.edit", anasLentToAcme, allow],
+  ["Ana still manages it", ana, "vault.manage", anasLentToAcme, allow],
+  ["the Owner reads its names", owner, "vault.view", anasLentToAcme, allow],
+  ["an Admin sees the Owner's group lent to Acme", admin, "vault.view", ownersLentToAcme, allow],
   [
-    "an Admin does not edit one that also reaches another Organization",
+    "an Admin does not edit the Owner's group lent to Acme",
     admin,
     "vault.edit",
-    allowedToAcmeAndOther,
+    ownersLentToAcme,
     deny("owner-only"),
   ],
   [
-    "an Admin does not edit one that also reaches a User",
+    "nor adds a Provider entry to it",
     admin,
-    "vault.edit",
-    allowedToAcmeAndGrace,
+    "vault.providerEntry",
+    ownersLentToAcme,
     deny("owner-only"),
   ],
   [
-    "nobody edits one allowed only to Users",
-    admin,
-    "vault.edit",
-    allowedToGrace,
+    "a Guest does not read the Owner's lent Variables",
+    guest,
+    "vault.readVariables",
+    ownersLentToAcme,
     deny("owner-only"),
   ],
-  ["the allowed User sees its names", member, "vault.view", allowedToGrace, allow],
-  ["another User does not", admin, "vault.view", allowedToGrace, deny("owner-only")],
   [
-    "a Personal space's User sees one allowed to it",
+    "a Globex Member sees Acme's group lent there",
+    globexMember,
+    "vault.view",
+    acmesLentToGlobex,
+    allow,
+  ],
+  ["and reads its Variables", globexMember, "vault.readVariables", acmesLentToGlobex, allow],
+  [
+    "a Globex Guest does not read them",
+    globexGuest,
+    "vault.readVariables",
+    acmesLentToGlobex,
+    deny("not-a-member"),
+  ],
+  [
+    "a Globex Admin does not edit it",
+    outsider,
+    "vault.edit",
+    acmesLentToGlobex,
+    deny("not-a-member"),
+  ],
+  ["Acme's Admin still edits it", admin, "vault.edit", acmesLentToGlobex, allow],
+  [
+    "a Personal space's User sees one lent to it",
     personalCreator,
     "vault.view",
-    allowedToGracesPersonal,
+    anasLentToGracesPersonal,
     allow,
   ],
   [
-    "a Personal space's User does not edit it",
+    "and reads its Variables",
+    personalCreator,
+    "vault.readVariables",
+    anasLentToGracesPersonal,
+    allow,
+  ],
+  [
+    "and does not edit it",
     personalCreator,
     "vault.edit",
-    allowedToGracesPersonal,
-    deny("owner-only"),
+    anasLentToGracesPersonal,
+    deny("not-yours"),
   ],
   [
     "nothing through an archived Organization",
     admin,
     "vault.view",
-    allowedToArchivedAcme,
-    deny("owner-only"),
+    anasLentToArchivedAcme,
+    deny("not-yours"),
   ],
-  ["only the Owner allows a Vault", admin, "vault.manage", allowedToAcme, deny("owner-only")],
   [
-    "the Main vault stays the Owner's alone, whatever it holds",
+    "a `default` is never lent, whatever a row says",
     admin,
     "vault.view",
-    vault(null, { isDefault: true, allowedSpaces: [organization], allowedUsers: ["ada"] }),
-    deny("owner-only"),
+    vault(null, { ownerUser: "ana", isDefault: true, lentTo: [organization] }),
+    deny("not-yours"),
   ],
   // Spec «Variables y Secrets sellados», ticket 01 (decision 4): whoever sees a Vault reads its
   // Variables' values, Guests excepted (an invitation can leave the Organization).
@@ -1698,22 +1751,6 @@ const rows: ReadonlyArray<Row> = [
     deny("not-a-member"),
   ],
   ["nor an Admin the Main vault's", admin, "vault.readVariables", mainVault, deny("owner-only")],
-  ["a Member reads a Vault allowed to Acme", member, "vault.readVariables", allowedToAcme, allow],
-  [
-    "a Guest does not read a Vault allowed to Acme",
-    guest,
-    "vault.readVariables",
-    allowedToAcme,
-    deny("owner-only"),
-  ],
-  ["the allowed User reads its Variables", member, "vault.readVariables", allowedToGrace, allow],
-  [
-    "a Personal space's User reads one allowed to it",
-    personalCreator,
-    "vault.readVariables",
-    allowedToGracesPersonal,
-    allow,
-  ],
   // Ticket 03: a Provider entry is the Vault's editors' (an Admin's only through a scope allowed
   // to the Vault, which Vaults checks); Members and Guests never.
   ["Owner adds a Provider entry", owner, "vault.providerEntry", orgVault, allow],
@@ -1727,10 +1764,10 @@ const rows: ReadonlyArray<Row> = [
     deny("owner-only"),
   ],
   [
-    "nor on a Vault allowed to Acme",
+    "nor on the Owner's group lent to Acme",
     admin,
     "vault.identityEntry",
-    allowedToAcme,
+    ownersLentToAcme,
     deny("owner-only"),
   ],
   ["an Admin adds one to its Organization's Vault", admin, "vault.providerEntry", orgVault, allow],
@@ -1742,7 +1779,6 @@ const rows: ReadonlyArray<Row> = [
     deny("role-not-allowed"),
   ]),
   ["nor an Admin the Main vault", admin, "vault.providerEntry", mainVault, deny("owner-only")],
-  ["an Admin on a Vault allowed to Acme alone", admin, "vault.providerEntry", allowedToAcme, allow],
   // Secret providers' scopes and «Test connection»: the Owner's, on the Installation.
   [
     "Owner manages secret providers",

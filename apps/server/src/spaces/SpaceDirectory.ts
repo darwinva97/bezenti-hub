@@ -249,6 +249,20 @@ const spacesOf = (resource: AccessPolicy.Resource): ReadonlyArray<string> => {
 };
 
 /**
+ * Whether a session limited to Space `limit` may take `action` on `resource`: everything it acts
+ * on is in that Space. A Vault group lent to it (Grants ticket 07) is read there too.
+ */
+const withinLimit = (
+  resource: AccessPolicy.Resource,
+  action: AccessPolicy.Action,
+  limit: string,
+): boolean =>
+  spacesOf(resource).every((spaceId) => spaceId === limit) ||
+  (resource.kind === "vault" &&
+    (action === "vault.view" || action === "vault.readVariables") &&
+    resource.lentTo.some((space) => space.id === limit));
+
+/**
  * A Project's Space in SQL, given its `space_id` column: a Project from before Spaces is the
  * Owner's Personal space's. The one rule; whoever selects Projects by Space uses it.
  */
@@ -922,7 +936,7 @@ const make = Effect.gen(function* () {
     resource: AccessPolicy.Resource,
   ) =>
     Effect.flatMap(CommandActor.spaceLimit, (limit) => {
-      if (limit !== undefined && !spacesOf(resource).every((spaceId) => spaceId === limit)) {
+      if (limit !== undefined && !withinLimit(resource, action, limit)) {
         return Effect.fail(new SpaceAccessDeniedError({ action, reason: "space-limited" }));
       }
       const decision = AccessPolicy.decide(principal, action, resource);
@@ -1868,7 +1882,7 @@ const make = Effect.gen(function* () {
       const principal = yield* currentPrincipal(userId);
       const limit = yield* CommandActor.spaceLimit;
       return (action: AccessPolicy.Action, resource: AccessPolicy.Resource) =>
-        (limit === undefined || spacesOf(resource).every((spaceId) => spaceId === limit)) &&
+        (limit === undefined || withinLimit(resource, action, limit)) &&
         allows(principal, action, resource);
     }),
     authorizeItem,

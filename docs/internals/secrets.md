@@ -206,8 +206,8 @@ No door answers a Secret's value (owned-resources 01, ADR 0012).
 - **Metadata** (migrations 111, 142): `vault_groups` (`owner_kind` user|organization, `owner_id`,
   `is_default`; one `default` per owner, names unique per owner, `default` reserved),
   `vault_entries` (`group_id`; `own` | `provider` | `template` | `identity`, `value_id`),
-  `vault_allowances`, `space_default_vaults`, `project_vault_choices`, `vault_provider_scopes`
-  (all by `group_id`) and `vault_key_check`. A `default` is made in the transaction that makes its
+  `space_default_vaults`, `project_vault_choices`, `vault_provider_scopes` (all by `group_id`;
+  `vault_allowances` until migration 147 made them Grants) and `vault_key_check`. A `default` is made in the transaction that makes its
   owner (`VaultGroups.ensureDefault`: the Owner in `Users.insertOwner`, an Organization in
   `SpaceDirectory`), and again at the Hub's start for any owner without one.
 - **Migration 142** turned each Vault into a group with the same id: the Main vault (`vault-main`)
@@ -649,32 +649,72 @@ The Hub is an OIDC issuer for the work it runs (`apps/server/src/identity/`).
     `IdentityRefresher.test.ts`, and the OpenBao driver tests;
   - a live k3s run is left for a person (ticket 18).
 
-## Allowing groups (spec 5 ticket 03, owned-resources 03)
+## Who reaches what: own groups and lent ones (spec 5 ticket 03, owned-resources 03, Grants ticket 07)
 
-Which groups may reach a Space or a User is one rule, `vaults/VaultReach.ts`, used by the doors
-that choose groups and by the effective set:
+Which groups may reach a Space is one rule, `vaults/VaultReach.ts` (`reachesSpaceSql`), used by
+the doors that choose groups, by the effective set and by `SecretDelivery.mayReceiveSecrets`:
 
-- **A group reaches its owner's Space**, without an allowance: a User's groups that User's
-  Personal space, an Organization's that Organization.
+- **A group reaches its owner's Space**, without a loan: a User's groups that User's Personal
+  space, an Organization's that Organization.
 - **A `default`** is a fixed default of its owner's Space («Always» in Settings): every Thread there
-  receives it, and a Project neither adds nor removes it. It is never allowed elsewhere
-  (`default-group`).
-- **An Organization's groups** reach nothing else: allowing one is refused (`not-allowed`), so what
-  its Admins write stays in their Organization.
-- **The Owner's named groups** also reach the Spaces and Users the Owner allowed them to
-  (`vaults.allow`, AccessPolicy `vault.manage`: the Owner; audited `vault.allow`). Taking it back
-  never needs the Space or User to exist any more. Taking it back from a Space also drops that
-  Space's default and its Projects' choices of it (Projects by `SpaceDirectory.projectSpaceSql`,
-  so one from before Spaces counts as the Owner's Personal space's), so allowing it again never
-  brings them back unseen. Allowing it to a User shows the shared-Sandbox warning first
-  (ADR 0004): only that User's turns, terminals and scripts receive it, but other agents in the
-  same Sandbox can read a running process's environment.
-- Allowance rows on a `default` or on any group not the Owner's own are ignored when reading, so a
-  stray row never widens what a group reaches.
-- **Who sees and edits the Owner's allowed groups** (`AccessPolicy.decideAllowedVault`): whoever
-  works in an allowed Space, or is an allowed User, sees its names. An Admin edits its secrets only
-  while it reaches nothing but Organizations they run (no User, no Personal space, no other
-  Organization). Whom a Vault is allowed to is shown to the Owner alone.
+  receives it, and a Project neither adds nor removes it. It is never lent (`not-lendable`), and a
+  loan row naming one is ignored.
+- **A named group also reaches each Space it is lent to** by a Grant `active` there
+  (`grants`, `resource_kind = 'vault-group'`; see `docs/internals/grants.md`). Pending, rejected,
+  cancelled and ended Grants reach nothing. The rule is read on every call: an accepted loan is
+  choosable at once, an ended one is gone from the next turn, terminal or script.
+- **Who lends** is the group's owner: the User, or an Organization's Admins (`grant.give`, the
+  same rule as machines and AI accounts). Giving one always needs a strong factor, pending or
+  active: its Secrets reach the borrower's agents, so a stolen session must not turn into readable
+  values. Accepting needs none. A loan to a Space is never a loan to a User: there is no User side
+  any more (below).
+- **Who sees a lent group** (`AccessPolicy.decideLentVault`): whoever works in an open Space it is
+  lent to sees its names (`vault.view`, Guests included); Admins and Members (a Personal space's
+  User) read its Variables (`vault.readVariables`), Guests do not. Nobody there edits, manages,
+  archives or writes a dangerous name into it: the owner side's refusal stands. `vaults.list`
+  answers it with `borrowed: { grantId, spaceId, spaceName, lenderName }`. A session limited to
+  one Space (`spaceLimit`) reads a group lent to that Space as if it worked there
+  (`SpaceDirectory.withinLimit`), and writes nothing in it.
+- **Order:** `allowedToSpace` lists the Space's own groups first (Settings' order), then the lent
+  ones by when they were lent. So among a Project's adds, the Space's own win a shared name; among
+  the chosen defaults the Admin's order decides, and «Also use it as a Space default» on
+  acceptance appends it last.
+- **Never delivered from a loan:** a name `secretNameRisk` calls `dangerous`, whoever wrote it, the
+  Owner included (EffectiveVaults keeps it out before precedence, so the Space's own entry of that
+  name still wins; the Thread's «Secrets» panel lists it as «not delivered: from a loan»,
+  `withheld` `lent-dangerous`). And on a machine lent to the Space (a lent Sandbox,
+  `environments.mode = 'lent'`), nothing of a lent group but what is that machine's owner's own
+  (`lent-machine`): its owner can read whatever a process there receives, and the group's lender
+  never agreed to that.
+- **Where an answer to `request_secret` may be saved** (`Vaults.saveTargets`): only the Space's own
+  groups, never a lent one, even for its lender: what was typed in another Space's Thread stays in
+  that Space's Vault.
+- **Narrowed by Grants ticket 07:** an Organization's Admins edited one of the Owner's groups
+  allowed to their Organization alone; a lent group is read-only where it is lent, so they no
+  longer do. The Owner edits it.
+
+**Allowances became Grants** (migration 147, `VaultAllowancesToGrants`). Each `vault_allowances`
+row on one of the Owner's named groups became an active Grant of the Owner (audited `grant.give`
+`via: migration`): to its Space as it was, or, for an allowance «to a User», to their Personal
+space, where the group also became their last chosen default (it reached their turns without
+anyone choosing it). Rows the read rule ignored (on a `default`, on anyone else's group, to a gone
+Space or a removed User) went. What an allowance «to a User» reached and its Grant does not, each
+Organization that User works in without a loan of that group, is listed for the Owner
+(`vault_group_grant_reviews`, `grants.migrationReviews` → `vaultGroups`), with «Lend to
+<Organization>» and «Dismiss». `vaults.allow`, its UI and `vault_allowances` are gone;
+`vault.allow` stays readable in the audit log. The migration's test proves, on a seeded Hub, that
+every User's received groups in every Space and Project are the same before and after except
+exactly the review rows and two listed cases: a Project's `remove` now holds for a group the User
+had by allowance, and the Owner (who only reads other Users' Personal spaces) no longer receives
+there what was allowed to the Owner. A name both in a User's own `default` and in a group allowed
+to them now resolves to their own (`default` comes first).
+
+**Ending a loan** (revoked, returned, or a side gone: `Grants.endRow`, `GrantEnding.endGone`) drops,
+in its transaction, that Space's default of the group and its Projects' choices of it, each
+audited `vault.choose` `via: grant.end` (`VaultReachLoss.forgetLentReach`). Making a loan active
+drops any left from before (`clearForGrant`), so lending again never brings them back unseen. The
+lender is shown, on the ended Grant, the Secrets to rotate (`Grant.vaultGroup.toRotate`): those of
+the group not added or replaced since the end, by the audit's order, each with «Replace».
 
 **Choosing** (`vault.choose`, decided on the Space: the Owner anywhere, a Personal space
 included; an Organization's Admins while it is open): `vaults.spaceDefaults.set` replaces a
@@ -699,18 +739,18 @@ terminal.
 1. The Thread's Space (`SpaceDirectory.placementOf`: the Thread's own, else its Project's) must
    be one the acting User works in, else `forbidden`: nothing is computed for a removed Member.
 2. Space side: the Space's defaults, plus the Project's `add`s, minus its `remove`s, all limited to
-   the Vaults allowed to that Space now. No choice or default naming a Vault that does not reach
+   the Vaults reaching that Space now (its own, and those lent to it). No choice or default naming a Vault that does not reach
    its Space is kept («Losing reach»: dropped at every loss, again when the Vault is allowed there,
    and once by migration 115 for rows earlier Hubs left).
-3. User side: the Vaults allowed to the acting User, whichever Space the Thread is in. Never
-   another User's, even in the same Thread or Sandbox.
+3. No User side: since allowances became Grants (Grants ticket 07) nothing reaches a User across
+   Spaces; `source: "user"` is never sent.
 4. Without archived groups and names `secretNameRisk` calls `invalid` or `gateway`, however they
    got in. `dangerous` names
    are delivered (only the Owner sets them) and marked.
 
-**Precedence for a name several groups define:** the groups allowed to the User, then the
-Project's adds, then the Space's defaults. Within the User's and the Project's, Settings' order
-(`default` first, then position, then name); within the defaults, the Space owner's `default`
+**Precedence for a name several groups define:** the Project's adds, then the Space's defaults.
+Within the Project's, the Space's own in Settings' order (`default` first, then position, then
+name), then the lent ones by when they were lent; within the defaults, the Space owner's `default`
 first, then the chosen ones in the order they were set in. The losers are listed as `shadowed`, and
 the Thread's «Secrets» panel says «Wins over …». Precedence only picks among entries already
 allowed: it never lets a name in that rule 4 keeps out.
@@ -985,20 +1025,19 @@ shell keeps its environment and says `secretsStale`). What `VaultReachLoss` adds
 keeps naming a reach that is gone, so nothing comes back unseen and nothing of what was deleted
 remains. Every way to lose reach, and where it goes:
 
-| How reach is lost                                         | Delivery (next process)                               | Live processes                                                           | Rows dropped (same transaction)                                                                                                                                                                                                                                                                                                                                                                                                         |
-| --------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A Project moves to another Space                          | `forThread` reads the new Space                       | its Threads' shells started for the old Space are refused and closed     | its choices of Vaults that do not reach the new Space, each audited `vault.choose` `inherit` under the old Space (`keepProjectChoicesReaching`, one `DELETE … RETURNING`, with the commit of the move: `EventSink.commitProjectCommand` `alsoCommit`)                                                                                                                                                                                   |
-| A Project is deleted                                      | its Threads are deleted first                         | —                                                                        | its choices (`forgetProject`, with the commit of the delete)                                                                                                                                                                                                                                                                                                                                                                            |
-| A Vault is taken back from a Space                        | not allowed to the Space                              | stale flag (ticket 04)                                                   | the allowance, that Space's default, its Projects' choices (`forgetSpaceAllowance`)                                                                                                                                                                                                                                                                                                                                                     |
-| A Vault is taken back from a User                         | not allowed to the User                               | stale flag                                                               | the allowance (`forgetUserAllowance`)                                                                                                                                                                                                                                                                                                                                                                                                   |
-| A User is removed from the Installation                   | `forbidden` (no Space of theirs)                      | every shell started with their set is refused and closed, in any Sandbox | every allowance to them and to their (frozen) Personal space, that Space's defaults and its Projects' choices; each allowance audited `vault.allow` `allowed: false` with `subjectName` (`forgetUser`, `InstallationUserService`); and their own Vault: every group, `default` included, with its entries, audited `vault_group.delete` `via: user.remove`, its values removed after the commit (`forgetUserVault`, owned-resources 10) |
-| An Organization is deleted                                | its Threads are deleted first                         | ended with its Threads                                                   | its own Vault's groups, their entries and values (audited `vault_group.delete` `via: organization.delete`), allowances to it (audited `vault.allow` `allowed: false`), its defaults, its Projects' choices (`forgetOrganization`, `OrganizationLifecycle.delete`, before its row)                                                                                                                                                       |
-| A Vault is deleted                                        | gone                                                  | stale flag                                                               | entries, values, allowances, defaults, choices (`forgetVault`)                                                                                                                                                                                                                                                                                                                                                                          |
-| A Vault is archived, a link broken                        | skipped by `forThread`                                | stale flag                                                               | none: restoring brings it back as the Owner left it                                                                                                                                                                                                                                                                                                                                                                                     |
-| A Membership ends, a User is disabled                     | `forbidden`                                           | stale flag                                                               | none: a disabled User's allowances wait for them                                                                                                                                                                                                                                                                                                                                                                                        |
-| A Member becomes a Guest, or back                         | unchanged: a Guest's Threads receive the defaults too | —                                                                        | none: no reach is lost                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| A credential or agent bound to one Space (`spaceLimit`)   | `forThread` answers nothing outside that Space        | —                                                                        | none: the limit is the caller's, not a row                                                                                                                                                                                                                                                                                                                                                                                              |
-| A Thread moves to a machine that does not serve its Space | `servesSpace`: the plan is empty                      | —                                                                        | none                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| How reach is lost                                         | Delivery (next process)                               | Live processes                                                           | Rows dropped (same transaction)                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A Project moves to another Space                          | `forThread` reads the new Space                       | its Threads' shells started for the old Space are refused and closed     | its choices of Vaults that do not reach the new Space, each audited `vault.choose` `inherit` under the old Space (`keepProjectChoicesReaching`, one `DELETE … RETURNING`, with the commit of the move: `EventSink.commitProjectCommand` `alsoCommit`)                                                                                                                                   |
+| A Project is deleted                                      | its Threads are deleted first                         | —                                                                        | its choices (`forgetProject`, with the commit of the delete)                                                                                                                                                                                                                                                                                                                            |
+| A loan of a group ends (revoked, returned, a side gone)   | no longer reaches the Space                           | stale flag (ticket 04)                                                   | that Space's default and its Projects' choices of it, audited `vault.choose` `via: grant.end` (`forgetLentReach`, in the Grant's transaction)                                                                                                                                                                                                                                           |
+| A User is removed from the Installation                   | `forbidden` (no Space of theirs)                      | every shell started with their set is refused and closed, in any Sandbox | their loans and the loans to their (frozen) Personal space end (`GrantEnding.endGone`); that Space's defaults and its Projects' choices (`forgetUser`, `InstallationUserService`); and their own Vault: every group, `default` included, with its entries, audited `vault_group.delete` `via: user.remove`, its values removed after the commit (`forgetUserVault`, owned-resources 10) |
+| An Organization is deleted                                | its Threads are deleted first                         | ended with its Threads                                                   | its own Vault's groups, their entries and values (audited `vault_group.delete` `via: organization.delete`), loans to it end `target-gone`, its defaults, its Projects' choices (`forgetOrganization`, `OrganizationLifecycle.delete`, before its row)                                                                                                                                   |
+| A Vault is deleted                                        | gone                                                  | stale flag                                                               | entries, values, defaults, choices (`forgetVault`); its loans end with Grants ticket 11                                                                                                                                                                                                                                                                                                 |
+| A Vault is archived, a link broken                        | skipped by `forThread`                                | stale flag                                                               | none: restoring brings it back as the Owner left it                                                                                                                                                                                                                                                                                                                                     |
+| A Membership ends, a User is disabled                     | `forbidden`                                           | stale flag                                                               | none: a disabled User's loans wait for them                                                                                                                                                                                                                                                                                                                                             |
+| A Member becomes a Guest, or back                         | unchanged: a Guest's Threads receive the defaults too | —                                                                        | none: no reach is lost                                                                                                                                                                                                                                                                                                                                                                  |
+| A credential or agent bound to one Space (`spaceLimit`)   | `forThread` answers nothing outside that Space        | —                                                                        | none: the limit is the caller's, not a row                                                                                                                                                                                                                                                                                                                                              |
+| A Thread moves to a machine that does not serve its Space | `servesSpace`: the plan is empty                      | —                                                                        | none                                                                                                                                                                                                                                                                                                                                                                                    |
 
 **Closing terminals: each shell carries its own facts.** A move and a removal close terminals
 rather than flag them, because the new Space's Members (or, in a shared Sandbox, the other Users)
@@ -1049,8 +1088,8 @@ machine that predates `endSession`, only the shell and its PTY end. The move dia
 «Open terminals of its Threads close». After a revocation, live processes keep the ticket 04 rule
 (stale flag): nobody new gains control of them.
 
-**Granting clears too.** Allowing one of the Owner's Vaults to a Space drops, in the same
-transaction, that Space's default of it and its Projects' choices of it (`clearForGrant`): any such
+**Granting clears too.** A loan of a group that becomes active (Grants ticket 07) drops, in the
+same transaction, that Space's default of it and its Projects' choices of it (`clearForGrant`): any such
 row can only be left from before, so a grant never brings it back unseen. Migration 115
 (`VaultReachLoss`) drops once what earlier Hubs left: Vaults of Organizations that are gone
 (their values go at the next start's sweep), allowances to Spaces that are gone or to removed Users, a
@@ -1058,7 +1097,7 @@ removed User's Personal-space allowances, defaults and Project choices,
 and defaults and choices of Vaults that do not reach their Space.
 
 **Checks inside the write.** `Vaults.create`, `putEntry` (adding or changing a secret), `linkEntry`,
-`copyEntry`, `allow`, `setSpaceDefaults` and `setProjectChoice` check again, inside the transaction that writes,
+`copyEntry`, `setSpaceDefaults` and `setProjectChoice` check again, inside the transaction that writes,
 what they checked before it: the Vault's Organization is not being deleted or frozen, the Space
 still exists and takes Vaults, the User is not removed, the Project is still in that Space and each
 Vault still reaches it. A move, a removal or an Organization's deletion that commits between the two
@@ -1147,7 +1186,7 @@ master key's backup, the Owner's, opens them all from a copy of the disk); a Var
 `vaults.entries.*` and a Thread's «Secrets» panel to whoever may read Variables, and in
 `list_secret_names` to its own Thread's agent; everything else carries names or `[NAME]`. Who sees
 a name is who may use its group: its owner's Space (a User's Personal space, an Organization's
-people), the Spaces and Users the Owner allowed one of the Owner's groups, and the Owner, who reads
+people), the Spaces a named group is lent to (Grants ticket 07), and the Owner, who reads
 names and Variables of every Vault. A session limited to one Space (`spaceLimit`) sees that Space's
 alone. Each door is declared, and a test fails for one that is not:
 
@@ -1163,7 +1202,7 @@ alone. Each door is declared, and a test fails for one that is not:
 | Machine doors (Environments, Sandboxes, Grants)    | `HubWithEnvironments.environmentDoors.test.ts`  | the same                                             |
 
 - **Value sweep** (`vaults/VaultDoors.test.ts`): the Owner's `default` and named groups (one
-  allowed to Acme, one to a User), each Organization's own, and Ana's personal Vault with a
+  lent to Acme, one to a User's Personal space), each Organization's own, and Ana's personal Vault with a
   multi-line Secret and a Variable. The Owner, Ana, an Admin, a Member and a Guest of Acme and of
   Globex, and sessions limited to Acme (the Owner's and an Admin's), call every `vaults.*` door,
   reads and writes, the master key's status, the audit log and `list_secret_names`. No answer or

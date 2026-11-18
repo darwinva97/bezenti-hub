@@ -46,10 +46,8 @@ import {
   type VaultGroupSummary,
   type VaultGroupUpdateInput,
   type VaultWarning,
-  type InstallationUser,
   // Spec 5 ticket 03.
-  type VaultAllowance,
-  type VaultAllowInput,
+  GrantId,
   type VaultChoices,
   type VaultChoicesInput,
   type VaultProjectChoiceSetInput,
@@ -111,9 +109,7 @@ export class Vaults extends Context.Service<
     }) => Effect.Effect<string | undefined>;
     /** `vaults.unlinkedNotice.dismiss`: the Owner has read which entries were Secret links. */
     readonly dismissUnlinked: Effect.Effect<VaultUnlinkedDismissResult, VaultError>;
-    // Spec 5 ticket 03: allowances and choices. What a Thread receives is EffectiveVaults'.
-    /** `vaults.allow`: the Owner allows one of their Vaults to a Space or a User, or takes it back. */
-    readonly allow: (input: VaultAllowInput) => Effect.Effect<VaultGroupSummary, VaultError>;
+    // Spec 5 ticket 03: choices. What a Thread receives is EffectiveVaults'.
     /** `vaults.choices`: a Space's defaults and a Project's choices, for whoever sees the Space. */
     readonly choices: (input: VaultChoicesInput) => Effect.Effect<VaultChoices, VaultError>;
     /** `vaults.spaceDefaults.set`: the Owner or the Space's Admins, among the allowed Vaults. */
@@ -290,20 +286,20 @@ type Spaces = ReadonlyMap<
   { readonly resource: AccessPolicy.SpaceResource; readonly name: string }
 >;
 
-interface AllowanceRow {
+/** An active Grant lending a group to a Space (Grants ticket 07). */
+interface LentRow {
   readonly vaultId: string;
-  readonly subjectKind: "space" | "user";
-  readonly subjectId: string;
+  readonly grantId: string;
+  readonly spaceId: string;
 }
 
 /**
- * What deciding on groups needs: their Organizations, allowances, the allowed Users' names, whose
- * groups are the Installation Owner's and the owners' names.
+ * What deciding on groups needs: their Organizations, the Spaces they are lent to, whose groups
+ * are the Installation Owner's and the owners' names.
  */
 interface Known {
   readonly spaces: Spaces;
-  readonly allowances: ReadonlyMap<string, ReadonlyArray<AllowanceRow>>;
-  readonly userNames: ReadonlyMap<string, string>;
+  readonly lent: ReadonlyMap<string, ReadonlyArray<LentRow>>;
   readonly installationOwner: string | null;
   /** The display names of the Users owning the groups. */
   readonly ownerNames: ReadonlyMap<string, string>;
@@ -325,13 +321,12 @@ const auditSpaceOf = (row: VaultRow): SpaceId | null =>
   row.ownerKind === "organization" ? (row.ownerId as SpaceId) : null;
 
 /**
- * A group as AccessPolicy decides on it. A group of a deleted Organization has no Space. Allowances
- * count only on the Owner's own named groups, as in VaultReach.
+ * A group as AccessPolicy decides on it. A group of a deleted Organization has no Space. It is
+ * lent only while a named group, as in VaultReach.
  */
 const resourceOf = (row: VaultRow, known: Known): AccessPolicy.VaultResource => {
   const isInstallationOwner = row.ownerKind === "user" && row.ownerId === known.installationOwner;
-  const counts = row.isDefault === 0 && isInstallationOwner;
-  const allowances = counts ? (known.allowances.get(row.vaultId) ?? []) : [];
+  const lent = row.isDefault === 0 ? (known.lent.get(row.vaultId) ?? []) : [];
   return {
     kind: "vault",
     owner:
@@ -342,35 +337,43 @@ const resourceOf = (row: VaultRow, known: Known): AccessPolicy.VaultResource => 
           }
         : { kind: "user", userId: row.ownerId as UserId, isInstallationOwner },
     isDefault: row.isDefault === 1,
-    allowedSpaces: allowances.flatMap((allowance) => {
-      const space =
-        allowance.subjectKind === "space"
-          ? known.spaces.get(allowance.subjectId as SpaceId)
-          : undefined;
+    lentTo: lent.flatMap((loan) => {
+      const space = known.spaces.get(loan.spaceId as SpaceId);
       return space === undefined ? [] : [space.resource];
     }),
-    allowedUsers: allowances.flatMap((allowance) =>
-      allowance.subjectKind === "user" ? [allowance.subjectId as UserId] : [],
-    ),
   };
 };
 
-const allowancesShown = (row: VaultRow, known: Known): ReadonlyArray<VaultAllowance> =>
-  (known.allowances.get(row.vaultId) ?? []).map((allowance) =>
-    allowance.subjectKind === "space"
-      ? {
-          subject: { kind: "space", spaceId: allowance.subjectId as SpaceId },
-          name: known.spaces.get(allowance.subjectId as SpaceId)?.name ?? null,
-        }
-      : {
-          subject: { kind: "user", userId: allowance.subjectId as UserId },
-          name: known.userNames.get(allowance.subjectId) ?? null,
-        },
-  );
+/**
+ * Grants ticket 07: the loan through which the viewer sees a group their owner side would not
+ * show them (the first Space it is lent to that they see it in), read-only there.
+ */
+const borrowedOf = (
+  row: VaultRow,
+  known: Known,
+  can: Can,
+  resource: AccessPolicy.VaultResource,
+) => {
+  if (can("vault.view", { ...resource, lentTo: [] })) return undefined;
+  for (const loan of known.lent.get(row.vaultId) ?? []) {
+    const space = known.spaces.get(loan.spaceId as SpaceId);
+    if (space === undefined || !can("vault.view", { ...resource, lentTo: [space.resource] })) {
+      continue;
+    }
+    return {
+      grantId: GrantId.make(loan.grantId),
+      spaceId: space.resource.id,
+      spaceName: space.name,
+      lenderName: ownerNameOf(row, known),
+    };
+  }
+  return undefined;
+};
 
 const summaryOf = (row: VaultRow, known: Known, can: Can): VaultGroupSummary => {
   const resource = resourceOf(row, known);
   const canManage = can("vault.manage", resource);
+  const borrowed = borrowedOf(row, known, can, resource);
   return {
     id: VaultGroupId.make(row.vaultId),
     name: row.name,
@@ -382,8 +385,9 @@ const summaryOf = (row: VaultRow, known: Known, can: Can): VaultGroupSummary => 
     entryCount: row.entryCount,
     canEdit: row.archivedAt === null && can("vault.edit", resource),
     canManage,
-    // Whom a Vault reaches is the Owner's to know.
-    allowances: canManage ? allowancesShown(row, known) : [],
+    // Allowances became Grants (Grants ticket 07): «Loans given» lists whom it is lent to.
+    allowances: [],
+    ...(borrowed === undefined ? {} : { borrowed }),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -463,7 +467,6 @@ const unavailable = Vaults.of({
   variableValue: Effect.fn("Vaults.unavailableVariableValue")(function* (_entry: unknown) {
     return undefined;
   }),
-  allow: refuse,
   choices: refuse,
   setSpaceDefaults: refuse,
   setProjectChoice: refuse,
@@ -590,38 +593,32 @@ const make = Effect.gen(function* () {
     return { userId, can };
   });
 
-  /**
-   * The Vaults' Spaces and allowances, in a few reads; the allowed Users' names only for `who`,
-   * when they manage one of the Vaults (whom a Vault reaches is the Owner's to know), in one read.
-   */
-  const spacesOf = Effect.fn("Vaults.knownOf")(function* (
-    rows: ReadonlyArray<VaultRow>,
-    who?: { readonly userId: UserId; readonly can: Can },
-  ) {
+  /** The Vaults' Organizations and the Spaces they are lent to, in a few reads. */
+  const spacesOf = Effect.fn("Vaults.knownOf")(function* (rows: ReadonlyArray<VaultRow>) {
     const vaultIds = rows.map((row) => row.vaultId);
-    const allowanceRows =
+    const lentRows =
       vaultIds.length === 0
         ? []
-        : yield* sql<AllowanceRow>`
-            SELECT group_id AS "vaultId", subject_kind AS "subjectKind", subject_id AS "subjectId"
-            FROM vault_allowances WHERE group_id IN ${sql.in(vaultIds)}
-            ORDER BY subject_kind, subject_id
-          `.pipe(Effect.catch(storage("read whom the Vaults are allowed to")));
-    const allowances = new Map<string, Array<AllowanceRow>>();
-    for (const allowance of allowanceRows) {
-      const list = allowances.get(allowance.vaultId) ?? [];
-      list.push(allowance);
-      allowances.set(allowance.vaultId, list);
+        : yield* sql<LentRow>`
+            SELECT resource_id AS "vaultId", grant_id AS "grantId", target_id AS "spaceId"
+            FROM grants
+            WHERE resource_kind = 'vault-group' AND target_kind = 'space' AND state = 'active'
+              AND resource_id IN ${sql.in(vaultIds)}
+            ORDER BY decided_at, grant_id
+          `.pipe(Effect.catch(storage("read where the Vaults are lent")));
+    const lent = new Map<string, Array<LentRow>>();
+    for (const loan of lentRows) {
+      const list = lent.get(loan.vaultId) ?? [];
+      list.push(loan);
+      lent.set(loan.vaultId, list);
     }
     const spaceIds = new Set<SpaceId>();
     for (const row of rows)
       if (row.ownerKind === "organization") spaceIds.add(row.ownerId as SpaceId);
-    for (const allowance of allowanceRows) {
-      if (allowance.subjectKind === "space") spaceIds.add(allowance.subjectId as SpaceId);
-    }
+    for (const loan of lentRows) spaceIds.add(loan.spaceId as SpaceId);
     const known = yield* spaces
       .spacesById([...spaceIds])
-      .pipe(Effect.catch(storage("read the Vaults' Organizations")));
+      .pipe(Effect.catch(storage("read the Vaults' Spaces")));
     const userOwners = [
       ...new Set(rows.flatMap((row) => (row.ownerKind === "user" ? [row.ownerId] : []))),
     ];
@@ -633,25 +630,12 @@ const make = Effect.gen(function* () {
       SELECT user_id AS "userId", display_name AS "displayName", is_owner AS "isOwner" FROM users
       WHERE is_owner = 1 ${userOwners.length === 0 ? sql.literal("") : sql`OR user_id IN ${sql.in(userOwners)}`}
     `.pipe(Effect.catch(storage("read whose the Vaults are")));
-    const userNames = new Map<string, string>();
-    const base: Known = {
+    return {
       spaces: known,
-      allowances,
-      userNames,
+      lent,
       installationOwner: people.find((person) => person.isOwner === 1)?.userId ?? null,
       ownerNames: new Map(people.map((person) => [person.userId, person.displayName])),
-    };
-    const named =
-      who !== undefined &&
-      allowanceRows.some((allowance) => allowance.subjectKind === "user") &&
-      rows.some((row) => who.can("vault.manage", resourceOf(row, base)));
-    if (named) {
-      const users = yield* spaces
-        .listUsers(who.userId)
-        .pipe(Effect.orElseSucceed((): ReadonlyArray<InstallationUser> => []));
-      for (const user of users) userNames.set(user.id, user.displayName);
-    }
-    return base;
+    } satisfies Known;
   });
 
   const findVault = (vaultId: string) =>
@@ -671,7 +655,7 @@ const make = Effect.gen(function* () {
     const { userId, can } = yield* caller;
     const row = yield* findVault(vaultId);
     if (Option.isNone(row)) return yield* fail("not-found", NOT_FOUND);
-    const known = yield* spacesOf([row.value], { userId, can });
+    const known = yield* spacesOf([row.value]);
     const resource = resourceOf(row.value, known);
     if (!can("vault.view", resource)) return yield* fail("not-found", NOT_FOUND);
     if (action === "vault.manage" && resource.isDefault) {
@@ -972,8 +956,7 @@ const make = Effect.gen(function* () {
         isInstallationOwner: who.userId === installationOwner,
       },
       isDefault: false,
-      allowedSpaces: [],
-      allowedUsers: [],
+      lentTo: [],
     };
     if (who.can("vault.manage", self)) {
       const me = yield* spaces
@@ -999,8 +982,7 @@ const make = Effect.gen(function* () {
         kind: "vault",
         owner: { kind: "organization", space: resource },
         isDefault: false,
-        allowedSpaces: [],
-        allowedUsers: [],
+        lentTo: [],
       };
       if (who.can("vault.manage", group)) {
         options.push({ owner: { kind: "organization", spaceId: space.id }, name: space.name });
@@ -1065,7 +1047,7 @@ const make = Effect.gen(function* () {
       SELECT ${sql.literal(VAULT_COLUMNS)} FROM vault_groups v
       ORDER BY v.owner_kind DESC, v.owner_id, ${sql.literal(GROUP_ORDER)}
     `.pipe(Effect.catch(storage("read the Vaults")));
-    const known = yield* spacesOf(rows, who);
+    const known = yield* spacesOf(rows);
     // The caller's own first, then each owner's groups together by the owner's name, each
     // owner's in Settings' order (`default` first).
     const mine = (row: VaultRow) => row.ownerKind === "user" && row.ownerId === who.userId;
@@ -1137,10 +1119,13 @@ const make = Effect.gen(function* () {
       .placementOf(input.threadId)
       .pipe(Effect.catch(storage("read the Thread's Space")));
     if (Option.isNone(placement)) return [];
-    // In the order that reaches the Space: its owner's `default` first.
+    // In the order that reaches the Space: its owner's `default` first. Never a group lent to it
+    // (Grants ticket 07): an answer given in this Space's Thread stays in this Space's Vault.
     const reaching = (yield* VaultReach.allowedToSpace(sql, placement.value.space.id).pipe(
       Effect.catch(storage("read the Vaults allowed to the Space")),
-    )).map((reach) => reach.vaultId);
+    ))
+      .filter((reach) => reach.grantId === null)
+      .map((reach) => reach.vaultId);
     const found =
       reaching.length === 0
         ? []
@@ -1153,7 +1138,7 @@ const make = Effect.gen(function* () {
       const row = byId.get(vaultId);
       return row === undefined ? [] : [row];
     });
-    const known = yield* spacesOf(rows, who);
+    const known = yield* spacesOf(rows);
     return rows.map((row) => summaryOf(row, known, who.can)).filter((summary) => summary.canEdit);
   });
 
@@ -1172,8 +1157,7 @@ const make = Effect.gen(function* () {
         kind: "vault",
         owner: { kind: "organization", space: found.value.resource },
         isDefault: false,
-        allowedSpaces: [],
-        allowedUsers: [],
+        lentTo: [],
       };
     } else {
       const [user] = yield* sql<{ readonly isOwner: number }>`
@@ -1183,8 +1167,7 @@ const make = Effect.gen(function* () {
         kind: "vault",
         owner: { kind: "user", userId: owner.userId, isInstallationOwner: user?.isOwner === 1 },
         isDefault: false,
-        allowedSpaces: [],
-        allowedUsers: [],
+        lentTo: [],
       };
     }
     if (!can("vault.manage", resource)) {
@@ -1228,7 +1211,7 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catch(orStorage("create the group")));
     const row = yield* findVault(vaultId);
     if (Option.isNone(row)) return yield* fail("not-found", NOT_FOUND);
-    return summaryOf(row.value, yield* spacesOf([row.value], { userId, can }), can);
+    return summaryOf(row.value, yield* spacesOf([row.value]), can);
   });
 
   const update = Effect.fn("Vaults.update")(function* (input: VaultGroupUpdateInput) {
@@ -1288,7 +1271,7 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catch(orStorage("change the Vault")));
     const updated = yield* findVault(row.vaultId);
     if (Option.isNone(updated)) return yield* fail("not-found", NOT_FOUND);
-    return summaryOf(updated.value, yield* spacesOf([updated.value], { userId, can }), can);
+    return summaryOf(updated.value, yield* spacesOf([updated.value]), can);
   });
 
   const remove = Effect.fn("Vaults.remove")(function* (input: VaultGroupDeleteInput) {
@@ -1947,91 +1930,9 @@ const make = Effect.gen(function* () {
     return { deleted: true } satisfies VaultEntryDeleteResult;
   });
 
-  // Spec 5 ticket 03: allowances, a Space's defaults and a Project's choices. Which Vaults may
-  // reach a Space is VaultReach's rule; what a Thread receives is EffectiveVaults'.
-
-  const allow = Effect.fn("Vaults.allow")(function* (input: VaultAllowInput) {
-    const { userId, can, row, known } = yield* authorizeVault(input.vaultId, "vault.manage");
-    // Only the Owner's own named groups are allowed elsewhere (until Grants); `default` never
-    // (authorizeVault refused it).
-    if (row.ownerKind !== "user" || row.ownerId !== known.installationOwner) {
-      return yield* fail(
-        "not-allowed",
-        "A group reaches its own owner's Space only: lending it elsewhere is a Grant.",
-      );
-    }
-    const subject = input.subject;
-    const subjectId = subject.kind === "space" ? subject.spaceId : subject.userId;
-    // Allowing needs a living Space or User; taking back never does (it may have been deleted).
-    let subjectName: string = subjectId;
-    if (subject.kind === "space") {
-      const found = yield* spaces
-        .spaceById(subject.spaceId)
-        .pipe(Effect.catch(storage("read the Space")));
-      if (Option.isSome(found)) subjectName = found.value.name;
-      else if (input.allowed) return yield* fail("not-found", "That Space does not exist.");
-    } else {
-      const found = yield* spaces
-        .installationUser(subject.userId)
-        .pipe(Effect.catch(storage("read the User")));
-      if (Option.isSome(found)) subjectName = found.value.displayName;
-      if (input.allowed && (Option.isNone(found) || found.value.status === "removed")) {
-        return yield* fail("not-found", "That User does not exist.");
-      }
-    }
-    const at = yield* now;
-    yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const existing = yield* sql<{ readonly n: number }>`
-            SELECT COUNT(*) AS n FROM vault_allowances
-            WHERE group_id = ${row.vaultId} AND subject_kind = ${subject.kind} AND subject_id = ${subjectId}
-          `;
-          const had = (existing[0]?.n ?? 0) > 0;
-          if (had === input.allowed) return;
-          if (input.allowed) {
-            // Checked again here: a removal, a freeze or a deletion since the read above wins.
-            yield* stillWritable(row.vaultId);
-            if (subject.kind === "space" && !(yield* spaceTakesVaults(subjectId))) {
-              return yield* fail("not-found", "That Space does not exist.");
-            }
-            if (subject.kind === "user") {
-              const [user] = yield* sql<{ readonly removed: number }>`
-                SELECT removed_at IS NOT NULL AS removed FROM users WHERE user_id = ${subjectId}
-              `;
-              if (user === undefined || user.removed === 1) {
-                return yield* fail("not-found", "That User does not exist.");
-              }
-            }
-            yield* sql`
-              INSERT INTO vault_allowances (group_id, subject_kind, subject_id, created_at)
-              VALUES (${row.vaultId}, ${subject.kind}, ${subjectId}, ${at})
-            `;
-            // A default or choice of it there can only be left from before: it never comes back.
-            if (subject.kind === "space") {
-              yield* VaultReachLoss.clearForGrant(sql, row.vaultId, subjectId);
-            }
-          } else {
-            // Taken back from a Space: its default and its Projects' choices go too, so allowing
-            // it again later does not bring them back unseen.
-            yield* subject.kind === "space"
-              ? VaultReachLoss.forgetSpaceAllowance(sql, row.vaultId, subjectId)
-              : VaultReachLoss.forgetUserAllowance(sql, row.vaultId, subjectId);
-          }
-          yield* audit.record({
-            actor: AuditLog.userActor(userId),
-            action: "vault.allow",
-            spaceId: subject.kind === "space" ? subject.spaceId : null,
-            target: { kind: "vault", id: row.vaultId, name: row.name },
-            detail: { subjectKind: subject.kind, subjectId, subjectName, allowed: input.allowed },
-          });
-        }),
-      )
-      .pipe(Effect.catch(orStorage("change whom the Vault is allowed to")));
-    const updated = yield* findVault(row.vaultId);
-    if (Option.isNone(updated)) return yield* fail("not-found", NOT_FOUND);
-    return summaryOf(updated.value, yield* spacesOf([updated.value], { userId, can }), can);
-  });
+  // Spec 5 ticket 03: a Space's defaults and a Project's choices. Which Vaults may reach a Space is
+  // VaultReach's rule (own groups and lent ones, Grants ticket 07); what a Thread receives is
+  // EffectiveVaults'.
 
   /**
    * The Space a choice is about, once the caller sees it (a Project's, when one is named): a
@@ -2126,6 +2027,7 @@ const make = Effect.gen(function* () {
                 ownerName: ownerNameOf(group, known),
                 isDefault: row.isDefault,
                 archived: row.archived,
+                ...(row.grantId === null ? {} : { lent: { grantId: row.grantId } }),
                 names: visible.has(row.vaultId)
                   ? names
                       .filter((entry) => entry.vaultId === row.vaultId)
@@ -2304,7 +2206,6 @@ const make = Effect.gen(function* () {
 
   return Vaults.of({
     list,
-    allow,
     choices,
     setSpaceDefaults,
     setProjectChoice,

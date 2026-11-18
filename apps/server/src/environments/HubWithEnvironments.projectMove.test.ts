@@ -48,6 +48,7 @@ import * as AiAccounts from "../ai/AiAccounts.ts";
 import * as AiGatewayKeys from "../ai/AiGatewayKeys.ts";
 import { addMember, joinOrganization } from "../auth/UserAuth.testkit.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
+import { lendVaultGroup } from "../grants/Grants.testkit.ts";
 import * as HubRepository from "../checkpointing/HubRepository.ts";
 import { ClaudeOrchestratorReplayHarness } from "../orchestration-v2/Adapters/ClaudeAdapterV2.testkit.ts";
 import { ClaudeProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
@@ -873,11 +874,15 @@ describe("Hub con Environments: a moved Project's Vaults", () => {
         yield* vaults.setSpaceDefaults({ spaceId: acme, vaultIds: [acmeVault] }).pipe(asOwner);
         const globexVault = yield* vaultWith("Globex keys", globex, "GLOBEX_TOKEN", GLOBEX_TOKEN);
         yield* vaults.setSpaceDefaults({ spaceId: globex, vaultIds: [globexVault] }).pipe(asOwner);
-        // One of the Owner's, allowed to Acme alone, that the Project added there.
+        // One of the Owner's, lent to Acme alone, that the Project added there.
         const shared = yield* vaultWith("Shared tools", null, "SHARED_TOKEN", SHARED_TOKEN);
-        yield* vaults
-          .allow({ vaultId: shared, subject: { kind: "space", spaceId: acme }, allowed: true })
-          .pipe(asOwner);
+        const lend = (spaceId: SpaceId) =>
+          lendVaultGroup(hub.server.sql, {
+            vaultId: shared,
+            spaceId,
+            lender: { kind: "user", id: owner },
+          });
+        yield* lend(acme);
 
         // The Owner's laptop serves every Space the Owner works in: the Thread keeps it.
         const laptop = yield* hub.join({
@@ -1049,10 +1054,8 @@ describe("Hub con Environments: a moved Project's Vaults", () => {
           ["default", "Globex keys"],
         );
 
-        // Allowing the Owner's Vault to Globex later does not bring the old choice back unseen.
-        yield* vaults
-          .allow({ vaultId: shared, subject: { kind: "space", spaceId: globex }, allowed: true })
-          .pipe(asOwner);
+        // Lending the Owner's group to Globex later does not bring the old choice back unseen.
+        yield* lend(globex);
         assert.deepEqual(namesIn((yield* threadNames).variables), ["GLOBEX_TOKEN"]);
 
         // A new turn's provider session gets Globex's secrets alone.

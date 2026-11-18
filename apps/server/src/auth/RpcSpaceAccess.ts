@@ -161,7 +161,6 @@ export const RPC_SPACE_ACCESS = {
   // Spec 5 ticket 03. Allowances and a Space's defaults: AccessPolicy `vault.manage` and
   // `vault.choose` in Vaults. A Project's choices and a Thread's names: the named Project or
   // Thread must be visible first, then the same rules (EffectiveVaults for the Thread).
-  [WS_METHODS.vaultsAllow]: VAULTS,
   [WS_METHODS.vaultsSpaceDefaultsSet]: VAULTS,
   [WS_METHODS.vaultsChoices]: "project",
   [WS_METHODS.vaultsProjectChoicesSet]: "project",

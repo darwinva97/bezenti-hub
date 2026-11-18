@@ -208,7 +208,8 @@ describe("every door of the Hub declares its rule", () => {
     const vaultRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
       rpc._tag.startsWith("vaults."),
     );
-    expect(vaultRpcs.length).toBe(14);
+    // Grants ticket 07: `vaults.allow` went (allowances became Grants).
+    expect(vaultRpcs.length).toBe(13);
     expect(
       vaultRpcs
         .filter((rpc) => objectsWith(rpc.successSchema.ast, "value").has(VaultEntry.ast))
@@ -336,6 +337,7 @@ describe("every door of the Hub declares its rule", () => {
         .toSorted(),
     ).toEqual([
       "ai/aiCredentialValue.ts", // a comment: how a direct AI credential is named there
+      "grants/Grants.ts", // names only: the Secrets a lent group's lender is told to rotate
       "identity/IdentityTokens.ts", // names only: whether any identity entry exists (question 12)
       "persistence/Migrations/111_Vaults.ts",
       "persistence/Migrations/115_VaultReachLoss.ts",

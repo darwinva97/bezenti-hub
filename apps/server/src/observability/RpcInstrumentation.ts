@@ -98,7 +98,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.vaultsEntriesPut]: "vaults",
   [WS_METHODS.vaultsEntriesDelete]: "vaults",
   [WS_METHODS.vaultsUnlinkedNoticeDismiss]: "vaults",
-  [WS_METHODS.vaultsAllow]: "vaults",
   [WS_METHODS.vaultsChoices]: "vaults",
   [WS_METHODS.vaultsSpaceDefaultsSet]: "vaults",
   [WS_METHODS.vaultsProjectChoicesSet]: "vaults",

@@ -439,8 +439,19 @@ const make = Effect.gen(function* () {
     readonly target: SecretTarget;
   }) {
     if (input.actingUserId === undefined) return emptyPlan(input.target);
+    // Grants ticket 07: a machine lent to the Space receives from lent groups only its owner's own.
+    const lentMachine =
+      input.target.environmentId === HUB_MACHINE_ENVIRONMENT_ID
+        ? Option.none<EffectiveVaults.LentMachine>()
+        : yield* EffectiveVaults.lentMachineOf(sql, input.target.environmentId).pipe(
+            Effect.catch(storage("read the machine")),
+          );
     const set = yield* effective
-      .forThread({ threadId: input.threadId, actingUserId: input.actingUserId })
+      .forThread({
+        threadId: input.threadId,
+        actingUserId: input.actingUserId,
+        ...(Option.isSome(lentMachine) ? { lentMachine: lentMachine.value } : {}),
+      })
       .pipe(
         Effect.asSome,
         Effect.catchIf(
@@ -636,20 +647,33 @@ const make = Effect.gen(function* () {
   const turnNames = Effect.fn("SecretDelivery.turnNames")(function* (threadId: ThreadId) {
     const owner = yield* turnOwner(threadId);
     if (Option.isNone(owner)) return [];
-    const set = yield* effective.forThread({ threadId, actingUserId: owner.value }).pipe(
-      Effect.asSome,
-      Effect.catchIf(
-        (error) => error.reason === "not-found" || error.reason === "forbidden",
-        () => Effect.succeedNone,
-      ),
-    );
-    if (Option.isNone(set)) return [];
-    // As `plan`: a machine that does not run this Space's Threads gets nothing, so lists nothing.
     const active = yield* sql<{ readonly environmentId: string | null }>`
       SELECT active_environment_id AS "environmentId"
       FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
     `.pipe(Effect.catch(storage("read the Thread's machine")));
     const environmentId = active[0]?.environmentId ?? null;
+    // As `plan`: on a machine lent to the Space, lent groups list only what goes there.
+    const lentMachine =
+      environmentId === null || environmentId === HUB_MACHINE_ENVIRONMENT_ID
+        ? Option.none<EffectiveVaults.LentMachine>()
+        : yield* EffectiveVaults.lentMachineOf(sql, environmentId).pipe(
+            Effect.catch(storage("read the Thread's machine")),
+          );
+    const set = yield* effective
+      .forThread({
+        threadId,
+        actingUserId: owner.value,
+        ...(Option.isSome(lentMachine) ? { lentMachine: lentMachine.value } : {}),
+      })
+      .pipe(
+        Effect.asSome,
+        Effect.catchIf(
+          (error) => error.reason === "not-found" || error.reason === "forbidden",
+          () => Effect.succeedNone,
+        ),
+      );
+    if (Option.isNone(set)) return [];
+    // As `plan`: a machine that does not run this Space's Threads gets nothing, so lists nothing.
     if (environmentId !== null && environmentId !== HUB_MACHINE_ENVIRONMENT_ID) {
       const serves = yield* servesSpace(
         EnvironmentId.make(environmentId),
@@ -985,12 +1009,8 @@ const make = Effect.gen(function* () {
       )
       SELECT EXISTS (
         SELECT 1 FROM t, vault_groups v JOIN vault_entries e ON e.group_id = v.group_id
-        WHERE t.owner_id IS NOT NULL AND v.archived_at IS NULL AND (
-          ${sql.literal(VaultReach.reachesSpaceSql("t.space_id"))}
-          OR (v.is_default = 0 AND ${sql.literal(VaultReach.ownersGroupSql)} AND EXISTS (
-            SELECT 1 FROM vault_allowances a WHERE a.group_id = v.group_id
-              AND a.subject_kind = 'user' AND a.subject_id = t.owner_id))
-        )
+        WHERE t.owner_id IS NOT NULL AND v.archived_at IS NULL
+          AND ${sql.literal(VaultReach.reachesSpaceSql("t.space_id"))}
       ) AS found
     `.pipe(Effect.catch(storage("check the Thread's Vaults")));
     return rows[0]?.found === 1;

@@ -207,7 +207,7 @@ No door answers a Secret's value (owned-resources 01, ADR 0012).
   `is_default`; one `default` per owner, names unique per owner, `default` reserved),
   `vault_entries` (`group_id`; `own` | `provider` | `template` | `identity`, `value_id`),
   `space_default_vaults`, `project_vault_choices`, `vault_provider_scopes` (all by `group_id`;
-  `vault_allowances` until migration 147 made them Grants) and `vault_key_check`. A `default` is made in the transaction that makes its
+  `vault_allowances` until migration 149 made them Grants) and `vault_key_check`. A `default` is made in the transaction that makes its
   owner (`VaultGroups.ensureDefault`: the Owner in `Users.insertOwner`, an Organization in
   `SpaceDirectory`), and again at the Hub's start for any owner without one.
 - **Migration 142** turned each Vault into a group with the same id: the Main vault (`vault-main`)
@@ -693,7 +693,7 @@ the doors that choose groups, by the effective set and by `SecretDelivery.mayRec
   allowed to their Organization alone; a lent group is read-only where it is lent, so they no
   longer do. The Owner edits it.
 
-**Allowances became Grants** (migration 147, `VaultAllowancesToGrants`). Each `vault_allowances`
+**Allowances became Grants** (migration 149, `VaultAllowancesToGrants`). Each `vault_allowances`
 row on one of the Owner's named groups became an active Grant of the Owner (audited `grant.give`
 `via: migration`): to its Space as it was, or, for an allowance «to a User», to their Personal
 space, where the group also became their last chosen default (it reached their turns without

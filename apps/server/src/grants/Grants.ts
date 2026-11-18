@@ -1334,11 +1334,11 @@ const make = Effect.gen(function* () {
   const createOffer = Effect.fn("Grants.createOffer")(function* (input: GrantCreateOfferInput) {
     const who = yield* caller;
     // A machine's loan made active needs its decider's strong factor, which a link cannot ask for
-    // yet; Vault groups are not lent at all yet.
+    // yet; a Vault group's needs its lender's at giving (Grants ticket 07), which a link skips.
     if (input.resource.kind !== "ai-account") {
       return yield* fail(
         "not-lendable",
-        "Only an AI account can be lent by link for now. Lend a machine to a Space you work in.",
+        "Only an AI account can be lent by link for now. Lend a machine or a Vault group to a Space you work in.",
       );
     }
     const grantId = yield* newId;

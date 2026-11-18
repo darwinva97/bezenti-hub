@@ -771,6 +771,14 @@ describe("Grants of Vault groups", () => {
         strongFactor: false,
       }).pipe(Effect.flip);
       assert.equal(unproven.reason, "strong-factor-required");
+      // Nor by a lending link, which asks its lender for none.
+      const byLink = yield* h.grants
+        .createOffer({
+          resource: { kind: "vault-group", vaultGroupId: group },
+          limits: VAULT_LIMITS,
+        })
+        .pipe(CommandActor.actAs(h.ana.id), Effect.flip);
+      assert.equal(byLink.reason, "not-lendable");
       // Over HTTP the door asks for one even though the loan would wait for Acme.
       const prepared = yield* h.grants
         .prepareGive({

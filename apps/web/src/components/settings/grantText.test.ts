@@ -139,6 +139,7 @@ it("warns whoever applies a subscription's link of its terms, and of what the le
       alreadyGranted: true,
     }),
   ).toBe("Acme (already lent there)");
+});
 
 it("says a lent Vault group has no limits and warns that the Space's agents read its Secrets", () => {
   expect(limitsText({ kind: "vault-group" })).toBe("Read-only for the Space");

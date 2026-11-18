@@ -328,6 +328,7 @@ it("warns whoever decides on a lent subscription of its provider's terms", async
     )
     .toBeVisible();
   loans.received = [];
+});
 
 // Grants ticket 07: a lent Vault group.
 const groupGrant = (id: string, state: string, space: string, over: Partial<Grant> = {}): Grant =>

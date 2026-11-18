@@ -843,7 +843,8 @@ export function parseBearerToken(request: HttpServerRequest.HttpServerRequest): 
 
 function parseDpopToken(request: HttpServerRequest.HttpServerRequest): string | null {
   const header = request.headers["authorization"];
-  if (typeof header !== "string" || !header.startsWith(DPOP_AUTHORIZATION_PREFIX)) {
+  // The scheme is case-insensitive (RFC 9110).
+  if (typeof header !== "string" || !/^DPoP /i.test(header)) {
     return null;
   }
   const token = header.slice(DPOP_AUTHORIZATION_PREFIX.length).trim();

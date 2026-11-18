@@ -750,6 +750,51 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
       ),
     );
 
+    it.effect.each(["DPoP", "dpop", "dPoP"])(
+      "accepts %s for a proof-bound HTTP request, and still refuses its proof replayed",
+      (scheme) =>
+        Effect.gen(function* () {
+          const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+          const key = makeDpopKey();
+          const { access_token: token } =
+            yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+              "desktop-bootstrap-token",
+              ["orchestration:read"],
+              requestMetadata,
+              { proofKeyThumbprint: key.thumbprint },
+            );
+          const iat = Math.floor((yield* DateTime.now).epochMilliseconds / 1_000);
+          const request = {
+            method: "GET",
+            url: "/api/auth/session",
+            cookies: {},
+            headers: {
+              host: "192.168.1.50:3773",
+              authorization: `${scheme} ${token}`,
+              dpop: key.sign({
+                method: "GET",
+                url: "http://192.168.1.50:3773/api/auth/session",
+                token,
+                iat,
+              }),
+            },
+          } as never;
+          expect((yield* serverAuth.authenticateHttpRequest(request)).sessionId).toBeTypeOf(
+            "string",
+          );
+          // An authenticated request's proof is recorded, so the same proof cannot come back.
+          const replayed = yield* Effect.flip(serverAuth.authenticateHttpRequest(request));
+          expect(replayed._tag).toBe("ServerAuthInvalidCredentialError");
+          if (replayed._tag === "ServerAuthInvalidCredentialError") {
+            expect(replayed.dpopFailureReason).toBe("replay");
+          }
+        }).pipe(
+          Effect.provide(
+            layerEnvironmentAuth({ desktopBootstrapToken: "desktop-bootstrap-token" }),
+          ),
+        ),
+    );
+
     it.effect("rejects a replayed proof on a bound RPC socket ticket", () =>
       Effect.gen(function* () {
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

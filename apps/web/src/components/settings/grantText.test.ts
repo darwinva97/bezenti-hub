@@ -3,12 +3,14 @@ import { expect, it } from "vite-plus/test";
 
 import {
   hostLimitsNotice,
+  limitsText,
   offerLinkOf,
   offerSpaceLabel,
   offerStatusText,
   offerWarnings,
   quotaShareText,
   recipientLabel,
+  vaultLendWarning,
 } from "./grantText";
 
 const host = (overrides: Partial<SandboxHostReport> = {}): SandboxHostReport => ({
@@ -137,4 +139,10 @@ it("warns whoever applies a subscription's link of its terms, and of what the le
       alreadyGranted: true,
     }),
   ).toBe("Acme (already lent there)");
+
+it("says a lent Vault group has no limits and warns that the Space's agents read its Secrets", () => {
+  expect(limitsText({ kind: "vault-group" })).toBe("Read-only for the Space");
+  const warning = vaultLendWarning("Acme");
+  expect(warning).toContain("The agents of Acme, Guests' Threads included, can read");
+  expect(warning).toContain("environment variables");
 });

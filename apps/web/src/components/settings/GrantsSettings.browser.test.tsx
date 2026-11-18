@@ -19,6 +19,7 @@ const loans = vi.hoisted(() => ({
   failWith: null as unknown,
   listCalls: 0,
   account: { hasPasskey: false, hasPassword: true, totpEnrolled: false } as Record<string, boolean>,
+  accepted: [] as Array<{ readonly grantId: string; readonly useAsDefault: boolean | undefined }>,
 }));
 
 vi.mock("../../state/environments", async (importOriginal) => {
@@ -39,6 +40,21 @@ vi.mock("../../state/environments", async (importOriginal) => {
     usePrimaryEnvironment: () => null,
   };
 });
+vi.mock("../../environments/primary/grants", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../environments/primary/grants")>()),
+  acceptGrant: (
+    grantId: string,
+    _stepUp: unknown,
+    options: { readonly useAsDefault?: boolean } = {},
+  ) => {
+    loans.accepted.push({ grantId, useAsDefault: options.useAsDefault });
+    return Promise.resolve({});
+  },
+}));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => () => Promise.resolve(),
+}));
 vi.mock("../../environments/primary/userAccounts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../environments/primary/userAccounts")>()),
   fetchAccount: () => Promise.resolve(loans.account),
@@ -172,6 +188,7 @@ const resetLoans = () => {
   loans.failWith = null;
   loans.listCalls = 0;
   loans.account = { hasPasskey: false, hasPassword: true, totpEnrolled: false };
+  loans.accepted = [];
 };
 
 it("keeps the footer buttons inside the dialog popup, with the body scrolling", async () => {
@@ -311,4 +328,82 @@ it("warns whoever decides on a lent subscription of its provider's terms", async
     )
     .toBeVisible();
   loans.received = [];
+
+// Grants ticket 07: a lent Vault group.
+const groupGrant = (id: string, state: string, space: string, over: Partial<Grant> = {}): Grant =>
+  ({
+    ...grant(id, "group-1", "Ana keys", space),
+    resource: { kind: "vault-group", id: "group-1", name: "Ana keys" },
+    lender: { kind: "user", id: "user-ana", name: "Ana" },
+    state,
+    limits: { kind: "vault-group" },
+    aiAccount: undefined,
+    can: {
+      cancel: false,
+      revoke: state === "active",
+      decide: state === "pending",
+      return: false,
+      setLimits: false,
+    },
+    ...over,
+  }) as unknown as Grant;
+
+it("accepts a lent Vault group without a strong factor, also as a Space default unless unticked", async () => {
+  resetLoans();
+  loans.received = [groupGrant("g7", "pending", "Acme")];
+  await using _screen = await render(<GrantsSettings />);
+  await expect
+    .element(page.getByText(/Names that change how tools run never come from it/).first())
+    .toBeVisible();
+  await page.getByRole("button", { name: "Accept…" }).click();
+  const asDefault = page.getByRole("checkbox", { name: "Also use it as a Space default" });
+  await expect.element(asDefault).toBeChecked();
+  await expect.element(page.getByText("Current password")).not.toBeInTheDocument();
+  await asDefault.click();
+  await expect.element(asDefault).not.toBeChecked();
+  const submit = page.getByRole("dialog").getByRole("button", { name: "Accept", exact: true });
+  await expect.element(submit).toBeEnabled();
+  await act(async () => (submit.element() as HTMLButtonElement).click());
+  await expect.poll(() => loans.accepted).toEqual([{ grantId: "g7", useAsDefault: false }]);
+});
+
+it("tells the lender which Secrets to rotate once a group's loan ended, by name", async () => {
+  resetLoans();
+  loans.given = [
+    groupGrant("g8", "ended", "Acme", {
+      endReason: "returned",
+      vaultGroup: {
+        toRotate: [
+          { entryId: "e1", name: "ANA_TOKEN" },
+          { entryId: "e2", name: "ANA_DB_PASSWORD" },
+        ],
+      },
+    } as Partial<Grant>),
+  ];
+  await using _screen = await render(<GrantsSettings />);
+  await expect
+    .element(page.getByText("Values may have been read. Rotate these Secrets:"))
+    .toBeVisible();
+  const list = page.getByRole("list", { name: "Secrets to rotate" });
+  await expect.element(list.getByText("ANA_TOKEN")).toBeVisible();
+  await expect.element(list.getByText("ANA_DB_PASSWORD")).toBeVisible();
+  await expect.element(list.getByRole("button", { name: "Replace…" })).toBeVisible();
+  await expect
+    .element(page.getByText(/Ended \(given back\) · Read-only for the Space/))
+    .toBeVisible();
+});
+
+it("warns before taking a group back that its Secrets may have been read", async () => {
+  resetLoans();
+  loans.given = [
+    groupGrant("g9", "active", "Acme", {
+      vaultGroup: { toRotate: [{ entryId: "e1", name: "ANA_TOKEN" }] },
+    } as Partial<Grant>),
+  ];
+  await using _screen = await render(<GrantsSettings />);
+  await page.getByRole("button", { name: "Actions for Ana keys lent to Acme" }).click();
+  await page.getByRole("menuitem", { name: "Take back" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect.element(dialog.getByText(/stop receiving it from their next turn/)).toBeVisible();
+  await expect.element(dialog.getByText("ANA_TOKEN")).toBeVisible();
 });

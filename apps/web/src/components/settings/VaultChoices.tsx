@@ -1,24 +1,18 @@
-import { fetchInstallationUsers } from "@t3tools/client-runtime/spaces/space-directory";
 import { threadSecretLines } from "@t3tools/client-runtime/vaults";
 import type {
   EnvironmentId,
-  InstallationUser,
   ProjectId,
   SpaceId,
   ThreadId,
+  VaultChoiceOption,
   VaultChoices,
   VaultGroupId,
-  VaultSubject,
-  VaultGroupSummary,
   VaultThreadEnvironment,
 } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
 import { KeyRoundIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
-import { PrimaryEnvironmentHttpClient } from "../../environments/primary/httpClient";
 import { errorMessageOf } from "../../lib/errorMessage";
-import { runPrimaryHttp } from "../../lib/runtime";
 import { useCurrentSpace } from "../../state/currentSpace";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -30,170 +24,21 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { settle } from "./vaultCommands";
 
-// Spec 5 ticket 03: allowing Vaults (the Owner), a Space's defaults and a Project's choices (the
-// Owner and the Space's Admins), and the names a Thread receives. Never values.
+// Spec 5 ticket 03: a Space's defaults and a Project's choices (the Owner and the Space's Admins),
+// and the names a Thread receives. Never values. Groups lent to a Space (Grants ticket 07) are
+// chosen like its own, after them.
 
-/** Shown before a Vault is allowed to a User: ADR 0004, nothing isolates a Space's processes. */
-const USER_ALLOWANCE_RISK =
-  "Only this User's turns, terminals and scripts receive it, but in a shared Sandbox other agents of the same Space can read a running process's environment.";
-const UNDERSTOOD = "I understand other agents in a shared Sandbox can read it";
-
-const subjectKey = (subject: VaultSubject) =>
-  subject.kind === "space" ? `space:${subject.spaceId}` : `user:${subject.userId}`;
-
-/** Whom one of the Owner's own Vaults is allowed to; the Owner adds and takes back. */
-export function VaultAllowances(props: {
-  readonly environmentId: EnvironmentId;
-  readonly vault: VaultGroupSummary;
-  readonly onChanged: () => Promise<void>;
-}) {
-  const { vault, environmentId } = props;
-  const allow = useAtomCommand(serverEnvironment.allowVault, "allow a Vault");
-  const spaces = useCurrentSpace((state) => state.view?.spaces ?? []);
-  const [users, setUsers] = useState<ReadonlyArray<InstallationUser>>([]);
-  const [choice, setChoice] = useState("");
-  const [understood, setUnderstood] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the Installation's Users, whom the Owner may allow the Vault to.
-  useEffect(() => {
-    let cancelled = false;
-    void runPrimaryHttp(PrimaryEnvironmentHttpClient.pipe(Effect.flatMap(fetchInstallationUsers)))
-      .then((list) => {
-        if (!cancelled) setUsers(list.users.filter((user) => user.status !== "removed"));
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const allowed = new Set(vault.allowances.map((allowance) => subjectKey(allowance.subject)));
-  const options: ReadonlyArray<{
-    readonly key: string;
-    readonly subject: VaultSubject;
-    readonly label: string;
-  }> = [
-    ...spaces.map((space) => ({
-      key: `space:${space.id}`,
-      subject: { kind: "space", spaceId: space.id } as const,
-      label: `Space: ${space.name}`,
-    })),
-    ...users.map((user) => ({
-      key: `user:${user.id}`,
-      subject: { kind: "user", userId: user.id } as const,
-      label: `User: ${user.displayName}`,
-    })),
-  ].filter((option) => !allowed.has(option.key));
-  const allowItems = options.map((option) => ({ value: option.key, label: option.label }));
-  // An option that dropped out (allowed elsewhere meanwhile) leaves the placeholder.
-  const picked = options.find((option) => option.key === choice);
-  const toUser = picked?.subject.kind === "user";
-
-  const change = async (subject: VaultSubject, isAllowed: boolean) => {
-    setPending(true);
-    setError(null);
-    try {
-      await settle(
-        allow({ environmentId, input: { vaultId: vault.id, subject, allowed: isAllowed } }),
-      );
-      setChoice("");
-      setUnderstood(false);
-      await props.onChanged();
-    } catch (cause) {
-      setError(errorMessageOf(cause, "Could not change whom the Vault is allowed to."));
-    } finally {
-      setPending(false);
-    }
-  };
-
-  return (
-    <div className="flex flex-col gap-2 px-4 pb-4">
-      <p className="text-xs font-medium">Allowed to</p>
-      {vault.allowances.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          Nobody yet: no Space or User receives this Vault.
-        </p>
-      ) : (
-        <ul className="flex flex-wrap gap-2" aria-label={`Allowed to: ${vault.name}`}>
-          {vault.allowances.map((allowance) => {
-            const name = allowance.name ?? "(gone)";
-            return (
-              <li key={subjectKey(allowance.subject)} className="flex items-center gap-1">
-                <Badge variant="outline" size="sm">
-                  {allowance.subject.kind === "user" ? `User: ${name}` : `Space: ${name}`}
-                </Badge>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  disabled={pending}
-                  aria-label={`Take back ${vault.name} from ${name}`}
-                  onClick={() => void change(allowance.subject, false)}
-                >
-                  Take back
-                </Button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
-          Allow to
-          <Select
-            disabled={pending}
-            items={allowItems}
-            value={picked === undefined ? null : choice}
-            onValueChange={(value) => {
-              setChoice(value ?? "");
-              setUnderstood(false);
-            }}
-          >
-            <SelectTrigger aria-label={`Allow ${vault.name} to`}>
-              <SelectValue placeholder="Choose a Space or a User…" />
-            </SelectTrigger>
-            <SelectPopup>
-              {allowItems.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        </label>
-        <Button
-          size="sm"
-          disabled={pending || picked === undefined || (toUser && !understood)}
-          aria-label={`Allow ${vault.name}`}
-          onClick={() => {
-            if (picked !== undefined) void change(picked.subject, true);
-          }}
-        >
-          Allow
-        </Button>
-      </div>
-      {toUser ? (
-        <div className="flex flex-col gap-1 rounded-md border border-warning/40 bg-warning/8 p-2">
-          <p className="text-xs" role="note">
-            {USER_ALLOWANCE_RISK}
-          </p>
-          <label className="flex items-center gap-2 text-xs font-medium">
-            <Checkbox
-              aria-label={UNDERSTOOD}
-              checked={understood}
-              onCheckedChange={(checked) => setUnderstood(checked === true)}
-            />
-            {UNDERSTOOD}
-          </label>
-        </div>
-      ) : null}
-      {error === null ? null : (
-        <span className="text-xs text-destructive" role="alert">
-          {error}
-        </span>
-      )}
-    </div>
+/** Whose group it is: its owner, or «Lent by <owner>» for one lent to the Space. */
+function OwnerOf({ option }: { readonly option: VaultChoiceOption }) {
+  if (option.lent !== undefined) {
+    return (
+      <Badge size="sm" variant="outline">
+        Lent by {option.ownerName ?? "its owner"}
+      </Badge>
+    );
+  }
+  return option.ownerName === null ? null : (
+    <span className="text-xs text-muted-foreground">{option.ownerName}</span>
   );
 }
 
@@ -290,7 +135,7 @@ export function SpaceDefaultVaults(props: {
     <SettingsSection id="default-vaults" title="Default groups">
       <SettingsRow
         title="Every Thread of a Space receives its defaults"
-        description="A Space's own default group always; other groups that reach it when chosen here. Projects add or remove groups among the ones reaching their Space. When two groups define the same name, a group allowed to you wins, then the Project's, then the defaults in this order."
+        description="A Space's own default group always; other groups that reach it when chosen here, groups lent to it included. Projects add or remove groups among the ones reaching their Space. When two groups define the same name, the Project's win, then the defaults in this order."
         status={
           error === null ? null : (
             <span className="text-destructive" role="alert">
@@ -354,9 +199,7 @@ export function SpaceDefaultVaults(props: {
                     }
                   />
                   <span className="font-medium">{option.name}</span>
-                  {option.ownerName === null ? null : (
-                    <span className="text-xs text-muted-foreground">{option.ownerName}</span>
-                  )}
+                  <OwnerOf option={option} />
                   <span className="truncate text-xs text-muted-foreground">
                     {option.names.join(", ") || "no secrets yet"}
                   </span>
@@ -452,13 +295,9 @@ export function ProjectVaults(props: {
           ];
           return (
             <li key={option.vaultId} className="flex items-center gap-3 px-4 py-2 text-sm">
-              <span className="flex-1 font-medium">
+              <span className="flex flex-1 items-center gap-2 font-medium">
                 {option.name}
-                {option.ownerName === null ? null : (
-                  <span className="ms-2 text-xs font-normal text-muted-foreground">
-                    {option.ownerName}
-                  </span>
-                )}
+                <OwnerOf option={option} />
               </span>
               {choices.fixedDefaults.includes(option.vaultId) ? (
                 <span className="text-xs text-muted-foreground">Always (its default group)</span>
@@ -565,14 +404,18 @@ export function ThreadSecrets(props: {
             <p className="text-xs text-destructive" role="alert">
               {error}
             </p>
-          ) : shown === null ? null : shown.variables.length === 0 ? (
+          ) : shown === null ? null : shown.variables.length === 0 &&
+            (shown.withheld ?? []).length === 0 ? (
             shown.aiCredential == null ? (
               <p className="text-xs text-muted-foreground">This Thread receives no secrets.</p>
             ) : null
           ) : (
             <ul className="flex flex-col gap-1" aria-label="Secrets this Thread receives">
               {threadSecretLines(shown).map((line) => (
-                <li key={line.name} className="flex flex-col">
+                <li
+                  key={`${line.name}:${line.from}:${line.withheld ?? ""}`}
+                  className="flex flex-col"
+                >
                   <span>
                     <code className="font-mono text-xs">{line.name}</code>
                     {line.value === null ? null : (
@@ -587,6 +430,9 @@ export function ThreadSecrets(props: {
                   </span>
                   {line.winsOver === null ? null : (
                     <span className="text-xs text-muted-foreground">Wins over {line.winsOver}</span>
+                  )}
+                  {line.withheld === null ? null : (
+                    <span className="text-xs text-warning-foreground">{line.withheld}</span>
                   )}
                 </li>
               ))}

@@ -8,6 +8,7 @@ import {
   type VaultSource,
   type VaultGroupSummary,
   type VaultThreadEnvironment,
+  type VaultThreadWithheld,
 } from "@t3tools/contracts";
 
 /** A dangerous name is replaced on a large screen only: never on a phone. */
@@ -146,7 +147,15 @@ export interface ThreadSecretLine {
   readonly winsOver: string | null;
   /** A Variable's value, when the Hub gave it (owned-resources 05); a Secret's never. */
   readonly value: string | null;
+  /** Grants ticket 07: why a lent group's name is never delivered here; null when it is. */
+  readonly withheld: string | null;
 }
+
+/** Why a name of a lent group never reaches this Thread's processes (Grants ticket 07). */
+const WITHHELD_LABEL: Record<VaultThreadWithheld["reason"], string> = {
+  "lent-dangerous": "not delivered: from a loan",
+  "lent-machine": "not delivered: on a borrowed machine",
+};
 
 /**
  * Settings copy for an entry's type (owned-resources 05): a Variable is seen by whoever receives
@@ -164,7 +173,7 @@ export const MAKE_SECRET_WARNING = (name: string) =>
 /** The lines of a Thread's «Secrets» panel: names and where they come from, Variables' values. */
 export function threadSecretLines(
   environment: Pick<VaultThreadEnvironment, "variables"> &
-    Partial<Pick<VaultThreadEnvironment, "vaults">>,
+    Partial<Pick<VaultThreadEnvironment, "vaults" | "withheld">>,
 ): ReadonlyArray<ThreadSecretLine> {
   // A group is named with its owner's Vault (owned-resources 03): «default · Acme».
   const owners = new Map(
@@ -174,8 +183,9 @@ export function threadSecretLines(
     const owner = owners.get(vaultId);
     return owner === null || owner === undefined ? name : `${name} · ${owner}`;
   };
-  return environment.variables.map((variable) => ({
+  const delivered = environment.variables.map((variable) => ({
     name: variable.name,
+    withheld: null,
     value: variable.class === "variable" ? (variable.value ?? null) : null,
     from: `${groupName(variable.vaultId, variable.vaultName)} (${VAULT_SOURCE_LABEL[variable.source]})`,
     winsOver:
@@ -188,6 +198,15 @@ export function threadSecretLines(
             )
             .join(", "),
   }));
+  // A lent group's names its processes never receive, after them (names only).
+  const withheld = (environment.withheld ?? []).map((item) => ({
+    name: item.name,
+    from: groupName(item.vaultId, item.vaultName),
+    winsOver: null,
+    value: null,
+    withheld: WITHHELD_LABEL[item.reason],
+  }));
+  return [...delivered, ...withheld];
 }
 
 /** Every group the viewer sees and its names, read in parallel. */

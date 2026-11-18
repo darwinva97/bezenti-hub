@@ -45,8 +45,10 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SecretValueArea } from "./SecretValueArea";
-import { ownerInScope, type OwnedResourceScope } from "./ownedResourceScope";
-import { SpaceDefaultVaults, VaultAllowances } from "./VaultChoices";
+import { LendVaultGroupDialog } from "./LendVaultGroupDialog";
+import { MigratedVaultLoansReview } from "./MigratedLoansReview";
+import { borrowedInScope, ownerInScope, type OwnedResourceScope } from "./ownedResourceScope";
+import { SpaceDefaultVaults } from "./VaultChoices";
 import { settle } from "./vaultCommands";
 
 const VAULT_SURFACE = isElectron ? "desktop" : "web";
@@ -309,9 +311,19 @@ function VaultsPage({
     }
   };
 
-  // Under a scope (a modal section) only that owner's Vault; without one, every owner's.
-  const sections = (listed === null ? [] : vaultSections(listed, { userId })).filter(
+  // Under a scope (a modal section) only that owner's Vault; without one, every owner's. A group
+  // lent to a Space (Grants ticket 07) is shown with that Space, read-only, not with its owner.
+  const own =
+    listed === null
+      ? null
+      : { ...listed, groups: listed.groups.filter((group) => group.borrowed === undefined) };
+  const sections = (own === null ? [] : vaultSections(own, { userId })).filter(
     (section) => scope === undefined || ownerInScope(scope, section.owner, userId),
+  );
+  const borrowed = (listed?.groups ?? []).filter(
+    (group) =>
+      group.borrowed !== undefined &&
+      (scope === undefined || borrowedInScope(scope, group.borrowed.spaceId, userId)),
   );
 
   return (
@@ -338,7 +350,7 @@ function VaultsPage({
           />
         ) : null}
       </SettingsSection>
-      {listed === null ? null : sections.length === 0 ? (
+      {listed === null ? null : sections.length === 0 && borrowed.length === 0 ? (
         <p className="px-4 text-sm text-muted-foreground">No Vault is shared with you.</p>
       ) : (
         sections.map((section) => (
@@ -356,6 +368,30 @@ function VaultsPage({
           />
         ))
       )}
+      {borrowed.length === 0 ? null : (
+        <SettingsSection id="vaults-borrowed" title="Lent to this Space">
+          <SettingsRow
+            title={`${borrowed.length} ${borrowed.length === 1 ? "group" : "groups"} lent here`}
+            description="Other people's groups, read-only here: Variables show their value, Secrets only their name. Choose them as defaults or per Project, like the Space's own."
+          />
+        </SettingsSection>
+      )}
+      {borrowed.map((group) => (
+        <VaultSection
+          key={group.id}
+          environmentId={environmentId}
+          commands={commands}
+          vault={group}
+          mayWrite={mayWrite}
+          isOwner={isOwner}
+          userId={userId}
+          entries={entries[group.id] ?? []}
+          onChanged={(all) => refresh(all ? "all" : group.id)}
+        />
+      ))}
+      {isOwner && scope?.kind !== "organization" ? (
+        <MigratedVaultLoansReview environmentId={environmentId} />
+      ) : null}
       {scope?.kind === "user" ? null : (
         <SpaceDefaultVaults
           environmentId={environmentId}
@@ -533,6 +569,14 @@ function VaultSection(props: {
 }) {
   const { vault, commands, environmentId } = props;
   const canEdit = vaultActions(vault, { mayWrite: props.mayWrite, surface: VAULT_SURFACE }).add;
+  // Grants ticket 07: a named group its managers lend to another Space.
+  const mayLend =
+    props.mayWrite &&
+    vault.canManage &&
+    !vault.isDefault &&
+    !vault.archived &&
+    vault.borrowed === undefined;
+  const [lending, setLending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const act: Act = async (work, all = false) => {
@@ -582,7 +626,10 @@ function VaultSection(props: {
               : "replaced";
       return savedMessage(entry.name, verb, result.warnings);
     });
-  const owner = defaultGroupLine(vault, props.userId);
+  const owner =
+    vault.borrowed === undefined
+      ? defaultGroupLine(vault, props.userId)
+      : `Lent to ${vault.borrowed.spaceName} by ${vault.borrowed.lenderName ?? "its owner"}, read-only here`;
   // A name that changes how tools run: the Owner's, and a User's in their own Vault (04).
   const confirmsDangerous =
     props.isOwner || (vault.owner.kind === "user" && vault.owner.userId === props.userId);
@@ -605,20 +652,32 @@ function VaultSection(props: {
         control={
           // `default` is never deleted: the Hub says so with `canManage`.
           vault.canManage && props.mayWrite ? (
-            <Button
-              size="xs"
-              variant="outline"
-              aria-label={`Delete group ${vault.name}`}
-              onClick={() => {
-                if (!window.confirm(`Delete the group ${vault.name} and its secrets?`)) return;
-                void act(async () => {
-                  await settle(commands.remove({ environmentId, input: { vaultId: vault.id } }));
-                  return null;
-                }, true);
-              }}
-            >
-              Delete group
-            </Button>
+            <div className="flex gap-1">
+              {mayLend ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  aria-label={`Lend group ${vault.name}`}
+                  onClick={() => setLending(true)}
+                >
+                  Lend…
+                </Button>
+              ) : null}
+              <Button
+                size="xs"
+                variant="outline"
+                aria-label={`Delete group ${vault.name}`}
+                onClick={() => {
+                  if (!window.confirm(`Delete the group ${vault.name} and its secrets?`)) return;
+                  void act(async () => {
+                    await settle(commands.remove({ environmentId, input: { vaultId: vault.id } }));
+                    return null;
+                  }, true);
+                }}
+              >
+                Delete group
+              </Button>
+            </div>
           ) : null
         }
       />
@@ -693,16 +752,10 @@ function VaultSection(props: {
           }
         />
       ) : null}
-      {/* Only the Owner's own named groups are allowed further (until Grants). */}
-      {props.isOwner &&
-      vault.canManage &&
-      props.mayWrite &&
-      vault.owner.kind === "user" &&
-      vault.owner.userId === props.userId ? (
-        <VaultAllowances
-          environmentId={environmentId}
-          vault={vault}
-          onChanged={() => props.onChanged(false)}
+      {lending ? (
+        <LendVaultGroupDialog
+          group={{ id: vault.id, name: vault.name }}
+          onClose={() => setLending(false)}
         />
       ) : null}
     </SettingsSection>

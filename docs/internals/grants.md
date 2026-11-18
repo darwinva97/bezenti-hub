@@ -154,4 +154,12 @@ and the lender's risks; the strong factor when the loan starts active) and the *
 (`GrantsSettings`: waiting loans to accept with a strong factor or reject, borrowed machines to give
 back, lent ones to take back or cancel, with the Sandbox's state and disk). A lent machine shows in
 the Space's lists as «Lent to <Space> by <lender>, who sees everything that runs on it»
-(`environmentUseDescription`). Mobile and the command palette come later (Grants ticket 12).
+(`environmentUseDescription`). Vault groups (Grants ticket 07): **Lend…** on each named group the
+User manages (`LendVaultGroupDialog`: the warning that the Space's agents, Guests' Threads
+included, read its Secrets, and always the strong factor); a waiting group is accepted with
+«Also use it as a Space default» (on); a borrowed group is listed read-only in the borrowing
+Space's Vault («Lent to this Space») and in its pickers as «Lent by <lender>»; taking one back,
+and an ended one, list the Secrets to rotate with **Replace…**. The Owner's review of migrated
+Vault allowances sits in Settings → Vault (`MigratedVaultLoansReview`). Mobile and the command
+palette come later (Grants ticket 12); the Thread's «Secrets» panel already says which lent names
+are never delivered, on both.

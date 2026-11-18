@@ -79,7 +79,8 @@ function ThreadSecretsPanel(props: {
         <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
           {current.error}
         </Text>
-      ) : current.environment === null ? null : current.environment.variables.length === 0 ? (
+      ) : current.environment === null ? null : current.environment.variables.length === 0 &&
+        (current.environment.withheld ?? []).length === 0 ? (
         <Text className="text-sm text-foreground-muted">This Thread receives no secrets.</Text>
       ) : (
         <View className="gap-1" accessibilityLabel="Secrets this Thread receives">
@@ -88,7 +89,7 @@ function ThreadSecretsPanel(props: {
             do.
           </Text>
           {threadSecretLines(current.environment).map((line) => (
-            <View key={line.name}>
+            <View key={`${line.name}:${line.from}:${line.withheld ?? ""}`}>
               <Text className="text-sm text-foreground">
                 {line.name} from {line.from}
               </Text>
@@ -99,6 +100,9 @@ function ThreadSecretsPanel(props: {
               )}
               {line.winsOver === null ? null : (
                 <Text className="text-xs text-foreground-muted">Wins over {line.winsOver}</Text>
+              )}
+              {line.withheld === null ? null : (
+                <Text className="text-xs text-foreground-muted">{line.withheld}</Text>
               )}
             </View>
           ))}

@@ -28,8 +28,16 @@ export const subscriptionTermsWarning = (provider: string) =>
 const PER: Record<GrantCapPeriod, string> = { day: "a day", week: "a week", month: "a month" };
 type GrantCapPeriod = GrantCapUse["period"];
 
-/** A loan's limits in words: a machine's sizes, or an AI account's caps («No cap»). */
+/**
+ * Grants ticket 07: what lending a Vault group lets the Space do, said before it is lent (ADR 0004:
+ * a Secret reaches a process as an environment variable, which its agent can read).
+ */
+export const vaultLendWarning = (space: string) =>
+  `The agents of ${space}, Guests' Threads included, can read this group's Secrets: they receive them as environment variables. Names that change how tools run are never sent.`;
+
+/** A loan's limits in words: a machine's sizes, an AI account's caps («No cap»), or none. */
 export const limitsText = (limits: GrantLimits) => {
+  if (limits.kind === "vault-group") return "Read-only for the Space";
   if (limits.kind === "environment") {
     return `${limits.cpus} CPUs · ${gib(limits.memoryBytes)} memory · ${limits.pids} processes · ${gib(limits.diskBytes)} disk`;
   }

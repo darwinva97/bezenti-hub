@@ -192,7 +192,30 @@ describe("threadSecretLines", () => {
         from: "Mine · Owner (yours)",
         winsOver: "Acme (Space default)",
         value: null,
+        withheld: null,
       },
+    ]);
+  });
+
+  it("lists a lent group's names never delivered, after the rest, and why (Grants 07)", () => {
+    const env = {
+      vaults: [{ vaultId: "v-ana", name: "Ana keys", source: "space", ownerName: "Ana" }],
+      variables: [
+        {
+          name: "ANA_TOKEN",
+          vaultId: "v-ana",
+          vaultName: "Ana keys",
+          source: "space",
+          shadowed: [],
+        },
+      ],
+      withheld: [
+        { name: "NODE_OPTIONS", vaultId: "v-ana", vaultName: "Ana keys", reason: "lent-dangerous" },
+      ],
+    } as unknown as VaultThreadEnvironment;
+    expect(threadSecretLines(env).map((line) => [line.name, line.from, line.withheld])).toEqual([
+      ["ANA_TOKEN", "Ana keys · Ana (Space default)", null],
+      ["NODE_OPTIONS", "Ana keys · Ana", "not delivered: from a loan"],
     ]);
   });
 });

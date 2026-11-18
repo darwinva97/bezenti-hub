@@ -23,6 +23,7 @@ import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environment
 import { grantsEnvironment } from "../../state/grants";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogDescription,
@@ -67,13 +68,68 @@ const targetLabel = (grant: Grant, fallback: string) =>
   grant.target === null ? fallback : spaceLabel(grant.target);
 
 /** What a loan lends, in words. */
-const nounOf = (grant: Grant) => (grant.resource.kind === "ai-account" ? "AI account" : "machine");
+const nounOf = (grant: Grant) =>
+  grant.resource.kind === "ai-account"
+    ? "AI account"
+    : grant.resource.kind === "vault-group"
+      ? "Vault group"
+      : "machine";
+
+/**
+ * Grants ticket 07: what the borrower is told of a lent Vault group: it is its lender's, read-only
+ * here, and what it never brings.
+ */
+const groupLenderSays = (lender: string) =>
+  `${lender} can change what it holds at any time. It reaches your Threads once chosen as a default or by a Project. Names that change how tools run never come from it, and nothing of it reaches a machine lent to this Space.`;
 
 /** What the borrower is told of what the lender sees, by kind. */
 const lenderSees = (grant: Grant) =>
   grant.resource.kind === "ai-account"
     ? `${grant.lender.name ?? "Its lender"} sees how much each person here uses it, never prompts or Threads.${grant.aiAccount?.type === "subscription" ? ` ${subscriptionTermsWarning(grant.aiAccount.provider)}` : ""}`
-    : lenderSeesEverything(grant.lender.name ?? "Its lender");
+    : grant.resource.kind === "vault-group"
+      ? groupLenderSays(grant.lender.name ?? "Its lender")
+      : lenderSeesEverything(grant.lender.name ?? "Its lender");
+
+/** Where the lender replaces a lent group's Secrets: their own Vault, or their Organization's. */
+const vaultSettingsOf = (grant: Grant) =>
+  grant.lender.kind === "user"
+    ? ({ to: "/settings/user/$section", params: { section: "vault" } } as const)
+    : ({
+        to: "/settings/space/$spaceId/$section",
+        params: { spaceId: grant.lender.id, section: "vault" },
+      } as const);
+
+/**
+ * Grants ticket 07: the Secrets of a lent group its borrower's agents could read, to rotate: all of
+ * them before taking it back, those not replaced since once it ended. Names only.
+ */
+function RotateList({
+  grant,
+  onReplace,
+}: {
+  readonly grant: Grant;
+  readonly onReplace: () => void;
+}) {
+  const toRotate = grant.vaultGroup?.toRotate ?? [];
+  if (toRotate.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1 text-xs" role="note">
+      <p className="text-warning">Values may have been read. Rotate these Secrets:</p>
+      <ul className="flex flex-wrap items-center gap-2" aria-label="Secrets to rotate">
+        {toRotate.map((entry) => (
+          <li key={entry.entryId}>
+            <code className="font-mono">{entry.name}</code>
+          </li>
+        ))}
+        <li>
+          <Button size="xs" type="button" variant="outline" onClick={onReplace}>
+            Replace…
+          </Button>
+        </li>
+      </ul>
+    </div>
+  );
+}
 
 /** A machine's hosting state as its last report says it. */
 function HostState({ host }: { readonly host: SandboxHostReport | null }) {
@@ -470,9 +526,10 @@ function LoanGroupTitle({ children }: { readonly children: string }) {
 }
 
 /**
- * Settings → Environments → «Loans»: machines and AI accounts the User (or an Organization they
- * run) lent (take back, cancel), loans waiting for a Space they decide for (accept, a machine with
- * a strong factor; reject) and what their Spaces borrow (give back). Never another Space's Threads.
+ * Settings → Environments → «Loans»: machines, AI accounts and Vault groups the User (or an
+ * Organization they run) lent (take back, cancel; a group's Secrets to rotate), loans waiting for a
+ * Space they decide for (accept, a machine with a strong factor; reject) and what their Spaces
+ * borrow (give back). Never another Space's Threads.
  */
 export function GrantsSettings() {
   const environmentId = usePrimaryEnvironmentId();
@@ -501,6 +558,11 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
     readonly stepUp: StepUpState;
   } | null>(null);
   const [ending, setEnding] = useState<Grant | null>(null);
+  // Grants ticket 07: a Vault group's loan, accepted with or without becoming a default.
+  const [acceptingGroup, setAcceptingGroup] = useState<{
+    readonly grant: Grant;
+    readonly useAsDefault: boolean;
+  } | null>(null);
   const [capping, setCapping] = useState<Grant | null>(null);
   // Grants ticket 04: one AI account loan's use, opened from its row.
   const [usageOf, setUsageOf] = useState<string | null>(null);
@@ -566,6 +628,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
     try {
       await change();
       setAccepting(null);
+      setAcceptingGroup(null);
       setEnding(null);
       await reload();
     } catch (cause) {
@@ -576,6 +639,10 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   };
   /** Accepting a machine asks for a strong factor (the account says which one); an AI account not. */
   const openAccept = async (grant: Grant) => {
+    if (grant.resource.kind === "vault-group") {
+      setAcceptingGroup({ grant, useAsDefault: true });
+      return;
+    }
     if (grant.resource.kind !== "environment") {
       await run(() => acceptGrant(grant.id, undefined));
       return;
@@ -674,7 +741,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
             mayChange ? (
               <div className="flex gap-1">
                 <Button disabled={pending} size="xs" onClick={() => void openAccept(grant)}>
-                  {grant.resource.kind === "environment" ? "Accept…" : "Accept"}
+                  {grant.resource.kind === "ai-account" ? "Accept" : "Accept…"}
                 </Button>
                 <Button
                   disabled={pending}
@@ -764,6 +831,12 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
                         <div className="min-w-0 flex-1">
                           <p className="min-w-0 truncate text-sm">{recipient}</p>
                           <p className="text-xs break-words text-muted-foreground">{detail}</p>
+                          {grant.state === "ended" ? (
+                            <RotateList
+                              grant={grant}
+                              onReplace={() => void navigate(vaultSettingsOf(grant))}
+                            />
+                          ) : null}
                         </div>
                         {lentActions(grant, `${group.name} lent to ${recipient}`)}
                       </div>
@@ -860,6 +933,60 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
           </DialogPopup>
         </Dialog>
       ) : null}
+      {acceptingGroup !== null ? (
+        <Dialog open onOpenChange={(open) => (open ? undefined : setAcceptingGroup(null))}>
+          <DialogPopup className="sm:max-w-md">
+            <form
+              className="flex min-h-0 flex-col"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void run(() =>
+                  acceptGrant(acceptingGroup.grant.id, undefined, {
+                    useAsDefault: acceptingGroup.useAsDefault,
+                  }),
+                );
+              }}
+            >
+              <DialogHeader>
+                <DialogTitle>
+                  Accept {acceptingGroup.grant.resource.name ?? "this Vault group"}?
+                </DialogTitle>
+                <DialogDescription>
+                  {groupLenderSays(acceptingGroup.grant.lender.name ?? "Its lender")} Your Space
+                  sees its Variables and the names of its Secrets, never a Secret's value.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogPanel>
+                <label className="flex items-center gap-2 text-xs">
+                  <Checkbox
+                    aria-label="Also use it as a Space default"
+                    checked={acceptingGroup.useAsDefault}
+                    disabled={pending}
+                    onCheckedChange={(checked) =>
+                      setAcceptingGroup({ ...acceptingGroup, useAsDefault: checked === true })
+                    }
+                  />
+                  Also use it as a default of {targetLabel(acceptingGroup.grant, "this Space")}:
+                  every Thread there receives it, after the Space's own defaults
+                </label>
+              </DialogPanel>
+              <DialogFooter>
+                <Button
+                  disabled={pending}
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setAcceptingGroup(null)}
+                >
+                  Cancel
+                </Button>
+                <Button disabled={pending} type="submit">
+                  Accept
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogPopup>
+        </Dialog>
+      ) : null}
       {ending !== null ? (
         <Dialog open onOpenChange={(open) => (open ? undefined : setEnding(null))}>
           <DialogPopup className="sm:max-w-md">
@@ -871,9 +998,24 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
               <DialogDescription>
                 {ending.resource.kind === "ai-account"
                   ? `The Threads of ${targetLabel(ending, "the Space")} that use it are refused from their next request and need another AI account; requests already running finish.`
-                  : `The Threads of ${targetLabel(ending, "the Space")} on it stop: running turns get up to two minutes to save a checkpoint, and changes made by hand since the last turn may be lost. Its Sandbox and files are then deleted from the machine.`}
+                  : ending.resource.kind === "vault-group"
+                    ? ending.can.revoke
+                      ? `The Threads of ${targetLabel(ending, "the Space")} stop receiving it from their next turn, terminal or script; processes already running keep what they got.`
+                      : `Your Threads stop receiving it from their next turn, terminal or script. ${ending.lender.name ?? "Its lender"} will be asked to rotate its Secrets.`
+                    : `The Threads of ${targetLabel(ending, "the Space")} on it stop: running turns get up to two minutes to save a checkpoint, and changes made by hand since the last turn may be lost. Its Sandbox and files are then deleted from the machine.`}
               </DialogDescription>
             </DialogHeader>
+            {ending.resource.kind === "vault-group" && ending.can.revoke ? (
+              <DialogPanel>
+                <RotateList
+                  grant={ending}
+                  onReplace={() => {
+                    setEnding(null);
+                    void navigate(vaultSettingsOf(ending));
+                  }}
+                />
+              </DialogPanel>
+            ) : null}
             <DialogFooter>
               <Button disabled={pending} variant="ghost" onClick={() => setEnding(null)}>
                 Keep it

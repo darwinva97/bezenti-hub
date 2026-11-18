@@ -215,6 +215,7 @@ export function LendMachineDialog({
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogPopup className="sm:max-w-lg">
         <form
+          className="flex min-h-0 flex-col"
           onSubmit={(event) => {
             event.preventDefault();
             void submit();
@@ -717,6 +718,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
         <Dialog open onOpenChange={(open) => (open ? undefined : setAccepting(null))}>
           <DialogPopup className="sm:max-w-md">
             <form
+              className="flex min-h-0 flex-col"
               onSubmit={(event) => {
                 event.preventDefault();
                 void run(() =>

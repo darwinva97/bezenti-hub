@@ -244,6 +244,7 @@ export function LendAiAccountDialog({
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogPopup className="sm:max-w-lg">
         <form
+          className="flex min-h-0 flex-col"
           onSubmit={(event) => {
             event.preventDefault();
             void submit();
@@ -364,6 +365,7 @@ export function ChangeCapsDialog({
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogPopup className="sm:max-w-md">
         <form
+          className="flex min-h-0 flex-col"
           onSubmit={(event) => {
             event.preventDefault();
             void submit();

@@ -21,10 +21,16 @@ export const ENVIRONMENT_CONNECTION_PROTOCOL_VERSION = 2;
 export const ENVIRONMENT_CONNECT_PATH = "/api/environment/connect";
 
 export const ENVIRONMENT_HEARTBEAT_INTERVAL_MS = 10_000;
-/** No frame for this long: the Hub shows `reconnecting` and drops the socket. */
+/** No frame for this long: the Hub drops the socket (`heartbeat-timeout`). */
 export const ENVIRONMENT_RECONNECTING_AFTER_MS = 30_000;
+/**
+ * A machine whose socket dropped but was heard from this recently still shows `online`: behind a
+ * proxy such as Cloudflare's, long-lived sockets drop routinely and the machine is back within a
+ * few seconds. It covers one heartbeat interval before the drop plus the reconnect.
+ */
+export const ENVIRONMENT_RECONNECT_GRACE_MS = 20_000;
 /** No frame for this long: `offline`. */
-const ENVIRONMENT_OFFLINE_AFTER_MS = 60_000;
+const ENVIRONMENT_OFFLINE_AFTER_MS = 90_000;
 /** How long the Hub waits for `hello` after the upgrade. */
 export const ENVIRONMENT_HELLO_TIMEOUT_MS = 10_000;
 
@@ -262,8 +268,9 @@ export const ENVIRONMENT_CLOSE_MESSAGES: Record<EnvironmentCloseReason, string> 
 };
 
 /**
- * Online while a socket is open and heard from within `ENVIRONMENT_RECONNECTING_AFTER_MS`,
- * reconnecting until `ENVIRONMENT_OFFLINE_AFTER_MS` of silence, then offline.
+ * Online while a socket is open and heard from within `ENVIRONMENT_RECONNECTING_AFTER_MS`, or,
+ * once it dropped, while silent for less than `ENVIRONMENT_RECONNECT_GRACE_MS`; reconnecting until
+ * `ENVIRONMENT_OFFLINE_AFTER_MS` of silence, then offline.
  */
 export const environmentConnectionStatus = (input: {
   readonly connected: boolean;
@@ -273,5 +280,6 @@ export const environmentConnectionStatus = (input: {
   if (input.lastSeenAtMs === null) return "offline";
   const silentMs = input.nowMs - input.lastSeenAtMs;
   if (input.connected && silentMs < ENVIRONMENT_RECONNECTING_AFTER_MS) return "online";
+  if (silentMs < ENVIRONMENT_RECONNECT_GRACE_MS) return "online";
   return silentMs < ENVIRONMENT_OFFLINE_AFTER_MS ? "reconnecting" : "offline";
 };

@@ -27,6 +27,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Random from "effect/Random";
 import * as DateTime from "effect/DateTime";
@@ -92,6 +93,8 @@ export interface ConnectionOutcome {
   /** Why the Hub closed it, when it said. */
   readonly reason: EnvironmentCloseReason | undefined;
   readonly message: string;
+  /** The WebSocket close code, when the socket closed with one. */
+  readonly code?: number;
 }
 
 const encodeHello = Schema.encodeSync(Schema.fromJsonString(EnvironmentHelloFrame));
@@ -194,18 +197,27 @@ export const connectOnce = Effect.fn("JoinedHub.connectOnce")(function* (input: 
       SocketError: (error) =>
         Ref.get(welcomed).pipe(
           Effect.map((wasWelcomed): ConnectionOutcome => {
-            const reason =
-              error.reason._tag === "SocketCloseError"
-                ? environmentCloseReasonOf(error.reason.code)
-                : undefined;
+            const code = error.reason._tag === "SocketCloseError" ? error.reason.code : undefined;
+            const reason = code === undefined ? undefined : environmentCloseReasonOf(code);
             return {
               welcomed: wasWelcomed,
               reason,
               message: reason === undefined ? error.message : ENVIRONMENT_CLOSE_MESSAGES[reason],
+              ...(code === undefined ? {} : { code }),
             };
           }),
         ),
     }),
+    Effect.map((outcome): ConnectionOutcome => outcome),
+    // Why each connection ended, on its span: behind a proxy they end routinely.
+    Effect.tap((outcome) =>
+      Effect.annotateCurrentSpan({
+        "hubConnection.welcomed": outcome.welcomed,
+        "hubConnection.reason": outcome.reason ?? "none",
+        "hubConnection.code": outcome.code ?? -1,
+        "hubConnection.message": outcome.message,
+      }),
+    ),
   );
 });
 
@@ -344,6 +356,7 @@ const layerConnector = (joined: JoinedHubState, credential: Option.Option<string
         }
         let attempt = 0;
         while (true) {
+          const dialedAt = yield* Clock.currentTimeMillis;
           const outcome = yield* connectOnce({
             hubUrl: joined.hubUrl,
             credential: credential.value,
@@ -404,6 +417,15 @@ const layerConnector = (joined: JoinedHubState, credential: Option.Option<string
               message: outcome.message,
             });
           }
+          // Expected now and then behind a proxy (Cloudflare recycles long-lived sockets): the
+          // machine is back within seconds, and the Hub shows it online meanwhile.
+          yield* Effect.logInfo("The connection to the Hub ended", {
+            welcomed: outcome.welcomed,
+            reason: outcome.reason ?? null,
+            code: outcome.code ?? null,
+            message: outcome.message,
+            connectedForMs: (yield* Clock.currentTimeMillis) - dialedAt,
+          });
           attempt = outcome.welcomed ? 0 : attempt + 1;
           yield* Ref.set(state, {
             _tag: "connecting",

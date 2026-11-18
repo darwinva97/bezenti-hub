@@ -129,6 +129,8 @@ const makeHandler = Effect.fnUntraced(function* (
         Deferred.await(closeRequested),
         receive(environmentId, nextFrame, registry, connection),
       );
+      // Why the session ended, to tell a proxy's routine drop (`peer-closed`) from the Hub's own.
+      yield* Effect.logInfo("An Environment's connection ended", { environmentId, end });
       // A removed machine will not come back: its sessions end with the socket.
       if (end === "environment-removed" || end === "owner-inactive") {
         yield* connection?.retireOnClose ?? Effect.void;

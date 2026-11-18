@@ -313,6 +313,27 @@ live(
         accountId: gusAccount,
         input: 600,
       });
+      // OpenAI-shaped, the input holding the cache reads: only what was not read counts, the
+      // caps' own rule (100 of the loan's, 900 of Gus's own).
+      yield* request(setup, {
+        ...lent,
+        id: "r5",
+        at: inWindow,
+        userId: guest,
+        shape: "openai",
+        input: 1100,
+        cacheRead: 1000,
+      });
+      yield* request(setup, {
+        id: "r6",
+        at: inWindow,
+        userId: gus,
+        spaceId: `personal:${gus}` as SpaceId,
+        accountId: gusAccount,
+        shape: "openai",
+        input: 4500,
+        cacheRead: 3600,
+      });
       // Before the window began.
       yield* request(setup, {
         ...lent,
@@ -328,14 +349,14 @@ live(
       yield* setup.server.sql`
         UPDATE ai_accounts SET type = 'subscription' WHERE account_id = ${gusAccount}
       `;
-      // (300 + 100) / 1000 of the session's 50 %.
+      // (300 + 100 + 100) / 2000 of the session's 50 %.
       assert.deepEqual((yield* summaryAs(setup, gus, { grantId })).quotaShare, [
         {
           windowId: "five_hour",
           label: "Session",
           kind: "session",
           resetsAt: iso(now + HOUR),
-          sharePercent: 20,
+          sharePercent: 12.5,
           of: "loan",
           usedPercent: 50,
         },
@@ -344,9 +365,9 @@ live(
       const ada = (yield* summaryAs(setup, admin, { grantId })).quotaShare;
       assert.deepEqual(
         ada?.map((share) => [share.sharePercent, share.of, share.usedPercent]),
-        [[20, "loan", undefined]],
+        [[12.5, "loan", undefined]],
       );
-      // Linus, a Guest: his own part only.
+      // Linus, a Guest: his own part only, (100 + 100) / 2000.
       const linus = (yield* summaryAs(setup, guest, { grantId })).quotaShare;
       assert.deepEqual(
         linus?.map((share) => [share.sharePercent, share.of, share.usedPercent]),

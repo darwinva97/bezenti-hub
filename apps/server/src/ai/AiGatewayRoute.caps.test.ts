@@ -9,12 +9,15 @@ import { assert, it } from "@effect/vitest";
 import { type AiAccountId, type GrantCap, SpaceId, type UserId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as Grants from "../grants/Grants.ts";
 import { lendAiAccount } from "../grants/Grants.testkit.ts";
+import * as AiGatewayActivity from "./AiGatewayActivity.ts";
 import { call, hub, messages, platform, posix, type Hub } from "./AiGatewayRoute.testkit.ts";
+import * as GrantCaps from "./GrantCaps.ts";
 
 const ANTHROPIC = "/api/ai/anthropic/v1/messages";
 /** What the fake CLIProxyAPI answers each request with: 11 in, 7 out. */
@@ -25,11 +28,12 @@ const accountOf = Effect.fn(function* (
   actor: UserId,
   name: string,
   owner?: { readonly kind: "organization"; readonly spaceId: SpaceId },
+  provider: "claude" | "codex" = "claude",
 ) {
   const made = yield* setup.accounts
     .create({
       name,
-      provider: "claude" as never,
+      provider: provider as never,
       apiKey: Redacted.make(`sk-capped-${name.replaceAll(" ", "-")}-0123456789abcdef`),
       ...(owner === undefined ? {} : { owner }),
     })
@@ -128,6 +132,57 @@ it.live.skipIf(!posix || platform === undefined)(
           200,
         );
       }
+    }).pipe(Effect.scoped),
+);
+
+it.live.skipIf(!posix || platform === undefined)(
+  "cache reads never bring a Grant's cap closer in the OpenAI and Gemini shapes, whose input holds them; the loan shows the same use",
+  () =>
+    Effect.gen(function* () {
+      const setup = yield* hub;
+      // Each answer: 11 in, 8 of them read from the cache, and 7 out. 10 count, not 18.
+      setup.flag("fake-cached-tokens");
+      const grace = setup.people.member;
+      const graces = yield* accountOf(setup, grace, "Grace Codex", undefined, "codex");
+      const grantId = yield* lentToAcme(setup, graces, tokensADay(30));
+      const ada = yield* setup.thread(setup.people.admin, setup.acmeId, graces);
+      const openai = () =>
+        call(setup, "/api/ai/openai/v1/chat/completions", {
+          key: ada.key,
+          body: { model: "gpt-5.5", messages: [{ role: "user", content: "hi" }] },
+        });
+      const gemini = () =>
+        call(setup, "/api/ai/gemini/v1beta/models/gpt-5.5:generateContent", {
+          key: ada.key,
+          keyHeader: "x-goog-api-key",
+          body: { contents: [] },
+        });
+      assert.equal((yield* openai()).status, 200);
+      assert.equal((yield* openai()).status, 200);
+      // 20 used: room for a third (with cache reads counted it would be 36, refused).
+      assert.equal((yield* gemini()).status, 200);
+      // 30 used: the cap is reached now.
+      const refused = yield* openai();
+      assert.equal(refused.status, 429);
+      assert.include(refused.text, "reached its daily token cap");
+
+      // What the lender's loans show is the cap's own count (Grants over the gateway's caps, as
+      // the Hub wires them).
+      const lenderView = yield* Layer.build(
+        Grants.layer.pipe(
+          Layer.provide(
+            GrantCaps.layer.pipe(
+              Layer.provide(Layer.succeed(AiGatewayActivity.AiGatewayActivity, setup.activity)),
+            ),
+          ),
+          Layer.provide(Layer.succeedContext(setup.server.services)),
+        ),
+      );
+      const given = yield* Context.get(lenderView, Grants.Grants).listGiven.pipe(
+        CommandActor.actAs(grace),
+      );
+      const loan = given.grants.find((grant) => grant.id === grantId);
+      assert.equal(loan?.aiAccount?.caps?.tokens?.used, 30);
     }).pipe(Effect.scoped),
 );
 

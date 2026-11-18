@@ -481,6 +481,16 @@ export const EMPTY_USAGE: GatewayUsage = {
   cacheWriteTokens: null,
 };
 
+/**
+ * Input not read from the cache, per request. An Anthropic-shaped answer's input leaves the cache
+ * out; OpenAI's and Gemini's count the cache reads in. The rule of migration 147's backfill, the
+ * price estimate and a Grant's caps (docs/internals/ai-gateway.md, «Caps»).
+ */
+export const uncachedInputOf = (shape: GatewayShape, usage: GatewayUsage | null) => {
+  const input = usage?.inputTokens ?? 0;
+  return shape === "anthropic" ? input : Math.max(0, input - (usage?.cacheReadTokens ?? 0));
+};
+
 const numberAt = (value: unknown, ...path: ReadonlyArray<string>): number | null => {
   let at: unknown = value;
   for (const key of path) {

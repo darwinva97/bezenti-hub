@@ -43,6 +43,7 @@ import * as AiAccounts from "./AiAccounts.ts";
 import * as AiGatewayActivity from "./AiGatewayActivity.ts";
 import { AI_PRICES, AI_PRICES_REVIEWED, type AiPrice, costUsd, priceFor } from "./aiPrices.ts";
 import * as AllowedAiAccounts from "./AllowedAiAccounts.ts";
+import { uncachedInputOf } from "./gatewayShapes.ts";
 
 /** Per-request rows are kept this long; the daily summaries are kept for good. */
 const AI_USAGE_RETENTION_DAYS = 90;
@@ -167,18 +168,9 @@ type CostRow = Pick<
 >;
 
 /**
- * Input not read from the cache, per request. An Anthropic-shaped answer's input leaves the cache
- * out; OpenAI's and Gemini's count it in. The same rule as migration 147's backfill.
+ * `uncachedInputOf` (input not read from the cache, by shape) in SQL over `ai_usage` rows: a
+ * Thread's, a truncated answer's sums, a quota window's tokens.
  */
-const uncachedInputOf = (
-  shape: AiGatewayActivity.GatewayRequestRecord["shape"],
-  usage: AiGatewayActivity.GatewayRequestRecord["usage"],
-) => {
-  const input = usage?.inputTokens ?? 0;
-  return shape === "anthropic" ? input : Math.max(0, input - (usage?.cacheReadTokens ?? 0));
-};
-
-/** The same, in SQL over `ai_usage` rows (a Thread's, or a truncated answer's sums). */
 const UNCACHED_INPUT_SQL = `CASE WHEN input_tokens IS NULL THEN 0
   WHEN shape = 'anthropic' THEN input_tokens
   ELSE MAX(input_tokens - COALESCE(cache_read_tokens, 0), 0) END`;
@@ -590,8 +582,9 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       if (windows === null) return undefined;
       const now = yield* Clock.currentTimeMillis;
       const whole = view.everything || lender || view.administered.includes(target);
+      // Tokens as a Grant's caps count them: uncached input + output + cache writes.
       const counted = sql.literal(
-        `COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
+        `COALESCE(SUM(${UNCACHED_INPUT_SQL} + COALESCE(output_tokens, 0)
           + COALESCE(cache_write_tokens, 0)), 0)`,
       );
       const shares: Array<AiUsageQuotaShare> = [];

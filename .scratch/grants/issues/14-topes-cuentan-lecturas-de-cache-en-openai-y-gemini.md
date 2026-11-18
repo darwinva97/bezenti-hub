@@ -13,9 +13,14 @@ El ticket 05 ya guarda la entrada sin caché por fila diaria: `ai_usage_daily.un
 
 **Blocked by:** 05.
 
-**Status:** todo
+**Status:** done
 
-- [ ] `GrantCaps` cuenta `uncached_input_tokens` + salida + escritura de caché. Una fila con NULL (anterior a la migración 147) cuenta `input_tokens`, como hoy: nunca de menos.
-- [ ] El recuento de lo no escrito usa la misma regla por forma (`uncachedInputOf` en `ai/AiUsage.ts`).
-- [ ] Red-first con el CLIProxyAPI falso en forma OpenAI con `cached_tokens`: las lecturas de caché no acercan el tope.
-- [ ] `docs/internals/ai-gateway.md`, «Caps»: qué cuenta como entrada en cada forma.
+- [x] `GrantCaps` cuenta `uncached_input_tokens` + salida + escritura de caché. Una fila con NULL (anterior a la migración 147) cuenta `input_tokens`, como hoy: nunca de menos.
+- [x] El recuento de lo no escrito usa la misma regla por forma (`uncachedInputOf`, movido a `ai/gatewayShapes.ts` para que `AiGatewayActivity` lo use sin ciclo).
+- [x] Red-first con el CLIProxyAPI falso en forma OpenAI con `cached_tokens`: las lecturas de caché no acercan el tope.
+- [x] `docs/internals/ai-gateway.md`, «Caps»: qué cuenta como entrada en cada forma.
+- [x] La parte de cuota de una suscripción prestada (ticket 05) cuenta los tokens igual que los topes.
+
+## Notes
+
+- Pendiente (follow-up): en `LoanUsage`, «N in» muestra la entrada tal como la da el proveedor, con las lecturas de caché dentro en OpenAI y Gemini, así que entrada + salida + escritura no coincide con el «used» del tope en esas formas. Arreglarlo pide `uncachedInputTokens` en `AiUsageTotals` (cambio de contrato).

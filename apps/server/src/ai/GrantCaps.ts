@@ -113,12 +113,16 @@ const make = Effect.gen(function* () {
       cap === null ? [] : [{ which, cap, ...periodOf(cap.period, now) }],
     );
     const since = periods.map((entry) => entry.fromDay).toSorted()[0]!;
+    // Input not read from the cache (grants ticket 14); a row from before migration 147, whose
+    // part read from the cache nobody kept, counts all its input: never less than was used.
     const written = yield* sql<{
       readonly day: string;
       readonly tokens: number;
       readonly requests: number;
     }>`
-      SELECT day, COALESCE(SUM(input_tokens + output_tokens + cache_write_tokens), 0) AS tokens,
+      SELECT day,
+        COALESCE(SUM(COALESCE(uncached_input_tokens, input_tokens) + output_tokens
+          + cache_write_tokens), 0) AS tokens,
         COALESCE(SUM(requests), 0) AS requests
       FROM ai_usage_daily WHERE grant_id = ${grantId} AND day >= ${since}
       GROUP BY day

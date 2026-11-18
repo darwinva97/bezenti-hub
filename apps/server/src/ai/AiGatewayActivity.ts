@@ -22,7 +22,7 @@ import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
-import type { GatewayShape, GatewayUsage } from "./gatewayShapes.ts";
+import { type GatewayShape, type GatewayUsage, uncachedInputOf } from "./gatewayShapes.ts";
 
 /** One request through `/api/ai/*`, as far as the Hub knows when it ends. */
 export interface GatewayRequestRecord {
@@ -59,10 +59,13 @@ export interface UnwrittenUse {
 
 /**
  * The tokens a Grant's caps count (grants ticket 03): input, output and cache writes. Cache reads
- * are shown but never counted; unknown tokens count 0.
+ * are shown but never counted (taken out of OpenAI's and Gemini's input, which holds them: grants
+ * ticket 14); unknown tokens count 0.
  */
-const cappedTokensOf = (usage: GatewayUsage | null) =>
-  (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0) + (usage?.cacheWriteTokens ?? 0);
+const cappedTokensOf = (request: GatewayRequestRecord) =>
+  uncachedInputOf(request.shape, request.usage) +
+  (request.usage?.outputTokens ?? 0) +
+  (request.usage?.cacheWriteTokens ?? 0);
 
 /** A request a Grant's caps count: one that reached its account (never shed, never a count). */
 const countsForCaps = (
@@ -125,7 +128,7 @@ const make = Effect.gen(function* () {
     const day = request.at.slice(0, 10);
     const days = pending.get(request.grantId) ?? new Map();
     const entry = days.get(day) ?? { tokens: 0, requests: 0 };
-    entry.tokens += sign * cappedTokensOf(request.usage);
+    entry.tokens += sign * cappedTokensOf(request);
     entry.requests += sign;
     if (entry.requests <= 0) days.delete(day);
     else days.set(day, entry);

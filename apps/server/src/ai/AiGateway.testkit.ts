@@ -304,12 +304,14 @@ if (mode === "decoy") {
         if (!stream && fs.existsSync(path.join(dir, "fake-big-json"))) {
           return send(response, 200, { id: "chat_1", object: "chat.completion", model, choices: [{ index: 0, message: { role: "assistant", content: text + " " + "x".repeat(1536 * 1024) }, finish_reason: "stop" }], usage: { prompt_tokens: 11, completion_tokens: 7 } });
         }
+        // Like OpenAI and Gemini: 8 of the 11 input tokens were read from the cache (counted in).
+        const cached = fs.existsSync(path.join(dir, "fake-cached-tokens"));
         if (!stream) {
           if (route === "/v1/messages/count_tokens") return send(response, 200, { input_tokens: 11 });
           if (route === "/v1/messages") return send(response, 200, { id: "msg_1", type: "message", role: "assistant", model, content: [{ type: "text", text }], usage: { input_tokens: 11, output_tokens: 7, cache_read_input_tokens: 3 } });
-          if (route === "/v1/responses") return send(response, 200, { id: "resp_1", object: "response", model, output: [{ type: "message", content: [{ type: "output_text", text }] }], usage: { input_tokens: 11, output_tokens: 7 } });
-          if (route === "gemini") return send(response, 200, { candidates: [{ content: { role: "model", parts: [{ text }] } }], modelVersion: model, usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 7 } });
-          return send(response, 200, { id: "chat_1", object: "chat.completion", model, choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }], usage: { prompt_tokens: 11, completion_tokens: 7 } });
+          if (route === "/v1/responses") return send(response, 200, { id: "resp_1", object: "response", model, output: [{ type: "message", content: [{ type: "output_text", text }] }], usage: { input_tokens: 11, output_tokens: 7, ...(cached ? { input_tokens_details: { cached_tokens: 8 } } : {}) } });
+          if (route === "gemini") return send(response, 200, { candidates: [{ content: { role: "model", parts: [{ text }] } }], modelVersion: model, usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 7, ...(cached ? { cachedContentTokenCount: 8 } : {}) } });
+          return send(response, 200, { id: "chat_1", object: "chat.completion", model, choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }], usage: { prompt_tokens: 11, completion_tokens: 7, ...(cached ? { prompt_tokens_details: { cached_tokens: 8 } } : {}) } });
         }
         response.statusCode = 200;
         response.setHeader("content-type", "text/event-stream");

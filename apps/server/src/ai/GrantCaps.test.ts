@@ -142,6 +142,58 @@ describe("GrantCaps.check", () => {
       }).pipe(Effect.provide(layer)),
   );
 
+  it.effect(
+    "counts the input not read from the cache in every shape; a row from before it was kept counts all its input",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const sql = yield* SqlClient.SqlClient;
+        const caps = yield* GrantCaps.GrantCaps;
+        const activity = yield* AiGatewayActivity.AiGatewayActivity;
+        yield* TestClock.setTime(at("2026-11-18T10:00:00.000Z"));
+        // Written: an OpenAI- or Gemini-shaped day whose 1000 input held 900 cache reads, and a day
+        // from before migration 147 (uncached unknown): all of its input counts, never less.
+        yield* sql`
+        INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model, grant_id, requests,
+          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, uncached_input_tokens)
+        VALUES ('2026-11-18', 'ana', 'org-acme', 'acct', 'gpt', 'g1', 1, 1000, 20, 900, 0, 100),
+          ('2026-11-17', 'ana', 'org-acme', 'acct', 'gpt', 'g1', 1, 1000, 20, 900, 0, NULL)
+      `;
+        const week = {
+          kind: "ai-account",
+          tokens: { amount: 100_000, period: "week" },
+          requests: null,
+        } as const;
+        assert.equal((yield* caps.check("g1", TOKENS_A_DAY(1000))).tokens?.used, 120);
+        assert.equal((yield* caps.check("g1", week)).tokens?.used, 120 + 1020);
+
+        // Not written yet: the same rule per shape. OpenAI's and Gemini's input holds the cache
+        // reads (taken out); Anthropic's leaves them out already (all of it counts).
+        const usage = {
+          inputTokens: 50,
+          outputTokens: 5,
+          cacheReadTokens: 40,
+          cacheWriteTokens: 0,
+        };
+        const openai = request("g1", "2026-11-18T10:00:00.000Z", usage, { shape: "openai" });
+        const gemini = request("g1", "2026-11-18T10:00:01.000Z", usage, { shape: "gemini" });
+        const anthropic = request("g1", "2026-11-18T10:00:02.000Z", {
+          ...usage,
+          cacheWriteTokens: 2,
+        });
+        yield* activity.record(openai);
+        assert.equal((yield* caps.check("g1", TOKENS_A_DAY(1000))).tokens?.used, 120 + 15);
+        yield* activity.record(gemini);
+        assert.equal((yield* caps.check("g1", TOKENS_A_DAY(1000))).tokens?.used, 120 + 30);
+        yield* activity.record(anthropic);
+        assert.equal((yield* caps.check("g1", TOKENS_A_DAY(1000))).tokens?.used, 120 + 30 + 57);
+        // Written (or lost): taken back out by the same rule, so nothing is left over.
+        yield* activity.settle([openai, gemini, anthropic]);
+        assert.deepEqual(yield* activity.unwritten("g1"), []);
+        assert.equal((yield* caps.check("g1", TOKENS_A_DAY(1000))).tokens?.used, 120);
+      }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("a request with unknown tokens counts 0 tokens and 1 request; shed ones nothing", () =>
     Effect.gen(function* () {
       yield* runMigrations();

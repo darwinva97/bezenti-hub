@@ -118,6 +118,9 @@ function CapsFields(props: {
   return (
     <fieldset className="flex flex-col gap-2 text-xs">
       <legend className="font-medium">Caps</legend>
+      <p className="text-muted-foreground">
+        Counts input, output and cache writes. Cache reads never count.
+      </p>
       <div className="grid grid-cols-[1fr_auto] items-end gap-2">
         <label className="flex flex-col gap-1 font-medium" htmlFor="grant-cap-tokens">
           Tokens

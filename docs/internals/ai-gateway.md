@@ -403,6 +403,20 @@ month, or explicitly none; requests per period, optionally. `ai/GrantCaps.ts` ch
   counted: Claude Code's are huge and would make caps meaningless. A request with unknown tokens
   counts 0 tokens and 1 request. Every request that reached the lent account counts one, upstream
   errors included; one refused by the Hub (load, a cap) reached no account and counts nothing.
+- **Input, by shape** (grants ticket 14; `uncachedInputOf` in `gatewayShapes.ts`). The input that
+  counts is the part not read from the cache, and its meaning depends on the answer's shape:
+  - Anthropic: `input_tokens` already leaves cache reads and writes out, so it counts as is, and
+    cache writes are `cache_creation_input_tokens`.
+  - OpenAI (`prompt_tokens`, `input_tokens`) and Gemini (`promptTokenCount`): the input holds the
+    cache reads (`cached_tokens`, `cachedContentTokenCount`), so they are taken out,
+    `max(0, input − cache reads)`. Neither reports cache writes: they are billed as plain input
+    and already count in it.
+
+  The daily summary keeps that number per row (`uncached_input_tokens`, migration 147). A row
+  from before it, whose cached part nobody kept (NULL), counts all its input: never less than was
+  used. The unwritten records apply the same rule per request. A subscription loan's quota share
+  counts tokens the same way.
+
 - **Periods** are UTC calendar ones, the days of `ai_usage_daily`: a day, an ISO week from Monday, a
   month. A new period starts from zero; the UI shows the reset in local time.
 - **Used** = the Grant's `ai_usage_daily` rows of the period (`grant_id`, migration 146) + what

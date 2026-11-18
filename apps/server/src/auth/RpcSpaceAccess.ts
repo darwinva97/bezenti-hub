@@ -180,6 +180,8 @@ export const RPC_SPACE_ACCESS = {
   // it and applies it only to a Space where they decide (`grant.decide`).
   [WS_METHODS.grantsCreateOffer]: GRANTS,
   [WS_METHODS.grantsReadOffer]: GRANTS,
+  // Grants ticket 15: `grant.viewGiven` (the lender) or `grant.return` (who runs the destination).
+  [WS_METHODS.grantsVaultUsage]: GRANTS,
   [WS_METHODS.grantsClaimOffer]: GRANTS,
   [WS_METHODS.projectsCreateFromThread]: "thread",
   // An app acts inside its Thread's live session, so it is its creator's, like a message.

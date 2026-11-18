@@ -680,6 +680,44 @@ describe("every door of the Hub declares its rule", () => {
     ]);
   });
 
+  it("reads a lent Vault group's use over one WS RPC only, names and counts only: its table read by VaultGrantUsage alone (Grants ticket 15)", () => {
+    const usageRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
+      /vault[-_ ]?usage/iu.test(rpc._tag),
+    );
+    expect(usageRpcs.map((rpc) => rpc._tag)).toEqual(["grants.vaultUsage"]);
+    // Decided inside Grants for the session (a lender or the borrowing Space's Admins).
+    expect(typeof spaceAccessForRpcMethod("grants.vaultUsage")).toBe("object");
+    expect(
+      [
+        ...Object.keys(HTTP_ENDPOINT_RULES),
+        ...Object.keys(MCP_TOOL_RULES),
+        ...Object.keys(RAW_ROUTE_RULES),
+        ...rawRoutes,
+        ...mcpTools,
+        ...endpoints,
+      ].filter((name) => /vault[-_ ]?usage|grant[-_ ]?usage/iu.test(name)),
+    ).toEqual([]);
+    // No answer has a field that could carry a value, a Thread or what an agent was asked.
+    const fields = successFields(usageRpcs[0]!.successSchema.ast);
+    for (const never of ["value", "threadId", "prompt", "content", "text", "secret", "valueId"]) {
+      expect(fields).not.toContain(never);
+    }
+    // The table: written (when a process starts) and read by VaultGrantUsage alone, made by its
+    // migration.
+    const readers = files
+      .filter(({ text }) => /\bvault_grant_usage\b/u.test(text))
+      .map(({ file }) => file);
+    expect(readers.toSorted()).toEqual([
+      "persistence/Migrations/150_VaultGrantUsage.ts",
+      "vaults/VaultGrantUsage.ts",
+    ]);
+    // Counted only where values are read for a process that starts; read only by Grants.
+    const callers = files
+      .filter(({ text }) => /VaultGrantUsage\.(record|read)\(/u.test(text))
+      .map(({ file }) => file);
+    expect(callers.toSorted()).toEqual(["grants/Grants.ts", "vaults/SecretDelivery.ts"]);
+  });
+
   it("signs in to subscriptions over WS RPCs only: no callback route, tokens read by AiAccounts alone", () => {
     // Owned-resources 08: every sign-in door is an account owner's, decided by AiAccounts (never
     // a Thread's or Project's rule), with access:write; none is a route of its own.

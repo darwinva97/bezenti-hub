@@ -120,6 +120,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.grantsDismissMigrationReview]: "grants",
   [WS_METHODS.grantsCreateOffer]: "grants",
   [WS_METHODS.grantsReadOffer]: "grants",
+  [WS_METHODS.grantsVaultUsage]: "grants",
   [WS_METHODS.grantsClaimOffer]: "grants",
   [WS_METHODS.guestShareCreate]: "guest-share",
   [WS_METHODS.pullRequestsList]: "pull-requests",

@@ -126,6 +126,16 @@ the group in the same transaction (`VaultReachLoss.forgetLentReach`), and tells 
 Secrets to rotate (`Grant.vaultGroup.toRotate`, to `grant.viewGiven` alone). `setLimits` is refused
 (there are none). Details: docs/internals/secrets.md, «Who reaches what».
 
+**Use** (Grants ticket 15): each time `SecretDelivery.resolve` reads a set for a process that starts
+(a turn's provider session, a terminal, a setup script), every name it delivers from a lent group
+adds one to `vault_grant_usage` (migration 150: Grant, UTC day, the User whose set it is, name).
+A name withheld or left out is not counted; names and counts only, never a value nor a Thread. A
+count that cannot be written is logged and the process starts anyway. `grants.vaultUsage({ grantId
+})` answers a Vault group's loan's rows, newest first (1000 at most, `truncated` past that), to its
+lender (`grant.viewGiven`) and to whoever runs the borrowing Space (`grant.return`: its Admins, a
+Personal space's User), also once it ended; anyone else is answered as for a missing loan. The rows
+are kept as history, like the Grant; a removed User's rows stay, as their AI usage does.
+
 ## Doors
 
 - WS: `grants.listGiven`, `grants.listReceived`, `grants.targets`, `grants.reject`,
@@ -133,7 +143,7 @@ Secrets to rotate (`Grant.vaultGroup.toRotate`, to `grant.viewGiven` alone). `se
   `grants.migrationReviews` and `grants.dismissMigrationReview` (allowances that became loans:
   AI accounts in docs/internals/ai-gateway.md, Vault groups in docs/internals/secrets.md); lending
   links' `grants.createOffer` and `grants.claimOffer` (`access:write`) and `grants.readOffer`
-  (`access:read`).
+  (`access:read`); a lent Vault group's `grants.vaultUsage` (`access:read`).
 - HTTP: `POST /api/grants/give` and `POST /api/grants/accept`. When a machine's Grant would become
   active (accepting it, or giving it where the lender also decides), or a Vault group is given, the
   request must carry a strong factor (`reauth`: passkey, or password and authenticator code), checked only after Grants
@@ -159,7 +169,9 @@ User manages (`LendVaultGroupDialog`: the warning that the Space's agents, Guest
 included, read its Secrets, and always the strong factor); a waiting group is accepted with
 «Also use it as a Space default» (on); a borrowed group is listed read-only in the borrowing
 Space's Vault («Lent to this Space») and in its pickers as «Lent by <lender>»; taking one back,
-and an ended one, list the Secrets to rotate with **Replace…**. The Owner's review of migrated
+and an ended one, list the Secrets to rotate with **Replace…**. A group's loan's use (ticket 15,
+`VaultLoanUsage`: day, User, name, processes) opens from **View use** among the loans lent and
+from **Use** on a borrowed one for whoever runs the Space. The Owner's review of migrated
 Vault allowances sits in Settings → Vault (`MigratedVaultLoansReview`). Mobile and the command
 palette come later (Grants ticket 12); the Thread's «Secrets» panel already says which lent names
 are never delivered, on both.

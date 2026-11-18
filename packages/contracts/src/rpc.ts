@@ -483,6 +483,8 @@ import {
   GrantSetLimitsInput,
   GrantTargets,
   GrantTargetsInput,
+  GrantVaultUsage,
+  GrantVaultUsageInput,
 } from "./grants.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
@@ -656,6 +658,8 @@ export const WS_METHODS = {
   grantsCreateOffer: "grants.createOffer",
   grantsReadOffer: "grants.readOffer",
   grantsClaimOffer: "grants.claimOffer",
+  // Grants ticket 15: a lent Vault group's use, for its lender and the borrowing Space's Admins.
+  grantsVaultUsage: "grants.vaultUsage",
   secretProvidersTest: "secretProviders.test",
   secretProvidersImpact: "secretProviders.impact",
   secretProvidersScopesList: "secretProviders.scopes.list",
@@ -2223,6 +2227,11 @@ const WsGrantsReadOfferRpc = Rpc.make(WS_METHODS.grantsReadOffer, {
   success: GrantOfferPreview,
   error: GrantRpcError,
 });
+const WsGrantsVaultUsageRpc = Rpc.make(WS_METHODS.grantsVaultUsage, {
+  payload: GrantVaultUsageInput,
+  success: GrantVaultUsage,
+  error: GrantRpcError,
+});
 const WsGrantsClaimOfferRpc = Rpc.make(WS_METHODS.grantsClaimOffer, {
   payload: GrantClaimOfferInput,
   success: Grant,
@@ -2459,6 +2468,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGrantsCreateOfferRpc,
   WsGrantsReadOfferRpc,
   WsGrantsClaimOfferRpc,
+  WsGrantsVaultUsageRpc,
   WsSecretProvidersTestRpc,
   WsSecretProvidersImpactRpc,
   WsSecretProvidersScopesListRpc,

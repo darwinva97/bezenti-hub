@@ -25,8 +25,10 @@ import {
   serveAuthHttp,
 } from "../auth/UserAuth.testkit.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as VaultGrantUsage from "../vaults/VaultGrantUsage.ts";
 import * as Vaults from "../vaults/Vaults.ts";
 import * as Grants from "./Grants.ts";
+import { lendAiAccount } from "./Grants.testkit.ts";
 
 const GIVE = "/api/grants/give";
 const ACCEPT = "/api/grants/accept";
@@ -1003,6 +1005,105 @@ describe("Grants of Vault groups", () => {
           .end({ grantId: again.id })
           .pipe(CommandActor.actAs(h.adam.id));
         assert.deepEqual([returned.state, returned.endReason], ["ended", "returned"]);
+      }),
+  );
+
+  // Grants ticket 15: which User of the borrowing Space received which lent name, per day.
+  it.effect(
+    "a lent group's use is read by its lender and the borrower's Admins, by nobody else, and outlives the loan",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* hub;
+        const { group } = yield* anasGroup(h);
+        const given = yield* lendGroup(h, h.ana.id, group, h.acmeId);
+        yield* h.grants
+          .accept({ grantId: given.id }, { strongFactor: false })
+          .pipe(CommandActor.actAs(h.adam.id));
+        // Mia works in Acme as a Member; Grecia runs Globex.
+        yield* addMember(h.server, { id: "mia", displayName: "mia" });
+        yield* joinOrganization(h.server, h.acmeId, "mia", "member");
+        yield* joinOrganization(h.server, h.globexId, h.grecia.id, "admin");
+        const mia = UserId.make("mia");
+        yield* Context.get(h.server.services, SpaceDirectory.SpaceDirectory).membershipsChanged([
+          mia,
+          h.grecia.id,
+        ]);
+        // What delivery counted: Linus's Thread twice on one day, Adam's once the next.
+        const count = (day: string, userId: UserId, names: ReadonlyArray<string>) =>
+          VaultGrantUsage.record(h.server.sql, {
+            day,
+            userId,
+            delivered: names.map((name) => ({ grantId: given.id, name })),
+          });
+        yield* count("2026-11-17", h.linus.id, ["ANA_TOKEN", "ANA_REGION"]);
+        yield* count("2026-11-17", h.linus.id, ["ANA_TOKEN"]);
+        yield* count("2026-11-18", h.adam.id, ["ANA_TOKEN"]);
+        const usage = (who: UserId, grantId: GrantId = given.id) =>
+          h.grants.vaultUsage({ grantId }).pipe(CommandActor.actAs(who));
+        const expected = {
+          rows: [
+            {
+              day: "2026-11-18",
+              userId: h.adam.id,
+              userName: "adam",
+              name: "ANA_TOKEN",
+              deliveries: 1,
+            },
+            {
+              day: "2026-11-17",
+              userId: h.linus.id,
+              userName: "linus",
+              name: "ANA_REGION",
+              deliveries: 1,
+            },
+            {
+              day: "2026-11-17",
+              userId: h.linus.id,
+              userName: "linus",
+              name: "ANA_TOKEN",
+              deliveries: 2,
+            },
+          ],
+          truncated: false,
+        };
+        // The lender, and Acme's Admins (the Owner is one of them here).
+        for (const who of [h.ana.id, h.adam.id, h.ownerId]) {
+          assert.deepEqual(yield* usage(who), expected, who);
+        }
+        // Names, Users and counts only: never a value nor a Thread.
+        const text = JSON.stringify(yield* usage(h.ana.id));
+        for (const never of ["ana-token-0707", "eu-west-1", "thread", "Thread"]) {
+          assert.notInclude(text, never);
+        }
+        // A Member and a Guest of Acme, an Admin of another Space: as if it did not exist.
+        for (const who of [mia, h.linus.id, h.grecia.id]) {
+          assert.equal((yield* usage(who).pipe(Effect.flip)).reason, "not-found", who);
+        }
+        // The lender reads nothing of another lender's loan, nor of an AI account's.
+        const owners = yield* Context.get(h.server.services, Vaults.Vaults)
+          .create({ name: "Owner keys", owner: { kind: "user", userId: h.ownerId } })
+          .pipe(CommandActor.actAs(h.ownerId));
+        const theirs = yield* lendGroup(h, h.ownerId, owners.id, `personal:${h.adam.id}`);
+        assert.equal((yield* usage(h.ana.id, theirs.id).pipe(Effect.flip)).reason, "not-found");
+        const account = yield* lendAiAccount(h.server.sql, {
+          accountId: "acct-ana",
+          lender: { kind: "user", id: h.ana.id },
+          spaceId: h.acmeId,
+        });
+        assert.equal((yield* usage(h.ana.id, account).pipe(Effect.flip)).reason, "not-found");
+
+        // Ended, it stays as history for both sides.
+        yield* h.grants.end({ grantId: given.id }).pipe(CommandActor.actAs(h.ana.id));
+        for (const who of [h.ana.id, h.adam.id]) {
+          assert.deepEqual(yield* usage(who), expected, `${who} after the end`);
+        }
+        // Removing a User from the Installation keeps their rows, as it keeps their AI usage.
+        const removed = yield* h.server.request(`/api/installation/users/${h.linus.id}/status`, {
+          body: { status: "removed" },
+          cookie: h.owner,
+        });
+        assert.equal(removed.status, 200, JSON.stringify(removed.body));
+        assert.deepEqual(yield* usage(h.ana.id), expected);
       }),
   );
 });

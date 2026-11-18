@@ -20,6 +20,8 @@ const loans = vi.hoisted(() => ({
   listCalls: 0,
   account: { hasPasskey: false, hasPassword: true, totpEnrolled: false } as Record<string, boolean>,
   accepted: [] as Array<{ readonly grantId: string; readonly useAsDefault: boolean | undefined }>,
+  vaultUsage: { rows: [], truncated: false } as unknown,
+  vaultUsageReads: [] as Array<unknown>,
 }));
 
 vi.mock("../../state/environments", async (importOriginal) => {
@@ -75,8 +77,12 @@ vi.mock("@effect/atom-react", async (importOriginal) => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({
   // The label tells the commands apart; only the two lists and the targets answer here.
-  useAtomCommand: (_command: unknown, label: string) => () => {
+  useAtomCommand: (_command: unknown, label: string) => (target?: { readonly input?: unknown }) => {
     if (label === "list your loans") loans.listCalls += 1;
+    if (label === "read a loan's use") {
+      loans.vaultUsageReads.push(target?.input);
+      return Promise.resolve({ _tag: "Success", value: loans.vaultUsage });
+    }
     if (loans.failWith !== null && label.startsWith("list your")) {
       return Promise.resolve({ _tag: "Failure", cause: loans.failWith });
     }
@@ -407,4 +413,41 @@ it("warns before taking a group back that its Secrets may have been read", async
   const dialog = page.getByRole("dialog");
   await expect.element(dialog.getByText(/stop receiving it from their next turn/)).toBeVisible();
   await expect.element(dialog.getByText("ANA_TOKEN")).toBeVisible();
+});
+
+// Grants ticket 15: a lent Vault group's use, by day, User and name.
+it("shows a lent group's use to its lender, and to the borrowing Space's Admins only", async () => {
+  resetLoans();
+  loans.vaultUsage = {
+    rows: [
+      { day: "2026-11-18", userId: "adam", userName: "Adam", name: "ANA_TOKEN", deliveries: 3 },
+      { day: "2026-11-17", userId: "gone", userName: null, name: "ANA_REGION", deliveries: 1 },
+    ],
+    truncated: false,
+  };
+  loans.vaultUsageReads = [];
+  loans.given = [groupGrant("g10", "active", "Acme")];
+  loans.received = [
+    groupGrant("g11", "active", "Globex", {
+      can: { cancel: false, revoke: false, decide: false, return: true, setLimits: false },
+    } as Partial<Grant>),
+    groupGrant("g12", "active", "Initech"),
+  ];
+  await using _screen = await render(<GrantsSettings />);
+
+  // The lender: from the loan's actions.
+  await page.getByRole("button", { name: "Actions for Ana keys lent to Acme" }).click();
+  await page.getByRole("menuitem", { name: "View use" }).click();
+  const table = page.getByRole("table", { name: "Loan use by day, User and name" });
+  await expect.element(table.getByText("ANA_TOKEN")).toBeVisible();
+  await expect.element(table.getByText("Adam")).toBeVisible();
+  await expect.element(table.getByText("A former User")).toBeVisible();
+  expect(loans.vaultUsageReads).toEqual([{ grantId: "g10" }]);
+
+  // The borrower: a Use button where they run the Space (it may give it back), none elsewhere.
+  await expect
+    .poll(() => page.getByRole("button", { name: "Use", exact: true }).elements().length)
+    .toBe(1);
+  await page.getByRole("button", { name: "Use", exact: true }).click();
+  await expect.poll(() => loans.vaultUsageReads).toEqual([{ grantId: "g10" }, { grantId: "g11" }]);
 });

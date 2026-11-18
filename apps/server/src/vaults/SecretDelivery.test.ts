@@ -320,6 +320,76 @@ it.effect("a lent Secret reaches the borrower's process, stays masked once the l
   }).pipe(Effect.scoped),
 );
 
+// Grants ticket 15: each process a lent name reaches is counted for its Grant, by day and User;
+// names and counts only, and a count that cannot be written never stops the process.
+
+it.effect("a lent name is counted per process it reaches, by day and User, never a value", () =>
+  Effect.gen(function* () {
+    const { server, owner, main, vaults, put, thread, forTurn, forProcess } = yield* ownersThread;
+    const ana = UserId.make("ana");
+    yield* addMember(server, { id: "ana", displayName: "Ana" });
+    const lent = yield* vaults
+      .create({ name: "Ana lends", owner: { kind: "user", userId: ana } })
+      .pipe(CommandActor.actAs(ana));
+    for (const [name, value, entryClass, confirmDangerous] of [
+      ["ANA_TOKEN", "ana-lent-token-1515", "secret", undefined],
+      ["ANA_REGION", "ana-lent-region-1515", "variable", undefined],
+      // Withheld from a loan: never delivered, so never counted.
+      ["NODE_OPTIONS", "--require ./ana-hook-1515.js", "secret", true],
+    ] as const) {
+      yield* vaults
+        .putEntry({
+          vaultId: lent.id,
+          name,
+          value: Redacted.make(value),
+          class: entryClass,
+          ...(confirmDangerous === undefined ? {} : { confirmDangerous }),
+        })
+        .pipe(CommandActor.actAs(ana));
+    }
+    // The borrower's own Secret is not a loan's: never counted.
+    yield* put("OWNER_TOKEN", "owner-own-token-1515");
+    const personal = SpaceId.make(`personal:${owner}`);
+    const grantId = yield* lendVaultGroup(server.sql, {
+      vaultId: lent.id,
+      spaceId: personal,
+      lender: { kind: "user", id: ana },
+    });
+    yield* vaults
+      .setSpaceDefaults({ spaceId: personal, vaultIds: [main, lent.id] })
+      .pipe(CommandActor.actAs(owner));
+    const threadId = yield* thread("thread:counted");
+    // Two turns and a terminal: three processes.
+    yield* forTurn({ threadId, target: HUB });
+    yield* forTurn({ threadId, target: HUB });
+    const shell = yield* forProcess({ threadId, actingUserId: owner, target: HUB });
+    assert.equal(valueOf(shell, "ANA_TOKEN"), "ana-lent-token-1515");
+    const day = DateTime.formatIso(yield* DateTime.now).slice(0, 10);
+    const rows = yield* server.sql<Record<string, unknown>>`
+      SELECT * FROM vault_grant_usage ORDER BY name
+    `;
+    assert.deepEqual(
+      rows.map((row) => ({ ...row })),
+      [
+        { grant_id: grantId, day, user_id: owner, name: "ANA_REGION", deliveries: 3 },
+        { grant_id: grantId, day, user_id: owner, name: "ANA_TOKEN", deliveries: 3 },
+      ],
+    );
+    // Names and counts only: no value, whole or in part, of the loan or of the borrower.
+    const stored = JSON.stringify(rows);
+    for (const value of ["ana-lent-token-1515", "ana-lent-region-1515", "ana-hook-1515"]) {
+      assert.notInclude(stored, value);
+    }
+    assert.notInclude(stored, "owner-own-token-1515");
+
+    // A count that cannot be written is logged; the process still gets its set.
+    yield* server.sql`DROP TABLE vault_grant_usage`;
+    const after = yield* forTurn({ threadId, target: HUB });
+    assert.equal(valueOf(after, "ANA_TOKEN"), "ana-lent-token-1515");
+    assert.equal(valueOf(after, "OWNER_TOKEN"), "owner-own-token-1515");
+  }).pipe(Effect.scoped),
+);
+
 // Ticket 02 of «Variables, Secretos sellados y Secret providers»: Provider entries.
 
 const sha256 = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");

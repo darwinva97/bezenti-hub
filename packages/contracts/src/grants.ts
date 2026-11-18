@@ -5,13 +5,7 @@
 import * as Schema from "effect/Schema";
 
 import { AiAccountId, AiAccountProvider, AiAccountType } from "./aiAccounts.ts";
-import {
-  EnvironmentId,
-  GrantId,
-  SpaceId,
-  TrimmedNonEmptyString,
-  UserId,
-} from "./baseSchemas.ts";
+import { EnvironmentId, GrantId, SpaceId, TrimmedNonEmptyString, UserId } from "./baseSchemas.ts";
 import { GrantCap, GrantCapState } from "./grantCaps.ts";
 import { SandboxHostReport } from "./hubEnvironments.ts";
 import { AuthReauth } from "./userAccounts.ts";
@@ -356,6 +350,33 @@ export const GrantOfferPreview = Schema.Union([
   }),
 ]);
 export type GrantOfferPreview = typeof GrantOfferPreview.Type;
+
+/**
+ * Grants ticket 15: a lent Vault group's use. One row per UTC day, User of the borrowing Space and
+ * lent name: how many processes (turns, terminals, scripts) received it. Names and counts only,
+ * never a value nor a Thread.
+ */
+export const GrantVaultUsageInput = Schema.Struct({ grantId: GrantId });
+export type GrantVaultUsageInput = typeof GrantVaultUsageInput.Type;
+
+export const GrantVaultUsageRow = Schema.Struct({
+  day: Schema.String,
+  userId: UserId,
+  userName: Schema.NullOr(Schema.String),
+  name: Schema.String,
+  deliveries: Schema.Number,
+});
+export type GrantVaultUsageRow = typeof GrantVaultUsageRow.Type;
+
+/** The most rows one answer carries, newest first. */
+export const GRANT_VAULT_USAGE_ROWS = 1000;
+
+export const GrantVaultUsage = Schema.Struct({
+  rows: Schema.Array(GrantVaultUsageRow),
+  /** Older rows exist beyond `GRANT_VAULT_USAGE_ROWS`. */
+  truncated: Schema.Boolean,
+});
+export type GrantVaultUsage = typeof GrantVaultUsage.Type;
 
 /** Applying a link is accepting it: the Grant starts active in `spaceId`. */
 export const GrantClaimOfferInput = Schema.Struct({ token: GrantOfferToken, spaceId: SpaceId });

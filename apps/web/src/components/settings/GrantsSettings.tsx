@@ -50,6 +50,7 @@ import {
 import { ChangeCapsDialog } from "./LendAiAccountDialog";
 import { LoanUsage } from "./LoanUsage";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { VaultLoanUsage } from "./VaultLoanUsage";
 
 const GIB = 1024 ** 3;
 
@@ -569,8 +570,10 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   const [usageOf, setUsageOf] = useState<string | null>(null);
   // Groups the User opened or closed by hand, by resource; the rest follow the default.
   const [groupToggles, setGroupToggles] = useState<Readonly<Record<string, boolean>>>({});
+  // Grants ticket 15: a borrowed Vault group's use, for whoever runs the Space (its Admins).
   const loanUseButton = (grant: Grant) =>
-    grant.resource.kind === "ai-account" ? (
+    grant.resource.kind === "ai-account" ||
+    (grant.resource.kind === "vault-group" && grant.can.return) ? (
       <Button
         size="xs"
         variant="ghost"
@@ -583,7 +586,11 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   const usagePanel = (grant: Grant) =>
     usageOf === grant.id ? (
       <div className="px-4 pb-3 sm:pl-10">
-        <LoanUsage environmentId={environmentId} grant={grant} />
+        {grant.resource.kind === "vault-group" ? (
+          <VaultLoanUsage environmentId={environmentId} grant={grant} />
+        ) : (
+          <LoanUsage environmentId={environmentId} grant={grant} />
+        )}
       </div>
     ) : null;
 
@@ -676,9 +683,10 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   const lentActions = (grant: Grant, label: string) => {
     // A link nobody applied has no use to view.
     const isAi = grant.resource.kind === "ai-account" && grant.target !== null;
+    const hasUse = isAi || (grant.resource.kind === "vault-group" && grant.target !== null);
     const mayCap = mayChange && isAi && grant.can.setLimits;
     const mayEnd = mayChange && (grant.can.revoke || grant.can.cancel);
-    if (!isAi && !mayEnd) return null;
+    if (!hasUse && !mayEnd) return null;
     return (
       <Menu>
         <MenuTrigger
@@ -694,7 +702,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
           <EllipsisIcon />
         </MenuTrigger>
         <MenuPopup align="end" sideOffset={6}>
-          {isAi ? (
+          {hasUse ? (
             <MenuItem onClick={() => setUsageOf(usageOf === grant.id ? null : grant.id)}>
               View use
             </MenuItem>

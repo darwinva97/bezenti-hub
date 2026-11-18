@@ -5,7 +5,16 @@
  * Vault or secret door not called fails.
  */
 // @effect-diagnostics globalJsonInEffect:off -- answers are searched as text.
-import { ProjectId, SpaceId, ThreadId, UserId, VaultGroupId, WsRpcGroup } from "@t3tools/contracts";
+import {
+  ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
+  HUB_MACHINE_ENVIRONMENT_ID,
+  ProjectId,
+  SpaceId,
+  ThreadId,
+  UserId,
+  VaultGroupId,
+  WsRpcGroup,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -61,6 +70,11 @@ const SWEPT_ELSEWHERE: Record<string, string> = {
 };
 
 const RE_VAULTS = /vault|secret/iu;
+
+const HUB = {
+  environmentId: HUB_MACHINE_ENVIRONMENT_ID,
+  contractVersion: ENVIRONMENT_EXECUTOR_CONTRACT_VERSION,
+};
 
 const team = Effect.gen(function* () {
   const server = yield* serveAuthHttp;
@@ -132,12 +146,12 @@ const team = Effect.gen(function* () {
   // Grants ticket 07: lent to Acme, and one lent to Grace's Personal space.
   const lend = (vaultId: VaultGroupId, spaceId: SpaceId) =>
     lendVaultGroup(server.sql, { vaultId, spaceId, lender: { kind: "user", id: ownerId } });
-  yield* lend(shared.id, acmeId);
+  const sharedGrant = yield* lend(shared.id, acmeId);
   const graces = yield* vaults
     .create({ name: "Grace's", owner: userOwner(ownerId) })
     .pipe(as(ownerId));
   yield* put(graces.id, "GRACE_KEY", GRACES);
-  yield* lend(graces.id, SpaceId.make("personal:grace"));
+  const gracesGrant = yield* lend(graces.id, SpaceId.make("personal:grace"));
   yield* vaults
     .setSpaceDefaults({ spaceId: acmeId, vaultIds: [acme.id, shared.id] })
     .pipe(as(ownerId));
@@ -197,6 +211,7 @@ const team = Effect.gen(function* () {
     as,
     vaultIds: [main, acme.id, globex.id, shared.id, graces.id],
     lend,
+    lentGrants: [sharedGrant, gracesGrant],
     main,
     acmeVault: acme.id,
     mainEntry: linked.entry.id,
@@ -222,6 +237,11 @@ it.effect(
     Effect.gen(function* () {
       const t = yield* team;
       const swept = new Set<string>();
+      // Grants ticket 15: Grace's Acme Thread starts a process, counted for the Owner's loan.
+      yield* t.delivery
+        .planTurn({ threadId: t.threads[0]!, target: HUB })
+        .pipe(Effect.flatMap(t.delivery.resolve));
+      const grants = Context.get(t.server.services, Grants.Grants);
       const answers: Array<{ readonly who: string; readonly door: string; readonly text: string }> =
         [];
       for (const who of t.people) {
@@ -277,6 +297,10 @@ it.effect(
           v.deleteEntry({ vaultId: t.main, entryId: t.mainEntry }),
         );
         yield* call("ws:vaults.unlinkedNotice.dismiss", v.dismissUnlinked);
+        // A lent group's use: its lender and the borrowing Space's Admins only.
+        for (const grantId of t.lentGrants) {
+          yield* call("ws:grants.vaultUsage", grants.vaultUsage({ grantId }));
+        }
         const made = yield* v
           .create({ name: `${who.name} scratch`, owner: orgOwner(t.acmeId) })
           .pipe(t.as(who.id), Effect.option);
@@ -353,6 +377,11 @@ it.effect(
         "GLOBEX_DB_URL",
       );
       assert.include(textOf("ada", "ws:vaults.entries.put"), '"ADA_WROTE"');
+      assert.include(textOf("owner", "ws:grants.vaultUsage"), '"SHARED_KEY"');
+      assert.include(textOf("ada", "ws:grants.vaultUsage"), '"SHARED_KEY"');
+      for (const who of ["grace", "linus", "gus", "gina", "otto"]) {
+        assert.notInclude(textOf(who, "ws:grants.vaultUsage"), '"SHARED_KEY"', who);
+      }
 
       // No answer holds a value.
       const leaks = answers.filter(({ text }) => VALUES.some((value) => text.includes(value)));

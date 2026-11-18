@@ -29,6 +29,7 @@ import {
   VaultError,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -45,6 +46,7 @@ import * as DeliveredValueId from "./deliveredValueId.ts";
 import * as EffectiveVaults from "./EffectiveVaults.ts";
 import * as ProviderReads from "./ProviderReads.ts";
 import * as SecretMasker from "./SecretMasker.ts";
+import * as VaultGrantUsage from "./VaultGrantUsage.ts";
 import * as VaultReach from "./VaultReach.ts";
 
 /** A Provider entry to read: `key` tells entries apart (a template's of another Vault share names). */
@@ -105,6 +107,11 @@ export interface PlannedVariable {
     readonly text: string;
     readonly inputs: ReadonlyArray<PlannedInput>;
   };
+  /**
+   * Grants ticket 15: the Grant of the lent group it comes from, to count its use once delivered.
+   * Not part of the fingerprint: who lends a value changes nothing a process holds.
+   */
+  readonly grantId?: string;
 }
 
 /** An entry a template names (of its own Vault): its value id, or its provider, and if a file. */
@@ -497,6 +504,7 @@ const make = Effect.gen(function* () {
     const variables = chosen.flatMap((v): Array<PlannedVariable> => {
       const file = v.delivery === "file" ? { file: true as const } : {};
       const plain = v.class === "variable" ? { plain: true as const } : {};
+      const lent = v.grantId === null ? {} : { grantId: v.grantId };
       if (v.identity !== undefined) {
         return [
           {
@@ -504,6 +512,7 @@ const make = Effect.gen(function* () {
             valueId: identityId(v.entryId, v.identity),
             identity: { entryId: v.entryId, ...v.identity },
             file: true,
+            ...lent,
           },
         ];
       }
@@ -547,16 +556,17 @@ const make = Effect.gen(function* () {
             template: { text: v.template.text, inputs },
             ...plain,
             ...file,
+            ...lent,
           },
         ];
       }
       if (v.provider !== null) {
         const valueId = readId(v.entryId);
         if (valueId === undefined) return [];
-        return [{ name: v.name, valueId, provider: v.provider, ...file }];
+        return [{ name: v.name, valueId, provider: v.provider, ...file, ...lent }];
       }
       if (v.valueId === null) return [];
-      return [{ name: v.name, valueId: v.valueId, ...plain, ...file }];
+      return [{ name: v.name, valueId: v.valueId, ...plain, ...file, ...lent }];
     });
     const files = yield* filesFor(
       { threadId: input.threadId, actingUserId: input.actingUserId, target: input.target },
@@ -831,6 +841,28 @@ const make = Effect.gen(function* () {
     }
   });
 
+  /**
+   * Grants ticket 15: one more process for each lent name it receives, by UTC day and the User
+   * whose set it is. A count that cannot be written is logged; it never stops the process.
+   */
+  const countLent = (planned: SecretPlan, lent: ReadonlyArray<VaultGrantUsage.Delivered>) =>
+    lent.length === 0 || planned.userId === null
+      ? Effect.void
+      : Effect.gen(function* () {
+          const day = DateTime.formatIso(yield* DateTime.now).slice(0, 10);
+          yield* VaultGrantUsage.record(sql, {
+            day,
+            userId: planned.userId as UserId,
+            delivered: lent,
+          });
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("SecretDelivery: could not count a lent Vault group's use", {
+              cause,
+            }),
+          ),
+        );
+
   const resolve = Effect.fn("SecretDelivery.resolve")(function* (planned: SecretPlan) {
     // A Provider entry that could not be read: nothing of the set goes (decision 3).
     if (planned.failure !== undefined) return yield* planned.failure;
@@ -889,6 +921,13 @@ const make = Effect.gen(function* () {
       readonly plain?: true;
       readonly file?: true;
     }> = [];
+    // Grants ticket 15: the lent names that go, counted for their Grant once all is read.
+    const lentDelivered: Array<VaultGrantUsage.Delivered> = [];
+    const delivered = (variable: PlannedVariable) => {
+      if (variable.grantId !== undefined) {
+        lentDelivered.push({ grantId: variable.grantId, name: variable.name });
+      }
+    };
     const pathOf = (name: string) =>
       planned.files === undefined
         ? undefined
@@ -939,6 +978,7 @@ const make = Effect.gen(function* () {
           });
         }
         out.push({ name: variable.name, value: rendered.text, ...pick(variable) });
+        delivered(variable);
         continue;
       }
       if (variable.identity !== undefined) {
@@ -949,6 +989,7 @@ const make = Effect.gen(function* () {
           valueId: yield* keepRead(issued.token),
         });
         out.push({ name: variable.name, value: issued.token, file: true });
+        delivered(variable);
         identities.push({ name: variable.name, ...variable.identity, issued });
         continue;
       }
@@ -958,6 +999,7 @@ const make = Effect.gen(function* () {
         if (value === undefined) continue;
         masked.push({ name: variable.name, value, valueId: yield* keepRead(value) });
         out.push({ name: variable.name, value, ...pick(variable) });
+        delivered(variable);
         continue;
       }
       const value = yield* readOwn(variable.valueId);
@@ -967,6 +1009,7 @@ const make = Effect.gen(function* () {
         masked.push({ name: variable.name, value: value.value, valueId: variable.valueId });
       }
       out.push({ name: variable.name, value: value.value, ...pick(variable) });
+      delivered(variable);
     }
     // Masked in the Thread before the process that gets them can print anything (ticket 05);
     // Variables never are.
@@ -976,6 +1019,7 @@ const make = Effect.gen(function* () {
     if (identities.length > 0 && planned.files !== undefined) {
       yield* holdIdentity(planned, identities);
     }
+    yield* countLent(planned, lentDelivered);
     const variables = out.flatMap(({ name, value, plain, file }): Array<SecretEnvVariable> =>
       file === true ? [] : [plain === true ? { name, value, plain } : { name, value }],
     );

@@ -30,6 +30,9 @@ import {
   type GrantState,
   type GrantTargets,
   type GrantTargetsInput,
+  type GrantVaultUsage,
+  type GrantVaultUsageInput,
+  GRANT_VAULT_USAGE_ROWS,
   type AiAccountId,
   type AiAccountProvider,
   type AiAccountType,
@@ -62,6 +65,7 @@ import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
 import { invalidLimitsReason } from "../sandboxes/sandboxLimits.ts";
 import { LentSandboxDisk } from "../sandboxes/sandboxSpace.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as VaultGrantUsage from "../vaults/VaultGrantUsage.ts";
 import * as VaultReachLoss from "../vaults/VaultReachLoss.ts";
 
 /** What a change does to a Grant. */
@@ -136,6 +140,14 @@ export class Grants extends Context.Service<
     ) => Effect.Effect<GrantOfferPreview, GrantError>;
     /** Applying a link to a Space where the caller decides: the loan starts active there. */
     readonly claimOffer: (input: GrantClaimOfferInput) => Effect.Effect<Grant, GrantError>;
+    /**
+     * Grants ticket 15: a lent Vault group's use, by day, User and name (names and counts only).
+     * For its lender (`grant.viewGiven`) and whoever runs the borrowing Space (`grant.return`: its
+     * Admins, a Personal space's User), also once the loan ended. Anyone else: not found.
+     */
+    readonly vaultUsage: (
+      input: GrantVaultUsageInput,
+    ) => Effect.Effect<GrantVaultUsage, GrantError>;
     /**
      * Grants ticket 02, the Owner only: what an allowance «to a User» reached that its Grant does
      * not. Lending there (`give`) or dismissing removes a row; a row grants nothing.
@@ -932,6 +944,23 @@ const make = Effect.gen(function* () {
       mayOn(who, policyResourceOf(row, known, who))("grant.viewGiven"),
     );
     return yield* summaries(seen, who);
+  });
+
+  const vaultUsage = Effect.fn("Grants.vaultUsage")(function* (input: GrantVaultUsageInput) {
+    const who = yield* caller;
+    const row = yield* rowOf(input.grantId);
+    // Only a Vault group's loan has one; any other answers as a loan the caller does not see.
+    if (row === undefined || row.resourceKind !== "vault-group") {
+      return yield* fail("not-found", NOT_FOUND);
+    }
+    const known = yield* targetsOf([row]);
+    const can = mayOn(who, policyResourceOf(row, known, who));
+    if (!can("grant.viewGiven") && !can("grant.return")) {
+      return yield* fail("not-found", NOT_FOUND);
+    }
+    return yield* VaultGrantUsage.read(sql, row.grantId, GRANT_VAULT_USAGE_ROWS).pipe(
+      Effect.catch(storage("read the loan's use")),
+    );
   });
 
   const listReceived = Effect.fn("Grants.listReceived")(function* (input: GrantListReceivedInput) {
@@ -1771,6 +1800,7 @@ const make = Effect.gen(function* () {
     createOffer,
     readOffer,
     claimOffer,
+    vaultUsage,
   });
 });
 

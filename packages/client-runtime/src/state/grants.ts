@@ -63,5 +63,10 @@ export function createGrantsEnvironmentAtoms<R, E>(
       label: "environment-data:grants:claim-offer",
       tag: WS_METHODS.grantsClaimOffer,
     }),
+    // Grants ticket 15: a lent Vault group's use, by day, User and name.
+    vaultUsage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:grants:vault-usage",
+      tag: WS_METHODS.grantsVaultUsage,
+    }),
   };
 }

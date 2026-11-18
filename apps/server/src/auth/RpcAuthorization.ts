@@ -145,6 +145,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.grantsMigrationReviews]: AuthAccessReadScope,
   // Grants ticket 06: what a lending link lends (applying it is CLIENT_GUARDED_RPC_SCOPES').
   [WS_METHODS.grantsReadOffer]: AuthAccessReadScope,
+  [WS_METHODS.grantsVaultUsage]: AuthAccessReadScope,
   [WS_METHODS.secretProvidersImpact]: AuthAccessReadScope,
   [WS_METHODS.secretProvidersScopesList]: AuthAccessReadScope,
   // Delivery logs hold request bodies, so they need the same scope as the URL.

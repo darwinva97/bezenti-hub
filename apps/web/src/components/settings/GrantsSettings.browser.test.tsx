@@ -240,3 +240,20 @@ it("offers Try again on a real error", async () => {
   await expect.element(page.getByRole("heading", { name: "Lent by you" })).toBeVisible();
   await expect.element(page.getByText("Something went wrong")).not.toBeInTheDocument();
 });
+
+it("tells an account with no passkey or authenticator app to add one, and disables Accept", async () => {
+  resetLoans();
+  loans.received = [machineGrant("g9", "pending", "Eijun")];
+  await using _screen = await render(<GrantsSettings />);
+  await page.getByRole("button", { name: "Accept…" }).click();
+  await expect
+    .element(
+      page.getByText(
+        /To accept a machine, add a passkey or an authenticator app to your account first./,
+      ),
+    )
+    .toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Open Settings → Account" })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Confirm and accept" })).toBeDisabled();
+  await expect.element(page.getByText("Current password")).not.toBeInTheDocument();
+});

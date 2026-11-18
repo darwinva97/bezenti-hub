@@ -129,6 +129,13 @@ export const emptyStepUp = (account: AuthAccount): StepUpState => ({
   code: "",
 });
 
+/**
+ * What a machine's loan asks for where the lender also decides: a passkey, or a password with a
+ * code from an authenticator app. A password alone is refused by the Hub.
+ */
+export const lacksStrongFactor = (account: AuthAccount) =>
+  !account.hasPasskey && !account.totpEnrolled;
+
 export const toStepUp = (account: AuthAccount, state: StepUpState): StepUp => {
   if (!account.hasPasskey && !account.hasPassword) return { method: "none" };
   if (state.usePasskey || !account.hasPassword) return { method: "passkey" };

@@ -13,6 +13,7 @@ import type {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 import { Fragment, useEffect, useEffectEvent, useState } from "react";
 
 import { acceptGrant, giveGrant } from "../../environments/primary/grants";
@@ -34,7 +35,7 @@ import {
 import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { emptyStepUp, StepUpFields, toStepUp } from "./AccountSettingsSection";
+import { emptyStepUp, lacksStrongFactor, StepUpFields, toStepUp } from "./AccountSettingsSection";
 import {
   capUseText,
   gib,
@@ -102,6 +103,18 @@ function HostState({ host }: { readonly host: SandboxHostReport | null }) {
 
 type StepUpState = ReturnType<typeof emptyStepUp>;
 
+/** An account with neither a passkey nor an authenticator app cannot confirm a machine's loan. */
+function StrongFactorNotice({ onOpenAccount }: { readonly onOpenAccount: () => void }) {
+  return (
+    <p className="text-xs text-warning" role="alert">
+      To accept a machine, add a passkey or an authenticator app to your account first.{" "}
+      <Button size="xs" type="button" variant="link" onClick={onOpenAccount}>
+        Open Settings → Account
+      </Button>
+    </p>
+  );
+}
+
 /**
  * «Lend…» on one of the User's personal machines: the Space, the limits, the lender's risks and
  * what the machine said of itself; a loan where the lender also decides starts active, with the
@@ -115,6 +128,7 @@ export function LendMachineDialog({
   readonly onClose: () => void;
 }) {
   const environmentId = usePrimaryEnvironmentId();
+  const navigate = useNavigate();
   const targetsCommand = useAtomCommand(grantsEnvironment.targets, "list where you may lend");
   const givenCommand = useAtomCommand(grantsEnvironment.listGiven, "list your loans");
   const [targets, setTargets] = useState<ReadonlyArray<GrantTarget> | null>(null);
@@ -290,7 +304,18 @@ export function LendMachineDialog({
                     : "The loan waits until this Space accepts it."}
                 </p>
               )}
-              {account !== null && stepUp !== null ? (
+              {account !== null && stepUp !== null && lacksStrongFactor(account) ? (
+                <StrongFactorNotice
+                  onOpenAccount={() => {
+                    onClose();
+                    void navigate({
+                      to: "/settings/user/$section",
+                      params: { section: "account" },
+                    });
+                  }}
+                />
+              ) : null}
+              {account !== null && stepUp !== null && !lacksStrongFactor(account) ? (
                 <StepUpFields
                   account={account}
                   disabled={pending}
@@ -309,7 +334,15 @@ export function LendMachineDialog({
             <Button disabled={pending} type="button" variant="ghost" onClick={onClose}>
               Cancel
             </Button>
-            <Button disabled={pending || !valid || host?.ready === false} type="submit">
+            <Button
+              disabled={
+                pending ||
+                !valid ||
+                host?.ready === false ||
+                (target?.startsActive === true && account !== null && lacksStrongFactor(account))
+              }
+              type="submit"
+            >
               {target?.startsActive === true && account !== null ? "Confirm and lend" : "Lend"}
             </Button>
           </DialogFooter>
@@ -454,6 +487,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   const [pending, setPending] = useState(false);
   // Right after a page load or a Hub restart the session is not up yet: wait for it, then load.
   const connected = useEnvironment(environmentId)?.connection.phase === "connected";
+  const navigate = useNavigate();
   const [accepting, setAccepting] = useState<{
     readonly grant: Grant;
     readonly account: AuthAccount;
@@ -777,12 +811,25 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
                   {accepting.grant.machine?.host == null ? null : (
                     <HostState host={accepting.grant.machine.host} />
                   )}
-                  <StepUpFields
-                    account={accepting.account}
-                    disabled={pending}
-                    value={accepting.stepUp}
-                    onChange={(stepUp) => setAccepting({ ...accepting, stepUp })}
-                  />
+                  {lacksStrongFactor(accepting.account) ? (
+                    <StrongFactorNotice
+                      onOpenAccount={() => {
+                        setAccepting(null);
+                        void navigate({
+                          to: "/settings/user/$section",
+                          params: { section: "account" },
+                        });
+                      }}
+                    />
+                  ) : null}
+                  {lacksStrongFactor(accepting.account) ? null : (
+                    <StepUpFields
+                      account={accepting.account}
+                      disabled={pending}
+                      value={accepting.stepUp}
+                      onChange={(stepUp) => setAccepting({ ...accepting, stepUp })}
+                    />
+                  )}
                 </div>
               </DialogPanel>
               <DialogFooter>
@@ -794,7 +841,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
                 >
                   Cancel
                 </Button>
-                <Button disabled={pending} type="submit">
+                <Button disabled={pending || lacksStrongFactor(accepting.account)} type="submit">
                   Confirm and accept
                 </Button>
               </DialogFooter>

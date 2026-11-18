@@ -323,6 +323,39 @@ describe("SecretMasker: stored events and live command output", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  // de99330a3b (upstream) projects each live event once and shares it between subscribers. The
+  // projection is keyed on the stored event, so it must only ever see events that were masked
+  // before they were stored and published: one subscriber's view must carry no value another could
+  // not see.
+  it.live("every live subscriber's wire projection comes from an already-masked event", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const threadId = yield* seedThread;
+        const afterSequence = yield* eventSink.latestSequence();
+        const subscribe = eventSink.stream({ threadId, afterSequence, bounded: true }).pipe(
+          Stream.filter((stored) => stored.event.type === "turn-item.updated"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        const first = yield* subscribe;
+        const second = yield* subscribe;
+        yield* writeCommandItem(
+          threadId,
+          `token=${TOKEN}
+`,
+        );
+        const seen = [...(yield* Fiber.join(first)), ...(yield* Fiber.join(second))];
+        assert.lengthOf(seen, 2);
+        // Neither subscriber's copy holds the value; ws.test.ts covers that the item is shared.
+        for (const stored of seen) {
+          assert.notInclude(JSON.stringify(stored), TOKEN);
+        }
+      }),
+    ).pipe(Effect.provide(layerTest)),
+  );
+
   it.live("masks a value split between two chunks of live command output", () =>
     Effect.scoped(
       Effect.gen(function* () {

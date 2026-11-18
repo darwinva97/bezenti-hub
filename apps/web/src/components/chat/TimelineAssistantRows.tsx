@@ -14,7 +14,10 @@ import * as Effect from "effect/Effect";
 import { AtomRegistry } from "effect/reactivity";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { orchestrationEnvironment } from "../../state/orchestration";
-import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
+import {
+  checkpointFileTotals,
+  checkpointSkippedFilesNote,
+} from "@t3tools/client-runtime/state/thread-checkpoints";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { uploadIssueText, useUploadIssue } from "../../environments/primary/useHubEnvironments";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
@@ -348,7 +351,8 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
 }) {
   if (!turnSummary) return null;
   const checkpointFiles = turnSummary.files;
-  if (checkpointFiles.length === 0) return null;
+  // A turn whose only output was too large for its checkpoint still says so.
+  if (checkpointFiles.length === 0 && (turnSummary.skipped?.fileCount ?? 0) === 0) return null;
 
   return (
     <AssistantChangedFilesSectionInner
@@ -401,6 +405,7 @@ function AssistantChangedFilesSectionInner({
       notUploadedReason={
         uploadIssue === null ? null : uploadIssueText(uploadIssue, activeProject?.title ?? null)
       }
+      skippedFilesNote={checkpointSkippedFilesNote(turnSummary.skipped)}
       allDirectoriesExpanded={allDirectoriesExpanded}
       resolvedTheme={resolvedTheme}
       onToggleAllDirectories={() =>

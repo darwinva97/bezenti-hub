@@ -33,6 +33,7 @@ import "~/index.css";
 
 import { environmentThreadDetails } from "../../state/threads";
 import { act, fakeTimers, render, stubGlobal } from "../../../test/render";
+import { checkpointSkippedFilesNote } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { makeStreamingTimelineFixture } from "../../test-fixtures";
@@ -1449,6 +1450,42 @@ function ChangedFilesTimeline() {
 }
 
 describe("ChangedFilesCard", () => {
+  it("says which files were too large for the turn's checkpoint", async () => {
+    await using screen = await render(
+      <ChangedFilesCard
+        runId={RunId.make("run-1")}
+        files={[]}
+        totals={{ count: 0, additions: 0, deletions: 0 }}
+        allDirectoriesExpanded
+        resolvedTheme="light"
+        onToggleAllDirectories={() => {}}
+        onOpenTurnDiff={() => {}}
+        skippedFilesNote={checkpointSkippedFilesNote({
+          maxFileBytes: 50 * 1024 * 1024,
+          files: [{ path: "assets/intro.mp4", sizeBytes: 210 * 1024 * 1024 }],
+          fileCount: 1,
+          folders: ["node_modules/"],
+          folderCount: 1,
+        })}
+      />,
+    );
+    const label = screen.getByText("1 file not saved");
+    await expect.element(label).toBeVisible();
+    expect(screen.container.textContent).not.toContain("changed file");
+    await label.hover();
+    await expect
+      .element(page.getByText("Not saved in this checkpoint, so reverting leaves it as it is:"))
+      .toBeVisible();
+    await expect.element(page.getByText("assets/intro.mp4 (210 MiB)")).toBeVisible();
+    await expect
+      .element(
+        page.getByText(
+          "Files over 50 MiB are left out of checkpoints. Add them to .gitignore to hide this note.",
+        ),
+      )
+      .toBeVisible();
+  });
+
   it.each(["folder", "all folders"])(
     "measures %s collapse and expansion in the same commit",
     async (toggle) => {

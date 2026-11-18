@@ -4,6 +4,7 @@ import {
   CheckpointScopeId,
   NodeId,
   OrchestrationV2Checkpoint,
+  type OrchestrationV2CheckpointSkipped,
   type ProjectId,
   OrchestrationV2CheckpointScope,
   ProviderThreadId,
@@ -221,6 +222,7 @@ function makeCheckpoint(input: {
   readonly status: OrchestrationV2Checkpoint["status"];
   readonly files: OrchestrationV2Checkpoint["files"];
   readonly capturedAt: DateTime.Utc;
+  readonly skipped?: OrchestrationV2CheckpointSkipped | undefined;
 }): OrchestrationV2Checkpoint {
   return {
     id: input.id,
@@ -236,6 +238,10 @@ function makeCheckpoint(input: {
     files: input.files,
     capturedAt: input.capturedAt,
     ...(input.status === "ready" ? { uploadedToHub: false } : {}),
+    ...(input.skipped !== undefined &&
+    (input.skipped.fileCount > 0 || input.skipped.folderCount > 0)
+      ? { skipped: input.skipped }
+      : {}),
   };
 }
 
@@ -422,24 +428,28 @@ export const layer: Layer.Layer<
             });
           }
 
-          const captureStatus = yield* checkpointStore
+          const captured = yield* checkpointStore
             .captureCheckpoint({
               cwd: input.scope.cwd,
               checkpointRef,
             })
             .pipe(
-              Effect.as("ready" as const),
+              Effect.map((skipped) => ({ status: "ready" as const, skipped })),
               Effect.catchTags({
-                VcsUnsupportedOperationError: () => Effect.succeed("missing" as const),
+                VcsUnsupportedOperationError: () =>
+                  Effect.succeed({ status: "missing" as const, skipped: undefined }),
               }),
               Effect.catch((cause) =>
                 Effect.logWarning("orchestration V2 checkpoint capture failed", {
                   scopeId: input.scope.id,
                   checkpointRef,
                   cause: String(cause),
-                }).pipe(Effect.as("error" as const)),
+                }).pipe(Effect.as({ status: "error" as const, skipped: undefined })),
               ),
             );
+          const captureStatus = captured.status;
+          // A file that grew past the limit is absent from this checkpoint, not deleted.
+          const skippedPaths = new Set(captured.skipped?.files.map((file) => file.path) ?? []);
 
           if (captureStatus !== "ready") {
             return makeCheckpoint({
@@ -497,7 +507,9 @@ export const layer: Layer.Layer<
               ]).pipe(
                 Effect.map(([diff, authoredPaths]) =>
                   parseTurnDiffFilesFromNumstat(diff)
-                    .filter((file) => !isGitImport(file, authoredPaths))
+                    .filter(
+                      (file) => !isGitImport(file, authoredPaths) && !skippedPaths.has(file.path),
+                    )
                     .map((file) => ({
                       path: file.path,
                       kind: "modified",
@@ -527,6 +539,7 @@ export const layer: Layer.Layer<
             status: "ready",
             files,
             capturedAt: input.capturedAt,
+            skipped: captured.skipped,
           });
         }),
       ).pipe(

@@ -832,6 +832,15 @@ own remotes: checkpoints are never pushed to `origin`. A machine can only reach
 the repositories of Projects its owner works in, and loses access as soon as it
 is removed.
 
+Checkpoints skip what `.gitignore` ignores, and two more things even without a
+`.gitignore`: untracked files over 50 MiB, and untracked dependency and build
+folders (`node_modules`, `.venv`, `venv`, `__pycache__`, `.next`, `.nuxt`,
+`.svelte-kit`, `.turbo`, `.parcel-cache`, `.gradle`, `target`, `dist`). Undoing
+a turn leaves them exactly as they are: it neither deletes nor overwrites them.
+A turn that skipped large files says **N files not saved**, with their names.
+Committed files are always saved. To keep one of those folders in checkpoints,
+add a line like `!dist/` to the Project's `.gitignore`.
+
 A Thread's terminals, its Files panel, file search and previews open on the
 machine it runs on, in that machine's copy of the Project. When the machine is
 off they say **Environment offline** instead; nothing you type or save is kept

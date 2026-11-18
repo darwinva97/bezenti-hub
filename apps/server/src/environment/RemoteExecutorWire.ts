@@ -54,6 +54,7 @@ import {
   TextGenerationError,
   NodeId,
   OrchestrationV2AppThread,
+  OrchestrationV2CheckpointSkipped,
   OrchestrationV2ConversationMessage,
   OrchestrationV2HistoricalMessage,
   OrchestrationV2ProviderSession,
@@ -442,9 +443,10 @@ export const REMOTE_OPERATIONS = {
     Schema.Struct({ cwd: Schema.String, checkpointRef: CheckpointRef }),
     Schema.Boolean,
   ),
+  // A machine from before the size rule answers null.
   "checkpoint.capture": checkpoint(
     Schema.Struct({ cwd: Schema.String, checkpointRef: CheckpointRef }),
-    Schema.Void,
+    Schema.UndefinedOr(OrchestrationV2CheckpointSkipped),
   ),
   "checkpoint.restore": checkpoint(
     Schema.Struct({

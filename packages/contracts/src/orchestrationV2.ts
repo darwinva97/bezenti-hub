@@ -1452,6 +1452,21 @@ export const OrchestrationV2CheckpointFileTotals = Schema.Struct({
 });
 export type OrchestrationV2CheckpointFileTotals = typeof OrchestrationV2CheckpointFileTotals.Type;
 
+/**
+ * What a checkpoint left out by rule, beside what `.gitignore` already ignores: untracked files
+ * over `maxFileBytes`, and untracked dependency or build folders. A restore leaves them as they
+ * are. Paths are relative to the repository; the lists stop at a few dozen, the counts do not.
+ */
+export const OrchestrationV2CheckpointSkipped = Schema.Struct({
+  maxFileBytes: NonNegativeInt,
+  files: Schema.Array(Schema.Struct({ path: Schema.String, sizeBytes: NonNegativeInt })),
+  fileCount: NonNegativeInt,
+  /** Each ends in `/`. */
+  folders: Schema.Array(Schema.String),
+  folderCount: NonNegativeInt,
+});
+export type OrchestrationV2CheckpointSkipped = typeof OrchestrationV2CheckpointSkipped.Type;
+
 export const OrchestrationV2Checkpoint = Schema.Struct({
   id: CheckpointId,
   threadId: ThreadId,
@@ -1471,6 +1486,8 @@ export const OrchestrationV2Checkpoint = Schema.Struct({
    * captured with false. Absent on checkpoints from before the Hub kept one.
    */
   uploadedToHub: Schema.optionalKey(Schema.Boolean),
+  /** Absent when nothing was left out, and on checkpoints from before the rule. */
+  skipped: Schema.optionalKey(OrchestrationV2CheckpointSkipped),
 });
 export type OrchestrationV2Checkpoint = typeof OrchestrationV2Checkpoint.Type;
 

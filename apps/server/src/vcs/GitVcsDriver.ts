@@ -42,6 +42,7 @@ import {
   PATCH_RENDER_PREFIX_ARGS,
   splitNullSeparatedGitStdoutPaths,
 } from "./GitVcsDriverCore.ts";
+import * as CheckpointExclusions from "./CheckpointExclusions.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
@@ -896,6 +897,253 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   // core.longpaths is disabled in the user's Git configuration.
   const longPaths = hostPlatform === "win32" ? ["-c", "core.longpaths=true"] : [];
 
+  // The user's global ignore file as Git finds it: core.excludesFile, else the XDG default.
+  const readUserExcludes = Effect.fn("GitVcsDriver.readUserExcludes")(function* (
+    operation: string,
+    cwd: string,
+  ) {
+    const configured = yield* execute({
+      operation,
+      cwd,
+      args: ["config", "--path", "--get", "core.excludesFile"],
+      allowNonZeroExit: true,
+    });
+    const value = configured.exitCode === 0 ? configured.stdout.trim() : "";
+    const xdg = process.env.XDG_CONFIG_HOME;
+    const home = process.env.HOME ?? process.env.USERPROFILE;
+    const file =
+      value.length > 0
+        ? path.resolve(cwd, value)
+        : xdg !== undefined && xdg.length > 0
+          ? path.join(xdg, "git", "ignore")
+          : home !== undefined && home.length > 0
+            ? path.join(home, ".config", "git", "ignore")
+            : undefined;
+    if (file === undefined) return "";
+    return yield* fileSystem.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  });
+
+  /** Which of `paths` (relative to `cwd`) Git ignores under `config`. */
+  const ignoredAmong = Effect.fn("GitVcsDriver.ignoredAmong")(function* (input: {
+    readonly operation: string;
+    readonly cwd: string;
+    readonly paths: ReadonlyArray<string>;
+    readonly config: ReadonlyArray<string>;
+  }) {
+    if (input.paths.length === 0) return new Set<string>();
+    const result = yield* execute({
+      operation: input.operation,
+      cwd: input.cwd,
+      args: [...input.config, ...longPaths, "check-ignore", "-z", "--stdin"],
+      stdin: `${input.paths.join("\0")}\0`,
+      allowNonZeroExit: true,
+      maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+    });
+    if (result.exitCode !== 0 && result.exitCode !== 1) {
+      return yield* new VcsProcessExitError({
+        operation: input.operation,
+        command: "git check-ignore",
+        cwd: input.cwd,
+        exitCode: result.exitCode,
+        detail: result.stderr.trim() || "git check-ignore failed",
+      });
+    }
+    return new Set(splitNullSeparatedGitStdoutPaths(result));
+  });
+
+  /**
+   * What a checkpoint command leaves out (`CheckpointExclusions`): an excludes file beside the
+   * temporary index, read only through `-c core.excludesFile` so the user's own Git is unchanged,
+   * and the untracked files over the size limit, by repository path.
+   */
+  const prepareCheckpointExclusions = Effect.fn("GitVcsDriver.prepareCheckpointExclusions")(
+    function* (input: {
+      readonly operation: string;
+      readonly cwd: string;
+      /** Where to write the excludes file; the caller removes it. */
+      readonly excludesPath: string;
+      /** The index the untracked files are relative to; the user's own when absent. */
+      readonly env?: NodeJS.ProcessEnv;
+    }) {
+      const { operation, cwd } = input;
+      const location = yield* execute({
+        operation,
+        cwd,
+        args: ["rev-parse", "--show-toplevel", "--show-prefix"],
+      });
+      const [top = "", prefix = ""] = location.stdout.split("\n");
+      const { excludesPath } = input;
+      yield* fileSystem
+        .writeFileString(
+          excludesPath,
+          CheckpointExclusions.checkpointExcludesFile(yield* readUserExcludes(operation, cwd)),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new VcsProcessExitError({
+                operation,
+                command: "write checkpoint excludes",
+                cwd,
+                exitCode: 1,
+                detail: cause.message,
+              }),
+          ),
+        );
+      // A workspace inside a default folder (say `dist/app`) keeps only the user's rules: Git
+      // refuses to add from an ignored directory.
+      const insideDefaultFolder = prefix
+        .split("/")
+        .some((segment) => CheckpointExclusions.isDefaultExcludedFolder(`${segment}/`));
+      const excludesConfig = insideDefaultFolder ? [] : ["-c", `core.excludesFile=${excludesPath}`];
+      const untracked = yield* execute({
+        operation,
+        cwd,
+        args: [
+          ...excludesConfig,
+          ...longPaths,
+          "ls-files",
+          "--others",
+          "--exclude-standard",
+          "--full-name",
+          "-z",
+          "--",
+          ".",
+        ],
+        ...(input.env === undefined ? {} : { env: input.env }),
+        maxOutputBytes: 4 * WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+        outputMode: "error",
+      });
+      const sized = yield* Effect.forEach(
+        // Untracked nested repositories are listed as directories.
+        splitNullSeparatedGitStdoutPaths(untracked).filter((entry) => !entry.endsWith("/")),
+        (repositoryPath) => {
+          const absolute = path.join(top, repositoryPath);
+          return fileSystem.stat(absolute).pipe(
+            Effect.flatMap((info) => {
+              const sizeBytes = Number(info.size);
+              if (
+                info.type !== "File" ||
+                sizeBytes <= CheckpointExclusions.CHECKPOINT_MAX_FILE_BYTES
+              )
+                return Effect.succeed(null);
+              // Git keeps a symlink as its target's name, never following it.
+              return fileSystem.readLink(absolute).pipe(
+                Effect.as(null),
+                Effect.orElseSucceed(() => ({ path: repositoryPath, sizeBytes })),
+              );
+            }),
+            Effect.orElseSucceed(() => null),
+          );
+        },
+        { concurrency: 16 },
+      );
+      const oversized = sized
+        .filter((file) => file !== null)
+        .toSorted((a, b) => b.sizeBytes - a.sizeBytes || a.path.localeCompare(b.path));
+      return {
+        top,
+        excludesPath,
+        excludesConfig,
+        oversized,
+        pathspecs: oversized.map((file) => CheckpointExclusions.excludePathspec(file.path)),
+      };
+    },
+  );
+
+  /** The default folders a checkpoint left out: those only its excludes file ignores. */
+  const listSkippedFolders = Effect.fn("GitVcsDriver.listSkippedFolders")(function* (input: {
+    readonly operation: string;
+    readonly cwd: string;
+    readonly top: string;
+    readonly excludesConfig: ReadonlyArray<string>;
+    readonly env: NodeJS.ProcessEnv;
+  }) {
+    if (input.excludesConfig.length === 0) return [];
+    const listed = yield* execute({
+      operation: input.operation,
+      cwd: input.cwd,
+      args: [
+        ...longPaths,
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--directory",
+        "--full-name",
+        "-z",
+        ...CheckpointExclusions.CHECKPOINT_DEFAULT_EXCLUDED_FOLDERS.map(
+          (name) => `--exclude=${name}/`,
+        ),
+        "--",
+        ".",
+      ],
+      env: input.env,
+      maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+      outputMode: "error",
+    });
+    const candidates = splitNullSeparatedGitStdoutPaths(listed).filter(
+      CheckpointExclusions.isDefaultExcludedFolder,
+    );
+    const lookup = { operation: input.operation, cwd: input.top, paths: candidates };
+    // A `!dist/` of the user's brings one back; one the user ignores was never in a checkpoint.
+    const ignoredWithDefaults = yield* ignoredAmong({ ...lookup, config: input.excludesConfig });
+    const ignoredByUser = yield* ignoredAmong({ ...lookup, config: [] });
+    return candidates
+      .filter((entry) => ignoredWithDefaults.has(entry) && !ignoredByUser.has(entry))
+      .toSorted();
+  });
+
+  /**
+   * Runs `args` on `pathspecs`, read from stdin where the subcommand supports it. An older Git
+   * takes them as arguments while they fit the command line, and fails otherwise.
+   */
+  const executeWithPathspecs = Effect.fn("GitVcsDriver.executeWithPathspecs")(function* (
+    input: Parameters<typeof execute>[0] & {
+      readonly subcommand: string;
+      readonly pathspecs: ReadonlyArray<string>;
+    },
+  ) {
+    const { subcommand, pathspecs, ...rest } = input;
+    if (pathspecs.length <= 1) {
+      return yield* execute({ ...rest, args: [...rest.args, "--", ...pathspecs] });
+    }
+    const help = yield* execute({
+      operation: rest.operation,
+      cwd: rest.cwd,
+      args: [subcommand, "-h"],
+      allowNonZeroExit: true,
+    });
+    if (/--pathspec-from-file\b/.test(`${help.stdout}${help.stderr}`)) {
+      return yield* execute({
+        ...rest,
+        args: [...rest.args, "--pathspec-from-file=-", "--pathspec-file-nul"],
+        stdin: `${pathspecs.join("\0")}\0`,
+      });
+    }
+    yield* requirePathspecArgsFit(rest.operation, rest.cwd, `git ${subcommand}`, pathspecs);
+    return yield* execute({ ...rest, args: [...rest.args, "--", ...pathspecs] });
+  });
+
+  const requirePathspecArgsFit = (
+    operation: string,
+    cwd: string,
+    command: string,
+    pathspecs: ReadonlyArray<string>,
+  ) =>
+    pathspecs.reduce((bytes, pathspec) => bytes + Buffer.byteLength(pathspec) + 1, 0) >
+    CheckpointExclusions.CHECKPOINT_PATHSPEC_ARGS_MAX_BYTES
+      ? Effect.fail(
+          new VcsProcessExitError({
+            operation,
+            command,
+            cwd,
+            exitCode: 1,
+            detail:
+              "Too many large files to keep out of the checkpoint safely; add them to .gitignore.",
+          }),
+        )
+      : Effect.void;
+
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: Effect.fn("GitVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
       const operation = VcsProcess.CHECKPOINT_CAPTURE_OPERATION;
@@ -913,6 +1161,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       const { gitCommonDir, indexPath, headExists } = yield* resolveCaptureRepository(input.cwd);
       const indexId = yield* random.uuidV4();
       const tempIndexPath = path.join(gitCommonDir, `t3-checkpoint-index-${indexId}`);
+      const excludesPath = path.join(gitCommonDir, `t3-checkpoint-excludes-${indexId}`);
       const commitEnv: NodeJS.ProcessEnv = {
         ...process.env,
         GIT_INDEX_FILE: tempIndexPath,
@@ -928,7 +1177,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         { discard: true },
       );
 
-      yield* Effect.gen(function* () {
+      return yield* Effect.gen(function* () {
         const sparseConfig = yield* execute({
           operation,
           cwd: input.cwd,
@@ -1160,14 +1409,22 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           }
         }
 
-        const stageFiles = (exclusions: ReadonlyArray<string>) =>
-          execute({
+        const leftOut = yield* prepareCheckpointExclusions({
+          operation,
+          cwd: input.cwd,
+          excludesPath,
+          env: commitEnv,
+        });
+        const stageFiles = (nestedRepositories: ReadonlyArray<string>) =>
+          executeWithPathspecs({
             operation,
             cwd: input.cwd,
+            subcommand: "add",
             args: [
               ...indexConfig,
               ...durableWrite,
               ...longPaths,
+              ...leftOut.excludesConfig,
               // safecrlf=true refuses LF files under CRLF conversion; capture them as Git's default does.
               "-c",
               "core.safecrlf=false",
@@ -1175,10 +1432,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
               ...(sparseCheckout ? ["--sparse"] : []),
               // add -A rejects ignored directories even when they contain tracked files.
               workspaceIgnored ? "-u" : "-A",
-              "--",
-              ".",
-              ...exclusions,
             ],
+            pathspecs: [".", ...nestedRepositories, ...leftOut.pathspecs],
             env: commitEnv,
           });
         yield* stageFiles([]).pipe(
@@ -1190,6 +1445,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
                   operation,
                   cwd: input.cwd,
                   args: [
+                    ...leftOut.excludesConfig,
                     ...longPaths,
                     "ls-files",
                     "--others",
@@ -1286,7 +1542,31 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           cwd: input.cwd,
           args: [...durableWrite, "update-ref", input.checkpointRef, commitOid],
         });
-      }).pipe(Effect.ensuring(cleanupTempIndex));
+
+        const folders = yield* listSkippedFolders({
+          operation,
+          cwd: input.cwd,
+          top: leftOut.top,
+          excludesConfig: leftOut.excludesConfig,
+          env: commitEnv,
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Could not list the folders a checkpoint left out", {
+              cause: String(cause),
+            }).pipe(Effect.as([])),
+          ),
+        );
+        return {
+          maxFileBytes: CheckpointExclusions.CHECKPOINT_MAX_FILE_BYTES,
+          files: leftOut.oversized.slice(0, CheckpointExclusions.CHECKPOINT_SKIPPED_LIST_MAX),
+          fileCount: leftOut.oversized.length,
+          folders: folders.slice(0, CheckpointExclusions.CHECKPOINT_SKIPPED_LIST_MAX),
+          folderCount: folders.length,
+        };
+      }).pipe(
+        Effect.ensuring(cleanupTempIndex),
+        Effect.ensuring(fileSystem.remove(excludesPath, { force: true }).pipe(Effect.ignore)),
+      );
     }),
 
     hasCheckpointRef: (input) =>
@@ -1306,77 +1586,96 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       if (!commitOid) {
         return false;
       }
+      const sourceCommit = commitOid;
 
-      const tracked = yield* execute({
-        operation,
-        cwd: input.cwd,
-        args: ["ls-files", "--cached", `--with-tree=${commitOid}`, "-z", "--", "."],
-      });
-      // An empty index and checkpoint have nothing for git restore's pathspec to match.
-      if (tracked.stdout.length > 0) {
-        yield* execute({
+      const excludesPath = path.join(
+        yield* resolveGitCommonDir(input.cwd),
+        `t3-checkpoint-excludes-${yield* random.uuidV4()}`,
+      );
+      return yield* Effect.gen(function* () {
+        // What checkpoints leave out is never in one: restoring must neither delete nor overwrite it.
+        const exclusions = yield* prepareCheckpointExclusions({
+          operation,
+          cwd: input.cwd,
+          excludesPath,
+        });
+        // Git clean cannot read pathspecs from a file: fail rather than delete a file left out.
+        yield* requirePathspecArgsFit(operation, input.cwd, "git clean", exclusions.pathspecs);
+
+        const tracked = yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["ls-files", "--cached", `--with-tree=${sourceCommit}`, "-z", "--", "."],
+        });
+        // An empty index and checkpoint have nothing for git restore's pathspec to match.
+        if (tracked.stdout.length > 0) {
+          yield* executeWithPathspecs({
+            operation,
+            cwd: input.cwd,
+            subcommand: "restore",
+            args: [...longPaths, "restore", "--source", sourceCommit, "--worktree", "--staged"],
+            pathspecs: [".", ...exclusions.pathspecs],
+          });
+        }
+        // Restoring away the last tracked file can remove a nested workspace directory.
+        const recreateWorkspace = fileSystem.makeDirectory(input.cwd, { recursive: true }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new VcsProcessExitError({
+                operation,
+                command: "git restore",
+                cwd: input.cwd,
+                exitCode: 0,
+                detail: `Could not recreate the checkpoint workspace: ${cause.message}`,
+              }),
+          ),
+        );
+        yield* recreateWorkspace;
+        const cleaned = yield* execute({
           operation,
           cwd: input.cwd,
           args: [
+            ...exclusions.excludesConfig,
             ...longPaths,
-            "restore",
-            "--source",
-            commitOid,
-            "--worktree",
-            "--staged",
+            "clean",
+            "-fd",
             "--",
             ".",
+            ...exclusions.pathspecs,
           ],
+          allowNonZeroExit: true,
         });
-      }
-      // Restoring away the last tracked file can remove a nested workspace directory.
-      const recreateWorkspace = fileSystem.makeDirectory(input.cwd, { recursive: true }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new VcsProcessExitError({
+        if (cleaned.exitCode !== 0) {
+          // Git can remove every child, then fail trying to remove './' itself.
+          const emptiedWorkspace =
+            cleaned.exitCode === 1 &&
+            /^warning: failed to remove \.\/: [^\n]+$/.test(cleaned.stderr.trim()) &&
+            (yield* fileSystem.readDirectory(input.cwd).pipe(
+              Effect.map((entries) => entries.length === 0),
+              Effect.orElseSucceed(() => false),
+            ));
+          if (!emptiedWorkspace)
+            return yield* new VcsProcessExitError({
               operation,
-              command: "git restore",
+              command: "git clean",
               cwd: input.cwd,
-              exitCode: 0,
-              detail: `Could not recreate the checkpoint workspace: ${cause.message}`,
-            }),
-        ),
+              exitCode: cleaned.exitCode,
+              detail: cleaned.stderr.trim() || "Could not clean the checkpoint workspace.",
+            });
+        }
+        // On Windows the same clean can remove './' and exit 0.
+        yield* recreateWorkspace;
+
+        yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: [...longPaths, "reset", "--quiet", "--", "."],
+        });
+
+        return true;
+      }).pipe(
+        Effect.ensuring(fileSystem.remove(excludesPath, { force: true }).pipe(Effect.ignore)),
       );
-      yield* recreateWorkspace;
-      const cleaned = yield* execute({
-        operation,
-        cwd: input.cwd,
-        args: [...longPaths, "clean", "-fd", "--", "."],
-        allowNonZeroExit: true,
-      });
-      if (cleaned.exitCode !== 0) {
-        // Git can remove every child, then fail trying to remove './' itself.
-        const emptiedWorkspace =
-          cleaned.exitCode === 1 &&
-          /^warning: failed to remove \.\/: [^\n]+$/.test(cleaned.stderr.trim()) &&
-          (yield* fileSystem.readDirectory(input.cwd).pipe(
-            Effect.map((entries) => entries.length === 0),
-            Effect.orElseSucceed(() => false),
-          ));
-        if (!emptiedWorkspace)
-          return yield* new VcsProcessExitError({
-            operation,
-            command: "git clean",
-            cwd: input.cwd,
-            exitCode: cleaned.exitCode,
-            detail: cleaned.stderr.trim() || "Could not clean the checkpoint workspace.",
-          });
-      }
-      // On Windows the same clean can remove './' and exit 0.
-      yield* recreateWorkspace;
-
-      yield* execute({
-        operation,
-        cwd: input.cwd,
-        args: [...longPaths, "reset", "--quiet", "--", "."],
-      });
-
-      return true;
     }),
 
     diffCheckpoints: Effect.fn("GitVcsDriver.checkpoints.diffCheckpoints")(function* (input) {

@@ -279,14 +279,18 @@ export const make = Effect.gen(function* () {
       const authoredPaths = yield* reads
         .listAuthoredPaths(comparison)
         .pipe(Effect.orElseSucceed(() => null));
+      // A file the capture left out (it grew past the size limit) is absent, not deleted.
+      const skippedPaths = new Set(toCheckpoint.skippedFiles?.map((file) => file.path) ?? []);
       const files =
-        authoredPaths === null
+        authoredPaths === null && skippedPaths.size === 0
           ? []
           : yield* reads.diffCheckpoints({ ...comparison, format: "numstat" }).pipe(
               Effect.map(parseTurnDiffFilesFromNumstat),
               Effect.orElseSucceed(() => []),
             );
-      const retainedFiles = files.filter((file) => !isGitImport(file, authoredPaths));
+      const retainedFiles = files.filter(
+        (file) => !isGitImport(file, authoredPaths) && !skippedPaths.has(file.path),
+      );
       // Select retained paths before generating a patch, so imported bulk cannot exhaust its output limit.
       const pathBatches =
         retainedFiles.length === files.length ? [undefined] : batchFilePaths(retainedFiles);

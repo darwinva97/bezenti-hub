@@ -12,7 +12,11 @@ import {
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
-import { deriveThreadCheckpointSummaries } from "./threadCheckpoints.ts";
+import {
+  checkpointSkippedFilesNote,
+  checkpointSkippedFoldersText,
+  deriveThreadCheckpointSummaries,
+} from "./threadCheckpoints.ts";
 
 function checkpoint(
   run: string,
@@ -254,4 +258,70 @@ describe("deriveThreadCheckpointSummaries", () => {
       expect(metadataVisits).toBeLessThanOrEqual(messages.length);
     },
   );
+});
+
+describe("what a checkpoint left out", () => {
+  const MiB = 1024 * 1024;
+  const skipped = (
+    files: ReadonlyArray<{ path: string; sizeBytes: number }>,
+    fileCount?: number,
+  ) => ({
+    maxFileBytes: 50 * MiB,
+    files,
+    fileCount: fileCount ?? files.length,
+    folders: ["dist/", "node_modules/"],
+    folderCount: 2,
+  });
+
+  it("carries the report onto the turn's summary", () => {
+    const report = skipped([{ path: "assets/intro.mp4", sizeBytes: 210 * MiB }]);
+    const [summary] = deriveThreadCheckpointSummaries({
+      checkpoints: [checkpoint("run-1", { skipped: report })],
+      messages: [],
+    });
+    expect(summary?.skipped).toEqual(report);
+  });
+
+  it("names one skipped file, its size and the rule", () => {
+    expect(
+      checkpointSkippedFilesNote(skipped([{ path: "assets/intro.mp4", sizeBytes: 210 * MiB }])),
+    ).toEqual({
+      label: "1 file not saved",
+      title: "Not saved in this checkpoint, so reverting leaves it as it is:",
+      files: ["assets/intro.mp4 (210 MiB)"],
+      hint: "Files over 50 MiB are left out of checkpoints. Add them to .gitignore to hide this note.",
+    });
+  });
+
+  it("lists a few files and counts the rest", () => {
+    const files = Array.from({ length: 7 }, (_, index) => ({
+      path: `renders/take-${index}.mov`,
+      sizeBytes: 60 * MiB,
+    }));
+    const note = checkpointSkippedFilesNote(skipped(files, 120));
+    expect(note?.label).toBe("120 files not saved");
+    expect(note?.title).toBe("Not saved in this checkpoint, so reverting leaves them as they are:");
+    expect(note?.files).toEqual([
+      "renders/take-0.mov (60 MiB)",
+      "renders/take-1.mov (60 MiB)",
+      "renders/take-2.mov (60 MiB)",
+      "renders/take-3.mov (60 MiB)",
+      "renders/take-4.mov (60 MiB)",
+      "and 115 more",
+    ]);
+  });
+
+  it("says nothing in the turn when only default folders were left out", () => {
+    expect(checkpointSkippedFilesNote(skipped([]))).toBeNull();
+    expect(checkpointSkippedFilesNote(undefined)).toBeNull();
+  });
+
+  it("names the default folders for the diff", () => {
+    expect(checkpointSkippedFoldersText(skipped([]))).toBe(
+      "Dependency and build folders are not in checkpoints: dist/, node_modules/. To keep one, add a line like !dist/ to .gitignore.",
+    );
+    expect(
+      checkpointSkippedFoldersText({ ...skipped([]), folders: [], folderCount: 0 }),
+    ).toBeNull();
+  });
 });

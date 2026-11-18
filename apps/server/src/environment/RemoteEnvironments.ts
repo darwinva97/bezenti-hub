@@ -25,6 +25,7 @@ import {
   type EnvironmentId,
   type EnvironmentOrchestrationCapabilities,
   type EnvironmentProviderSummary,
+  type OrchestrationV2CheckpointSkipped,
   type PreviewEvent,
   type ProjectId,
   type ProviderDriverKind,
@@ -1169,7 +1170,11 @@ const make = Effect.gen(function* () {
         callCheckpoint<boolean>(link, "checkpoint.isGitRepository", { cwd }),
       ),
       captureCheckpoint: Effect.fn("RemoteEnvironments.checkpoints.capture")((input) =>
-        callCheckpoint<void>(link, "checkpoint.capture", definedOnly(input)),
+        callCheckpoint<OrchestrationV2CheckpointSkipped | undefined>(
+          link,
+          "checkpoint.capture",
+          definedOnly(input),
+        ),
       ),
       hasCheckpointRef: Effect.fn("RemoteEnvironments.checkpoints.hasRef")((input) =>
         callCheckpoint<boolean>(link, "checkpoint.hasRef", definedOnly(input)),

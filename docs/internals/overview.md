@@ -161,6 +161,17 @@ on its own in-process executor. Constraints that span both halves:
 
 ### Hub repository
 
+What a capture leaves out beside the repository's ignore rules is in
+[CheckpointExclusions](../../apps/server/src/vcs/CheckpointExclusions.ts): untracked files over
+50 MiB and untracked dependency or build folders. Its commands read a generated excludes file
+(defaults, then the user's global ignores) through `-c core.excludesFile`, and the large files as
+`:(top,literal,exclude)` pathspecs, so the user's own Git config and ignore files never change.
+Restore applies the same rules to the current files before `git restore` and `git clean`, so
+nothing left out is deleted or overwritten; when `git clean` (which takes pathspecs only as
+arguments) cannot hold them all, the restore fails instead. `checkpoint.capture` answers with the
+report (`OrchestrationV2CheckpointSkipped`, kept as the checkpoint's `skipped`); a machine from
+before the rule answers null. Turn files and turn diffs leave the skipped paths out.
+
 The Hub keeps one bare repository per Project under `<state dir>/hub-repositories`
 ([HubRepository](../../apps/server/src/checkpointing/HubRepository.ts)), so a turn's checkpoint
 outlives the machine that captured it. After `checkpoint.capture` commits, the

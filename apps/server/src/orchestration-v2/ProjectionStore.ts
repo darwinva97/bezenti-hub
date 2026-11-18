@@ -259,6 +259,12 @@ const ProjectionCheckpointContext = Schema.Struct({
         ref,
         /** The `uploaded_to_hub` column: 1 once the Hub repository has this capture. */
         uploadedToHub: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+        /** `skipped.files` of the payload: paths the capture left out, absent from its tree. */
+        skippedFiles: Schema.optionalKey(
+          Schema.NullOr(
+            Schema.fromJsonString(Schema.Array(Schema.Struct({ path: Schema.String }))),
+          ),
+        ),
       }),
     ),
   ),
@@ -5368,7 +5374,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ordinal_within_scope AS "ordinalWithinScope",
                 app_run_ordinal AS "appRunOrdinal", status,
                 json_extract(payload_json, '$.ref') AS ref,
-                uploaded_to_hub AS "uploadedToHub"
+                uploaded_to_hub AS "uploadedToHub",
+                json_extract(payload_json, '$.skipped.files') AS "skippedFiles"
               FROM orchestration_v2_projection_checkpoints
               WHERE thread_id = ${threadId}
               ORDER BY scope_id ASC, ordinal_within_scope ASC

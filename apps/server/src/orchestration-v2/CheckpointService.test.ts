@@ -188,3 +188,78 @@ it.live("restores a checkpoint the workspace lacks from the Hub's repository of 
     Effect.provide(VcsProcess.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   ),
 );
+
+it.live("records what a checkpoint left out and keeps it out of the turn's files", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const vcs = yield* VcsProcess.VcsProcess;
+    const git = (cwd: string, ...args: ReadonlyArray<string>) =>
+      vcs.run({ operation: "CheckpointService.test.git", command: "git", cwd, args });
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-checkpoint-skipped-" });
+    yield* git(cwd, "init", "--initial-branch=main");
+    yield* git(cwd, "config", "user.email", "machine@example.com");
+    yield* git(cwd, "config", "user.name", "Machine");
+    yield* fs.writeFileString(`${cwd}/notes.md`, "committed\n");
+    yield* git(cwd, "add", "notes.md");
+    yield* git(cwd, "commit", "-m", "Initial commit");
+    yield* fs.writeFileString(`${cwd}/clip.mp4`, "small for now");
+    const scope: OrchestrationV2CheckpointScope = {
+      id: CheckpointScopeId.make("checkpoint-scope:skipped"),
+      threadId: ThreadId.make("thread:skipped"),
+      runId: RunId.make("run:skipped:1"),
+      nodeId: NodeId.make("node:skipped:1"),
+      parentScopeId: null,
+      providerThreadId: ProviderThreadId.make("provider-thread:skipped"),
+      kind: "root_run",
+      ordinalWithinParent: 0,
+      advancesAppRunCount: true,
+      cwd,
+      createdAt: DateTime.makeUnsafe("2026-11-18T00:00:00.000Z"),
+    };
+    yield* Effect.gen(function* () {
+      const checkpoints = yield* CheckpointService.CheckpointServiceV2;
+      yield* checkpoints.captureBaseline({ scope, ordinalWithinScope: 0 });
+      yield* fs.writeFileString(`${cwd}/notes.md`, "the turn's edit\n");
+      yield* fs.truncate(`${cwd}/clip.mp4`, 51 * 1024 * 1024);
+      yield* fs.makeDirectory(`${cwd}/node_modules/pkg`, { recursive: true });
+      yield* fs.writeFileString(`${cwd}/node_modules/pkg/index.js`, "x\n");
+      const checkpoint = yield* checkpoints.capture({
+        scope,
+        ordinalWithinScope: 1,
+        runId: scope.runId,
+        nodeId: scope.nodeId,
+        appRunOrdinal: 1,
+        capturedAt: scope.createdAt,
+      });
+      assert.deepEqual(
+        checkpoint.files.map((file) => file.path),
+        ["notes.md"],
+      );
+      assert.deepEqual(checkpoint.skipped, {
+        maxFileBytes: 50 * 1024 * 1024,
+        files: [{ path: "clip.mp4", sizeBytes: 51 * 1024 * 1024 }],
+        fileCount: 1,
+        folders: ["node_modules/"],
+        folderCount: 1,
+      });
+    }).pipe(
+      Effect.provide(
+        CheckpointService.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              CheckpointStore.layer.pipe(
+                Layer.provide(VcsDriverRegistry.layer),
+                Layer.provide(VcsProcess.layer),
+              ),
+            ),
+          ),
+          Layer.provideMerge(NodeCrypto.layer),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(VcsProcess.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+  ),
+);

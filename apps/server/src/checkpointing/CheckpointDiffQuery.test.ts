@@ -323,6 +323,30 @@ it.effect("truncates a storage-cut UTF-8 character without replacement text", ()
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("leaves a file the checkpoint left out by size out of the turn's patch", () => {
+  const projection = makeProjection();
+  const patchPaths: Array<ReadonlyArray<string> | undefined> = [];
+  const layer = layerFor({
+    projection: Effect.succeed({
+      ...projection,
+      checkpoints: [{ ...projection.checkpoints[0]!, skippedFiles: [{ path: "media/clip.mp4" }] }],
+    }),
+    diffCheckpoints: (input) =>
+      Effect.sync(() => {
+        if (input.format === "numstat")
+          return ["0\t0\tmedia/clip.mp4", "1\t1\tnotes.md", ""].join("\0");
+        patchPaths.push(input.filePaths);
+        return "notes patch";
+      }),
+  });
+  return Effect.gen(function* () {
+    const query = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+    const result = yield* query.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 2 });
+    assert.strictEqual(result.diff, "notes patch");
+    assert.deepEqual(patchPaths, [["notes.md"]]);
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("preserves an exact-fit filtered patch across batches without a marker", () => {
   const ownPaths = Array.from({ length: 1_000 }, (_, index) => `src/module-${index}/file.ts`);
   const patches = ["é".repeat(3_000_000), "x".repeat(4_000_000)];

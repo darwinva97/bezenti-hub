@@ -108,6 +108,10 @@ import { DiffFileLoadingBoundary } from "./diffs/DiffFileLoadingBoundary";
 import { DiffFileStatus } from "./diffs/DiffFileStatus";
 import { useThreadRouteRef } from "../hooks/useThreadRouteTarget";
 import { projectCommitUrl } from "@t3tools/client-runtime/change-request-links";
+import {
+  checkpointSkippedFilesNote,
+  checkpointSkippedFoldersText,
+} from "@t3tools/client-runtime/state/thread-checkpoints";
 import { useOpenLink } from "../browser/useOpenLink";
 
 type DiffThemeType = "light" | "dark";
@@ -335,6 +339,19 @@ export default function DiffPanel({
       : (orderedTurnDiffSummaries.find((summary) => summary.runId === selectedRunId) ??
         orderedTurnDiffSummaries[0]);
   const selectedCheckpointTurnCount = selectedTurn?.checkpointTurnCount;
+  // What the turn's checkpoint left out by rule, so its diff cannot show.
+  const skippedFilesNote = toolCallSelection
+    ? null
+    : checkpointSkippedFilesNote(selectedTurn?.skipped);
+  const checkpointSkippedText =
+    [
+      skippedFilesNote === null
+        ? null
+        : `${skippedFilesNote.title} ${skippedFilesNote.files.join(", ")}. ${skippedFilesNote.hint}`,
+      toolCallSelection ? null : checkpointSkippedFoldersText(selectedTurn?.skipped),
+    ]
+      .filter((line) => line !== null)
+      .join(" ") || null;
   const latestTurn = orderedTurnDiffSummaries[0];
   const reviewSectionId = toolCallSelection
     ? `tool-call:${toolCallSelection.threadId}:${toolCallSelection.itemId}`
@@ -1314,6 +1331,14 @@ export default function DiffPanel({
                 {isGitSelection && selectedGitSource?.files && !preview?.incomplete
                   ? " Totals include all changes."
                   : ""}
+              </p>
+            )}
+            {checkpointSkippedText !== null && (
+              <p
+                className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground"
+                data-checkpoint-skipped=""
+              >
+                {checkpointSkippedText}
               </p>
             )}
             {omittedToolCallFiles > 0 && (

@@ -102,6 +102,11 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "grants.setLimits": none("loans: resource and Space names, states and limits"),
   "grants.migrationReviews": none("AI account, User and Organization names"),
   "grants.dismissMigrationReview": none("AI account, User and Organization names"),
+  // Grants ticket 06: lending links (the lender makes one; any signed-in User reads one, a dead
+  // link answering `invalid`; whoever decides for a Space applies it there).
+  "grants.createOffer": none("a loan: resource name, limits and state, and the link once"),
+  "grants.readOffer": none("a link's loan: resource and lender names, limits, the reader's Spaces"),
+  "grants.claimOffer": none("a loan: resource and Space names, state and limits"),
   "vaults.choices": none("Vault and secret names, and Variables' values; never a Secret's"),
   "vaults.providerScopes": none(
     "providers, scopes and Vault names; a test answers ok or a class of error, never a value",

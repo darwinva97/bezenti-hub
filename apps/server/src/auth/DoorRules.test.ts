@@ -665,7 +665,8 @@ describe("every door of the Hub declares its rule", () => {
     }
     // The tables: written and read by AiUsage alone (and created by their migrations); GrantCaps
     // sums a Grant's days for its caps (Grants 03); migration 145 reads once who used a migrated
-    // account where, for the Owner's review (Grants 02).
+    // account where, for the Owner's review (Grants 02); migration 147 backfills the daily rows'
+    // uncached input from the per-request ones (Grants 05).
     const readers = files
       .filter(({ text }) => /\bai_usage(_daily)?\b/u.test(text))
       .map(({ file }) => file);
@@ -675,6 +676,7 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/114_AiUsage.ts",
       "persistence/Migrations/145_AiAccountAllowancesToGrants.ts",
       "persistence/Migrations/146_AiUsageGrant.ts",
+      "persistence/Migrations/147_AiUsageUncachedInput.ts",
     ]);
   });
 

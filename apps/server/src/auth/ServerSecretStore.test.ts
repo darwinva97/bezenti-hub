@@ -128,7 +128,7 @@ const layerConcurrentEmptyRepairFileSystem = (firstReturned: Deferred.Deferred<v
       const readCountRef = yield* Ref.make(0);
       const removeCountRef = yield* Ref.make(0);
       const readBarrier = yield* Deferred.make<void>();
-      const isSecretPath = (path: string) => /[\/]session-signing-key\.sealed$/.test(path);
+      const isSecretPath = (path: string) => /[\\/]session-signing-key\.sealed$/.test(path);
 
       return {
         ...fileSystem,

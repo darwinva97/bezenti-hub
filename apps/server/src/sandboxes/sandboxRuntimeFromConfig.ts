@@ -24,7 +24,7 @@ import { SandboxHubAddress } from "./SandboxRuntime.ts";
 
 const SANDBOX_RUNTIME_SETTING = "T3CODE_SANDBOX_RUNTIME";
 /** Ports of a machine its Sandboxes (dedicated or lent) may reach, comma-separated (`22,443`). */
-const SANDBOX_HOST_PORTS_SETTING = "T3CODE_SANDBOX_HOST_PORTS";
+export const SANDBOX_HOST_PORTS_SETTING = "T3CODE_SANDBOX_HOST_PORTS";
 /** The older name of the same setting, still read. */
 const DEDICATED_HOST_PORTS_SETTING = "T3CODE_DEDICATED_HOST_PORTS";
 
@@ -108,6 +108,17 @@ export interface DedicatedRuntimeRefusal {
 const refused = (message: string, waits = false) =>
   Result.fail<DedicatedRuntimeRefusal>({ message, waits });
 
+/** The ports of a comma-separated list (`22, 443`); what is not a number is left out. */
+export const parseHostPorts = (listed: string): Set<number> =>
+  new Set(
+    listed
+      .split(",")
+      .map((port) => Number.parseInt(port.trim(), 10))
+      .filter(Number.isFinite),
+  );
+
+export const HOST_PORTS_SETTINGS = [SANDBOX_HOST_PORTS_SETTING, DEDICATED_HOST_PORTS_SETTING];
+
 /**
  * The host ports its owner lets Sandboxes reach: `T3CODE_SANDBOX_HOST_PORTS`, and the older
  * `T3CODE_DEDICATED_HOST_PORTS` too, comma-separated.
@@ -117,12 +128,7 @@ export const allowedHostPorts = Effect.gen(function* () {
     Option.getOrElse(yield* optionalSetting(SANDBOX_HOST_PORTS_SETTING), () => ""),
     Option.getOrElse(yield* optionalSetting(DEDICATED_HOST_PORTS_SETTING), () => ""),
   ].join(",");
-  return new Set(
-    listed
-      .split(",")
-      .map((port) => Number.parseInt(port.trim(), 10))
-      .filter(Number.isFinite),
-  );
+  return parseHostPorts(listed);
 });
 
 export const dedicatedRuntimeFromConfig = Effect.fn("dedicatedRuntimeFromConfig")(function* (

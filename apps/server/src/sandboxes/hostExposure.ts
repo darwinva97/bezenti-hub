@@ -61,6 +61,12 @@ export const listeningOutsideLoopback = (): ReadonlyArray<HostListener> => [
   ...readListeners("/proc/net/tcp6", ipv6Of),
 ];
 
+/** The listeners whose port the Owner did not allow: the ones that keep Sandboxes from running. */
+export const unallowedListeners = (
+  listeners: ReadonlyArray<HostListener>,
+  allowedPorts: ReadonlySet<number>,
+): ReadonlyArray<HostListener> => listeners.filter((listener) => !allowedPorts.has(listener.port));
+
 /**
  * Why the host's open ports keep a dedicated or lent Sandbox from running, or undefined: each
  * `address:port`, and the two ways out (bind it to loopback, or let Sandboxes reach that port).
@@ -69,7 +75,7 @@ export const hostExposureRefusal = (
   listeners: ReadonlyArray<HostListener>,
   allowedPorts: ReadonlySet<number>,
 ): string | undefined => {
-  const open = listeners.filter((listener) => !allowedPorts.has(listener.port));
+  const open = unallowedListeners(listeners, allowedPorts);
   if (open.length === 0) return undefined;
   const named = [...new Set(open.map((listener) => `${listener.address}:${listener.port}`))];
   const ports = [...new Set(open.map((listener) => listener.port))].toSorted((a, b) => a - b);

@@ -383,6 +383,31 @@ export const hostReportOf = Effect.fn("LentSandboxHost.hostReportOf")(function* 
 });
 
 /**
+ * The report this machine sends the Hub each round, and `t3 sandbox doctor` prints: its open host
+ * ports (but this server's own) against the ones its Owner allowed, with the runtime's limits.
+ */
+export const lentHostReport = Effect.fn("LentSandboxHost.lentHostReport")(function* (input: {
+  readonly runtime: Option.Option<SandboxRuntime["Service"]>;
+  /** Why the runtime could not start, if it could not. */
+  readonly unavailable: string | undefined;
+}) {
+  const config = yield* ServerConfig.ServerConfig;
+  const allowed = yield* allowedHostPorts;
+  const exposed = hostExposureRefusal(
+    listeningOutsideLoopback().filter((listener) => listener.port !== config.port),
+    allowed,
+  );
+  const capacity = hostCapacity(null);
+  return yield* hostReportOf({
+    runtime: input.runtime,
+    refusal: input.unavailable ?? exposed,
+    reachablePorts: [...allowed],
+    cpus: capacity.cpus,
+    memoryBytes: capacity.memoryBytes,
+  });
+});
+
+/**
  * Beside a personal machine's own server: hosts its lent Sandboxes (`<base dir>-lent-sandboxes`,
  * apart from any other runtime's homes and containers on the machine). Without rootless Podman
  * and the image, or with a host port reachable that its owner did not list, it hosts nothing and
@@ -445,22 +470,10 @@ export const layer = (joined: JoinedHubState) =>
         runtime = Option.some(Context.get(built.value, SandboxRuntime));
         return runtime;
       });
-      const capacity = hostCapacity(null);
       const hostReport = Effect.gen(function* () {
         const current = yield* currentRuntime;
-        const allowed = yield* allowedHostPorts;
         // Asked anew each round: a service bound since then stops the lent Sandboxes.
-        const exposed = hostExposureRefusal(
-          listeningOutsideLoopback().filter((listener) => listener.port !== config.port),
-          allowed,
-        );
-        return yield* hostReportOf({
-          runtime: current,
-          refusal: unavailable ?? exposed,
-          reachablePorts: [...allowed],
-          cpus: capacity.cpus,
-          memoryBytes: capacity.memoryBytes,
-        });
+        return yield* lentHostReport({ runtime: current, unavailable });
       }).pipe(Effect.provide(context));
       yield* superviseLentSandboxes({
         joined,

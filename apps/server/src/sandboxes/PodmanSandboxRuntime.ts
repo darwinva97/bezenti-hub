@@ -287,7 +287,7 @@ export const podmanLimitLabels = (
   };
 };
 
-const readCgroupInfo = (podmanCommand?: string) =>
+export const readCgroupInfo = (podmanCommand?: string) =>
   runPodman(["info", "--format", "json"], {
     ...(podmanCommand === undefined ? {} : { podmanCommand }),
     timeoutMs: 15_000,

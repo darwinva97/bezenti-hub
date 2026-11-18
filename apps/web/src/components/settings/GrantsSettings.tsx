@@ -146,7 +146,8 @@ function HostState({ host }: { readonly host: SandboxHostReport | null }) {
     <div className="flex flex-col gap-1 text-xs">
       {host.ready ? null : (
         <p className="text-destructive" role="alert">
-          This machine cannot run a Sandbox for another Space now: {host.reason}
+          This machine cannot run a Sandbox for another Space now: {host.reason} Run{" "}
+          <code>t3 sandbox doctor</code> on this machine to see how to fix it.
         </p>
       )}
       {notEnforced === null ? null : <p className="text-muted-foreground">{notEnforced}</p>}

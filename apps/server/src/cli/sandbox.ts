@@ -35,6 +35,7 @@ import * as SandboxImage from "../sandboxes/SandboxImage.ts";
 import * as ServerOwnership from "../serverOwnership.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { authLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { sandboxDoctorCommand } from "./sandboxDoctor.ts";
 
 const userError = (message: string) => new CliError.UserError({ cause: message });
 const isConflict = Schema.is(EnvironmentHttpConflictError);
@@ -204,6 +205,7 @@ const buildCommand = Command.make("build", { ...authLocationFlags }).pipe(
 export const sandboxCommand = Command.make("sandbox").pipe(
   Command.withDescription("Manage this Hub's Sandboxes."),
   Command.withSubcommands([
+    sandboxDoctorCommand,
     Command.make("image").pipe(
       Command.withDescription("The base image every Sandbox runs."),
       Command.withSubcommands([buildCommand]),

@@ -638,7 +638,11 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
             .pipe(Effect.mapError(storage("group memberships")));
     return GroupSync.planGroupSync({
       memberships: current,
-      groups: GroupSync.groupsOf(claims, groupsClaim),
+      groups: GroupSync.groupsOf(
+        claims,
+        groupsClaim,
+        new Set(mappings.map((mapping) => mapping.group)),
+      ),
       mappings,
     });
   });

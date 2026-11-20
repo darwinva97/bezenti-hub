@@ -8,11 +8,14 @@ import { UserId } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
+import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 
+import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SignInSettings from "./SignInSettings.ts";
 import { discoveryDocument, type FakeKeycloak, makeFakeKeycloak } from "./Keycloak.testkit.ts";
@@ -460,101 +463,128 @@ describe("Keycloak group mappings (Keycloak 05)", () => {
         ('org-legacy', 'organization', 'Legacy', '2026-01-01T00:00:00.000Z', NULL)
     `;
 
-  it.effect(
-    "the Owner maps groups only into Organizations they are Admin or Steward of, audited",
-    () =>
-      Effect.gen(function* () {
-        const { server, owner } = yield* hub();
-        yield* otherOrganizations(server);
-        const fresh = yield* server.request(SETTINGS, { cookie: owner });
-        assert.deepEqual(fresh.body.groupMappings, []);
-        const organizations = fresh.body.mappableOrganizations as ReadonlyArray<{
-          readonly spaceId: string;
-          readonly name: string;
-        }>;
-        // Acme the Owner created, Legacy is from the single-user era; Lonerco is someone else's.
-        assert.sameMembers(
-          organizations.map((organization) => organization.name),
-          ["Acme", "Legacy"],
-        );
-        const acmeId = organizations.find((organization) => organization.name === "Acme")!.spaceId;
+  it.effect("the Owner maps groups only into Organizations they are the Steward of, audited", () =>
+    Effect.gen(function* () {
+      const { server, owner, ownerId } = yield* hub();
+      yield* otherOrganizations(server);
+      const fresh = yield* server.request(SETTINGS, { cookie: owner });
+      assert.deepEqual(fresh.body.groupMappings, []);
+      const organizations = fresh.body.mappableOrganizations as ReadonlyArray<{
+        readonly spaceId: string;
+        readonly name: string;
+      }>;
+      // Acme the Owner created, Legacy is from the single-user era; Lonerco is someone else's.
+      assert.sameMembers(
+        organizations.map((organization) => organization.name),
+        ["Acme", "Legacy"],
+      );
+      const acmeId = organizations.find((organization) => organization.name === "Acme")!.spaceId;
 
-        const foreign = yield* save(server, owner, {
-          groupMappings: [{ group: "lonerco", spaceId: "org-lonerco", role: "member" }],
-        });
-        assert.equal(foreign.status, 400);
-        assert.include(foreign.body.message as string, "Admin or the Steward");
+      const foreign = yield* save(server, owner, {
+        groupMappings: [{ group: "lonerco", spaceId: "org-lonerco", role: "member" }],
+      });
+      assert.equal(foreign.status, 400);
+      assert.include(foreign.body.message as string, "the Steward of");
+      assert.notInclude(foreign.body.message as string, "Admin");
 
-        const twice = yield* save(server, owner, {
-          groupMappings: [
-            { group: "bezenti", spaceId: acmeId, role: "member" },
-            { group: "/bezenti", spaceId: acmeId, role: "admin" },
-          ],
-        });
-        assert.equal(twice.status, 400);
-        assert.equal((yield* auditEntries(server, owner)).length, 0);
+      // Being an Admin Member of someone else's Organization is not enough (Steward only).
+      yield* server.sql`
+          INSERT INTO space_memberships (space_id, user_id, role, created_at)
+          VALUES ('org-lonerco', ${ownerId}, 'admin', '2026-01-01T00:00:00.000Z')
+        `;
+      const asAdmin = yield* save(server, owner, {
+        groupMappings: [{ group: "lonerco", spaceId: "org-lonerco", role: "member" }],
+      });
+      assert.equal(asAdmin.status, 400);
+      assert.notInclude(
+        (
+          (yield* server.request(SETTINGS, { cookie: owner })).body
+            .mappableOrganizations as ReadonlyArray<{ readonly name: string }>
+        ).map((organization) => organization.name),
+        "Lonerco",
+      );
 
-        const saved = yield* save(server, owner, {
-          groupsClaim: "teams",
-          groupMappings: [
-            { group: "/bezenti", spaceId: acmeId, role: "member" },
-            { group: "bezenti-admin", spaceId: acmeId, role: "admin" },
-            { group: "legacy", spaceId: "org-legacy", role: "guest" },
-          ],
-        });
-        assert.equal(saved.status, 200);
-        assert.equal((saved.body.keycloak as { groupsClaim: string }).groupsClaim, "teams");
-        assert.sameDeepMembers(saved.body.groupMappings as Array<MappingView>, [
-          {
-            group: "bezenti",
-            spaceId: acmeId,
-            organizationName: "Acme",
-            role: "member",
-            enabled: true,
-            archived: false,
-          },
-          {
-            group: "bezenti-admin",
-            spaceId: acmeId,
-            organizationName: "Acme",
-            role: "admin",
-            enabled: true,
-            archived: false,
-          },
-          {
-            group: "legacy",
-            spaceId: "org-legacy",
-            organizationName: "Legacy",
-            role: "guest",
-            enabled: true,
-            archived: false,
-          },
-        ]);
+      const twice = yield* save(server, owner, {
+        groupMappings: [
+          { group: "bezenti", spaceId: acmeId, role: "member" },
+          { group: "/bezenti", spaceId: acmeId, role: "admin" },
+        ],
+      });
+      assert.equal(twice.status, 400);
+      assert.equal((yield* auditEntries(server, owner)).length, 0);
 
-        // Dropping one and changing another's Role, in one save.
-        const changed = yield* save(server, owner, {
-          groupMappings: [
-            { group: "bezenti", spaceId: acmeId, role: "guest" },
-            { group: "legacy", spaceId: "org-legacy", role: "guest" },
-          ],
-        });
-        assert.equal(changed.status, 200);
-        assert.equal((changed.body.groupMappings as ReadonlyArray<MappingView>).length, 2);
+      const saved = yield* save(server, owner, {
+        groupsClaim: "teams",
+        groupMappings: [
+          { group: "/bezenti", spaceId: acmeId, role: "member" },
+          { group: "bezenti-admin", spaceId: acmeId, role: "admin" },
+          { group: "legacy", spaceId: "org-legacy", role: "guest" },
+        ],
+      });
+      assert.equal(saved.status, 200);
+      assert.equal((saved.body.keycloak as { groupsClaim: string }).groupsClaim, "teams");
+      assert.sameDeepMembers(saved.body.groupMappings as Array<MappingView>, [
+        {
+          group: "bezenti",
+          spaceId: acmeId,
+          organizationName: "Acme",
+          role: "member",
+          enabled: true,
+          archived: false,
+        },
+        {
+          group: "bezenti-admin",
+          spaceId: acmeId,
+          organizationName: "Acme",
+          role: "admin",
+          enabled: true,
+          archived: false,
+        },
+        {
+          group: "legacy",
+          spaceId: "org-legacy",
+          organizationName: "Legacy",
+          role: "guest",
+          enabled: true,
+          archived: false,
+        },
+      ]);
 
-        const entries = yield* auditEntries(server, owner);
-        assert.equal(entries.length, 2);
-        assert.deepInclude(entries[1]!.detail, {
-          changed: "groupsClaim, groupMappings",
-          groupsClaim: "teams",
-          mappingsAdded: 3,
-          mappingsRemoved: 0,
-        });
-        assert.deepInclude(entries[0]!.detail, {
-          changed: "groupMappings",
-          mappingsAdded: 1,
-          mappingsRemoved: 2,
-        });
-      }).pipe(Effect.scoped),
+      // Dropping one and changing another's Role, in one save.
+      const changed = yield* save(server, owner, {
+        groupMappings: [
+          { group: "bezenti", spaceId: acmeId, role: "guest" },
+          { group: "legacy", spaceId: "org-legacy", role: "guest" },
+        ],
+      });
+      assert.equal(changed.status, 200);
+      assert.equal((changed.body.groupMappings as ReadonlyArray<MappingView>).length, 2);
+
+      const entries = yield* auditEntries(server, owner);
+      assert.equal(entries.length, 2);
+      assert.deepInclude(entries[1]!.detail, {
+        changed: "groupsClaim, groupMappings",
+        groupsClaim: "teams",
+        mappingsAdded: 3,
+        mappingsRemoved: 0,
+      });
+      assert.deepInclude(entries[0]!.detail, {
+        changed: "groupMappings",
+        mappingsAdded: 1,
+        mappingsRemoved: 2,
+      });
+      // Which mappings changed: group, Organization and Role, never more.
+      assert.equal(
+        entries[1]!.detail.mappingChanges,
+        `added bezenti ${acmeId} member; added bezenti-admin ${acmeId} admin; ` +
+          "added legacy org-legacy guest",
+      );
+      assert.equal(entries[1]!.detail.mappingChangesTruncated, false);
+      assert.equal(
+        entries[0]!.detail.mappingChanges,
+        `role bezenti ${acmeId} member -> guest; removed bezenti-admin ${acmeId} admin`,
+      );
+    }).pipe(Effect.scoped),
   );
 
   it.effect("a mapping the Owner may no longer make is disabled and shown as such", () =>
@@ -650,6 +680,132 @@ describe("Keycloak group mappings (Keycloak 05)", () => {
         (released.body.entries as ReadonlyArray<{ detail: Record<string, unknown> }>)[0]!.detail,
         { from: "member", to: "member", managed: "manual", keycloakGroup: "legacy" },
       );
+    }).pipe(Effect.scoped),
+  );
+
+  /** A managed (or manual) Membership of a User who exists only for the test. */
+  const seedMember = Effect.fn(function* (
+    server: Server,
+    id: string,
+    spaceId: string,
+    role: string,
+    group: string | null,
+  ) {
+    yield* addMember(server, { id, displayName: id });
+    yield* server.sql`
+      INSERT INTO space_memberships
+        (space_id, user_id, role, created_at, managed_by_keycloak, keycloak_group)
+      VALUES (${spaceId}, ${id}, ${role}, '2026-01-01T00:00:00.000Z',
+        ${group === null ? 0 : 1}, ${group})
+    `;
+  });
+
+  const rolesIn = (server: Server, spaceId: string) =>
+    server.sql<{ userId: string; role: string; group: string | null; managed: number }>`
+      SELECT user_id AS "userId", role, keycloak_group AS "group", managed_by_keycloak AS managed
+      FROM space_memberships WHERE space_id = ${spaceId} ORDER BY user_id
+    `.pipe(
+      Effect.map((rows) =>
+        rows.filter((row) => row.userId.startsWith("kc-")).map((row) => ({ ...row })),
+      ),
+    );
+
+  it.effect("lowering a mapping's Role demotes the Memberships it made, at save", () =>
+    Effect.gen(function* () {
+      const { server, owner } = yield* hub();
+      const spaceDirectory = Context.get(server.services, SpaceDirectory.SpaceDirectory);
+      const organizations = (yield* server.request(SETTINGS, { cookie: owner })).body
+        .mappableOrganizations as ReadonlyArray<{ spaceId: string; name: string }>;
+      const acmeId = organizations.find((organization) => organization.name === "Acme")!.spaceId;
+      assert.equal(
+        (yield* save(server, owner, {
+          groupMappings: [
+            { group: "bezenti-admin", spaceId: acmeId, role: "admin" },
+            { group: "other-admin", spaceId: acmeId, role: "admin" },
+          ],
+        })).status,
+        200,
+      );
+      yield* seedMember(server, "kc-made", acmeId, "admin", "bezenti-admin");
+      yield* seedMember(server, "kc-manual", acmeId, "admin", null);
+      yield* seedMember(server, "kc-elsewhere", acmeId, "admin", "other-admin");
+      yield* seedMember(server, "kc-low", acmeId, "guest", "bezenti-admin");
+
+      const sockets = yield* spaceDirectory.subscribeMembershipChanges;
+      const notified = yield* Stream.runCollect(Stream.take(sockets, 1)).pipe(Effect.forkScoped);
+
+      // Raising a Role never changes anyone at save.
+      assert.equal(
+        (yield* save(server, owner, {
+          groupMappings: [
+            { group: "bezenti-admin", spaceId: acmeId, role: "admin" },
+            { group: "other-admin", spaceId: acmeId, role: "admin" },
+          ],
+        })).status,
+        200,
+      );
+      assert.deepEqual(
+        (yield* rolesIn(server, acmeId)).map((row) => row.role),
+        ["admin", "guest", "admin", "admin"],
+      );
+
+      const lowered = yield* save(server, owner, {
+        groupMappings: [
+          { group: "bezenti-admin", spaceId: acmeId, role: "member" },
+          { group: "other-admin", spaceId: acmeId, role: "admin" },
+        ],
+      });
+      assert.equal(lowered.status, 200);
+      assert.deepEqual(yield* rolesIn(server, acmeId), [
+        { userId: "kc-elsewhere", role: "admin", group: "other-admin", managed: 1 },
+        { userId: "kc-low", role: "guest", group: "bezenti-admin", managed: 1 },
+        { userId: "kc-made", role: "member", group: "bezenti-admin", managed: 1 },
+        { userId: "kc-manual", role: "admin", group: null, managed: 0 },
+      ]);
+
+      const audited = yield* server.request(
+        "/api/installation/audit?action=membership.changeRole",
+        { cookie: owner },
+      );
+      const entries = (
+        audited.body.entries as ReadonlyArray<{
+          actor: { source: string };
+          target: { id: string };
+          detail: Record<string, unknown>;
+        }>
+      ).filter((entry) => entry.target.id.startsWith("kc-"));
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0]!.actor.source, "system");
+      assert.equal(entries[0]!.target.id, "kc-made");
+      assert.deepEqual(entries[0]!.detail, {
+        from: "admin",
+        to: "member",
+        keycloakGroup: "bezenti-admin",
+      });
+      // The socket of the demoted User is told, after the commit.
+      assert.deepEqual(Array.from(yield* Fiber.join(notified)), ["kc-made"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("the audit names the mappings that changed, and a huge save is cut", () =>
+    Effect.gen(function* () {
+      const { server, owner } = yield* hub();
+      const organizations = (yield* server.request(SETTINGS, { cookie: owner })).body
+        .mappableOrganizations as ReadonlyArray<{ spaceId: string; name: string }>;
+      const acmeId = organizations.find((organization) => organization.name === "Acme")!.spaceId;
+      const groupMappings = Array.from({ length: 60 }, (_, index) => ({
+        group: `team-${index}`,
+        spaceId: acmeId,
+        role: "member" as const,
+      }));
+      assert.equal((yield* save(server, owner, { groupMappings })).status, 200);
+      const [entry] = yield* auditEntries(server, owner);
+      assert.equal(entry!.detail.mappingsAdded, 60);
+      assert.equal(entry!.detail.mappingChangesTruncated, true);
+      const listed = (entry!.detail.mappingChanges as string).split("; ");
+      assert.isAtMost(listed.length, 25);
+      assert.equal(listed[0], `added team-0 ${acmeId} member`);
+      assert.notInclude(JSON.stringify(entry!.detail), SECRET);
     }).pipe(Effect.scoped),
   );
 });

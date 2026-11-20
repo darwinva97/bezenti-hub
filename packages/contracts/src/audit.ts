@@ -171,6 +171,9 @@ export const AUDIT_DETAIL_KEYS = {
     "groupsClaim",
     "mappingsAdded",
     "mappingsRemoved",
+    // Which mappings changed: «added|removed|role group organization role» lines, at most 20.
+    "mappingChanges",
+    "mappingChangesTruncated",
   ],
   /**
    * The realm the identity comes from and whether the User's own passkeys, password and TOTP went

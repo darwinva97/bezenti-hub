@@ -11,7 +11,6 @@ import {
   type GroupMapping,
   grantsAdmin,
   groupsOf,
-  MAX_TOKEN_GROUPS,
   normalizeGroup,
   planGroupSync,
 } from "./GroupSync.ts";
@@ -134,9 +133,24 @@ const ROWS: ReadonlyArray<Row> = [
     changes: [{ kind: "remove", spaceId: bezenti, role: "member", group: "bezenti" }],
   },
   {
+    name: "a mapped group after entry 500 of 600 keeps its managed Membership",
+    memberships: [managed(bezenti, "member", "bezenti")],
+    groups: groupsOf(
+      {
+        groups: Array.from({ length: 600 }, (_, index) =>
+          index === 550 ? "/bezenti" : `other-${index}`,
+        ),
+      },
+      "groups",
+      new Set(["bezenti", "bezenti-admin"]),
+    ),
+    mappings: bezentiMappings,
+    changes: [],
+  },
+  {
     name: "an absent claim is an empty list: managed goes, manual stays",
     memberships: [managed(bezenti, "member", "bezenti"), manual(acme, "admin")],
-    groups: groupsOf({ sub: "someone" }, "groups"),
+    groups: groupsOf({ sub: "someone" }, "groups", new Set(["bezenti"])),
     mappings: [...bezentiMappings, mapping("acme", acme, "member")],
     changes: [{ kind: "remove", spaceId: bezenti, role: "member", group: "bezenti" }],
   },
@@ -255,29 +269,42 @@ describe("planGroupSync", () => {
 
 describe("groupsOf", () => {
   it("reads the named claim as a list of strings, without a leading /", () => {
-    assert.deepStrictEqual(groupsOf({ teams: ["/a", "b", "/a"] }, "teams"), ["a", "b"]);
+    assert.deepStrictEqual(
+      groupsOf({ teams: ["/a", "b", "/a", "c"] }, "teams", new Set(["a", "b"])),
+      ["a", "b"],
+    );
   });
 
   it("is empty for an absent claim or one of another shape", () => {
-    assert.deepStrictEqual(groupsOf({}, "groups"), []);
-    assert.deepStrictEqual(groupsOf({ groups: "bezenti" }, "groups"), []);
-    assert.deepStrictEqual(groupsOf({ groups: { bezenti: true } }, "groups"), []);
+    assert.deepStrictEqual(groupsOf({}, "groups", new Set(["a"])), []);
+    assert.deepStrictEqual(groupsOf({ groups: "bezenti" }, "groups", new Set(["bezenti"])), []);
+    assert.deepStrictEqual(
+      groupsOf({ groups: { bezenti: true } }, "groups", new Set(["bezenti"])),
+      [],
+    );
   });
 
   it("skips entries that are not usable group names", () => {
     assert.deepStrictEqual(
-      groupsOf({ groups: [1, null, "", "/", "x".repeat(300), "ok"] }, "groups"),
+      groupsOf(
+        { groups: [1, null, "", "/", "x".repeat(300), "ok"] },
+        "groups",
+        new Set(["ok", "x".repeat(300)]),
+      ),
       ["ok"],
     );
   });
 
-  it("reads at most MAX_TOKEN_GROUPS groups", () => {
-    const many = Array.from({ length: MAX_TOKEN_GROUPS + 10 }, (_, index) => `g${index}`);
-    assert.strictEqual(groupsOf({ groups: many }, "groups").length, MAX_TOKEN_GROUPS);
+  it("keeps only the groups some mapping names, wherever they sit in the list", () => {
+    const many = Array.from({ length: 5_000 }, (_, index) => `g${index}`);
+    assert.deepStrictEqual(groupsOf({ groups: many }, "groups", new Set(["g4000", "g3"])), [
+      "g3",
+      "g4000",
+    ]);
   });
 
   it("never reads an inherited property as the claim", () => {
-    assert.deepStrictEqual(groupsOf({}, "constructor"), []);
+    assert.deepStrictEqual(groupsOf({}, "constructor", new Set(["x"])), []);
   });
 
   it("normalizes one leading / only", () => {

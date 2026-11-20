@@ -150,7 +150,7 @@ export class SignInSettings extends Context.Service<
     readonly keycloakOffered: Effect.Effect<boolean, SignInSettingsStorageError>;
     /**
      * Internal (ticket 05): the Owner's group mappings as a sign-in applies them, each with
-     * whether it is enabled (the Owner is the Organization's Admin or Steward) and whether its
+     * whether it is enabled (the Owner is the Organization's Steward) and whether its
      * Organization is archived. No door.
      */
     readonly groupMappings: Effect.Effect<
@@ -161,20 +161,17 @@ export class SignInSettings extends Context.Service<
 >()("t3/auth/SignInSettings") {}
 
 /**
- * The Owner may map a group into Organization `s` only as its Admin or Steward (ADR 0008). Steward
- * is its creator; NULL counts as the Owner only because those are single-user-era Organizations
- * (migration 138). plans-and-limits 02 moves this to `spaces.steward_user_id`.
+ * The Owner may map a group into Organization `s` only as its Steward (ADR 0008), never as a
+ * Member: the Owner holds no Memberships. Steward is its creator; NULL counts as the Owner only
+ * because those are single-user-era Organizations (migration 138). plans-and-limits 02 moves this
+ * to `spaces.steward_user_id`.
  */
 const OWNER_MAY_MAP = `(o.user_id IS NOT NULL AND (
     s.created_by_user_id IS NULL OR s.created_by_user_id = o.user_id
-    OR EXISTS (
-      SELECT 1 FROM space_memberships AS sm
-      WHERE sm.space_id = s.space_id AND sm.user_id = o.user_id AND sm.role = 'admin'
-    )
   ))`;
 
 const MAPPING_ELSEWHERE =
-  "You can map a group only into an Organization you're an Admin or the Steward of, and not an archived one.";
+  "You can map a group only into an Organization you're the Steward of, and not an archived one.";
 
 interface Row {
   readonly registrationMode: RegistrationMode;
@@ -216,6 +213,9 @@ const settingsOf = (row: Row): Settings => ({
   strongAcr: listOf(row.strongAcr),
   strongAmr: listOf(row.strongAmr),
 });
+
+/** The most mapping changes one `signIn.settings.update` entry names; the rest are counted. */
+const MAX_AUDITED_MAPPING_CHANGES = 20;
 
 const mappingKey = (mapping: { readonly group: string; readonly spaceId: string }) =>
   `${mapping.group}\u0000${mapping.spaceId}`;
@@ -406,6 +406,47 @@ const make = Effect.gen(function* () {
     return users;
   });
 
+  /**
+   * In the settings' transaction: lowers the managed Memberships a lowered mapping made to its
+   * new Role, never raises one. Another group of theirs may restore a higher Role at their next
+   * sign-in. Returns whose Memberships changed.
+   */
+  const lowerToMappingRole = Effect.fn("SignInSettings.lowerToMappingRole")(function* (
+    lowered: ReadonlyArray<{
+      readonly group: string;
+      readonly spaceId: SpaceId;
+      readonly role: SpaceRole;
+    }>,
+  ) {
+    const users: Array<UserId> = [];
+    for (const mapping of lowered) {
+      const managed = yield* sql<{ readonly userId: UserId; readonly role: SpaceRole }>`
+        SELECT m.user_id AS "userId", m.role AS role
+        FROM space_memberships AS m JOIN spaces AS s ON s.space_id = m.space_id
+        WHERE m.space_id = ${mapping.spaceId} AND m.managed_by_keycloak = 1
+          AND m.keycloak_group = ${mapping.group} AND s.archived_at IS NULL
+        ORDER BY m.user_id
+      `;
+      for (const membership of managed) {
+        if (GroupSync.RANK[membership.role] <= GroupSync.RANK[mapping.role]) continue;
+        yield* spaces.setRole({
+          spaceId: mapping.spaceId,
+          userId: membership.userId,
+          role: mapping.role,
+        });
+        yield* audit.record({
+          actor: { source: "system" },
+          action: "membership.changeRole",
+          spaceId: mapping.spaceId,
+          target: { kind: "user", id: membership.userId },
+          detail: { from: membership.role, to: mapping.role, keycloakGroup: mapping.group },
+        });
+        users.push(membership.userId);
+      }
+    }
+    return users;
+  }, Effect.mapError(storage));
+
   const viewOf = Effect.fn("SignInSettings.viewOf")(function* (row: Row) {
     const settings = settingsOf(row);
     // Whether a secret is saved is the store's answer, not the row's: a secret that could not be
@@ -483,11 +524,15 @@ const make = Effect.gen(function* () {
           const strongAmr = yield* listFrom(request.strongAmr, "amr");
           // Ticket 05: the whole list of mappings, against the saved one. A mapping kept as it is
           // stays even if the Owner may no longer make it (it is disabled); a new one, or a new
-          // Role for one, must point where the Owner is an Admin or the Steward.
+          // Role for one, must point where the Owner is the Steward.
           const nextMappings = yield* mappingsFrom(request.groupMappings);
           let mappingsAdded: ReadonlyArray<{ group: string; spaceId: SpaceId; role: SpaceRole }> =
             [];
           let mappingsRemoved: ReadonlyArray<KeycloakGroupMapping> = [];
+          let mappingsLowered: ReadonlyArray<{ group: string; spaceId: SpaceId; role: SpaceRole }> =
+            [];
+          let mappingChanges = "";
+          let mappingChangesTruncated = false;
           if (nextMappings !== undefined) {
             const saved = yield* readMappings;
             const savedByKey = new Map(saved.map((mapping) => [mappingKey(mapping), mapping]));
@@ -500,6 +545,30 @@ const make = Effect.gen(function* () {
             mappingsAdded = nextMappings.filter(
               (mapping) => savedByKey.get(mappingKey(mapping))?.role !== mapping.role,
             );
+            // Which mappings changed, for the audit: a new Role for a pair is one «role» line, not
+            // an add and a remove. Bounded, so a huge save can't bloat the row.
+            const lines: Array<string> = [];
+            for (const mapping of nextMappings) {
+              const was = savedByKey.get(mappingKey(mapping));
+              if (was === undefined) {
+                lines.push(`added ${mapping.group} ${mapping.spaceId} ${mapping.role}`);
+              }
+            }
+            const lowered: Array<{ group: string; spaceId: SpaceId; role: SpaceRole }> = [];
+            for (const mapping of nextMappings) {
+              const was = savedByKey.get(mappingKey(mapping));
+              if (was === undefined || was.role === mapping.role) continue;
+              lines.push(`role ${mapping.group} ${mapping.spaceId} ${was.role} -> ${mapping.role}`);
+              if (GroupSync.RANK[mapping.role] < GroupSync.RANK[was.role]) lowered.push(mapping);
+            }
+            for (const mapping of saved) {
+              if (!nextByKey.has(mappingKey(mapping))) {
+                lines.push(`removed ${mapping.group} ${mapping.spaceId} ${mapping.role}`);
+              }
+            }
+            mappingsLowered = lowered;
+            mappingChangesTruncated = lines.length > MAX_AUDITED_MAPPING_CHANGES;
+            mappingChanges = lines.slice(0, MAX_AUDITED_MAPPING_CHANGES).join("; ");
             if (mappingsAdded.length > 0) {
               const mappable = new Set(
                 (yield* readMappable).map((organization) => organization.spaceId),
@@ -654,6 +723,8 @@ const make = Effect.gen(function* () {
                         ${actor})
                     `;
                   }
+                  const lowered = yield* lowerToMappingRole(mappingsLowered);
+                  if (lowered.length > 0) closes.push(spaces.membershipsChanged(lowered));
                   released = yield* releaseUnmapped(
                     actor,
                     mappingsRemoved.map((mapping) => mapping.spaceId),
@@ -679,6 +750,8 @@ const make = Effect.gen(function* () {
                       ? {
                           mappingsAdded: mappingsAdded.length,
                           mappingsRemoved: mappingsRemoved.length,
+                          mappingChanges,
+                          mappingChangesTruncated,
                         }
                       : {}),
                     ...(listsChanged

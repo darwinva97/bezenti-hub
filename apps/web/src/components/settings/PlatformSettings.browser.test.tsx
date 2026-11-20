@@ -187,9 +187,7 @@ it("shows the Owner's Keycloak group mappings, and warns about one that no longe
   try {
     await expect.element(page.getByRole("textbox", { name: "Groups claim" })).toHaveValue("groups");
     await expect.element(page.getByText("Disabled")).toBeVisible();
-    await expect
-      .element(page.getByText(/You are no longer an Admin or the Steward of Legacy/))
-      .toBeVisible();
+    await expect.element(page.getByText(/You are no longer the Steward of Legacy/)).toBeVisible();
     // Removing it is an unsaved change, saved with the rest of the form.
     await expect.element(page.getByRole("button", { name: "Save" })).toBeDisabled();
     // The modal's inert layer takes pointer events in this frame: press it as a keyboard would.

@@ -73,7 +73,7 @@ export const KeycloakGroupMapping = Schema.Struct({
   organizationName: Schema.String,
   role: SpaceRole,
   /**
-   * Whether the sign-in applies it: only while the Owner is an Admin or the Steward of the
+   * Whether the sign-in applies it: only while the Owner is the Steward of the
    * Organization, so a group never puts the Owner into someone else's Organization (ADR 0008).
    * A disabled one is shown with a warning and applies nothing.
    */
@@ -83,7 +83,7 @@ export const KeycloakGroupMapping = Schema.Struct({
 });
 export type KeycloakGroupMapping = typeof KeycloakGroupMapping.Type;
 
-/** An Organization a new mapping may name: not archived, and the Owner its Admin or Steward. */
+/** An Organization a new mapping may name: not archived, and the Owner its Steward. */
 export const MappableOrganization = Schema.Struct({
   spaceId: SpaceId,
   name: Schema.String,

@@ -23,7 +23,7 @@ export interface GroupMapping {
   readonly group: string;
   readonly spaceId: SpaceId;
   readonly role: SpaceRole;
-  /** The Owner is the Organization's Admin or Steward; otherwise the mapping applies nothing. */
+  /** The Owner is the Organization's Steward; otherwise the mapping applies nothing. */
   readonly enabled: boolean;
   readonly archived: boolean;
 }
@@ -68,7 +68,7 @@ export type GroupChange =
     }
   /**
    * The Organization has no mapping that applies (removed, or disabled because the Owner is no
-   * longer its Admin or Steward): the managed Membership becomes manual, its Role kept, so it is
+   * longer its Steward): the managed Membership becomes manual, its Role kept, so it is
    * never left where nobody may change it.
    */
   | {
@@ -85,32 +85,30 @@ export type GroupChange =
       readonly group: string;
     };
 
-/** The most groups read from one token; a realm that sends more is cut, never refused. */
-export const MAX_TOKEN_GROUPS = 500;
-
-const RANK: Record<SpaceRole, number> = { admin: 3, member: 2, guest: 1 };
+export const RANK: Record<SpaceRole, number> = { admin: 3, member: 2, guest: 1 };
 
 /** A group as mappings keep it and as it is compared: without one leading `/`. */
 export const normalizeGroup = (group: string): string =>
   group.startsWith("/") ? group.slice(1) : group;
 
 /**
- * The groups in the ID token's claim `claimName`: a top-level array of strings. Anything else, or
- * no claim (Keycloak omits it when the person has no groups), is an empty list. Entries that are
- * not strings, empty or too long are skipped.
+ * The groups in the token's claim `claimName` that some mapping names (`mappedGroups`,
+ * normalized): a top-level array of strings, else empty. Unusable entries are skipped. No cut by
+ * position, so a mapped group late in a long list still counts.
  */
 export const groupsOf = (
   claims: Readonly<Record<string, unknown>>,
   claimName: string,
+  mappedGroups: ReadonlySet<string>,
 ): ReadonlyArray<string> => {
   const value = Object.hasOwn(claims, claimName) ? claims[claimName] : undefined;
   if (!Array.isArray(value)) return [];
   const kept = new Set<string>();
   for (const entry of value as ReadonlyArray<unknown>) {
-    if (kept.size >= MAX_TOKEN_GROUPS) break;
     if (typeof entry !== "string") continue;
     const group = normalizeGroup(entry);
     if (group.length === 0 || group.length > MAX_GROUP_LENGTH) continue;
+    if (!mappedGroups.has(group)) continue;
     kept.add(group);
   }
   return [...kept];

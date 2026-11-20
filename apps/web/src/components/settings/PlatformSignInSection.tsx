@@ -42,7 +42,7 @@ const roleItems = MAPPING_ROLES.map((role) => ({ value: role, label: SPACE_ROLE_
 
 /**
  * Keycloak groups mapped to an Organization and a Role (ticket 05), saved with the rest of the
- * form. Only Organizations the Owner is an Admin or the Steward of can be chosen; a saved mapping
+ * form. Only Organizations the Owner is the Steward of can be chosen; a saved mapping
  * that no longer qualifies is shown disabled, with why.
  */
 function KeycloakGroupsFieldset({
@@ -135,8 +135,8 @@ function KeycloakGroupsFieldset({
               </span>
               {mapping.enabled ? null : (
                 <span className="text-xs text-warning-foreground">
-                  You are no longer an Admin or the Steward of {mapping.organizationName}, so this
-                  mapping puts nobody in it. Remove it, or ask to be made an Admin there.
+                  You are no longer the Steward of {mapping.organizationName}, so this mapping puts
+                  nobody in it. Remove it, or ask to be made an Admin there.
                 </span>
               )}
             </li>
@@ -200,7 +200,7 @@ function KeycloakGroupsFieldset({
       </div>
       {settings.mappableOrganizations.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          You can map groups only into Organizations you are an Admin or the Steward of.
+          You can map groups only into Organizations you are the Steward of.
         </p>
       ) : null}
       {problem !== null ? <p className="text-destructive text-sm">{problem}</p> : null}

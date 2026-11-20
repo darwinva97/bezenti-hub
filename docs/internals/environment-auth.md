@@ -617,14 +617,20 @@ transaction, since the identity is not the User's until it commits. A new identi
 mapped group is admitted under «invitation only» (a permanent Invitation), never
 under «closed». The Owner holds no Memberships and is skipped.
 
-A mapping may point only into an Organization whose Admin or Steward the Owner is
+A mapping may point only into an Organization whose Steward the Owner is
 (today the creator, with a missing creator counting as the Owner for single-user-era
 Organizations), so a group never puts the Owner into someone else's Organization. A
 saved mapping that stops qualifying reads `enabled: false`, applies nothing and
 shows a warning. When an Organization is left with no enabled mapping, its managed
 Memberships turn manual with their Role kept: immediately when the Owner removes
 the mapping, otherwise at the next sign-in. Deleting an Organization deletes its
-mappings (foreign key).
+mappings (foreign key). Lowering a mapping's Role lowers, in the same transaction as the
+save, the managed Memberships that mapping made to the new Role (audited as
+`membership.changeRole`, actor `system`); a Role is never raised at save, and another
+group of the person that gives a higher Role restores it at their next sign-in. The
+`signIn.settings.update` entry names the changed mappings (group, Organization, Role;
+at most 20, with a truncated flag). Only the groups some mapping names are read from a
+token, wherever they sit in its list.
 
 ### Disabled and removed Users
 

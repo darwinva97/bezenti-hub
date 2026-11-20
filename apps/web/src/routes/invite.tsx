@@ -16,8 +16,11 @@ function InviteRouteView() {
       onAccepted={({ userId, spaceId }) => {
         forgetInvitationToken();
         // Start in the Organization just joined; the Space selector reads this choice on load.
+        // A Platform invitation joins none: the User starts in their first Space.
         try {
-          window.localStorage.setItem(currentSpaceStorageKey(UserId.make(userId)), spaceId);
+          if (spaceId !== null) {
+            window.localStorage.setItem(currentSpaceStorageKey(UserId.make(userId)), spaceId);
+          }
         } catch {
           // Without storage the User starts in their first Space.
         }

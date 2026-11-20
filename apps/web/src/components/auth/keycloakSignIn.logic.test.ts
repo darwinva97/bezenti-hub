@@ -53,6 +53,10 @@ describe("keycloakResultMessage", () => {
       "second factor in Keycloak",
     );
     expect(keycloakResultCode("?keycloak=strong-factor-required")).toBe("strong-factor-required");
+    // Ticket 04: a Platform invitation opened by who already has a User.
+    expect(keycloakResultMessage("?keycloak=has-account")).toContain(
+      "already have an account on this Hub",
+    );
     expect(keycloakResultCode("?keycloak=nope")).toBeNull();
     expect(keycloakResultMessage("?keycloak=<script>")).toBeNull();
     expect(keycloakResultMessage("")).toBeNull();

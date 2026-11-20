@@ -26,6 +26,7 @@ import { Input } from "../ui/input";
 import { Radio, RadioGroup } from "../ui/radio-group";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { PlatformInvitations } from "./PlatformInvitations";
 import { SettingsPageContainer } from "./settingsLayout";
 import {
   changesOf,
@@ -424,8 +425,8 @@ export function PlatformRegistrationSection() {
         <h2 className="text-base font-semibold">Registration</h2>
         <p className="text-sm text-muted-foreground">
           Who may get a User on this Hub when they sign in with Keycloak, whatever Keycloak lets
-          them do. Keycloak groups mapped under Keycloak count as an Invitation. Platform
-          invitations arrive in a later update.
+          them do. Keycloak groups mapped under Keycloak count as an Invitation; a Platform
+          invitation below lets one person in whatever the mode.
         </p>
       </div>
       <RadioGroup
@@ -467,6 +468,7 @@ export function PlatformRegistrationSection() {
         </p>
       </div>
       <SaveBar state={state} settings={settings} changes={changes} />
+      <PlatformInvitations />
     </SettingsPageContainer>
   );
 }

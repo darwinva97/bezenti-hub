@@ -29,6 +29,20 @@ export const revokeInvitation = (
   headers: SessionHeaders = {},
 ) => client.invitations.revoke({ headers, payload: { invitationId } });
 
+/**
+ * The Owner's pending Platform invitations (Keycloak sign-in, ticket 04): Invitations to the Hub
+ * without a Space. Revoked with `revokeInvitation`, as any Invitation.
+ */
+export const listPlatformInvitations = (
+  client: EnvironmentHttpClient,
+  headers: SessionHeaders = {},
+) => client.platformInvitations.list({ headers });
+
+export const createPlatformInvitation = (
+  client: EnvironmentHttpClient,
+  headers: SessionHeaders = {},
+) => client.platformInvitations.create({ headers });
+
 /** The link to hand the invitee. The token rides in the fragment, which never reaches a server log. */
 export const invitationLink = (origin: string, token: string) =>
   `${origin.replace(/\/+$/, "")}/invite#token=${encodeURIComponent(token)}`;

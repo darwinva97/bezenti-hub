@@ -78,7 +78,7 @@ function describeInvitation(invitation: InvitationSummary) {
 }
 
 /** A link shown once, with a button to copy it. */
-function OneTimeLink({ label, link, note }: { label: string; link: string; note: string }) {
+export function OneTimeLink({ label, link, note }: { label: string; link: string; note: string }) {
   const id = useId();
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: label.toLowerCase() });
   return (

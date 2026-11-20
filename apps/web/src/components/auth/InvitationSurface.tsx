@@ -33,6 +33,11 @@ const isLoginName = Schema.is(AuthLoginName);
 
 type LinkState = { readonly status: "checking" } | InvitationPreview;
 type Method = "passkey" | "password";
+/** What accepting answers: the Organization joined, or none for a Platform invitation. */
+type Accepted = { readonly userId: string; readonly spaceId: string | null };
+
+/** The Hub this page was opened on, as the address bar shows it; display only. */
+const hubLabel = () => window.location.host;
 
 // The tab keeps the token until the Invitation is accepted or found invalid, so a reload or
 // switching account mid-way does not lose it; it never goes back into the address bar.
@@ -59,14 +64,15 @@ export function forgetInvitationToken() {
 /**
  * Where an Invitation link lands: who invites you to which Organization with what Role, the
  * notice that the Owner sees every Personal space, then creating the User (or, signed in, adding
- * the Organization to yours).
+ * the Organization to yours). A Platform invitation (Keycloak sign-in, ticket 04) invites to the
+ * Hub itself: no Organization, no Role, and nothing to add for who already has an account.
  */
 export function InvitationSurface({
   signedIn,
   onAccepted,
 }: {
   readonly signedIn: boolean;
-  readonly onAccepted: (result: { readonly userId: string; readonly spaceId: string }) => void;
+  readonly onAccepted: (result: Accepted) => void;
 }) {
   // The fragment never reaches the server; read it once, then drop it from the address bar.
   const [token] = useState(takeInvitationToken);
@@ -125,14 +131,21 @@ export function InvitationSurface({
     );
   }
 
+  const platform = link.kind === "platform";
+  // A signed-in viewer of a Platform invitation is told so below, once.
+  const showKeycloakResult = keycloakResult !== null && !(platform && signedIn);
   return (
     <StandalonePage>
       <StandalonePageHeader
-        title={`Join ${link.organizationName}`}
-        description={`${link.inviterName} invited you as ${SPACE_ROLE_LABELS[link.role]}.`}
+        title={platform ? `Invitation to ${hubLabel()}` : `Join ${link.organizationName}`}
+        description={
+          platform
+            ? `${link.inviterName} invited you to create an account on this Hub.`
+            : `${link.inviterName} invited you as ${SPACE_ROLE_LABELS[link.role]}.`
+        }
       />
       <div className="mt-6 space-y-4">
-        {keycloakResult ? (
+        {showKeycloakResult ? (
           <Alert variant="error">
             <AlertDescription>{keycloakResult}</AlertDescription>
           </Alert>
@@ -144,11 +157,19 @@ export function InvitationSurface({
           </AlertDescription>
         </Alert>
         {signedIn ? (
-          <JoinAsSignedInUser token={token} onAccepted={onAccepted} />
+          platform ? (
+            <AlreadyHasAccount />
+          ) : (
+            <JoinAsSignedInUser token={token} onAccepted={onAccepted} />
+          )
         ) : (
           <>
-            {keycloakOffered ? <AcceptWithKeycloak token={token} /> : null}
-            <CreateInvitedUser token={token} role={link.role} onAccepted={onAccepted} />
+            {keycloakOffered ? <AcceptWithKeycloak token={token} platform={platform} /> : null}
+            <CreateInvitedUser
+              token={token}
+              role={platform ? null : link.role}
+              onAccepted={onAccepted}
+            />
           </>
         )}
       </div>
@@ -160,7 +181,13 @@ export function InvitationSurface({
  * Accepting by signing in (or signing up) at Keycloak: the token goes to the Hub, which checks it
  * and keeps it; the browser comes back signed in, or to this page with the reason.
  */
-function AcceptWithKeycloak({ token }: { readonly token: string }) {
+function AcceptWithKeycloak({
+  token,
+  platform,
+}: {
+  readonly token: string;
+  readonly platform: boolean;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Refused for a sign-in without the second factor the Role needs: offer to ask for it.
@@ -193,8 +220,9 @@ function AcceptWithKeycloak({ token }: { readonly token: string }) {
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        Already have an account on this Hub? Sign in with it first, then open this link again. Or
-        create an account below.
+        {platform
+          ? "Already have an account on this Hub? Then you don't need this invitation. Or create an account below."
+          : "Already have an account on this Hub? Sign in with it first, then open this link again. Or create an account below."}
       </p>
       {error ? (
         <Alert variant="error">
@@ -205,12 +233,48 @@ function AcceptWithKeycloak({ token }: { readonly token: string }) {
   );
 }
 
+/**
+ * A Platform invitation opened while signed in: it is for someone without an account, so it stays
+ * unused. Signing out keeps the link in this tab for whoever it was meant for.
+ */
+function AlreadyHasAccount() {
+  const [busy, setBusy] = useState(false);
+  const switchAccount = async () => {
+    setBusy(true);
+    await signOut().catch(() => undefined);
+    window.location.replace("/invite");
+  };
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        You already have an account on this Hub. This invitation stays unused, so it can go to
+        someone else.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          disabled={busy}
+          size="sm"
+          onClick={() => {
+            forgetInvitationToken();
+            window.location.replace("/");
+          }}
+        >
+          Open the Hub
+        </Button>
+        <Button disabled={busy} size="sm" variant="ghost" onClick={() => void switchAccount()}>
+          Sign out
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function JoinAsSignedInUser({
   token,
   onAccepted,
 }: {
   readonly token: string;
-  readonly onAccepted: (result: { readonly userId: string; readonly spaceId: string }) => void;
+  readonly onAccepted: (result: Accepted) => void;
 }) {
   const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -275,8 +339,9 @@ function CreateInvitedUser({
   onAccepted,
 }: {
   readonly token: string;
-  readonly role: SpaceRole;
-  readonly onAccepted: (result: { readonly userId: string; readonly spaceId: string }) => void;
+  /** The Organization Role; null for a Platform invitation, which gives none. */
+  readonly role: SpaceRole | null;
+  readonly onAccepted: (result: Accepted) => void;
 }) {
   const passkeysWork = canRegisterPasskeys();
   const [method, setMethod] = useState<Method>(passkeysWork ? "passkey" : "password");
@@ -290,9 +355,7 @@ function CreateInvitedUser({
   // Admins need more than a password: a passkey, or a password with an authenticator app.
   const needsTotp = role === "admin" && method === "password";
 
-  const run = async (
-    action: () => Promise<{ readonly userId: string; readonly spaceId: string }>,
-  ) => {
+  const run = async (action: () => Promise<Accepted>) => {
     setBusy(true);
     setError("");
     try {

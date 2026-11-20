@@ -1,4 +1,11 @@
-import { type SignInSettings, SpaceId, UserId } from "@t3tools/contracts";
+import {
+  InvitationId,
+  type PlatformInvitationSummary,
+  type SignInSettings,
+  SpaceId,
+  UserId,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import {
   Outlet,
   RouterProvider,
@@ -20,7 +27,10 @@ import { PlatformSettingsPage } from "./PlatformSettingsPage";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 
 const session = vi.hoisted(() => ({ isOwner: false }));
-/** What the Hub answers: the Users list, unless a test serves the sign-in settings. */
+/**
+ * What the Hub answers: the Users list, unless a test serves the sign-in settings (with, on the
+ * Registration page, the Platform invitations and a new link's token in the same answer).
+ */
 const served = vi.hoisted((): { signInSettings: SignInSettings | null } => ({
   signInSettings: null,
 }));
@@ -240,6 +250,69 @@ it("warns the Owner when Keycloak rejects the Hub and the newest sign-in got no 
       )
       .toBeVisible();
     await expect.element(page.getByText(/did not get offline_access/)).toBeVisible();
+  } finally {
+    stopTracking();
+    served.signInSettings = null;
+  }
+});
+
+it("lets the Owner create a Platform invitation, copy its link once, and revoke pending ones", async () => {
+  session.isOwner = true;
+  const pending: PlatformInvitationSummary = {
+    id: InvitationId.make("invitation-1"),
+    kind: "platform",
+    status: "pending",
+    createdByName: "Olive Owner",
+    createdAt: DateTime.makeUnsafe("2026-11-20T10:00:00.000Z"),
+    expiresAt: DateTime.makeUnsafe("2026-11-27T10:00:00.000Z"),
+    acceptedByName: null,
+    acceptedAt: null,
+    revokedAt: null,
+  };
+  const settings: SignInSettings = {
+    registrationMode: "closed",
+    localSignInForMembers: true,
+    keycloak: {
+      enabled: true,
+      issuer: "https://auth.example.com/realms/acme",
+      clientId: "t3-hub",
+      clientSecretSet: true,
+      clientSecretUpdatedAt: null,
+      groupsClaim: "groups",
+      strongAcr: [],
+      strongAmr: [],
+    },
+    groupMappings: [],
+    mappableOrganizations: [],
+    publicOrigin: null,
+    updatedAt: null,
+  };
+  // One answer for every request: the settings, the pending list, and a created link.
+  served.signInSettings = Object.assign(settings, {
+    invitations: [pending],
+    invitation: pending,
+    token: "token-for-the-test",
+  });
+  const router = createFrameRouter("/settings/platform/registration");
+  const stopTracking = startMainAppLocationTracking(router);
+  await using _screen = await render(<RouterProvider router={router} />, { router: false });
+  try {
+    await expect.element(page.getByText("Platform invitations", { exact: true })).toBeVisible();
+    const list = page.getByRole("list", { name: "Pending Platform invitations" });
+    await expect.element(list.getByText(/Created by Olive Owner/)).toBeVisible();
+    await expect.element(list.getByRole("button", { name: "Revoke" })).toBeVisible();
+    expect(page.getByText(/arrive in a later update/).elements()).toHaveLength(0);
+
+    // The modal's inert layer takes pointer events in this frame: press it as a keyboard would.
+    (
+      page.getByRole("button", { name: "Create Platform invitation" }).element() as HTMLElement
+    ).click();
+    const link = page.getByRole("textbox", { name: "Platform invitation link" });
+    await expect.element(link).toBeVisible();
+    expect((link.element() as HTMLInputElement).value).toMatch(
+      /\/invite#token=token-for-the-test$/,
+    );
+    await expect.element(page.getByRole("button", { name: "Copy link" })).toBeVisible();
   } finally {
     stopTracking();
     served.signInSettings = null;

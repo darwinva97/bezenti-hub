@@ -285,10 +285,17 @@ export const layer = Layer.effect(
       yield* fileSystem.rename(file, path.join(packs, `pack-${hash}.pack`));
       yield* fileSystem.rename(index, path.join(packs, `pack-${hash}.idx`));
       // Every object the new refs reach is in the repository now.
-      yield* inRepository(
-        ["rev-list", "--objects", "--quiet", "--stdin"],
-        `${[...updates.map((update) => update.newOid), "--not", "--all"].join("\n")}\n`,
-      );
+      // The tips are arguments, not stdin: git before 2.40 refuses `--not` and `--all` among the
+      // revisions read from stdin. They are hex (`gitRoute` checks them), so none reads as an
+      // option, and the few refs of one upload fit any argument limit.
+      yield* inRepository([
+        "rev-list",
+        "--objects",
+        "--quiet",
+        ...updates.map((update) => update.newOid),
+        "--not",
+        "--all",
+      ]);
       yield* inRepository(
         ["update-ref", "--stdin"],
         `${updates

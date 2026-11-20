@@ -1,11 +1,14 @@
 import { type ReactNode, useState } from "react";
 
+import { usePrimarySessionState } from "../../environments/primary";
 import {
   signInWithPasskey,
   signInWithPassword,
   signInWithRecoveryCode,
   signInWithTotp,
+  startKeycloak,
 } from "../../environments/primary/userAccounts";
+import { keycloakResultMessage, keycloakReturnTo } from "./keycloakSignIn.logic";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -30,8 +33,12 @@ export function SignInSurface({
   const needsTotp = totpChallengeId !== null;
   const [totpCode, setTotpCode] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
-  const [errorMessage, setErrorMessage] = useState("");
+  // A refused Keycloak sign-in comes back here with `?keycloak=<why>`.
+  const [errorMessage, setErrorMessage] = useState(
+    () => keycloakResultMessage(window.location.search) ?? "",
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const keycloakOffered = usePrimarySessionState().data?.signInOptions?.keycloak === true;
 
   const attempt = async (
     signIn: () => Promise<{ readonly totpChallengeId: string } | "signed-in" | void>,
@@ -72,6 +79,27 @@ export function SignInSurface({
       <StandalonePageHeader title="Sign in" description={description} />
 
       <div className="mt-6 space-y-4">
+        {keycloakOffered ? (
+          <Button
+            disabled={isSubmitting}
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              // The browser leaves for the realm; only a refusal to start comes back here.
+              setIsSubmitting(true);
+              setErrorMessage("");
+              startKeycloak({
+                intent: "sign-in",
+                returnTo: keycloakReturnTo(window.location),
+              }).catch((cause: unknown) => {
+                setErrorMessage(cause instanceof Error ? cause.message : "Sign-in failed.");
+                setIsSubmitting(false);
+              });
+            }}
+          >
+            Sign in with Keycloak
+          </Button>
+        ) : null}
         {method === "passkey" ? (
           <Button disabled={isSubmitting} size="sm" onClick={() => void attempt(signInWithPasskey)}>
             {isSubmitting ? "Waiting for your passkey..." : "Sign in with a passkey"}

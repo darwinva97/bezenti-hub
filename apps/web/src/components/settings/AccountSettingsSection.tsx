@@ -10,8 +10,10 @@ import {
   setAccountPassword,
   signOut,
   type StepUp,
+  startKeycloak,
   startTotpEnrollment,
 } from "../../environments/primary/userAccounts";
+import { keycloakResultMessage } from "../auth/keycloakSignIn.logic";
 import { errorMessageOf } from "../../lib/errorMessage";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -72,13 +74,20 @@ export function AccountSettingsSection() {
     window.location.replace("/sign-in");
   };
   const onChanged = (account: AuthAccount) => setLoad({ status: "loaded", account });
+  const keycloakOffered = session.data?.signInOptions?.keycloak === true;
 
   return (
     <SettingsSection {...searchableSetting("account")}>
       {load.status === "loaded" ? (
         <>
-          <TotpRow account={load.account} onChanged={onChanged} />
-          <PasswordRow account={load.account} onChanged={onChanged} />
+          <KeycloakRow account={load.account} offered={keycloakOffered} />
+          {/* Who signs in with Keycloak keeps no local credentials, the Owner's break-glass aside. */}
+          {load.account.identity === undefined || load.account.user.isOwner ? (
+            <>
+              <TotpRow account={load.account} onChanged={onChanged} />
+              <PasswordRow account={load.account} onChanged={onChanged} />
+            </>
+          ) : null}
         </>
       ) : null}
       {load.status === "failed" ? (
@@ -299,6 +308,92 @@ function FormButtons({
         Cancel
       </Button>
     </div>
+  );
+}
+
+/** «Connect Keycloak», or the Keycloak account this User signs in with. */
+function KeycloakRow({ account, offered }: { account: AuthAccount; offered: boolean }) {
+  const [connecting, setConnecting] = useState(false);
+  const [stepUp, setStepUp] = useState(() => emptyStepUp(account));
+  const [isBusy, setIsBusy] = useState(false);
+  // A link Keycloak refused comes back here with `?keycloak=<why>`.
+  const [errorMessage, setErrorMessage] = useState(
+    () => keycloakResultMessage(window.location.search) ?? "",
+  );
+  const identity = account.identity;
+  if (identity !== undefined) {
+    const who = identity.username ?? identity.email ?? "your Keycloak account";
+    return (
+      <SettingsRow
+        title="Keycloak"
+        description={`You sign in with Keycloak as ${who}. Change your password or second factor there.`}
+        control={
+          <Button
+            size="xs"
+            variant="outline"
+            render={<a href={identity.accountUrl} rel="noreferrer" target="_blank" />}
+          >
+            Keycloak account
+          </Button>
+        }
+      />
+    );
+  }
+  if (!offered) return null;
+  const connect = async () => {
+    setIsBusy(true);
+    setErrorMessage("");
+    await startKeycloak({
+      intent: "link",
+      returnTo: window.location.pathname,
+      stepUp: toStepUp(account, stepUp),
+    }).catch((cause: unknown) => {
+      setErrorMessage(errorMessageOf(cause, "Could not connect Keycloak."));
+      setIsBusy(false);
+    });
+  };
+  return (
+    <SettingsRow
+      title="Keycloak"
+      description={
+        account.keycloakLink === "admins-later"
+          ? "Connecting Keycloak is available soon for Admins."
+          : account.keycloakLink === "needs-reset"
+            ? "Ask the Owner for a reset link to connect Keycloak to this account."
+            : account.user.isOwner
+              ? "Sign in with your Keycloak account. You keep your passkey and recovery codes."
+              : "Sign in with your Keycloak account from now on. Your passkeys, password and authenticator app here are removed, and your other sessions end."
+      }
+      control={
+        account.keycloakLink === "allowed" && !connecting ? (
+          <Button size="xs" variant="outline" onClick={() => setConnecting(true)}>
+            Connect Keycloak
+          </Button>
+        ) : null
+      }
+    >
+      {connecting ? (
+        <form
+          className="mt-3 flex max-w-sm flex-col gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void connect();
+          }}
+        >
+          <StepUpFields account={account} disabled={isBusy} value={stepUp} onChange={setStepUp} />
+          <FormButtons
+            isBusy={isBusy}
+            submitLabel="Continue to Keycloak"
+            onCancel={() => {
+              setConnecting(false);
+              setStepUp(emptyStepUp(account));
+              setErrorMessage("");
+            }}
+          />
+        </form>
+      ) : null}
+      <ErrorNote message={errorMessage} />
+    </SettingsRow>
   );
 }
 

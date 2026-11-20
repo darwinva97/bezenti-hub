@@ -301,6 +301,30 @@ export async function signInWithRecoveryCode(code: string): Promise<void> {
   );
 }
 
+/**
+ * Starts a Keycloak flow and sends the browser to the realm's sign-in page: `sign-in` from the
+ * sign-in page, `link` from the account page with proof of the current credential.
+ */
+export async function startKeycloak(input: {
+  readonly intent: "sign-in" | "link";
+  readonly returnTo: string;
+  readonly stepUp?: StepUp;
+}): Promise<void> {
+  const reauth = input.stepUp === undefined ? undefined : await toReauth(input.stepUp);
+  const started = await request(
+    (client) =>
+      client.keycloakSignIn.start({
+        payload: {
+          intent: input.intent,
+          returnTo: input.returnTo,
+          ...(reauth === undefined ? {} : { reauth }),
+        },
+      }),
+    input.intent === "link" ? STEP_UP_REJECTED : "Sign in to this Hub first.",
+  );
+  window.location.assign(started.authorizationUrl);
+}
+
 export async function signOut(): Promise<void> {
   try {
     await request((client) => client.auth.signOut({ headers: {} }));

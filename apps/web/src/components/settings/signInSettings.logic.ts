@@ -105,7 +105,7 @@ export const REGISTRATION_MODES: ReadonlyArray<{
   {
     value: "open",
     label: "Open",
-    description: "Anyone who signs in with Keycloak gets a User.",
+    description: "Anyone who signs in with Keycloak gets a User, without any Organization.",
   },
   {
     value: "invitation-only",

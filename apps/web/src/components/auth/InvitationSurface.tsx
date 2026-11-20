@@ -8,6 +8,7 @@ import {
 import * as Schema from "effect/Schema";
 import { useEffect, useState } from "react";
 
+import { usePrimarySessionState } from "../../environments/primary";
 import { peekPairingTokenFromUrl, stripPairingTokenFromUrl } from "../../environments/primary/auth";
 import {
   acceptInvitationWithPasskey,
@@ -17,6 +18,7 @@ import {
   joinInvitation,
   signOut,
   startInvitationTotpEnrollment,
+  startKeycloak,
 } from "../../environments/primary/userAccounts";
 import { errorMessageOf as messageOf } from "../../lib/errorMessage";
 import { Alert, AlertDescription } from "../ui/alert";
@@ -24,6 +26,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { QRCodeSvg } from "../ui/qr-code";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
+import { keycloakResultMessage } from "./keycloakSignIn.logic";
 import { canRegisterPasskeys } from "./OwnerSetupSurface";
 
 const isLoginName = Schema.is(AuthLoginName);
@@ -71,6 +74,9 @@ export function InvitationSurface({
     token === null ? { status: "invalid" } : { status: "checking" },
   );
   const [errorMessage, setErrorMessage] = useState("");
+  // Accepting through Keycloak that did not go through comes back here with `?keycloak=<why>`.
+  const [keycloakResult] = useState(() => keycloakResultMessage(window.location.search));
+  const keycloakOffered = usePrimarySessionState().data?.signInOptions?.keycloak === true;
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- strips the invitation token from the URL and asks the server whether it is still valid
   useEffect(() => {
@@ -108,10 +114,10 @@ export function InvitationSurface({
           title="This invitation is no longer valid"
           description="Invitations work once and expire after 7 days. Ask whoever invited you for a new link."
         />
-        {errorMessage ? (
+        {errorMessage || keycloakResult ? (
           <div className="mt-6">
             <Alert variant="error">
-              <AlertDescription>{errorMessage}</AlertDescription>
+              <AlertDescription>{errorMessage || keycloakResult}</AlertDescription>
             </Alert>
           </div>
         ) : null}
@@ -126,6 +132,11 @@ export function InvitationSurface({
         description={`${link.inviterName} invited you as ${SPACE_ROLE_LABELS[link.role]}.`}
       />
       <div className="mt-6 space-y-4">
+        {keycloakResult ? (
+          <Alert variant="error">
+            <AlertDescription>{keycloakResult}</AlertDescription>
+          </Alert>
+        ) : null}
         <Alert>
           <AlertDescription>
             You also have a Personal space, which opens once the Owner allows it. The Owner of this
@@ -135,10 +146,45 @@ export function InvitationSurface({
         {signedIn ? (
           <JoinAsSignedInUser token={token} onAccepted={onAccepted} />
         ) : (
-          <CreateInvitedUser token={token} role={link.role} onAccepted={onAccepted} />
+          <>
+            {keycloakOffered ? <AcceptWithKeycloak token={token} /> : null}
+            <CreateInvitedUser token={token} role={link.role} onAccepted={onAccepted} />
+          </>
         )}
       </div>
     </StandalonePage>
+  );
+}
+
+/**
+ * Accepting by signing in (or signing up) at Keycloak: the token goes to the Hub, which checks it
+ * and keeps it; the browser comes back signed in, or to this page with the reason.
+ */
+function AcceptWithKeycloak({ token }: { readonly token: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const accept = () => {
+    setBusy(true);
+    setError("");
+    startKeycloak({ intent: "invitation", invitationToken: token, returnTo: "/" }).catch(
+      (cause: unknown) => {
+        setError(messageOf(cause, "Could not start signing in with Keycloak."));
+        setBusy(false);
+      },
+    );
+  };
+  return (
+    <div className="space-y-2">
+      <Button disabled={busy} size="sm" variant="outline" onClick={accept}>
+        Sign in with Keycloak to accept
+      </Button>
+      <p className="text-xs text-muted-foreground">Or create an account on this Hub below.</p>
+      {error ? (
+        <Alert variant="error">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+    </div>
   );
 }
 

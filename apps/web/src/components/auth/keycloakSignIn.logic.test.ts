@@ -18,6 +18,11 @@ describe("keycloakResultMessage", () => {
   it("says why Keycloak sign-in was refused, and nothing for an unknown code", () => {
     expect(keycloakResultMessage("?keycloak=unknown")).toContain("doesn't know you");
     expect(keycloakResultMessage("?keycloak=taken")).toContain("another account");
+    expect(keycloakResultMessage("?keycloak=invitation-only")).toContain("invitation only");
+    expect(keycloakResultMessage("?keycloak=registration-closed")).toContain("not taking");
+    expect(keycloakResultMessage("?keycloak=strong-factor-required")).toContain(
+      "Member invitation",
+    );
     expect(keycloakResultMessage("?keycloak=<script>")).toBeNull();
     expect(keycloakResultMessage("")).toBeNull();
   });

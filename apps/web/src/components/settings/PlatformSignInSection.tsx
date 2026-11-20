@@ -16,6 +16,7 @@ import { PrimaryEnvironmentHttpClient } from "../../environments/primary/httpCli
 import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
 import { errorMessageOf as messageOf } from "../../lib/errorMessage";
 import { runPrimaryHttp } from "../../lib/runtime";
+import { Alert, AlertDescription } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -173,8 +174,8 @@ export function PlatformRegistrationSection() {
       <div className="flex flex-col gap-1">
         <h2 className="text-base font-semibold">Registration</h2>
         <p className="text-sm text-muted-foreground">
-          Who may get a User on this Hub, whatever Keycloak lets them do. Saved now; they take
-          effect when Keycloak sign-in arrives in a later update.
+          Who may get a User on this Hub when they sign in with Keycloak, whatever Keycloak lets
+          them do. Platform invitations and mapped groups arrive in later updates.
         </p>
       </div>
       <RadioGroup
@@ -192,6 +193,14 @@ export function PlatformRegistrationSection() {
           </label>
         ))}
       </RadioGroup>
+      {form.registrationMode === "open" ? (
+        <Alert variant="warning">
+          <AlertDescription>
+            The terms of use that people accept when they sign up are not in place yet. Keep
+            registration open only on a Hub that is not public, until they are.
+          </AlertDescription>
+        </Alert>
+      ) : null}
       <div className="flex flex-col gap-1">
         <label className="flex items-center gap-2 text-sm">
           <Switch

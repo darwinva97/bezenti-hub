@@ -409,8 +409,8 @@ function SaveBar({
 }
 
 /**
- * Who may get a User, and whether everyone but the Owner may still sign in locally (Keycloak
- * sign-in, ticket 01). Saved now; tickets 03 and 08 make them take effect.
+ * Who may get a User (Keycloak sign-in, ticket 03), and whether everyone but the Owner may still
+ * sign in locally (ticket 08: turning it off is confirmed with how many it affects).
  */
 export function PlatformRegistrationSection() {
   const state = useSignInSettings();
@@ -463,7 +463,7 @@ export function PlatformRegistrationSection() {
         </label>
         <p className="text-xs text-muted-foreground">
           {settings.keycloak.enabled
-            ? "You always keep your own passkey and recovery codes."
+            ? "Off: everyone else signs in with Keycloak, and their passkey and password sessions end. You always keep your own passkey and recovery codes."
             : "Turn Keycloak on before turning this off: until then it is the only way in."}
         </p>
       </div>

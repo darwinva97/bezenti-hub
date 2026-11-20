@@ -82,7 +82,10 @@ export function InvitationSurface({
   const [errorMessage, setErrorMessage] = useState("");
   // Accepting through Keycloak that did not go through comes back here with `?keycloak=<why>`.
   const [keycloakResult] = useState(() => keycloakResultMessage(window.location.search));
-  const keycloakOffered = usePrimarySessionState().data?.signInOptions?.keycloak === true;
+  const signInOptions = usePrimarySessionState().data?.signInOptions;
+  const keycloakOffered = signInOptions?.keycloak === true;
+  // Keycloak 08: no new passkey or password while local sign-in is the Owner's alone.
+  const localClosed = keycloakOffered && signInOptions?.localForMembers === false;
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- strips the invitation token from the URL and asks the server whether it is still valid
   useEffect(() => {
@@ -165,11 +168,13 @@ export function InvitationSurface({
         ) : (
           <>
             {keycloakOffered ? <AcceptWithKeycloak token={token} platform={platform} /> : null}
-            <CreateInvitedUser
-              token={token}
-              role={platform ? null : link.role}
-              onAccepted={onAccepted}
-            />
+            {localClosed ? null : (
+              <CreateInvitedUser
+                token={token}
+                role={platform ? null : link.role}
+                onAccepted={onAccepted}
+              />
+            )}
           </>
         )}
       </div>

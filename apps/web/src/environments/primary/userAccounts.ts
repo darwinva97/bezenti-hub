@@ -313,10 +313,12 @@ export async function signInWithRecoveryCode(code: string): Promise<void> {
  * `strongFactor` asks the realm for the second factor the Owner listed.
  */
 export async function startKeycloak(input: {
-  readonly intent: "sign-in" | "link" | "invitation" | "step-up";
+  readonly intent: "sign-in" | "link" | "invitation" | "step-up" | "reset";
   readonly returnTo: string;
   readonly stepUp?: StepUp;
   readonly invitationToken?: string;
+  /** Keycloak 08: a reset link's token, with `reset`. */
+  readonly resetToken?: string;
   readonly strongFactor?: boolean;
 }): Promise<void> {
   const reauth = input.stepUp === undefined ? undefined : await toReauth(input.stepUp);
@@ -330,6 +332,7 @@ export async function startKeycloak(input: {
           ...(input.invitationToken === undefined
             ? {}
             : { invitationToken: input.invitationToken }),
+          ...(input.resetToken === undefined ? {} : { resetToken: input.resetToken }),
           ...(input.strongFactor === true ? { strongFactor: true } : {}),
         },
       }),

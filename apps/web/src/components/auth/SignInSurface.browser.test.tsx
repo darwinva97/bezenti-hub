@@ -8,11 +8,13 @@ import { SignInSurface } from "./SignInSurface";
 // sign-out's handle in the fragment, and may leave Keycloak too.
 
 const leave = vi.hoisted(() => vi.fn((_handle: string) => Promise.resolve("ended" as const)));
+// Keycloak 08: whether everyone but the Owner may still sign in locally.
+const options = vi.hoisted(() => ({ current: { keycloak: true, localForMembers: true } }));
 
 vi.mock("~/environments/primary", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/environments/primary")>()),
   usePrimarySessionState: () => ({
-    data: { signInOptions: { keycloak: true } },
+    data: { signInOptions: options.current },
     error: null,
     isPending: false,
     refresh: vi.fn(),
@@ -53,4 +55,38 @@ it("offers nothing after a sign-out that came from no Keycloak sign-in", async (
   expect(page.getByRole("button", { name: "Also sign out of Keycloak" }).elements()).toHaveLength(
     0,
   );
+});
+
+it("folds the local form under «Owner access» while local sign-in is the Owner's alone", async () => {
+  options.current = { keycloak: true, localForMembers: false };
+  window.history.replaceState(null, "", "/sign-in");
+  try {
+    await using _screen = await render(<SignInSurface onSignedIn={() => undefined} />, {
+      router: false,
+    });
+    await expect.element(page.getByRole("button", { name: "Sign in with Keycloak" })).toBeVisible();
+    expect(page.getByRole("button", { name: "Sign in with a passkey" }).elements()).toHaveLength(0);
+    // Still there for the Owner's break-glass, one click away.
+    const ownerAccess = page.getByRole("button", { name: "Owner access" });
+    await expect.element(ownerAccess).toHaveAttribute("aria-expanded", "false");
+    await ownerAccess.click();
+    await expect.element(ownerAccess).toHaveAttribute("aria-expanded", "true");
+    await expect
+      .element(page.getByRole("button", { name: "Sign in with a passkey" }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Lost your passkey? Use a recovery code" }))
+      .toBeVisible();
+  } finally {
+    options.current = { keycloak: true, localForMembers: true };
+  }
+});
+
+it("shows the local form open while everyone may sign in locally", async () => {
+  window.history.replaceState(null, "", "/sign-in");
+  await using _screen = await render(<SignInSurface onSignedIn={() => undefined} />, {
+    router: false,
+  });
+  await expect.element(page.getByRole("button", { name: "Sign in with a passkey" })).toBeVisible();
+  expect(page.getByRole("button", { name: "Owner access" }).elements()).toHaveLength(0);
 });

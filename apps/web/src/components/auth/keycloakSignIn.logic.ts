@@ -82,6 +82,8 @@ export const keycloakResultMessage = (search: string): string | null => {
       return "Your Role needs a second factor in Keycloak. Retry and confirm with it there.";
     case "identity-mismatch":
       return "You signed in at Keycloak with another account than this one's. Try again with yours.";
+    case "reset-invalid":
+      return "This reset link expired or was already used. Ask the Owner for a new one.";
     case "disabled":
       return "The Owner disabled this account. Ask them to turn it back on.";
     case "removed":

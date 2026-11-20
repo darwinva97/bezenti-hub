@@ -6,7 +6,9 @@ import {
   fetchResetLinkStatus,
   resetPasskey,
   resetPassword,
+  startKeycloak,
 } from "../../environments/primary/userAccounts";
+import { keycloakResultMessage } from "./keycloakSignIn.logic";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -26,6 +28,19 @@ export function ResetPasskeySurface({ onFinished }: { onFinished: () => void }) 
   const [method, setMethod] = useState<"passkey" | "password">("passkey");
   const [loginName, setLoginName] = useState<string | null>(null);
   const [password, setPassword] = useState("");
+  // Keycloak 08: a reset through Keycloak that did not go through comes back with `?keycloak=`.
+  const [keycloakRefusal] = useState(() => keycloakResultMessage(window.location.search));
+
+  const resetWithKeycloak = () => {
+    if (token === null) return;
+    // The browser leaves for the realm; only a refusal to start comes back here.
+    setIsSubmitting(true);
+    setErrorMessage("");
+    startKeycloak({ intent: "reset", returnTo: "/", resetToken: token }).catch((cause: unknown) => {
+      setErrorMessage(cause instanceof Error ? cause.message : "The reset failed.");
+      setIsSubmitting(false);
+    });
+  };
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- strips the reset token from the URL and asks the server whether the link is still live
   useEffect(() => {
@@ -75,6 +90,22 @@ export function ResetPasskeySurface({ onFinished }: { onFinished: () => void }) 
     );
   }
 
+  if (link.status === "invalid" && token === null && keycloakRefusal !== null) {
+    return (
+      <StandalonePage>
+        <StandalonePageHeader
+          title="The reset did not go through"
+          description="Open your reset link again to try once more. It still works unless it expired or was used."
+        />
+        <div className="mt-6">
+          <Alert variant="error">
+            <AlertDescription>{keycloakRefusal}</AlertDescription>
+          </Alert>
+        </div>
+      </StandalonePage>
+    );
+  }
+
   if (link.status === "invalid") {
     return (
       <StandalonePage>
@@ -100,7 +131,22 @@ export function ResetPasskeySurface({ onFinished }: { onFinished: () => void }) 
         description="Your old passkeys, password and authenticator app stop working, and every device signed in to this account is signed out. This link works once."
       />
       <div className="mt-6 space-y-4">
-        {method === "password" ? (
+        {link.keycloak === true ? (
+          <Button
+            disabled={isSubmitting}
+            size="sm"
+            variant={link.local === false ? "default" : "outline"}
+            onClick={resetWithKeycloak}
+          >
+            Continue with Keycloak
+          </Button>
+        ) : null}
+        {link.local === false ? (
+          <p className="text-sm text-muted-foreground">
+            This Hub signs everyone but its Owner in with Keycloak. Your Keycloak account becomes
+            this account&apos;s way in.
+          </p>
+        ) : method === "password" ? (
           <form
             className="space-y-2"
             onSubmit={(event) => {

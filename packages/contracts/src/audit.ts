@@ -136,9 +136,10 @@ export const AUDIT_DETAIL_KEYS = {
   "owner.resetLink": [],
   /** `identityRemoved` when the reset also ended a Keycloak link (Keycloak sign-in, ticket 02). */
   "resetLink.redeem": ["method", "identityRemoved"],
-  "invitation.create": ["role"],
-  "invitation.accept": ["role", "newUser"],
-  "invitation.revoke": ["role"],
+  /** `platform` for a Platform invitation (Keycloak sign-in, ticket 04): no Space, no Role. */
+  "invitation.create": ["role", "platform"],
+  "invitation.accept": ["role", "newUser", "platform"],
+  "invitation.revoke": ["role", "platform"],
   /**
    * Ticket 05: `keycloakGroup` when a mapped group decided it (actor `system`), and `managed` when
    * it moved between `keycloak` and `manual` (a group took over a manual one, or its mapping went).

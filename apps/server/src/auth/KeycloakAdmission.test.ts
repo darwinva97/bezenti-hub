@@ -31,11 +31,14 @@ const removed: IdentityState = { kind: "inactive", userId, removed: true };
 const none: InvitationState = { kind: "none" };
 const invalid: InvitationState = { kind: "invalid" };
 const organization = (role: SpaceRole): InvitationState => ({ kind: "organization", role });
+const platform: InvitationState = { kind: "platform" };
 
 const enter: AdmissionOutcome = { kind: "enter" };
 const join: AdmissionOutcome = { kind: "enter-and-join" };
 const createUser: AdmissionOutcome = { kind: "create-user" };
 const createAndJoin: AdmissionOutcome = { kind: "create-user-and-join" };
+const createAndSpend: AdmissionOutcome = { kind: "create-user-and-spend" };
+const hasAccount: AdmissionOutcome = { kind: "enter-has-account" };
 const refuse = (reason: string) => ({ kind: "refuse", reason }) as AdmissionOutcome;
 
 /** The identity's User, for who needs a strong factor: by default a Member (or nobody yet). */
@@ -322,6 +325,78 @@ const TABLE: ReadonlyArray<Row> = [
     "invitation-only": refuse("disabled"),
     closed: refuse("disabled"),
   },
+  // Ticket 04: a Platform invitation is the Owner's hand-made User, whatever the mode. It never
+  // gives a Role, so it never needs a strong factor itself.
+  {
+    name: "a new identity with a Platform invitation",
+    intent: "invitation",
+    identity: unknown,
+    invitation: platform,
+    open: createAndSpend,
+    "invitation-only": createAndSpend,
+    closed: createAndSpend,
+  },
+  {
+    name: "a new identity with a Platform invitation and a mapped group",
+    intent: "invitation",
+    identity: unknown,
+    invitation: platform,
+    group: "member",
+    open: createAndSpend,
+    "invitation-only": createAndSpend,
+    closed: createAndSpend,
+  },
+  {
+    // The group's Admin Role still needs what any Admin needs.
+    name: "a new identity with a Platform invitation and a mapped Admin group, weak login",
+    intent: "invitation",
+    identity: unknown,
+    invitation: platform,
+    group: "admin",
+    open: refuse("strong-factor-required"),
+    "invitation-only": refuse("strong-factor-required"),
+    closed: refuse("strong-factor-required"),
+  },
+  {
+    // «You already have an account»: signed in, the Invitation left for someone else.
+    name: "an active User with a Platform invitation",
+    intent: "invitation",
+    identity: active,
+    invitation: platform,
+    open: hasAccount,
+    "invitation-only": hasAccount,
+    closed: hasAccount,
+  },
+  {
+    name: "an Admin with a Platform invitation and a weak login",
+    intent: "invitation",
+    identity: active,
+    invitation: platform,
+    standing: "admin",
+    open: refuse("strong-factor-required"),
+    "invitation-only": refuse("strong-factor-required"),
+    closed: refuse("strong-factor-required"),
+  },
+  {
+    name: "the Owner with a Platform invitation and a strong login",
+    intent: "invitation",
+    identity: active,
+    invitation: platform,
+    standing: "owner",
+    loginStrong: true,
+    open: hasAccount,
+    "invitation-only": hasAccount,
+    closed: hasAccount,
+  },
+  {
+    name: "a removed User with a Platform invitation",
+    intent: "invitation",
+    identity: removed,
+    invitation: platform,
+    open: refuse("removed"),
+    "invitation-only": refuse("removed"),
+    closed: refuse("removed"),
+  },
 ];
 
 const MODES: ReadonlyArray<RegistrationMode> = ["open", "invitation-only", "closed"];
@@ -369,6 +444,7 @@ describe("KeycloakAdmission.decide", () => {
                 },
                 ...[
                   invalid,
+                  platform,
                   organization("admin"),
                   organization("member"),
                   organization("guest"),

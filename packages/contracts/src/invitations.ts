@@ -35,6 +35,40 @@ export const InvitationSummary = Schema.Struct({
 });
 export type InvitationSummary = typeof InvitationSummary.Type;
 
+/**
+ * A Platform invitation as the Owner sees it (Keycloak sign-in spec, ticket 04): an Invitation to
+ * the Hub itself, without a Space or a Role. Accepting it creates a User and nothing more.
+ */
+export const PlatformInvitationSummary = Schema.Struct({
+  id: InvitationId,
+  kind: Schema.Literal("platform"),
+  status: InvitationStatus,
+  createdByName: Schema.NullOr(Schema.String),
+  createdAt: Schema.DateTimeUtc,
+  expiresAt: Schema.DateTimeUtc,
+  acceptedByName: Schema.NullOr(Schema.String),
+  acceptedAt: Schema.NullOr(Schema.DateTimeUtc),
+  revokedAt: Schema.NullOr(Schema.DateTimeUtc),
+});
+export type PlatformInvitationSummary = typeof PlatformInvitationSummary.Type;
+
+export const CreatedPlatformInvitation = Schema.Struct({
+  invitation: PlatformInvitationSummary,
+  /** Shown once: the server keeps only its hash. The link is `<origin>/invite#token=<token>`. */
+  token: TrimmedNonEmptyString,
+});
+export type CreatedPlatformInvitation = typeof CreatedPlatformInvitation.Type;
+
+/** The pending Platform invitations; the audit log keeps the rest. */
+export const PlatformInvitationList = Schema.Struct({
+  invitations: Schema.Array(PlatformInvitationSummary),
+});
+export type PlatformInvitationList = typeof PlatformInvitationList.Type;
+
+/** What revoking answers: the Invitation as its list shows it. */
+export const RevokedInvitation = Schema.Union([InvitationSummary, PlatformInvitationSummary]);
+export type RevokedInvitation = typeof RevokedInvitation.Type;
+
 export const CreateInvitationRequest = Schema.Struct({ role: SpaceRole });
 export type CreateInvitationRequest = typeof CreateInvitationRequest.Type;
 
@@ -56,13 +90,21 @@ export type InvitationTokenRequest = typeof InvitationTokenRequest.Type;
 
 /**
  * What the invitee sees before accepting. Expired, revoked, used and unknown links, and links into
- * an archived Organization, all answer `invalid` alike.
+ * an archived Organization, all answer `invalid` alike. A Platform invitation (ticket 04) names
+ * no Organization and no Role: the page names the Hub it was opened on.
  */
 export const InvitationPreview = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("valid"),
+    kind: Schema.Literal("organization"),
     organizationName: Schema.String,
     role: SpaceRole,
+    inviterName: Schema.String,
+    expiresAt: Schema.DateTimeUtc,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("valid"),
+    kind: Schema.Literal("platform"),
     inviterName: Schema.String,
     expiresAt: Schema.DateTimeUtc,
   }),
@@ -101,7 +143,8 @@ export type AcceptInvitationRequest = typeof AcceptInvitationRequest.Type;
 export const AcceptInvitationResult = Schema.Struct({
   session: AuthBrowserSessionResult,
   userId: UserId,
-  spaceId: SpaceId,
+  /** The Organization joined; null for a Platform invitation, which joins none. */
+  spaceId: Schema.NullOr(SpaceId),
 });
 export type AcceptInvitationResult = typeof AcceptInvitationResult.Type;
 

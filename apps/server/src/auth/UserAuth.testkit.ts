@@ -116,6 +116,7 @@ class AuthTestApi extends HttpApi.make("environment")
   .add(EnvironmentHttpApi.groups.installationUsers)
   .add(EnvironmentHttpApi.groups.audit)
   .add(EnvironmentHttpApi.groups.signInSettings)
+  .add(EnvironmentHttpApi.groups.platformInvitations)
   .add(EnvironmentHttpApi.groups.environments)
   .add(EnvironmentHttpApi.groups.sandboxImage)
   .add(EnvironmentHttpApi.groups.vaults)
@@ -460,7 +461,11 @@ export const serveAuthHttpWith = Effect.fn(function* (
   );
   const services = config.extend === undefined ? base : yield* config.extend(base);
   const apiRoutes = HttpApiBuilder.layer(AuthTestApi)
-    .pipe(Layer.provide(SignInSettingsHttp.layer), Layer.provide(KeycloakSignInHttp.layerApi))
+    .pipe(
+      Layer.provide(SignInSettingsHttp.layer),
+      Layer.provide(KeycloakSignInHttp.layerApi),
+      Layer.provide(InvitationsHttp.layerPlatform),
+    )
     .pipe(
       Layer.provide(AuthHttp.layer),
       Layer.provide(AppSignInHttp.layer),

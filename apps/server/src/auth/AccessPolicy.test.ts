@@ -1521,6 +1521,39 @@ const rows: ReadonlyArray<Row> = [
     organization,
     deny("wrong-resource"),
   ],
+  // Keycloak sign-in, ticket 04: a Platform invitation makes a User whatever the Registration
+  // mode, so it is the Owner's alone, as the mode is.
+  [
+    "Owner manages Platform invitations",
+    owner,
+    "platformInvitation.manage",
+    AccessPolicy.installation,
+    allow,
+  ],
+  ...(
+    [
+      ["an Admin", admin],
+      ["a Member", member],
+      ["a Guest", guest],
+      ["a User in no Organization", personalCreator],
+    ] as const
+  ).map(
+    ([who, principal]) =>
+      [
+        `${who} does not manage Platform invitations`,
+        principal,
+        "platformInvitation.manage",
+        AccessPolicy.installation,
+        deny("owner-only"),
+      ] as const,
+  ),
+  [
+    "Platform invitations are the Installation's, not a Space's",
+    owner,
+    "platformInvitation.manage",
+    organization,
+    deny("wrong-resource"),
+  ],
   // Vaults (spec 5 «Vaults», owned-resources 03): the Owner does all; an Organization's Admins
   // manage its groups and edit them without reading Secrets; its Members and Guests see names;
   // the Owner's `default` (the Main vault) is the Owner's alone.

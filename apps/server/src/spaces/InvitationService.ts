@@ -1,7 +1,7 @@
 /**
- * Invitations into an Organization. Only a hash of each link's token is stored. Accepting spends
- * the Invitation, creates the User and membership and issues the session in one transaction, so a
- * link works once even when two browsers race.
+ * Invitations into an Organization, and Platform invitations (ticket 04: no Space, no Role, a User
+ * and nothing more; every Organization read leaves them out). Only a token's hash is stored.
+ * Accepting spends it, creates the User (and membership) and the session in one transaction.
  */
 import {
   type AuthSessionId,
@@ -10,12 +10,16 @@ import {
   type AuthPasskeyRegistrationCeremony,
   type AuthTotpEnrollment,
   type CreatedInvitation,
+  type CreatedPlatformInvitation,
   InvitationId,
   type InvitationList,
   type InvitationPreview,
   type InvitationStatus,
   type InvitationSummary,
   type JoinInvitationResult,
+  type PlatformInvitationList,
+  type PlatformInvitationSummary,
+  type RevokedInvitation,
   SpaceId,
   SpaceRole,
   UserId,
@@ -35,7 +39,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 
 import * as AuditLog from "../audit/AuditLog.ts";
-import type * as AccessPolicy from "../auth/AccessPolicy.ts";
+import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import { makeSignInThrottle } from "../auth/signInThrottle.ts";
 import type { AuthRequestMetadata } from "../auth/utils.ts";
@@ -71,8 +75,11 @@ export class InvitationConflictError extends Schema.TaggedError<InvitationConfli
   "InvitationConflictError",
   {
     reason: Schema.String,
-    /** For a caller that answers in codes: the Owner, or someone already in the Organization. */
-    code: Schema.optionalKey(Schema.Literals(["owner", "already-member"])),
+    /**
+     * For a caller that answers in codes: the Owner, someone already in the Organization, or a
+     * User who opened a Platform invitation (ticket 04), which stays unspent.
+     */
+    code: Schema.optionalKey(Schema.Literals(["owner", "already-member", "has-account"])),
   },
 ) {
   override get message(): string {
@@ -110,10 +117,21 @@ export class InvitationService extends Context.Service<
       role: SpaceRole,
     ) => Effect.Effect<CreatedInvitation, ManageError>;
     readonly list: (actor: UserId, spaceId: SpaceId) => Effect.Effect<InvitationList, ManageError>;
+    /** Ticket 04: a Platform invitation, the Owner's alone (`platformInvitation.manage`). */
+    readonly createPlatform: (
+      actor: UserId,
+    ) => Effect.Effect<CreatedPlatformInvitation, ManageError>;
+    /** Ticket 04: the pending Platform invitations, for the Owner alone. */
+    readonly listPlatform: (actor: UserId) => Effect.Effect<PlatformInvitationList, ManageError>;
+    /**
+     * Any Invitation. A Platform invitation only for the Owner, and only when the request may
+     * write access (`accessWrite`); anyone else hears what an unknown Invitation answers.
+     */
     readonly revoke: (
       actor: UserId,
       invitationId: InvitationId,
-    ) => Effect.Effect<InvitationSummary, ManageError>;
+      options?: { readonly accessWrite: boolean },
+    ) => Effect.Effect<RevokedInvitation, ManageError>;
     readonly preview: (
       token: string,
       clientIp: string | undefined,
@@ -164,14 +182,13 @@ export class InvitationService extends Context.Service<
       token: string,
       clientIp: string | undefined,
     ) => Effect.Effect<
-      { readonly role: SpaceRole },
+      { readonly kind: "organization"; readonly role: SpaceRole } | { readonly kind: "platform" },
       InvitationInvalidError | UserDirectory.SignInThrottledError | InvitationStorageError
     >;
     /**
-     * Keycloak sign-in, ticket 03: spends the Invitation for a User just created, in the caller's
-     * transaction (a refusal rolls it all back, the Invitation unspent): the conditional spend, the
-     * membership with the spent row's Role (an Admin's only if `adminAllowed`) and
-     * `invitation.accept`. Run `afterCommit` once the transaction committed.
+     * Spends the Invitation for a User just created, in the caller's transaction (a refusal rolls
+     * it all back): the spend, the spent row's membership (an Admin's only if `adminAllowed`; none
+     * for a Platform invitation) and `invitation.accept`. Run `afterCommit` after the commit.
      */
     readonly redeemForNewUser: (input: {
       readonly token: string;
@@ -182,20 +199,64 @@ export class InvitationService extends Context.Service<
   }
 >()("t3/spaces/InvitationService") {}
 
+// `space_id` and `role` are null together: a Platform invitation (migration 156).
 const LiveInvitationRow = Schema.Struct({
   invitationId: InvitationId,
-  spaceId: SpaceId,
-  role: SpaceRole,
-  organizationName: Schema.String,
+  spaceId: Schema.NullOr(SpaceId),
+  role: Schema.NullOr(SpaceRole),
+  organizationName: Schema.NullOr(Schema.String),
   inviterName: Schema.NullOr(Schema.String),
   expiresAt: Schema.String,
 });
 type LiveInvitationRow = typeof LiveInvitationRow.Type;
 
+/** A live Invitation: into an Organization, or to the Hub itself (ticket 04). */
+type LiveInvitation =
+  | {
+      readonly kind: "organization";
+      readonly invitationId: InvitationId;
+      readonly spaceId: SpaceId;
+      readonly role: SpaceRole;
+      readonly organizationName: string;
+      readonly inviterName: string | null;
+      readonly expiresAt: string;
+    }
+  | {
+      readonly kind: "platform";
+      readonly invitationId: InvitationId;
+      readonly inviterName: string | null;
+      readonly expiresAt: string;
+    };
+
+const toLive = (row: LiveInvitationRow): LiveInvitation | undefined => {
+  const { invitationId, inviterName, expiresAt } = row;
+  if (row.spaceId === null) {
+    return row.role === null
+      ? { kind: "platform", invitationId, inviterName, expiresAt }
+      : undefined;
+  }
+  return row.role === null || row.organizationName === null
+    ? undefined
+    : {
+        kind: "organization",
+        invitationId,
+        spaceId: row.spaceId,
+        role: row.role,
+        organizationName: row.organizationName,
+        inviterName,
+        expiresAt,
+      };
+};
+
+/** What a spend took: an Organization's Role, or a Platform invitation's nothing. */
+type Spent =
+  | { readonly kind: "organization"; readonly spaceId: SpaceId; readonly role: SpaceRole }
+  | { readonly kind: "platform" };
+
 const InvitationRow = Schema.Struct({
   invitationId: InvitationId,
-  spaceId: SpaceId,
-  role: SpaceRole,
+  spaceId: Schema.NullOr(SpaceId),
+  role: Schema.NullOr(SpaceRole),
   createdByName: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   expiresAt: Schema.String,
@@ -207,28 +268,36 @@ type InvitationRow = typeof InvitationRow.Type;
 
 const utc = (iso: string) => DateTime.makeUnsafe(iso);
 
-const toSummary = (row: InvitationRow, nowIso: string): InvitationSummary => {
-  const status: InvitationStatus =
-    row.revokedAt !== null
-      ? "revoked"
-      : row.acceptedAt !== null
-        ? "accepted"
-        : row.expiresAt <= nowIso
-          ? "expired"
-          : "pending";
-  return {
-    id: row.invitationId,
-    spaceId: row.spaceId,
-    role: row.role,
-    status,
-    createdByName: row.createdByName,
-    createdAt: utc(row.createdAt),
-    expiresAt: utc(row.expiresAt),
-    acceptedByName: row.acceptedByName,
-    acceptedAt: row.acceptedAt === null ? null : utc(row.acceptedAt),
-    revokedAt: row.revokedAt === null ? null : utc(row.revokedAt),
-  };
+const statusOf = (row: InvitationRow, nowIso: string): InvitationStatus =>
+  row.revokedAt !== null
+    ? "revoked"
+    : row.acceptedAt !== null
+      ? "accepted"
+      : row.expiresAt <= nowIso
+        ? "expired"
+        : "pending";
+
+const toPlatformSummary = (row: InvitationRow, nowIso: string): PlatformInvitationSummary => ({
+  id: row.invitationId,
+  kind: "platform",
+  status: statusOf(row, nowIso),
+  createdByName: row.createdByName,
+  createdAt: utc(row.createdAt),
+  expiresAt: utc(row.expiresAt),
+  acceptedByName: row.acceptedByName,
+  acceptedAt: row.acceptedAt === null ? null : utc(row.acceptedAt),
+  revokedAt: row.revokedAt === null ? null : utc(row.revokedAt),
+});
+
+/** An Organization's Invitation; undefined for a Platform invitation, which has no Space. */
+const toSummary = (row: InvitationRow, nowIso: string): InvitationSummary | undefined => {
+  if (row.spaceId === null || row.role === null) return undefined;
+  const { kind: _kind, ...rest } = toPlatformSummary(row, nowIso);
+  return { ...rest, spaceId: row.spaceId, role: row.role };
 };
+
+const toAnySummary = (row: InvitationRow, nowIso: string): RevokedInvitation =>
+  toSummary(row, nowIso) ?? toPlatformSummary(row, nowIso);
 
 const ADMINS_INVITE = "Only an Admin or the Owner invites people to this Organization.";
 
@@ -259,6 +328,11 @@ const deniedReason = (reason: string) =>
 
 // Not found and not allowed answer alike, so a revoke never confirms an Invitation exists.
 const NOT_YOURS_TO_REVOKE = "You can't revoke that Invitation.";
+
+const OWNER_INVITES_TO_HUB = "Only the Owner invites people to this Hub.";
+
+const HAS_ACCOUNT =
+  "You already have an account on this Hub. This invitation stays unused, so it can go to someone else.";
 
 const ADMIN_NEEDS_MORE =
   "An Admin signs in with a passkey, or with a password plus an authenticator app.";
@@ -297,6 +371,7 @@ const make = Effect.gen(function* () {
     execute: (invitationId) =>
       sql`${sql.literal(SUMMARY_SELECT)} WHERE i.invitation_id = ${invitationId}`,
   });
+  // `=` never matches a null `space_id`: a Platform invitation is in no Organization's list.
   const listBySpace = SqlSchema.findAll({
     Request: SpaceId,
     Result: InvitationRow,
@@ -304,6 +379,15 @@ const make = Effect.gen(function* () {
       sql`${sql.literal(SUMMARY_SELECT)} WHERE i.space_id = ${spaceId}
         ORDER BY i.created_at DESC, i.invitation_id DESC`,
   });
+  const listPendingPlatform = SqlSchema.findAll({
+    Request: Schema.String,
+    Result: InvitationRow,
+    execute: (now) =>
+      sql`${sql.literal(SUMMARY_SELECT)} WHERE i.space_id IS NULL
+        AND i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ${now}
+        ORDER BY i.created_at DESC, i.invitation_id DESC`,
+  });
+  // A Platform invitation, or one into a live Organization; `toLive` tells them apart.
   const findLive = SqlSchema.findOneOption({
     Request: Schema.Struct({ tokenHash: Schema.String, now: Schema.String }),
     Result: LiveInvitationRow,
@@ -312,13 +396,15 @@ const make = Effect.gen(function* () {
         s.name AS "organizationName", creator.display_name AS "inviterName",
         i.expires_at AS "expiresAt"
       FROM space_invitations AS i
-      JOIN spaces AS s ON s.space_id = i.space_id
+      LEFT JOIN spaces AS s ON s.space_id = i.space_id
       LEFT JOIN users AS creator ON creator.user_id = i.created_by
       WHERE i.token_hash = ${tokenHash} AND i.accepted_at IS NULL AND i.revoked_at IS NULL
-        AND i.expires_at > ${now} AND s.kind = 'organization' AND s.archived_at IS NULL
+        AND i.expires_at > ${now}
+        AND (i.space_id IS NULL OR (s.kind = 'organization' AND s.archived_at IS NULL))
     `,
   });
-  // The one write that decides who gets a link: whoever's UPDATE matches first.
+  // The one write that decides who gets a link: whoever's UPDATE matches first. Only an
+  // Organization's: its EXISTS never matches a Platform invitation's null `space_id`.
   const spend = SqlSchema.findOneOption({
     Request: Schema.Struct({ tokenHash: Schema.String, now: Schema.String, userId: UserId }),
     Result: Schema.Struct({ spaceId: SpaceId, role: SpaceRole }),
@@ -335,6 +421,56 @@ const make = Effect.gen(function* () {
       RETURNING space_id AS "spaceId", role
     `,
   });
+  // Ticket 04: the same for a Platform invitation, and only for one.
+  const spendPlatform = SqlSchema.findOneOption({
+    Request: Schema.Struct({ tokenHash: Schema.String, now: Schema.String, userId: UserId }),
+    Result: Schema.Struct({ invitationId: InvitationId }),
+    execute: ({ tokenHash, now, userId }) => sql`
+      UPDATE space_invitations
+      SET accepted_at = ${now}, accepted_by = ${userId}
+      WHERE token_hash = ${tokenHash} AND space_id IS NULL AND accepted_at IS NULL
+        AND revoked_at IS NULL AND expires_at > ${now}
+      RETURNING invitation_id AS "invitationId"
+    `,
+  });
+  /** Spends the live Invitation for `userId`, by its kind; none when someone else got it. */
+  const spendLive = Effect.fnUntraced(function* (
+    invitation: LiveInvitation,
+    tokenHash: string,
+    userId: UserId,
+  ) {
+    const now = yield* nowIso;
+    if (invitation.kind === "platform") {
+      const spent = yield* spendPlatform({ tokenHash, now, userId }).pipe(storage);
+      return Option.map(spent, (): Spent => ({ kind: "platform" }));
+    }
+    const spent = yield* spend({ tokenHash, now, userId }).pipe(storage);
+    return Option.map(spent, (row): Spent => ({ kind: "organization", ...row }));
+  });
+  /** A new User's acceptance: the Organization's membership, if any, and `invitation.accept`. */
+  const recordNewUserAcceptance = Effect.fnUntraced(function* (
+    userId: UserId,
+    invitationId: InvitationId,
+    spent: Spent,
+  ) {
+    if (spent.kind === "organization") {
+      yield* spaces
+        .addMembership({ spaceId: spent.spaceId, userId, role: spent.role })
+        .pipe(storage);
+    }
+    yield* audit
+      .record({
+        actor: AuditLog.userActor(userId),
+        action: "invitation.accept",
+        ...(spent.kind === "organization" ? { spaceId: spent.spaceId } : {}),
+        target: { kind: "invitation", id: invitationId },
+        detail:
+          spent.kind === "organization"
+            ? { role: spent.role, newUser: true }
+            : { platform: true, newUser: true },
+      })
+      .pipe(storage);
+  });
 
   const refuseDenied = <A, R>(
     effect: Effect.Effect<A, SpaceDirectory.SpaceClaimError, R>,
@@ -348,79 +484,138 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * A new link: its token (answered once), the row with only its hash, and `invitation.create`,
+   * into an Organization with a Role, or to the Hub (`target` null, ticket 04).
+   */
+  const issue = Effect.fnUntraced(function* (
+    actor: UserId,
+    target: { readonly spaceId: SpaceId; readonly role: SpaceRole } | null,
+  ) {
+    const token = isoBase64URL.fromBuffer(
+      new Uint8Array(yield* random.randomBytes(32).pipe(storage)),
+    );
+    const invitationId = InvitationId.make(yield* random.uuidV4().pipe(storage));
+    const now = yield* DateTime.now;
+    const createdAt = DateTime.formatIso(now);
+    const expiresAt = DateTime.formatIso(
+      DateTime.add(now, { milliseconds: Duration.toMillis(INVITATION_TTL) }),
+    );
+    const tokenHash = yield* hashToken(token);
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* sql`
+            INSERT INTO space_invitations (
+              invitation_id, space_id, role, token_hash, created_by, created_at, expires_at
+            )
+            VALUES (
+              ${invitationId}, ${target?.spaceId ?? null}, ${target?.role ?? null}, ${tokenHash},
+              ${actor}, ${createdAt}, ${expiresAt}
+            )
+          `;
+          yield* audit.record({
+            actor: AuditLog.userActor(actor),
+            action: "invitation.create",
+            ...(target === null ? {} : { spaceId: target.spaceId }),
+            target: { kind: "invitation", id: invitationId },
+            detail: target === null ? { platform: true } : { role: target.role },
+          });
+        }),
+      )
+      .pipe(storage);
+    const row = yield* findById(invitationId).pipe(storage);
+    if (Option.isNone(row)) return yield* storageError("invitation vanished after insert");
+    return { row: row.value, createdAt, token };
+  });
+
   const create: InvitationService["Service"]["create"] = Effect.fn("InvitationService.create")(
     function* (actor, spaceId, role) {
       const space = yield* spaces.authorize(actor, "invitation.create", spaceId).pipe(refuseDenied);
       if (role === "admin") {
         yield* spaces.authorize(actor, "admin.manage", spaceId).pipe(refuseDenied);
       }
-      const token = isoBase64URL.fromBuffer(
-        new Uint8Array(yield* random.randomBytes(32).pipe(storage)),
-      );
-      const invitationId = InvitationId.make(yield* random.uuidV4().pipe(storage));
-      const now = yield* DateTime.now;
-      const createdAt = DateTime.formatIso(now);
-      const expiresAt = DateTime.formatIso(
-        DateTime.add(now, { milliseconds: Duration.toMillis(INVITATION_TTL) }),
-      );
-      const tokenHash = yield* hashToken(token);
-      yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* sql`
-              INSERT INTO space_invitations (
-                invitation_id, space_id, role, token_hash, created_by, created_at, expires_at
-              )
-              VALUES (
-                ${invitationId}, ${space.id}, ${role}, ${tokenHash}, ${actor},
-                ${createdAt}, ${expiresAt}
-              )
-            `;
-            yield* audit.record({
-              actor: AuditLog.userActor(actor),
-              action: "invitation.create",
-              spaceId: space.id,
-              target: { kind: "invitation", id: invitationId },
-              detail: { role },
-            });
-          }),
-        )
-        .pipe(storage);
-      const row = yield* findById(invitationId).pipe(storage);
-      if (Option.isNone(row)) return yield* storageError("invitation vanished after insert");
-      return { invitation: toSummary(row.value, createdAt), token };
+      const { row, createdAt, token } = yield* issue(actor, { spaceId: space.id, role });
+      const invitation = toSummary(row, createdAt);
+      if (invitation === undefined) return yield* storageError("invitation lost its Space");
+      return { invitation, token };
     },
   );
+
+  /** Ticket 04: whether the actor manages Platform invitations (the Owner). */
+  const managesPlatform = (actor: UserId) =>
+    spaces
+      .principalOf(actor)
+      .pipe(
+        Effect.map((principal) =>
+          AccessPolicy.isAllowed(
+            AccessPolicy.decide(principal, "platformInvitation.manage", AccessPolicy.installation),
+          ),
+        ),
+      );
+  const requireManagesPlatform = Effect.fnUntraced(function* (actor: UserId) {
+    if (!(yield* managesPlatform(actor))) {
+      return yield* new InvitationRefusedError({ reason: OWNER_INVITES_TO_HUB });
+    }
+  });
+
+  const createPlatform: InvitationService["Service"]["createPlatform"] = Effect.fn(
+    "InvitationService.createPlatform",
+  )(function* (actor) {
+    yield* requireManagesPlatform(actor);
+    const { row, createdAt, token } = yield* issue(actor, null);
+    return { invitation: toPlatformSummary(row, createdAt), token };
+  });
+
+  const listPlatform: InvitationService["Service"]["listPlatform"] = Effect.fn(
+    "InvitationService.listPlatform",
+  )(function* (actor) {
+    yield* requireManagesPlatform(actor);
+    const now = yield* nowIso;
+    const rows = yield* listPendingPlatform(now).pipe(storage);
+    return { invitations: rows.map((row) => toPlatformSummary(row, now)) };
+  });
 
   const list: InvitationService["Service"]["list"] = Effect.fn("InvitationService.list")(
     function* (actor, spaceId) {
       yield* spaces.authorize(actor, "invitation.manage", spaceId).pipe(refuseDenied);
       const rows = yield* listBySpace(spaceId).pipe(storage);
       const now = yield* nowIso;
-      return { invitations: rows.map((row) => toSummary(row, now)) };
+      return {
+        invitations: rows.flatMap((row) => {
+          const summary = toSummary(row, now);
+          return summary === undefined ? [] : [summary];
+        }),
+      };
     },
   );
 
   const revoke: InvitationService["Service"]["revoke"] = Effect.fn("InvitationService.revoke")(
-    function* (actor, invitationId) {
+    function* (actor, invitationId, options = { accessWrite: false }) {
       const found = yield* findById(invitationId).pipe(storage);
       if (Option.isNone(found)) {
         return yield* new InvitationRefusedError({ reason: NOT_YOURS_TO_REVOKE });
       }
+      const { spaceId, role } = found.value;
       const notYours = {
         SpaceAccessDeniedError: () =>
           Effect.fail(new InvitationRefusedError({ reason: NOT_YOURS_TO_REVOKE })),
         SpaceNotFoundError: () =>
           Effect.fail(new InvitationRefusedError({ reason: NOT_YOURS_TO_REVOKE })),
       };
-      yield* spaces
-        .authorize(actor, "invitation.manage", found.value.spaceId)
-        .pipe(Effect.catchTags(notYours));
-      // An Admin never touches an Admin, not even one still invited.
-      if (found.value.role === "admin") {
+      if (spaceId === null || role === null) {
+        // A Platform invitation (ticket 04): the Owner's, with a session that may write access.
+        if (!options.accessWrite || !(yield* managesPlatform(actor))) {
+          return yield* new InvitationRefusedError({ reason: NOT_YOURS_TO_REVOKE });
+        }
+      } else {
         yield* spaces
-          .authorize(actor, "admin.manage", found.value.spaceId)
+          .authorize(actor, "invitation.manage", spaceId)
           .pipe(Effect.catchTags(notYours));
+        // An Admin never touches an Admin, not even one still invited.
+        if (role === "admin") {
+          yield* spaces.authorize(actor, "admin.manage", spaceId).pipe(Effect.catchTags(notYours));
+        }
       }
       const now = yield* nowIso;
       const revoked = yield* sql
@@ -436,9 +631,9 @@ const make = Effect.gen(function* () {
               yield* audit.record({
                 actor: AuditLog.userActor(actor),
                 action: "invitation.revoke",
-                spaceId: found.value.spaceId,
+                ...(spaceId === null ? {} : { spaceId }),
                 target: { kind: "invitation", id: invitationId },
-                detail: { role: found.value.role },
+                detail: role === null ? { platform: true } : { role },
               });
             }
             return rows;
@@ -451,7 +646,7 @@ const make = Effect.gen(function* () {
         });
       }
       const row = yield* findById(invitationId).pipe(storage);
-      return toSummary(
+      return toAnySummary(
         Option.getOrElse(row, () => found.value),
         now,
       );
@@ -501,7 +696,8 @@ const make = Effect.gen(function* () {
     const tokenHash = yield* hashToken(token);
     const keys = linkKeys(tokenHash, clientIp);
     yield* requireNotThrottled(keys);
-    const live = yield* findLive({ tokenHash, now: yield* nowIso }).pipe(storage);
+    const found = yield* findLive({ tokenHash, now: yield* nowIso }).pipe(storage);
+    const live = Option.flatMap(found, (row) => Option.fromUndefinedOr(toLive(row)));
     if (Option.isNone(live)) {
       const known = Option.isSome(yield* tokenExists(tokenHash).pipe(storage));
       if (!known) yield* recordFailure(ipKeys(clientIp));
@@ -528,13 +724,23 @@ const make = Effect.gen(function* () {
   const preview: InvitationService["Service"]["preview"] = Effect.fn("InvitationService.preview")(
     function* (token, clientIp) {
       return yield* requireLive(token, clientIp, { countDeadLink: false }).pipe(
-        Effect.map(({ invitation }): InvitationPreview => ({
-          status: "valid",
-          organizationName: invitation.organizationName,
-          role: invitation.role,
-          inviterName: invitation.inviterName ?? "The Owner",
-          expiresAt: utc(invitation.expiresAt),
-        })),
+        Effect.map(({ invitation }): InvitationPreview =>
+          invitation.kind === "platform"
+            ? {
+                status: "valid",
+                kind: "platform",
+                inviterName: invitation.inviterName ?? "The Owner",
+                expiresAt: utc(invitation.expiresAt),
+              }
+            : {
+                status: "valid",
+                kind: "organization",
+                organizationName: invitation.organizationName,
+                role: invitation.role,
+                inviterName: invitation.inviterName ?? "The Owner",
+                expiresAt: utc(invitation.expiresAt),
+              },
+        ),
         Effect.catchTags({
           InvitationInvalidError: () => Effect.succeed({ status: "invalid" } as const),
         }),
@@ -559,7 +765,10 @@ const make = Effect.gen(function* () {
   )(function* (token, clientIp) {
     const { tokenHash, invitation } = yield* requireLive(token, clientIp);
     return yield* users
-      .startInviteeTotpEnrollment({ tokenHash, label: invitation.organizationName })
+      .startInviteeTotpEnrollment({
+        tokenHash,
+        label: invitation.kind === "organization" ? invitation.organizationName : "Hub",
+      })
       .pipe(storage);
   });
 
@@ -583,7 +792,7 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError((error) => new InvitationRefusedError({ reason: error.message })));
       if (pending.tokenHash !== tokenHash) return yield* new InvitationInvalidError({});
     } else {
-      if (invitation.role === "admin" && input.totp === undefined) {
+      if (invitation.kind === "organization" && invitation.role === "admin" && !input.totp) {
         return yield* new InvitationRefusedError({ reason: ADMIN_NEEDS_MORE });
       }
       pending = yield* users
@@ -614,33 +823,20 @@ const make = Effect.gen(function* () {
       .withTransaction(
         Effect.gen(function* () {
           const user = yield* users.createInvitedUser(pending).pipe(Effect.catchTags(userFailures));
-          const spent = yield* spend({ tokenHash, now: yield* nowIso, userId: user.id }).pipe(
-            storage,
-          );
+          const spent = yield* spendLive(invitation, tokenHash, user.id);
           // Another browser accepted it first, or it was revoked or expired meanwhile.
           if (Option.isNone(spent)) return yield* new InvitationInvalidError({});
-          yield* spaces
-            .addMembership({
-              spaceId: spent.value.spaceId,
-              userId: user.id,
-              role: spent.value.role,
-            })
-            .pipe(storage);
-          yield* audit
-            .record({
-              actor: AuditLog.userActor(user.id),
-              action: "invitation.accept",
-              spaceId: spent.value.spaceId,
-              target: { kind: "invitation", id: invitation.invitationId },
-              detail: { role: spent.value.role, newUser: true },
-            })
-            .pipe(storage);
+          // A Platform invitation (ticket 04) makes the User and nothing more.
+          yield* recordNewUserAcceptance(user.id, invitation.invitationId, spent.value);
           const session = yield* environmentAuth.startUserBrowserSession(
             request,
             user,
             requestMetadata,
           );
-          return { spaceId: spent.value.spaceId, session };
+          return {
+            spaceId: spent.value.kind === "organization" ? spent.value.spaceId : null,
+            session,
+          };
         }),
       )
       // After the commit, so a viewer that refreshes on the bump reads the new Membership.
@@ -669,6 +865,10 @@ const make = Effect.gen(function* () {
     { tokenHash, invitation, keys }: LiveLink,
     sessionId: AuthSessionId | undefined,
   ) {
+    // Ticket 04: a Platform invitation is for who has no User yet; it stays for someone else.
+    if (invitation.kind === "platform") {
+      return yield* new InvitationConflictError({ reason: HAS_ACCOUNT, code: "has-account" });
+    }
     const principal = yield* spaces.principalOf(userId).pipe(storage);
     if (principal.isOwner) {
       return yield* new InvitationConflictError({
@@ -753,7 +953,9 @@ const make = Effect.gen(function* () {
   const inspect: InvitationService["Service"]["inspect"] = Effect.fn("InvitationService.inspect")(
     function* (token, clientIp) {
       const { invitation } = yield* requireLive(token, clientIp);
-      return { role: invitation.role };
+      return invitation.kind === "platform"
+        ? ({ kind: "platform" } as const)
+        : ({ kind: "organization", role: invitation.role } as const);
     },
   );
 
@@ -762,28 +964,18 @@ const make = Effect.gen(function* () {
   )(function* ({ token, clientIp, userId, adminAllowed }) {
     const { tokenHash, invitation, keys } = yield* requireLive(token, clientIp);
     yield* Effect.gen(function* () {
-      const spent = yield* spend({ tokenHash, now: yield* nowIso, userId }).pipe(storage);
+      const spent = yield* spendLive(invitation, tokenHash, userId);
       // Another browser accepted it first, or it was revoked or expired meanwhile.
       if (Option.isNone(spent)) return yield* new InvitationInvalidError({});
-      // The Role is the spent row's, never a copy read before the transaction.
-      if (spent.value.role === "admin" && !adminAllowed) {
+      // The Role is the spent row's, never a copy read before the transaction. A Platform
+      // invitation (ticket 04) has none: it makes nobody an Admin.
+      if (spent.value.kind === "organization" && spent.value.role === "admin" && !adminAllowed) {
         return yield* new InvitationRefusedError({
           reason: ADMIN_NEEDS_MORE,
           code: "strong-factor-required",
         });
       }
-      yield* spaces
-        .addMembership({ spaceId: spent.value.spaceId, userId, role: spent.value.role })
-        .pipe(storage);
-      yield* audit
-        .record({
-          actor: AuditLog.userActor(userId),
-          action: "invitation.accept",
-          spaceId: spent.value.spaceId,
-          target: { kind: "invitation", id: invitation.invitationId },
-          detail: { role: spent.value.role, newUser: true },
-        })
-        .pipe(storage);
+      yield* recordNewUserAcceptance(userId, invitation.invitationId, spent.value);
     }).pipe(countRefusals(keys));
     // After the commit, so a viewer that refreshes on the bump reads the new Membership.
     return {
@@ -794,6 +986,8 @@ const make = Effect.gen(function* () {
   return InvitationService.of({
     create,
     list,
+    createPlatform,
+    listPlatform,
     revoke,
     preview,
     startRegistration,

@@ -144,6 +144,7 @@ import Migration0152 from "./Migrations/152_KeycloakIdentities.ts";
 import Migration0153 from "./Migrations/153_IdentityLoginStrength.ts";
 import Migration0154 from "./Migrations/154_KeycloakManagedMemberships.ts";
 import Migration0155 from "./Migrations/155_KeycloakLogout.ts";
+import Migration0156 from "./Migrations/156_PlatformInvitations.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -290,6 +291,7 @@ const migrationEntries = [
   [153, "IdentityLoginStrength", Migration0153],
   [154, "KeycloakManagedMemberships", Migration0154],
   [155, "KeycloakLogout", Migration0155],
+  [156, "PlatformInvitations", Migration0156],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

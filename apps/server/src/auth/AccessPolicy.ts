@@ -269,6 +269,11 @@ export type Action =
    * ticket 01), decided on the Installation: the Owner alone. They decide who gets in at all.
    */
   | "signInSettings.manage"
+  /**
+   * Create, list and revoke Platform invitations (Keycloak sign-in spec, ticket 04), decided on
+   * the Installation: the Owner alone. One makes a User whatever the Registration mode says.
+   */
+  | "platformInvitation.manage"
   /** Add, replace, rename and delete a Vault's secrets without reading them. */
   | "vault.edit"
   /**
@@ -998,7 +1003,8 @@ export function decide(principal: Principal, action: Action, resource: Resource)
   if (
     action === "masterKey.backup" ||
     action === "secretProvider.manage" ||
-    action === "signInSettings.manage"
+    action === "signInSettings.manage" ||
+    action === "platformInvitation.manage"
   ) {
     if (resource.kind !== "installation") return deny("wrong-resource");
     return principal.isOwner ? allow : deny("owner-only");

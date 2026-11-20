@@ -685,7 +685,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     flow.invitationToken === undefined
       ? Effect.succeed({ kind: "none" })
       : invitations.inspect(Redacted.value(flow.invitationToken), clientIp).pipe(
-          Effect.map(({ role }) => ({ kind: "organization", role }) as const),
+          Effect.map((found): KeycloakAdmission.InvitationState => found),
           Effect.catchTags({
             InvitationInvalidError: () => Effect.succeed({ kind: "invalid" } as const),
             SignInThrottledError: () => Effect.fail(refuse("throttled", "invitation throttled")),
@@ -779,7 +779,11 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
               requiresStrong,
               loginStrong: strength.strong,
             });
-            if (outcome.kind !== "enter" && outcome.kind !== "enter-and-join") {
+            if (
+              outcome.kind !== "enter" &&
+              outcome.kind !== "enter-and-join" &&
+              outcome.kind !== "enter-has-account"
+            ) {
               return {
                 refusal: outcome.kind === "refuse" ? outcome.reason : ("failed" as const),
                 afterCommit: applied.afterCommit,
@@ -795,6 +799,11 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
       if ("refusal" in done) return yield* refuse(done.refusal, "admission");
       const session = done.session;
       if (done.outcome === "enter") return { session, redirectTo: flow.returnTo };
+      // Ticket 04: signed in, told they already have an account; the Invitation stays unspent.
+      // Only the code goes in the address, never the token.
+      if (done.outcome === "enter-has-account") {
+        return { session, redirectTo: withResult(INVITE_PATH, "has-account") };
+      }
       // `enter-and-join`: signed in whatever the Invitation says, as they are this Hub's User
       // already. A link found dead just now is the refusal `join` would give, counted once.
       const joined =
@@ -830,14 +839,17 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         return yield* refuse(outcome.reason, "admission");
       case "enter":
       case "enter-and-join":
+      case "enter-has-account":
         return yield* refuse("failed", "admission");
       case "create-user": {
         const session = yield* register(request, flow, claims, tokens, strength, groupsClaim);
         return { session, redirectTo: flow.returnTo };
       }
-      case "create-user-and-join": {
+      case "create-user-and-join":
+      case "create-user-and-spend": {
         // One transaction: the User, identity, login and session, then the conditional spend and
-        // the membership. Losing the race for the link rolls the new User back.
+        // the membership (none for a Platform invitation, ticket 04). Losing the race for the
+        // link rolls the new User back.
         const { session, afterCommit } = yield* sql
           .withTransaction(
             Effect.gen(function* () {

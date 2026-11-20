@@ -1117,6 +1117,19 @@ const anotherInvite = Effect.fn(function* (
   };
 });
 
+/** A Platform invitation of the Owner's (ticket 04): a User, without a Space. */
+const platformInvite = Effect.fn(function* (server: Server, owner: string) {
+  const created = yield* server.request("/api/installation/invitations", {
+    body: {},
+    cookie: owner,
+  });
+  assert.equal(created.status, 200, created.text);
+  return {
+    token: created.body.token as string,
+    invitationId: (created.body.invitation as { id: string }).id,
+  };
+});
+
 const setMode = Effect.fn(function* (
   server: Server,
   owner: string,
@@ -1565,6 +1578,113 @@ describe("Keycloak admission (ticket 03)", () => {
     );
   });
 
+  describe("a Platform invitation (ticket 04)", () => {
+    it.effect.each([{ mode: "open" }, { mode: "invitation-only" }, { mode: "closed" }] as const)(
+      "$mode: a new identity gets a User of its own, without Organizations, spending it",
+      ({ mode }) =>
+        Effect.gen(function* () {
+          const { server, realm, owner } = yield* hub();
+          yield* setMode(server, owner, mode);
+          const invitation = yield* platformInvite(server, owner);
+          const accepted = yield* roundTrip(
+            server,
+            realm,
+            { sub: "kc-lin", username: "lin" },
+            invitationStart(invitation.token),
+          );
+          assert.equal(accepted.status, 303);
+          assert.equal(accepted.location, "/");
+          const userId = (yield* userOf(server, accepted.cookie)) ?? "";
+          assert.notEqual(userId, "");
+          assert.deepEqual(yield* membershipsOf(server, userId), []);
+          assert.equal((yield* invitationRow(server, invitation.invitationId))?.acceptedBy, userId);
+
+          const acceptance = yield* auditOf(server, owner, "invitation.accept");
+          assert.equal(acceptance.length, 1);
+          assert.equal(acceptance[0]?.actor.userId, userId);
+          assert.deepEqual(acceptance[0]?.detail, { platform: true, newUser: true });
+          // Created through an Invitation: not a registration.
+          assert.deepEqual(yield* auditOf(server, owner, "user.register"), []);
+          // Single use: the spent link no longer even starts a flow.
+          const second = yield* start(server, invitationStart(invitation.token));
+          assert.equal(second.status, 400);
+          assert.isUndefined(second.flowCookie);
+        }),
+    );
+
+    it.effect("an existing User is told they already have an account; it stays unspent", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        yield* setMode(server, owner, "closed");
+        const member = yield* linkedMember(server, realm, "kc-grace");
+        const invitation = yield* platformInvite(server, owner);
+        const answer = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-grace" },
+          invitationStart(invitation.token),
+        );
+        assert.equal(answer.status, 303);
+        assert.equal(answer.location, "/invite?keycloak=has-account");
+        assert.equal(yield* userOf(server, answer.cookie), member.id);
+        assert.isNull((yield* invitationRow(server, invitation.invitationId))?.acceptedAt);
+        assert.deepEqual(yield* membershipsOf(server, member.id), []);
+        assert.deepEqual(yield* auditOf(server, owner, "invitation.accept"), []);
+
+        // Someone new can still use it.
+        const fresh = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-lin" },
+          invitationStart(invitation.token),
+        );
+        assert.equal(fresh.location, "/");
+        assert.isDefined(fresh.cookie);
+      }),
+    );
+
+    it.effect("one that expires while the person is at Keycloak is refused", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        yield* setMode(server, owner, "closed");
+        const invitation = yield* platformInvite(server, owner);
+        yield* TestClock.adjust("6 days");
+        yield* TestClock.adjust("23 hours");
+        yield* TestClock.adjust("55 minutes");
+        const started = yield* start(server, invitationStart(invitation.token));
+        assert.equal(started.status, 200, started.text);
+        const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-lin" });
+        yield* TestClock.adjust("6 minutes");
+        const before = yield* userCount(server);
+        const refused = yield* callback(server, back, joinCookies(started.flowCookie));
+        assert.equal(refused.location, "/invite?keycloak=invitation-invalid");
+        assert.isUndefined(refused.cookie);
+        assert.equal(yield* userCount(server), before);
+      }),
+    );
+
+    it.effect("one revoked while the person is at Keycloak is refused, even when open", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        yield* setMode(server, owner, "open");
+        const invitation = yield* platformInvite(server, owner);
+        const started = yield* start(server, invitationStart(invitation.token));
+        assert.equal(started.status, 200, started.text);
+        const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-lin" });
+        const revoked = yield* server.request("/api/invitations/revoke", {
+          body: { invitationId: invitation.invitationId },
+          cookie: owner,
+        });
+        assert.equal(revoked.status, 200, revoked.text);
+        const before = yield* userCount(server);
+        const refused = yield* callback(server, back, joinCookies(started.flowCookie));
+        assert.equal(refused.location, "/invite?keycloak=invitation-invalid");
+        assert.isUndefined(refused.cookie);
+        assert.equal(yield* userCount(server), before);
+      }),
+    );
+  });
+
   it.effect("the Invitation token never leaves the Hub's side of the flow", () => {
     const recorded: Array<string> = [];
     const tracer = Tracer.make({
@@ -1598,6 +1718,9 @@ describe("Keycloak admission (ticket 03)", () => {
       const { server, realm, owner } = yield* hub();
       const accepted = yield* organizationInvite(server, owner);
       const refused = yield* organizationInvite(server, owner, "admin", "Beta");
+      // Ticket 04: a Platform invitation an existing User opens comes back «has account».
+      const platform = yield* platformInvite(server, owner);
+      yield* linkedMember(server, realm, "kc-grace");
       // Making a link answers its token to the Owner; from here on it is the invitee's flow.
       recorded.length = 0;
       const started = yield* start(server, invitationStart(accepted.token));
@@ -1610,6 +1733,13 @@ describe("Keycloak admission (ticket 03)", () => {
         { sub: "kc-max" },
         invitationStart(refused.token),
       );
+      const hasAccount = yield* roundTrip(
+        server,
+        realm,
+        { sub: "kc-grace" },
+        invitationStart(platform.token),
+      );
+      assert.equal(hasAccount.location, "/invite?keycloak=has-account");
       const rows = [
         ...(yield* server.sql`SELECT * FROM audit_log`),
         ...(yield* server.sql`SELECT * FROM identity_logins`),
@@ -1624,11 +1754,13 @@ describe("Keycloak admission (ticket 03)", () => {
         ...realm.tokenRequests.map((request) => request.body),
         answer.location ?? "",
         refusedAnswer.location ?? "",
+        hasAccount.location ?? "",
+        ...hasAccount.setCookies,
         ...rows.map((row) => JSON.stringify(row)),
         ...recorded,
       ];
       assert.isAbove(recorded.length, 10, "the logger and tracer recorded the requests");
-      for (const token of [accepted.token, refused.token]) {
+      for (const token of [accepted.token, refused.token, platform.token]) {
         assert.deepEqual(
           seen.filter((text) => text.includes(token)).map((text) => text.slice(0, 400)),
           [],

@@ -1,4 +1,7 @@
 import {
+  AuthAccessReadScope,
+  AuthAccessWriteScope,
+  type AuthEnvironmentScope,
   EnvironmentAuthenticatedPrincipal,
   EnvironmentHttpApi,
   EnvironmentHttpConflictError,
@@ -15,12 +18,15 @@ import {
   appendSessionCookie,
   failEnvironmentInternal,
   failEnvironmentInvalidRequest,
+  requireEnvironmentScope,
 } from "../auth/http.ts";
+import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import type * as UserDirectory from "../auth/UserDirectory.ts";
 import { deriveAuthClientMetadata } from "../auth/utils.ts";
 import * as InvitationService from "./InvitationService.ts";
+import * as SpaceDirectory from "./SpaceDirectory.ts";
 
 const requireUser = Effect.gen(function* () {
   const principal = yield* EnvironmentAuthenticatedPrincipal;
@@ -97,8 +103,12 @@ export const layer = HttpApiBuilder.group(
         "revoke",
         Effect.fn("environment.invitations.revoke")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
+          // A Platform invitation (ticket 04) also needs a session that may write access.
+          const { scopes } = yield* EnvironmentAuthenticatedPrincipal;
           return yield* invitations
-            .revoke(yield* requireUser, args.payload.invitationId)
+            .revoke(yield* requireUser, args.payload.invitationId, {
+              accessWrite: scopes.has(AuthAccessWriteScope),
+            })
             .pipe(Effect.catchTags(manageFailures));
         }),
       )
@@ -165,6 +175,64 @@ export const layer = HttpApiBuilder.group(
           return yield* invitations
             .join(yield* requireUser, args.payload.token, yield* clientIp, sessionId)
             .pipe(Effect.catchTags(redeemFailures));
+        }),
+      );
+  }),
+);
+
+const PLATFORM_OWNER_ONLY = "Only the Owner invites people to this Hub.";
+
+/**
+ * The Owner's Platform invitations (Keycloak sign-in spec, ticket 04): list and create. Anyone but
+ * the Owner gets the same 403, whatever their session's scopes; a session of the Owner's also
+ * needs the access scope. Revoking is the `revoke` above.
+ */
+export const layerPlatform = HttpApiBuilder.group(
+  EnvironmentHttpApi,
+  "platformInvitations",
+  Effect.fnUntraced(function* (handlers) {
+    const invitations = yield* InvitationService.InvitationService;
+    const spaces = yield* SpaceDirectory.SpaceDirectory;
+    const forbiddenToAll = () =>
+      Effect.fail(new EnvironmentHttpForbiddenError({ message: PLATFORM_OWNER_ONLY }));
+
+    /** The Owner, asked before the scope, as the sign-in settings do. */
+    const requireOwner = Effect.fn("environment.platformInvitations.requireOwner")(function* (
+      scope: AuthEnvironmentScope,
+    ) {
+      const session = yield* EnvironmentAuthenticatedPrincipal;
+      if (session.userId === undefined) return yield* forbiddenToAll();
+      const principal = yield* spaces.principalOf(session.userId).pipe(Effect.catch(internal));
+      const decision = AccessPolicy.decide(
+        principal,
+        "platformInvitation.manage",
+        AccessPolicy.installation,
+      );
+      if (!AccessPolicy.isAllowed(decision)) return yield* forbiddenToAll();
+      yield* requireEnvironmentScope(scope);
+      return session.userId;
+    });
+
+    return handlers
+      .handle(
+        "list",
+        Effect.fn("environment.platformInvitations.list")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const owner = yield* requireOwner(AuthAccessReadScope);
+          return yield* invitations
+            .listPlatform(owner)
+            .pipe(Effect.catchTags({ ...manageFailures, InvitationRefusedError: forbiddenToAll }));
+        }),
+      )
+      .handle(
+        "create",
+        Effect.fn("environment.platformInvitations.create")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const owner = yield* requireOwner(AuthAccessWriteScope);
+          yield* appendCredentialResponseHeaders;
+          return yield* invitations
+            .createPlatform(owner)
+            .pipe(Effect.catchTags({ ...manageFailures, InvitationRefusedError: forbiddenToAll }));
         }),
       );
   }),

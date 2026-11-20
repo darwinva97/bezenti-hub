@@ -284,6 +284,8 @@ export const KeycloakSignInFailure = Schema.Literals([
   "invitation-invalid",
   "already-member",
   "owner",
+  // Ticket 04: a Platform invitation opened by who already has a User; it stays unspent.
+  "has-account",
   "strong-factor-required",
   "disabled",
   "removed",

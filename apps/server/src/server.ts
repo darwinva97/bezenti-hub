@@ -876,6 +876,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(ProjectHttp.layer),
       Layer.provide(SpacesHttp.layer),
       Layer.provide(InvitationsHttp.layer),
+      Layer.provide(InvitationsHttp.layerPlatform),
       Layer.provide(InstallationUsersHttp.layer),
       Layer.provide(AuditHttp.layer),
       Layer.provide(SignInSettingsHttp.layer),

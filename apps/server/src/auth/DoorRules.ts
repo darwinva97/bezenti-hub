@@ -17,7 +17,13 @@ const ENVIRONMENTS = own(
   "EnvironmentRegistry with the session's principal: environment.view/use/manage in AccessPolicy",
 );
 const SPACES = own("SpaceDirectory/AccessPolicy for the session's User (Owner, Admin, Member)");
-const INVITATIONS = own("an Invitation token, or an Admin of its Organization");
+const INVITATIONS = own(
+  "an Invitation token, or an Admin of its Organization; a Platform invitation (no Space, ticket 04) only the Owner (AccessPolicy `platformInvitation.manage`), revoking it also needs access:write, and every Organization read leaves it out",
+);
+/** Ticket 04: an Invitation that makes a User whatever the Registration mode says. */
+const PLATFORM_INVITATIONS = own(
+  "AccessPolicy `platformInvitation.manage` on the Installation (the Owner only; everyone else the same 403, before any scope is looked at), then access:read to list and access:write to create; the token is answered once at creation and only its hash is kept; a Platform invitation gives a User and never a Role or a membership; no WS or MCP door",
+);
 const OWNER = own("the Installation's Owner only, plus the access scopes");
 /** Remote code execution on another host with the Hub's grant: never anyone but the Owner. */
 const SSH_INSTALL = own(
@@ -124,6 +130,8 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "signInSettings.check": SIGN_IN_SETTINGS,
   "signInSettings.get": SIGN_IN_SETTINGS,
   "signInSettings.update": SIGN_IN_SETTINGS,
+  "platformInvitations.create": PLATFORM_INVITATIONS,
+  "platformInvitations.list": PLATFORM_INVITATIONS,
   "invitations.accept": INVITATIONS,
   "invitations.create": INVITATIONS,
   "invitations.join": own(

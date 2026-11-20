@@ -22,7 +22,9 @@ export type InvitationState =
   | { readonly kind: "none" }
   /** Unknown, expired, revoked, used or into an archived Organization: all alike. */
   | { readonly kind: "invalid" }
-  | { readonly kind: "organization"; readonly role: SpaceRole };
+  | { readonly kind: "organization"; readonly role: SpaceRole }
+  /** Ticket 04: the Owner's Invitation to the Hub, without a Space or a Role. */
+  | { readonly kind: "platform" };
 
 export type AdmissionIntent = "sign-in" | "invitation";
 
@@ -62,6 +64,13 @@ export type AdmissionOutcome =
   | { readonly kind: "create-user" }
   /** A new User and the Invitation's membership, spending it, all in one transaction. */
   | { readonly kind: "create-user-and-join" }
+  /** Ticket 04: a new User spending a Platform invitation, in one transaction; no membership. */
+  | { readonly kind: "create-user-and-spend" }
+  /**
+   * Ticket 04: an existing User opened a Platform invitation. Sign them in and say «you already
+   * have an account»; the Invitation stays unspent for someone else.
+   */
+  | { readonly kind: "enter-has-account" }
   | { readonly kind: "refuse"; readonly reason: AdmissionRefusal };
 
 export interface AdmissionRule {
@@ -118,9 +127,24 @@ export const RULES: ReadonlyArray<AdmissionRule> = [
     outcome: () => refuse("strong-factor-required"),
   },
   {
+    // Ticket 04: the Owner's hand-made User, in every mode. It never gives a Role; a mapped
+    // group's Admin Role still needed a strong login (above).
+    name: "new identity, platform invitation",
+    when: (input) => isNew(input) && input.invitation.kind === "platform",
+    outcome: () => ({ kind: "create-user-and-spend" }),
+  },
+  {
     name: "active user signs in",
     when: (input) => input.identity.kind === "active" && input.intent === "sign-in",
     outcome: () => ({ kind: "enter" }),
+  },
+  {
+    name: "active user opens a platform invitation",
+    when: (input) =>
+      input.identity.kind === "active" &&
+      input.intent === "invitation" &&
+      input.invitation.kind === "platform",
+    outcome: () => ({ kind: "enter-has-account" }),
   },
   {
     // Whether the Invitation still holds is `join`'s to say, with today's refusals.

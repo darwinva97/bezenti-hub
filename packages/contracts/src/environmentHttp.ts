@@ -124,13 +124,15 @@ import {
   AcceptInvitationRequest,
   AcceptInvitationResult,
   CreatedInvitation,
+  CreatedPlatformInvitation,
   CreateInvitationRequest,
   InvitationList,
   InvitationPreview,
   InvitationRegistrationRequest,
-  InvitationSummary,
   InvitationTokenRequest,
   JoinInvitationResult,
+  PlatformInvitationList,
+  RevokedInvitation,
   RevokeInvitationRequest,
 } from "./invitations.ts";
 import {
@@ -1181,6 +1183,25 @@ class EnvironmentSignInSettingsHttpApi extends HttpApiGroup.make("signInSettings
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+// The Owner's Platform invitations (Keycloak sign-in spec, ticket 04): an Invitation to the Hub
+// without a Space. Anyone else gets the same 403; a session of the Owner's also needs the access
+// scope. Revoking is `/api/invitations/revoke`, as for any Invitation.
+class EnvironmentPlatformInvitationsHttpApi extends HttpApiGroup.make("platformInvitations")
+  .add(
+    HttpApiEndpoint.get("list", "/api/installation/invitations", {
+      headers: OptionalBearerHeaders,
+      success: PlatformInvitationList,
+      error: EnvironmentInstallationUserErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("create", "/api/installation/invitations", {
+      headers: OptionalBearerHeaders,
+      success: CreatedPlatformInvitation,
+      error: EnvironmentInstallationUserErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 const EnvironmentHubEnvironmentErrors = [
   // The session has no User, or the policy refuses the change.
   EnvironmentHttpForbiddenError,
@@ -1458,7 +1479,8 @@ class EnvironmentInvitationsHttpApi extends HttpApiGroup.make("invitations")
     HttpApiEndpoint.post("revoke", "/api/invitations/revoke", {
       headers: OptionalBearerHeaders,
       payload: RevokeInvitationRequest,
-      success: InvitationSummary,
+      // A Platform invitation (ticket 04) only for the Owner, with the access scope to write.
+      success: RevokedInvitation,
       error: EnvironmentInvitationManageErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
@@ -1692,6 +1714,7 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentInstallationUsersHttpApi)
   .add(EnvironmentAuditHttpApi)
   .add(EnvironmentSignInSettingsHttpApi)
+  .add(EnvironmentPlatformInvitationsHttpApi)
   .add(EnvironmentHubEnvironmentsHttpApi)
   .add(EnvironmentSandboxImageHttpApi)
   .add(EnvironmentVaultsHttpApi)

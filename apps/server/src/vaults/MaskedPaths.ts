@@ -390,6 +390,8 @@ export const HTTP_DOOR_RULES: Record<string, DoorRule> = {
   "invitations.totpEnrollment": none("invitations"),
   "invitations.accept": none("invitations"),
   "invitations.join": none("invitations"),
+  "platformInvitations.list": none("invitations"),
+  "platformInvitations.create": none("invitations"),
   "installationUsers.list": none("Users"),
   "installationUsers.setStatus": none("Users"),
   "signInSettings.get": none("sign-in settings, never the Keycloak client secret"),

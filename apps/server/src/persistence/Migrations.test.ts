@@ -151,6 +151,82 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect(
+    "156 keeps every Invitation and lets one without a Space be a Platform invitation",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 155 });
+        yield* sql`
+        INSERT INTO users (user_id, display_name, is_owner, created_at)
+        VALUES ('owner', 'Ada', 1, '2026-01-01T00:00:00.000Z')
+      `;
+        yield* sql`
+        INSERT INTO spaces (space_id, kind, name, created_at)
+        VALUES ('acme', 'organization', 'Acme', '2026-01-01T00:00:00.000Z')
+      `;
+        yield* sql`
+        INSERT INTO space_invitations (
+          invitation_id, space_id, role, token_hash, created_by, created_at, expires_at
+        )
+        VALUES (
+          'inv-1', 'acme', 'member', 'hash-1', 'owner', '2026-01-01T00:00:00.000Z',
+          '2026-01-08T00:00:00.000Z'
+        )
+      `;
+
+        yield* runMigrations();
+
+        const rows = yield* sql`
+        SELECT invitation_id, space_id, role, token_hash FROM space_invitations
+      `;
+        assert.deepStrictEqual(rows, [
+          { invitation_id: "inv-1", space_id: "acme", role: "member", token_hash: "hash-1" },
+        ]);
+        const indexes = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'space_invitations'
+      `;
+        const indexNames = indexes.map((row) => row.name);
+        assert.include(indexNames, "space_invitations_space_idx");
+        assert.include(indexNames, "space_invitations_platform_idx");
+
+        const insert = (id: string, spaceId: string | null, role: string | null, hash: string) =>
+          sql`
+          INSERT INTO space_invitations (
+            invitation_id, space_id, role, token_hash, created_by, created_at, expires_at
+          )
+          VALUES (
+            ${id}, ${spaceId}, ${role}, ${hash}, 'owner', '2026-01-02T00:00:00.000Z',
+            '2026-01-09T00:00:00.000Z'
+          )
+        `;
+        // Without a Space and without a Role: a Platform invitation.
+        yield* insert("inv-2", null, null, "hash-2");
+        // A Space without a Role, or a Role without a Space, is neither.
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(insert("inv-3", "acme", null, "hash-3"))));
+        assert.isTrue(
+          Exit.isFailure(yield* Effect.exit(insert("inv-4", null, "member", "hash-4"))),
+        );
+        // A token hash still names one Invitation.
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(insert("inv-5", null, null, "hash-1"))));
+        const references = yield* sql<{ readonly table: string; readonly from: string }>`
+        SELECT "table", "from" FROM pragma_foreign_key_list('space_invitations')
+      `;
+        assert.sameDeepMembers(
+          references.map((row) => ({ table: row.table, from: row.from })),
+          [
+            { table: "spaces", from: "space_id" },
+            { table: "users", from: "created_by" },
+            { table: "users", from: "accepted_by" },
+          ],
+        );
+        const count = yield* sql<{ readonly n: number }>`
+        SELECT COUNT(*) AS n FROM space_invitations
+      `;
+        assert.strictEqual(count[0]?.n, 2);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("still starts after a newer build recorded a later V2 migration", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

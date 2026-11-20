@@ -344,19 +344,40 @@ describe("local sign-in off for everyone but the Owner (ticket 08)", () => {
   );
 
   it.effect(
-    "a Platform invitation accepted with a new password or passkey is refused, unspent",
+    "a Platform invitation with new local credentials works while open, is refused once closed",
     () =>
       Effect.gen(function* () {
         const { server, owner } = yield* hub;
-        const created = yield* server.request("/api/installation/invitations", {
+        const createPlatform = server.request("/api/installation/invitations", {
           body: {},
           cookie: owner,
         });
+        // While local sign-in is open, it works: a User with no Membership.
+        const open = yield* createPlatform;
+        assert.equal(open.status, 200, open.text);
+        const joined = yield* server.request("/api/invitations/accept", {
+          body: {
+            token: open.body.token as string,
+            method: "password",
+            displayName: "Ada Byron",
+            loginName: "ada",
+            password: PASSWORD,
+          },
+        });
+        assert.equal(joined.status, 200, joined.text);
+        const ada = yield* userOf(server, joined.cookie);
+        assert.isString(ada);
+        const memberships = yield* server.sql<{ n: number }>`
+          SELECT COUNT(*) AS n FROM space_memberships WHERE user_id = ${ada ?? ""}
+        `;
+        assert.equal(memberships[0]?.n, 0);
+
+        const created = yield* createPlatform;
         assert.equal(created.status, 200, created.text);
         const token = created.body.token as string;
-        const off = yield* server.request(SETTINGS, {
-          cookie: owner,
-          body: { localSignInForMembers: false },
+        // Ada has no Keycloak account yet: the Owner confirms first.
+        const { saved: off } = yield* saveConfirmed(server, owner, {
+          localSignInForMembers: false,
         });
         assert.equal(off.status, 200, off.text);
 
@@ -394,8 +415,9 @@ describe("local sign-in off for everyone but the Owner (ticket 08)", () => {
         WHERE invitation_id = ${(created.body.invitation as { id: string }).id}
       `;
         assert.deepEqual(accepted, [{ acceptedAt: null }]);
+        // The Owner and Ada: no User for the refused accepts.
         const users = yield* server.sql<{ n: number }>`SELECT COUNT(*) AS n FROM users`;
-        assert.equal(users[0]?.n, 1);
+        assert.equal(users[0]?.n, 2);
       }).pipe(Effect.scoped),
   );
 

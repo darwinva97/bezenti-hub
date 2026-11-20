@@ -634,6 +634,107 @@ group of the person that gives a higher Role restores it at their next sign-in. 
 at most 20, with a truncated flag). Only the groups some mapping names are read from a
 token, wherever they sit in its list.
 
+### Keycloak sign-ins after the callback
+
+Each Keycloak sign-in is an `identity_logins` row with its refresh token and its
+latest ID token, both sealed (see Secrets at rest). Sessions born of it carry its
+`identity_login_id`.
+[KeycloakLogins](../../apps/server/src/auth/KeycloakLogins.ts) keeps it honest
+afterwards. Every ending goes through `UserDirectory.endKeycloakLogins`: the row
+ends, its sealed tokens are dropped, and every session and unspent pairing link
+born of it is revoked in the caller's transaction. Sockets close after the
+commit. A session whose sign-in has ended also reads as revoked on its own.
+
+**Re-check.** Using a session born of a sign-in counts as use of that sign-in: an
+HTTP request it signs, or a socket held open on it. When use comes more than an
+hour after `checked_at`, `SessionStore` puts the login id on a dropping queue.
+The request never waits for it, and a full queue drops the signal; the next use
+sends it again. An open socket wakes on the hour to send its own signal.
+KeycloakLogins refreshes in a background fiber with the tracer off, so no span
+holds a token. It runs one refresh at a time per sign-in (at most 8 at once).
+
+- **A refused refresh token** (`invalid_grant`: the account is disabled or
+  deleted, or the session ended or expired) ends the sign-in.
+- **No answer, a 5xx, another refusal or a bad ID token** ends nothing, on
+  purpose: a Keycloak outage must not sign everyone out. The Owner's sign-in
+  settings show «not answering since …», or «rejected» when the realm refuses
+  the Hub's client (a wrong secret). Disabled accounts are not signed out
+  meanwhile, so the two must look different. Re-checks then back off from 1 to
+  10 minutes. This state is in memory, and a restart clears it.
+- **A good refresh** saves the new refresh token and ID token first, on their own,
+  so a rotated token is never lost to a later failure. Then it applies Keycloak's
+  groups through the callback's own code (`KeycloakGroups`), so an Admin group
+  on a weak sign-in ends that sign-in, as a promotion does. It keeps the
+  sign-in's strength as it was at sign-in.
+- **A sign-in with no refresh token**, or one whose issuer is no longer the
+  configured one, or any sign-in while Keycloak is off, ends at its first
+  re-check: nothing can vouch for it.
+
+The one-at-a-time rule is a `Set` in memory, so it assumes a single Hub process,
+as production runs today. If two replicas refreshed the same rotating refresh
+token, Keycloak would refuse the slower one (a false `invalid_grant`) and end a
+sign-in that is fine. Coordinate the turn (for example a row lock) before running
+more than one.
+
+**Back-channel logout.** `POST /oauth/keycloak/backchannel-logout` is a raw,
+untraced route.
+
+- **Input:** it reads no cookie. It takes a urlencoded body of at most 16 KiB
+  with exactly one `logout_token` (8 KiB).
+- **Checks:** the token is verified like an ID token (the realm's keys and
+  algorithms, `iss`, `aud`/`azp`, `exp` when present). It must also have been
+  issued at most 2 minutes ago (60 s skew), carry a `jti` and the back-channel
+  logout event, and have no `nonce`, so an ID token is never taken for one.
+- **Replays:** a `jti` is remembered for 4 minutes, and only after the signature
+  checks, so only realm-signed tokens fill the cache. The cache holds 10 000; when
+  full it refuses rather than forget one that could then be replayed.
+- **Ending:** with `sid` it ends that SSO session's live sign-ins (of `sub` too
+  when given). Without `sid` it ends every live sign-in of the identity.
+- **Answer:** 200, also when nothing matched, or an empty 400. On a Hub that
+  Keycloak cannot reach (LAN, Tailscale), the hourly re-check covers the same
+  cases more slowly.
+
+**Inheritance.** Some things approved from a session born of a sign-in carry that
+sign-in's id:
+
+- an app sign-in (`AppSignIn.approve`);
+- an MCP client, whether approved in one click or with a pairing code created
+  from such a session;
+- a pairing link (`auth_pairing_links.identity_login_id`) and every session it
+  issues.
+
+They end with the sign-in. A session or link naming a sign-in is written only
+while that sign-in is live (a conditional insert), so nothing approved in a race
+outlives it. Sessions issued from the shell stay unbound.
+
+Inheritance changes how ticket 06's weak-access ending treats them:
+
+- `endWeakKeycloakLogins` ends a User's weak sign-ins with everything they
+  approved. What a strong sign-in approved stays.
+- For a User other than the Owner it also ends what carries no sign-in, because
+  nothing vouches for its strength: local sign-in sessions, apps approved before
+  inheritance, unbound links. The Owner's unbound sessions are the break-glass and
+  stay.
+- An inherited session counts as its sign-in's strength in `sessionLoginStrong`.
+
+**Also sign out of Keycloak.** `POST /api/auth/sign-out` still ends only the
+Hub session. For a browser session born of a live sign-in, it also answers a
+random handle. The handle is single-use, kept hashed, valid for 10 minutes, and
+never logged. At most 10 000 exist at once; past that none is handed out.
+
+The page lands on `/sign-in` with the handle in the fragment and removes it from
+the address straight away. «Also sign out of Keycloak» spends it at
+`POST /api/auth/keycloak/sign-out`, from the Hub's own origin. That ends the
+sign-in with the apps, MCP clients and pairing links approved from it, which is
+why the page says so. It answers the realm's `end_session_endpoint` with
+`client_id`, `post_logout_redirect_uri` (`<base>/sign-in`) and `id_token_hint`.
+The hint is the sign-in's latest ID token, read before the sign-in ends; OPs
+accept an expired one. The Hub ends the sign-in itself because an offline session
+outlives Keycloak's SSO logout, so no back-channel call would come for it.
+Audit: `keycloak.login.end` with its reason (`refresh-refused`, `backchannel`,
+`sign-out`, `no-refresh-token`, `keycloak-off`, `issuer-changed`) and how many
+sessions and links ended with it.
+
 ### Disabled and removed Users
 
 [InstallationUserService](../../apps/server/src/spaces/InstallationUserService.ts)
@@ -876,7 +977,11 @@ master key; only the Owner sees its status or downloads its backup (`masterKey.b
 `file` are sealed at rest and in clear only in a folder in memory (on the disk, emptied at every
 start, where there is none); that delivery applies only when
 the Hub machine runs agents, since a Sandbox or a joined machine cannot read a path on the Hub. See
-[secrets.md](secrets.md).
+[secrets.md](secrets.md). A Keycloak sign-in's refresh token and latest ID token are
+sealed like TOTP secrets: AES-256-GCM under the `identity-login-key` store secret. The
+associated data names the sign-in and the kind of token, so a value moved to another row or
+column never opens. A failed seal or unseal carries no cause, and no token reaches a log, a
+span or an answer.
 
 ## Folders on the Hub's disk
 

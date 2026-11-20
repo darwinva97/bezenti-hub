@@ -710,7 +710,7 @@ realm over the network, and a session is used on every request and socket: if th
 request waited for the answer, a slow Keycloak would slow the whole Hub, and a
 Keycloak outage would take it down. So use only queues the question, and the
 answer arrives a little late. The question has two kinds of failure with opposite
-answers. A refresh token the realm *refuses* is the realm saying the account is
+answers. A refresh token the realm _refuses_ is the realm saying the account is
 gone, so the sign-in ends. Anything else (no answer, a timeout, a 5xx) tells the
 Hub nothing about the account, and ending sessions on it would sign out
 everybody, the Owner's Admins included, for as long as Keycloak is down. The Hub

@@ -161,7 +161,7 @@ days (see below). Copy the client's secret from its **Credentials** tab.
 the client (**Group Membership**) with **Add to ID token** on, and write its
 claim name in **Groups** (`groups` unless you changed it). A claim that is
 missing from the token means the person has no groups, so set the mapper up
-*before* you add mappings: otherwise every managed Membership would go at the
+_before_ you add mappings: otherwise every managed Membership would go at the
 next sign-in. A mapping names a group, an Organization and a Role; the list
 offers only Organizations you steward. See
 [Keycloak groups and Memberships](./install.md#keycloak-groups-and-memberships).

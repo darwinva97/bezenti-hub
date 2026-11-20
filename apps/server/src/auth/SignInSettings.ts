@@ -1,7 +1,7 @@
 /**
- * The Platform's sign-in settings (Keycloak sign-in spec, ticket 01): the Owner's alone, audited.
- * The client secret is write-only (`keycloak-client-secret`, read back only by `keycloakConfig`).
- * A strong-list change (ticket 06) ends the Owner's and Admins' sign-ins it makes weak, confirmed.
+ * The Platform's sign-in settings (ticket 01): the Owner's alone, audited; the client secret is
+ * write-only. What a change ends is confirmed first: weak sign-ins (ticket 06), local sessions
+ * (local sign-in off), Keycloak sign-ins it can no longer re-check (Keycloak off, a new issuer).
  */
 import {
   type KeycloakCheckResult,
@@ -33,6 +33,7 @@ import * as AccessPolicy from "./AccessPolicy.ts";
 import * as GroupSync from "./GroupSync.ts";
 import * as KeycloakAdmission from "./KeycloakAdmission.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
+import * as LocalSignIn from "./localSignIn.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as UserDirectory from "./UserDirectory.ts";
 
@@ -79,25 +80,57 @@ export class SignInSecretNotStoredError extends Schema.TaggedError<SignInSecretN
 }
 
 /**
- * A change to the strong-factor lists would end Keycloak sign-ins of the Owner and Admins
- * (ticket 06), and the request did not confirm it: nothing was saved. `loginsToEnd` says how many.
+ * A change would end sessions or strand Users, and the request did not confirm it
+ * (`endLoginsConfirmed`): nothing was saved. `message` says what and how many: a strong-list
+ * change (ticket 06), local sign-in off, Keycloak off or a new issuer (ticket 08).
  */
 export class SignInSettingsConfirmError extends Schema.TaggedError<SignInSettingsConfirmError>()(
   "SignInSettingsConfirmError",
-  { loginsToEnd: Schema.Number, otherAccessToEnd: Schema.Number },
-) {
-  override get message(): string {
-    const signIns =
-      this.loginsToEnd === 1 ? "1 Keycloak sign-in" : `${this.loginsToEnd} Keycloak sign-ins`;
-    const other =
-      this.otherAccessToEnd === 0
-        ? ""
-        : this.otherAccessToEnd === 1
-          ? ", and 1 app session or pairing link of those Admins"
-          : `, and ${this.otherAccessToEnd} app sessions or pairing links of those Admins`;
-    return `This change ends ${signIns} of the Owner or Admins that would no longer count as strong${other} (yours too, if yours is one; your passkey still signs you in). Save again to confirm.`;
-  }
-}
+  { message: Schema.String },
+) {}
+
+const counted = (n: number, one: string, many: string) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
+
+const YOURS_TOO = "(yours too, if yours is one; your passkey still signs you in)";
+
+const strongListWarning = (loginsToEnd: number, otherAccessToEnd: number) => {
+  const other =
+    otherAccessToEnd === 0
+      ? ""
+      : `, and ${counted(otherAccessToEnd, "app session or pairing link", "app sessions or pairing links")} of those Admins`;
+  return `This change ends ${counted(loginsToEnd, "Keycloak sign-in", "Keycloak sign-ins")} of the Owner or Admins that would no longer count as strong${other} ${YOURS_TOO}.`;
+};
+
+const localOffWarning = (counts: {
+  readonly usersWithoutKeycloak: number;
+  readonly sessions: number;
+  readonly pairingLinks: number;
+}) => {
+  const users =
+    counts.usersWithoutKeycloak === 0
+      ? "Every User besides you signs in with Keycloak."
+      : `${counted(counts.usersWithoutKeycloak, "User besides you doesn't", "Users besides you don't")} sign in with Keycloak yet: each will need a reset link to get back in.`;
+  const ended =
+    counts.sessions === 0 && counts.pairingLinks === 0
+      ? ""
+      : ` This ends ${counted(counts.sessions, "session", "sessions")} and ${counted(counts.pairingLinks, "pairing link", "pairing links")} from a passkey or password sign-in.`;
+  return `Turning off local sign-in for everyone but you: ${users}${ended}`;
+};
+
+const keycloakOffWarning = (logins: number, sessions: number) =>
+  `Turning Keycloak off ends ${counted(logins, "Keycloak sign-in", "Keycloak sign-ins")} and ${counted(sessions, "session", "sessions")} born of them ${YOURS_TOO}. Local sign-in comes back on for everyone; Users who sign in only with Keycloak need a reset link.`;
+
+const issuerWarning = (stranded: number, logins: number) => {
+  const users =
+    stranded === 0
+      ? ""
+      : `${counted(stranded, "User linked to the current realm", "Users linked to the current realm")} won't match the new issuer: each needs a reset link (in open registration they would get a new, empty User).`;
+  const ended =
+    logins === 0
+      ? ""
+      : ` ${counted(logins, "Keycloak sign-in", "Keycloak sign-ins")} of the current realm end now ${YOURS_TOO}.`;
+  return `${users}${ended}`.trim();
+};
 
 /** What ticket 02 signs in with: the enabled realm's client, its secret Redacted. */
 export interface KeycloakConfig {
@@ -148,6 +181,11 @@ export class SignInSettings extends Context.Service<
      * when the flow starts.
      */
     readonly keycloakOffered: Effect.Effect<boolean, SignInSettingsStorageError>;
+    /**
+     * Ticket 08: whether local sign-in is off for everyone but the Owner (Keycloak on, the switch
+     * off). For the sign-in page and the reset page; the doors read the row themselves.
+     */
+    readonly localSignInClosed: Effect.Effect<boolean, SignInSettingsStorageError>;
     /**
      * Internal (ticket 05): the Owner's group mappings as a sign-in applies them, each with
      * whether it is enabled (the Owner is the Organization's Steward) and whether its
@@ -452,6 +490,74 @@ const make = Effect.gen(function* () {
     return users;
   }, Effect.mapError(storage));
 
+  /**
+   * Ticket 08, before local sign-in turns off: the active Users besides the Owner with no Keycloak
+   * identity yet, and the sessions and unspent pairing links it would end (those
+   * `UserDirectory.endLocalSignIns` ends).
+   */
+  const localSignInCounts = (nowIso: string) =>
+    Effect.all({
+      usersWithoutKeycloak: sql<{ readonly n: number }>`
+        SELECT COUNT(*) AS n FROM users AS u
+        WHERE u.is_owner = 0 AND u.disabled_at IS NULL AND u.removed_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM user_identities AS i WHERE i.user_id = u.user_id)
+      `,
+      sessions: sql<{ readonly n: number }>`
+        SELECT COUNT(*) AS n FROM auth_sessions
+        WHERE revoked_at IS NULL AND expires_at > ${nowIso}
+          AND identity_login_id IS NULL AND issued_by_shell = 0 AND user_id IS NOT NULL
+          AND user_id NOT IN (SELECT user_id FROM users WHERE is_owner = 1)
+      `,
+      pairingLinks: sql<{ readonly n: number }>`
+        SELECT COUNT(*) AS n FROM auth_pairing_links
+        WHERE revoked_at IS NULL AND consumed_at IS NULL AND expires_at > ${nowIso}
+          AND identity_login_id IS NULL AND issued_by_shell = 0 AND user_id IS NOT NULL
+          AND user_id NOT IN (SELECT user_id FROM users WHERE is_owner = 1)
+      `,
+    }).pipe(
+      Effect.map((rows) => ({
+        usersWithoutKeycloak: rows.usersWithoutKeycloak[0]?.n ?? 0,
+        sessions: rows.sessions[0]?.n ?? 0,
+        pairingLinks: rows.pairingLinks[0]?.n ?? 0,
+      })),
+      Effect.mapError(storage),
+    );
+
+  /** Ticket 08: the live Keycloak sign-ins Keycloak off (all) or a new issuer (the rest) ends. */
+  const keycloakLoginsToEnd = (all: boolean, issuer: string | null) =>
+    sql<{ readonly loginId: string }>`
+      SELECT login_id AS "loginId" FROM identity_logins
+      WHERE ended_at IS NULL
+        ${all || issuer === null ? sql`` : sql`AND issuer <> ${issuer}`}
+      ORDER BY created_at, login_id
+    `.pipe(
+      Effect.map((rows) => rows.map((row) => row.loginId)),
+      Effect.mapError(storage),
+    );
+
+  /** The live sessions born of these sign-ins, inherited ones included. */
+  const keycloakSessionCount = (loginIds: ReadonlyArray<string>, nowIso: string) =>
+    loginIds.length === 0
+      ? Effect.succeed(0)
+      : sql<{ readonly n: number }>`
+          SELECT COUNT(*) AS n FROM auth_sessions
+          WHERE revoked_at IS NULL AND expires_at > ${nowIso}
+            AND ${sql.in("identity_login_id", loginIds)}
+        `.pipe(
+          Effect.map((rows) => rows[0]?.n ?? 0),
+          Effect.mapError(storage),
+        );
+
+  /** Ticket 08: Users whose Keycloak identity a new issuer no longer matches. */
+  const identitiesOffIssuer = (issuer: string | null) =>
+    sql<{ readonly n: number }>`
+      SELECT COUNT(*) AS n FROM user_identities
+      ${issuer === null ? sql`` : sql`WHERE issuer <> ${issuer}`}
+    `.pipe(
+      Effect.map((rows) => rows[0]?.n ?? 0),
+      Effect.mapError(storage),
+    );
+
   const viewOf = Effect.fn("SignInSettings.viewOf")(function* (row: Row) {
     const settings = settingsOf(row);
     // Whether a secret is saved is the store's answer, not the row's: a secret that could not be
@@ -654,22 +760,52 @@ const make = Effect.gen(function* () {
           if (changed.length === 0) return yield* viewOf(row);
 
           const listsChanged = changed.includes("strongAcr") || changed.includes("strongAmr");
+          // Ticket 08: what else a save ends.
+          const localTurnedOff = was.localSignInForMembers && !next.localSignInForMembers;
+          const keycloakTurnedOff = was.keycloakEnabled && !next.keycloakEnabled;
+          const issuerChanged = was.issuer !== null && next.issuer !== was.issuer;
           // A dry run first: the Owner sees how many sign-ins the change ends before it does.
-          if (listsChanged && request.endLoginsConfirmed !== true) {
-            const planned = yield* strengthPlan(next);
-            if (planned.toEnd.length > 0) {
-              // The Owner's sessions without a sign-in are their local ones, and stay.
-              const admins: Array<UserId> = [];
-              for (const userId of planned.users) {
-                const principal = yield* spaces.principalOf(userId).pipe(Effect.mapError(storage));
-                if (!principal.isOwner) admins.push(userId);
+          if (request.endLoginsConfirmed !== true) {
+            const nowIso = DateTime.formatIso(yield* DateTime.now);
+            const warnings: Array<string> = [];
+            if (listsChanged) {
+              const planned = yield* strengthPlan(next);
+              if (planned.toEnd.length > 0) {
+                // The Owner's sessions without a sign-in are their local ones, and stay.
+                const admins: Array<UserId> = [];
+                for (const userId of planned.users) {
+                  const principal = yield* spaces
+                    .principalOf(userId)
+                    .pipe(Effect.mapError(storage));
+                  if (!principal.isOwner) admins.push(userId);
+                }
+                const otherAccessToEnd = yield* identities
+                  .unboundAccessCount(admins, nowIso)
+                  .pipe(Effect.mapError(storage));
+                warnings.push(strongListWarning(planned.toEnd.length, otherAccessToEnd));
               }
-              const otherAccessToEnd = yield* identities
-                .unboundAccessCount(admins, DateTime.formatIso(yield* DateTime.now))
-                .pipe(Effect.mapError(storage));
+            }
+            if (localTurnedOff) {
+              const counts = yield* localSignInCounts(nowIso);
+              if (counts.usersWithoutKeycloak + counts.sessions + counts.pairingLinks > 0) {
+                warnings.push(localOffWarning(counts));
+              }
+            }
+            if (keycloakTurnedOff || issuerChanged) {
+              const ending = yield* keycloakLoginsToEnd(keycloakTurnedOff, next.issuer);
+              const sessions = yield* keycloakSessionCount(ending, nowIso);
+              if (keycloakTurnedOff && ending.length > 0) {
+                warnings.push(keycloakOffWarning(ending.length, sessions));
+              }
+              if (issuerChanged) {
+                const stranded = yield* identitiesOffIssuer(next.issuer);
+                const logins = keycloakTurnedOff ? 0 : ending.length;
+                if (stranded + logins > 0) warnings.push(issuerWarning(stranded, logins));
+              }
+            }
+            if (warnings.length > 0) {
               return yield* new SignInSettingsConfirmError({
-                loginsToEnd: planned.toEnd.length,
-                otherAccessToEnd,
+                message: `${warnings.join(" ")} Save again to confirm.`,
               });
             }
           }
@@ -700,6 +836,41 @@ const make = Effect.gen(function* () {
                 // an Admin, which ends it then if it is weak.
                 let ended = 0;
                 const closes: Array<Effect.Effect<void>> = [];
+                // Ticket 08: local sign-in off ends everyone else's local sessions and links.
+                let localEnded: { readonly sessions: number; readonly pairingLinks: number } = {
+                  sessions: 0,
+                  pairingLinks: 0,
+                };
+                if (localTurnedOff) {
+                  const done = yield* userDirectory.endLocalSignIns();
+                  localEnded = done;
+                  closes.push(done.afterCommit);
+                }
+                // Keycloak off, or another realm: nothing re-checks these sign-ins any more, so
+                // they end now with all born of them, one `keycloak.login.end` each (ticket 07's
+                // re-check would end them later).
+                if (keycloakTurnedOff || issuerChanged) {
+                  const reason = keycloakTurnedOff ? "keycloak-off" : "issuer-changed";
+                  for (const loginId of yield* keycloakLoginsToEnd(
+                    keycloakTurnedOff,
+                    next.issuer,
+                  )) {
+                    const done = yield* userDirectory.endKeycloakLogins([loginId]);
+                    closes.push(done.afterCommit);
+                    for (const login of done.ended) {
+                      yield* audit.record({
+                        actor: AuditLog.userActor(actor),
+                        action: "keycloak.login.end",
+                        target: { kind: "user", id: login.userId },
+                        detail: {
+                          reason,
+                          sessions: done.sessions,
+                          pairingLinks: done.pairingLinks,
+                        },
+                      });
+                    }
+                  }
+                }
                 if (listsChanged) {
                   const plan = yield* strengthPlan(next);
                   yield* identities.setStrength(plan.toStrong, true);
@@ -764,6 +935,12 @@ const make = Effect.gen(function* () {
                           strongAcr: next.strongAcr.join(" "),
                           strongAmr: next.strongAmr.join(" "),
                           loginsEnded: ended,
+                        }
+                      : {}),
+                    ...(localTurnedOff
+                      ? {
+                          localSessionsEnded: localEnded.sessions,
+                          localPairingLinksEnded: localEnded.pairingLinks,
                         }
                       : {}),
                   },
@@ -833,6 +1010,12 @@ const make = Effect.gen(function* () {
     Effect.withSpan("SignInSettings.keycloakOffered"),
   );
 
+  const localSignInClosed: SignInSettings["Service"]["localSignInClosed"] =
+    LocalSignIn.localSignInClosed(sql).pipe(
+      Effect.mapError(storage),
+      Effect.withSpan("SignInSettings.localSignInClosed"),
+    );
+
   const groupMappings: SignInSettings["Service"]["groupMappings"] = readMappings.pipe(
     Effect.map((mappings) =>
       mappings.map((mapping): GroupSync.GroupMapping => ({
@@ -852,6 +1035,7 @@ const make = Effect.gen(function* () {
     check,
     keycloakConfig,
     keycloakOffered,
+    localSignInClosed,
     groupMappings,
   });
 });

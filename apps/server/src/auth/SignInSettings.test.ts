@@ -283,9 +283,16 @@ describe("sign-in settings (Keycloak 01)", () => {
       const refused = yield* save(server, owner, { localSignInForMembers: false });
       assert.equal(refused.status, 400);
       yield* configure(server, owner, realm);
+      // Ticket 08: the Members without Keycloak are counted first, then it is confirmed.
+      const unconfirmed = yield* save(server, owner, {
+        keycloakEnabled: true,
+        localSignInForMembers: false,
+      });
+      assert.equal(unconfirmed.status, 409);
       const off = yield* save(server, owner, {
         keycloakEnabled: true,
         localSignInForMembers: false,
+        endLoginsConfirmed: true,
       });
       assert.equal(off.status, 200);
       assert.equal(off.body.localSignInForMembers, false);

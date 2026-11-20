@@ -828,11 +828,15 @@ const make = Effect.gen(function* () {
           if (Option.isNone(spent)) return yield* new InvitationInvalidError({});
           // A Platform invitation (ticket 04) makes the User and nothing more.
           yield* recordNewUserAcceptance(user.id, invitation.invitationId, spent.value);
-          const session = yield* environmentAuth.startUserBrowserSession(
-            request,
-            user,
-            requestMetadata,
-          );
+          const session = yield* environmentAuth
+            .startUserBrowserSession(request, user, requestMetadata)
+            .pipe(
+              // Keycloak 08: local sign-in is off for everyone but the Owner; nothing is kept.
+              Effect.catchTags({
+                ServerAuthLocalSignInClosedError: (error) =>
+                  Effect.fail(new InvitationRefusedError({ reason: error.message })),
+              }),
+            );
           return {
             spaceId: spent.value.kind === "organization" ? spent.value.spaceId : null,
             session,

@@ -437,6 +437,8 @@ const mintPairingLink = Effect.fn("pair.mintPairingLink")(function* (input: {
       scopes: input.scopes,
       subject: "one-time-token",
       ...(userId === undefined ? {} : { userId }),
+      // Keycloak 08: the Owner's own act on the machine; local sign-in off leaves it.
+      issuedByShell: true,
       label: Option.getOrElse(input.label, () => "t3 pair"),
       ...(Option.isSome(input.ttl) ? { ttl: input.ttl.value } : {}),
     });

@@ -32,6 +32,8 @@ export const AuthPairingLinkRecord = Schema.Struct({
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   /** The Keycloak sign-in of the session that created it (ticket 07); it ends with it. */
   identityLoginId: Schema.NullOr(Schema.String),
+  /** Ticket 08: made by the Hub's shell (`t3 pair`); its sessions are the shell's too. */
+  issuedByShell: Schema.BooleanFromBit,
 });
 export type AuthPairingLinkRecord = typeof AuthPairingLinkRecord.Type;
 
@@ -47,6 +49,7 @@ export const CreateAuthPairingLinkInput = Schema.Struct({
   createdAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
   identityLoginId: Schema.optionalKey(Schema.String),
+  issuedByShell: Schema.optionalKey(Schema.Boolean),
 });
 export type CreateAuthPairingLinkInput = typeof CreateAuthPairingLinkInput.Type;
 
@@ -90,6 +93,7 @@ const AuthPairingLinkRawDbRow = Schema.Struct({
   consumedAt: Schema.Unknown,
   revokedAt: Schema.Unknown,
   identityLoginId: Schema.Unknown,
+  issuedByShell: Schema.Unknown,
 });
 
 const decodeAuthPairingLinkDbRow = Schema.decodeUnknownEffect(AuthPairingLinkRecord);
@@ -123,6 +127,13 @@ export class AuthPairingLinkRepository extends Context.Service<
       readonly userId: UserId;
       /** Only the links no Keycloak sign-in vouches for (ticket 07). */
       readonly unboundOnly?: boolean;
+      readonly revokedAt: DateTime.Utc;
+    }) => Effect.Effect<ReadonlyArray<string>, AuthPairingLinkRepositoryError>;
+    /**
+     * Ticket 08: ends the unspent links of every User but the Owner born of a local sign-in: no
+     * Keycloak sign-in vouches for them and the Hub's shell did not make them.
+     */
+    readonly revokeLocalForNonOwners: (input: {
       readonly revokedAt: DateTime.Utc;
     }) => Effect.Effect<ReadonlyArray<string>, AuthPairingLinkRepositoryError>;
     /** Ends the unspent links created from these Keycloak sign-ins (ticket 07). */
@@ -180,7 +191,8 @@ export const make = Effect.gen(function* () {
           expires_at,
           consumed_at,
           revoked_at,
-          identity_login_id
+          identity_login_id,
+          issued_by_shell
         )
         SELECT
           ${input.id},
@@ -195,7 +207,8 @@ export const make = Effect.gen(function* () {
           ${input.expiresAt},
           NULL,
           NULL,
-          ${input.identityLoginId ?? null}
+          ${input.identityLoginId ?? null},
+          ${input.issuedByShell === true ? 1 : 0}
         -- Ticket 07: a link from a Keycloak session only while that sign-in is live.
         WHERE ${
           input.identityLoginId === undefined
@@ -266,7 +279,8 @@ export const make = Effect.gen(function* () {
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
           revoked_at AS "revokedAt",
-          identity_login_id AS "identityLoginId"
+          identity_login_id AS "identityLoginId",
+          issued_by_shell AS "issuedByShell"
       `,
   });
 
@@ -288,7 +302,8 @@ export const make = Effect.gen(function* () {
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
           revoked_at AS "revokedAt",
-          identity_login_id AS "identityLoginId"
+          identity_login_id AS "identityLoginId",
+          issued_by_shell AS "issuedByShell"
         FROM auth_pairing_links
         WHERE revoked_at IS NULL
           AND consumed_at IS NULL
@@ -329,7 +344,8 @@ export const make = Effect.gen(function* () {
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
           revoked_at AS "revokedAt",
-          identity_login_id AS "identityLoginId"
+          identity_login_id AS "identityLoginId",
+          issued_by_shell AS "issuedByShell"
         FROM auth_pairing_links
         WHERE credential = ${credential}
       `,
@@ -425,6 +441,33 @@ export const make = Effect.gen(function* () {
       RETURNING id AS "id"
     `,
   });
+
+  const revokeLocalRows = SqlSchema.findAll({
+    Request: Schema.Struct({ revokedAt: Schema.DateTimeUtcFromString }),
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: ({ revokedAt }) => sql`
+      UPDATE auth_pairing_links
+      SET revoked_at = ${revokedAt}
+      WHERE revoked_at IS NULL AND consumed_at IS NULL
+        AND identity_login_id IS NULL AND issued_by_shell = 0
+        AND user_id IS NOT NULL
+        AND user_id NOT IN (SELECT user_id FROM users WHERE is_owner = 1)
+      RETURNING id AS "id"
+    `,
+  });
+
+  const revokeLocalForNonOwners: AuthPairingLinkRepository["Service"]["revokeLocalForNonOwners"] = (
+    input,
+  ) =>
+    revokeLocalRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "AuthPairingLinkRepository.revokeLocalForNonOwners:query",
+          "AuthPairingLinkRepository.revokeLocalForNonOwners:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => rows.map((row) => row.id)),
+    );
 
   const revokeIdentityLoginRows = SqlSchema.findAll({
     Request: Schema.Struct({
@@ -532,6 +575,7 @@ export const make = Effect.gen(function* () {
     getUnspentCreator,
     revokeUnspentForUser,
     revokeForIdentityLogins,
+    revokeLocalForNonOwners,
   } satisfies AuthPairingLinkRepository["Service"];
 });
 

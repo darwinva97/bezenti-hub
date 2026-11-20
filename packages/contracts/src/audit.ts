@@ -134,7 +134,10 @@ export type AuditActorSource = typeof AuditActorSource.Type;
 export const AUDIT_DETAIL_KEYS = {
   "owner.bootstrap": [],
   "owner.resetLink": [],
-  /** `identityRemoved` when the reset also ended a Keycloak link (Keycloak sign-in, ticket 02). */
+  /**
+   * `identityRemoved` when the reset also ended a Keycloak link (Keycloak sign-in, ticket 02);
+   * `method` `keycloak` when it bound a Keycloak account instead (ticket 08).
+   */
   "resetLink.redeem": ["method", "identityRemoved"],
   /** `platform` for a Platform invitation (Keycloak sign-in, ticket 04): no Space, no Role. */
   "invitation.create": ["role", "platform"],
@@ -156,10 +159,9 @@ export const AUDIT_DETAIL_KEYS = {
   "user.enable": ["from"],
   "user.remove": ["from"],
   /**
-   * The fields that changed, by name, and the new Registration mode, switches and issuer. Never
-   * the client secret: `secretReplaced` says only that a new one was saved. The strong-factor
-   * lists (ticket 06), and how many Keycloak sign-ins of the Owner and Admins a change to them
-   * ended (`loginsEnded`).
+   * The fields that changed, the new mode, switches and issuer; never the client secret. How many
+   * sign-ins a strong-list change ended (`loginsEnded`, ticket 06), and how many local sessions and
+   * links turning local sign-in off ended (ticket 08). Other ended sign-ins have their own entry.
    */
   "signIn.settings.update": [
     "changed",
@@ -177,12 +179,15 @@ export const AUDIT_DETAIL_KEYS = {
     // Which mappings changed: «added|removed|role group organization role» lines, at most 20.
     "mappingChanges",
     "mappingChangesTruncated",
+    "localSessionsEnded",
+    "localPairingLinksEnded",
   ],
   /**
    * The realm the identity comes from and whether the User's own passkeys, password and TOTP went
-   * with the link (the Owner keeps theirs). Never the subject, the email or a token.
+   * with the link (the Owner keeps theirs); `via` `reset` when an Owner's reset link bound it
+   * (ticket 08). Never the subject, the email or a token.
    */
-  "user.identity.link": ["issuer", "credentialsRemoved"],
+  "user.identity.link": ["issuer", "credentialsRemoved", "via"],
   /**
    * `via` what admitted them (`open` registration; ticket 05 adds `group`) and the realm their
    * identity comes from. Never the subject, the email or a token.

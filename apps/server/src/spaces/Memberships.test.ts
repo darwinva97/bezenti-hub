@@ -424,6 +424,9 @@ it.effect(
         displayName: "grace",
         loginName: "grace",
         passwordAllowed: true,
+        // Keycloak 08: a passkey or password, and no Keycloak (it is off here).
+        local: true,
+        keycloak: false,
       });
       // A password-only Member recovers by setting a new password.
       const redeemed = yield* server.request("/api/auth/reset/password", {

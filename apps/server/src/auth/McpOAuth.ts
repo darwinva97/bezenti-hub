@@ -200,6 +200,8 @@ interface PendingCode {
   readonly userId: UserId | undefined;
   /** The approving session's (or code's) Keycloak sign-in (ticket 07): the client ends with it. */
   readonly identityLoginId: string | undefined;
+  /** Ticket 08: approved with a pairing code the Hub's shell made. */
+  readonly issuedByShell: boolean;
   readonly expiresAtMs: number;
 }
 
@@ -470,6 +472,7 @@ const make = Effect.gen(function* () {
     access: AuthMcpClientAccess,
     userId: UserId | undefined,
     identityLoginId: string | undefined,
+    issuedByShell: boolean,
   ) {
     const now = yield* Clock.currentTimeMillis;
     const code = Buffer.from(yield* random.randomBytes(32)).toString("base64url");
@@ -484,6 +487,7 @@ const make = Effect.gen(function* () {
         access,
         userId,
         identityLoginId,
+        issuedByShell,
         expiresAtMs: now + AUTHORIZATION_CODE_TTL_MS,
       });
       return next;
@@ -534,6 +538,7 @@ const make = Effect.gen(function* () {
     // The client acts as whoever approved it: the signed-in User, or the User a code was issued to.
     let approver: UserId | undefined;
     let identityLoginId: string | undefined;
+    let issuedByShell = false;
     if (decision._tag === "pairing-code") {
       // A signed-in browser approves as its User, so a code may only be that User's. Spending
       // the code and recording the approval commit together: a failed entry leaves the code.
@@ -561,6 +566,7 @@ const make = Effect.gen(function* () {
         );
       approver = granted.userId;
       identityLoginId = granted.identityLoginId;
+      issuedByShell = granted.issuedByShell === true;
     } else {
       const session = yield* approvingBrowserSession(input.request, input.authorization);
       if (
@@ -581,7 +587,13 @@ const make = Effect.gen(function* () {
       // Recorded before the code exists: an approval the log missed never signs anyone in.
       yield* recordApproval(approver).pipe(Effect.catch(notRecorded));
     }
-    const code = yield* mintCode(input.authorization, decision.access, approver, identityLoginId);
+    const code = yield* mintCode(
+      input.authorization,
+      decision.access,
+      approver,
+      identityLoginId,
+      issuedByShell,
+    );
     return redirectWith(input.authorization.redirectUri, {
       code,
       state: input.authorization.state,
@@ -643,6 +655,7 @@ const make = Effect.gen(function* () {
           ...(pending.identityLoginId === undefined
             ? {}
             : { identityLoginId: pending.identityLoginId }),
+          ...(pending.issuedByShell ? { issuedByShell: true } : {}),
           client: deriveAuthClientMetadata({ request }),
         })
         .pipe(

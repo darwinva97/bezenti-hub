@@ -36,6 +36,8 @@ export interface BootstrapGrant {
   readonly userId?: UserId;
   /** The Keycloak sign-in of the session that created it (ticket 07): its sessions inherit it. */
   readonly identityLoginId?: string;
+  /** Ticket 08: made by the Hub's shell (`t3 pair`); its sessions are the shell's too. */
+  readonly issuedByShell?: boolean;
   readonly expiresAt: DateTime.DateTime;
 }
 
@@ -224,6 +226,8 @@ export class PairingGrantStore extends Context.Service<
       readonly purpose?: "startup";
       /** Ticket 07: the creating session's Keycloak sign-in; the link ends with it. */
       readonly identityLoginId?: string;
+      /** Ticket 08: made by the Hub's shell (`t3 pair`, `t3 auth pairing create`). */
+      readonly issuedByShell?: boolean;
     }) => Effect.Effect<IssuedBootstrapCredential, BootstrapCredentialInternalError>;
     readonly listActive: () => Effect.Effect<
       ReadonlyArray<AuthPairingLink>,
@@ -253,6 +257,14 @@ export class PairingGrantStore extends Context.Service<
     readonly revokeUnboundForUserDeferred: (
       userId: UserId,
     ) => Effect.Effect<Effect.Effect<number>, BootstrapCredentialInternalError>;
+    /**
+     * Ticket 08, local sign-in turned off: the unspent links of every User but the Owner born of a
+     * local sign-in (no Keycloak sign-in, not the shell's), deferred likewise.
+     */
+    readonly revokeLocalForNonOwnersDeferred: () => Effect.Effect<
+      { readonly revoked: number; readonly close: Effect.Effect<number> },
+      BootstrapCredentialInternalError
+    >;
     /** Ticket 07: the unspent links created from these Keycloak sign-ins, deferred likewise. */
     readonly revokeForIdentityLoginsDeferred: (
       loginIds: ReadonlyArray<string>,
@@ -457,6 +469,7 @@ const make = Effect.gen(function* () {
         createdAt: now,
         expiresAt: expiresAt,
         ...(input?.identityLoginId === undefined ? {} : { identityLoginId: input.identityLoginId }),
+        ...(input?.issuedByShell === true ? { issuedByShell: true } : {}),
       })
       .pipe(
         Effect.mapError(
@@ -620,6 +633,7 @@ const make = Effect.gen(function* () {
           ...(consumed.value.identityLoginId
             ? { identityLoginId: consumed.value.identityLoginId }
             : {}),
+          ...(consumed.value.issuedByShell ? { issuedByShell: true } : {}),
           expiresAt: consumed.value.expiresAt,
         } satisfies BootstrapGrant;
       }
@@ -732,6 +746,22 @@ const make = Effect.gen(function* () {
       };
     });
 
+  const revokeLocalForNonOwnersDeferred: PairingGrantStore["Service"]["revokeLocalForNonOwnersDeferred"] =
+    Effect.fn("PairingGrantStore.revokeLocalForNonOwnersDeferred")(function* () {
+      const revokedAt = yield* DateTime.now;
+      const ids = yield* pairingLinks
+        .revokeLocalForNonOwners({ revokedAt })
+        .pipe(
+          Effect.mapError(
+            (cause) => new PairingLinkRevokeError({ pairingLinkId: "local-sign-ins", cause }),
+          ),
+        );
+      return {
+        revoked: ids.length,
+        close: Effect.forEach(ids, emitRemoved, { discard: true }).pipe(Effect.as(ids.length)),
+      };
+    });
+
   const revokeAllForUser: PairingGrantStore["Service"]["revokeAllForUser"] = Effect.fn(
     "PairingGrantStore.revokeAllForUser",
   )(function* (userId) {
@@ -745,6 +775,7 @@ const make = Effect.gen(function* () {
     revokeAllForUserDeferred,
     revokeUnboundForUserDeferred,
     revokeForIdentityLoginsDeferred,
+    revokeLocalForNonOwnersDeferred,
     issueOneTimeToken,
     listActive,
     get streamChanges() {

@@ -396,6 +396,11 @@ export class SessionStore extends Context.Service<
       readonly replaceSessionId?: AuthSessionId;
       /** The Keycloak sign-in (`identity_logins`) a browser session comes from. */
       readonly identityLoginId?: string;
+      /**
+       * Ticket 08: handed out by the Hub's shell. Such a session outlives turning local sign-in
+       * off for everyone but the Owner, and is issued while it is off.
+       */
+      readonly issuedByShell?: boolean;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
     readonly verify: (token: string) => Effect.Effect<VerifiedSession, SessionCredentialError>;
     readonly issueWebSocketToken: (
@@ -480,6 +485,14 @@ export class SessionStore extends Context.Service<
     readonly revokeUnboundForUserDeferred: (
       userId: UserId,
     ) => Effect.Effect<
+      { readonly revoked: number; readonly close: Effect.Effect<number> },
+      SessionCredentialInternalError
+    >;
+    /**
+     * Ticket 08, local sign-in turned off: revokes the sessions of every User but the Owner born
+     * of a local sign-in (no Keycloak sign-in, not the shell's) in the caller's transaction.
+     */
+    readonly revokeLocalForNonOwnersDeferred: () => Effect.Effect<
       { readonly revoked: number; readonly close: Effect.Effect<number> },
       SessionCredentialInternalError
     >;
@@ -806,6 +819,7 @@ const make = Effect.gen(function* () {
         // A person signs in again; tokens held by agents and scripts keep a fixed lifetime.
         sliding: input?.ttl === undefined && claims.method === "browser-session-cookie",
         ...(input?.identityLoginId === undefined ? {} : { identityLoginId: input.identityLoginId }),
+        ...(input?.issuedByShell === true ? { issuedByShell: true } : {}),
       } satisfies AuthSessions.CreateAuthSessionInput;
       const replacedSessionIds = yield* (
         input?.replaceSessionId !== undefined || input?.replaceActiveForSubjectAndMethod
@@ -1228,6 +1242,14 @@ const make = Effect.gen(function* () {
       return { revoked: sessionIds.length, close: closeRevoked(sessionIds) };
     });
 
+  const revokeLocalForNonOwnersDeferred: SessionStore["Service"]["revokeLocalForNonOwnersDeferred"] =
+    Effect.fn("SessionStore.revokeLocalForNonOwnersDeferred")(function* () {
+      const sessionIds = yield* authSessions
+        .revokeLocalForNonOwners({ revokedAt: yield* DateTime.now })
+        .pipe(Effect.mapError((cause) => new ActiveSessionsListError({ cause })));
+      return { revoked: sessionIds.length, close: closeRevoked(sessionIds) };
+    });
+
   const revokeAllForUser: SessionStore["Service"]["revokeAllForUser"] = Effect.fn(
     "SessionStore.revokeAllForUser",
   )(function* (userId, options) {
@@ -1360,6 +1382,7 @@ const make = Effect.gen(function* () {
     revokeAllForUserDeferred,
     revokeForIdentityLoginsDeferred,
     revokeUnboundForUserDeferred,
+    revokeLocalForNonOwnersDeferred,
     identityLoginOf,
     takeDueLogin: Queue.take(dueLogins),
     markConnected,

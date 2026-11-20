@@ -64,6 +64,7 @@ import * as UserDirectory from "./UserDirectory.ts";
 import { REUSABLE_DEV_SESSION_EXPIRES_AT, resolveReusableDevAuth } from "./ReusableDevAuth.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
 import { OwnerPresence } from "./OwnerPresence.ts";
+import { localSignInClosed } from "./localSignIn.ts";
 import { type AuthRequestMetadata, type SessionCookieNames } from "./utils.ts";
 import {
   crossesFromPreviewOrigin,
@@ -445,6 +446,20 @@ export class ServerAuthForbiddenOperationError extends Schema.TaggedError<Server
   }
 }
 
+/**
+ * Ticket 08: the right credential of a User other than the Owner while the Owner has turned local
+ * sign-in off for everyone else. Said only once the credential checked out, so it tells a guesser
+ * nothing.
+ */
+export class ServerAuthLocalSignInClosedError extends Schema.TaggedError<ServerAuthLocalSignInClosedError>()(
+  "ServerAuthLocalSignInClosedError",
+  {},
+) {
+  override get message(): string {
+    return "This Hub signs you in with Keycloak: the Owner turned off passkey and password sign-in for everyone else.";
+  }
+}
+
 export class ServerAuthNotYourSessionError extends Schema.TaggedError<ServerAuthNotYourSessionError>()(
   "ServerAuthNotYourSessionError",
   {},
@@ -506,6 +521,8 @@ export class EnvironmentAuth extends Context.Service<
       readonly purpose?: "startup";
       /** Ticket 07: the creating session's Keycloak sign-in; the link and its sessions end with it. */
       readonly identityLoginId?: string;
+      /** Ticket 08: made by the Hub's shell (`t3 pair`), so local sign-in off leaves it. */
+      readonly issuedByShell?: boolean;
     }) => Effect.Effect<
       IssuedPairingLink,
       ServerAuthInternalError | ManagedLimits.ManagedPolicyRefusedError
@@ -597,6 +614,8 @@ export class EnvironmentAuth extends Context.Service<
       readonly client: AuthRequestMetadata;
       /** Ticket 07: the approving session's (or code's) Keycloak sign-in; it ends with it. */
       readonly identityLoginId?: string;
+      /** Ticket 08: the Hub's shell (`t3 thread`), or a code the shell made. */
+      readonly issuedByShell?: boolean;
     }) => Effect.Effect<
       {
         readonly sessionId: AuthSessionId;
@@ -616,7 +635,11 @@ export class EnvironmentAuth extends Context.Service<
       access: AuthMcpClientAccess,
       options?: { readonly asUser?: UserId | undefined },
     ) => Effect.Effect<
-      { readonly userId?: UserId; readonly identityLoginId?: string },
+      {
+        readonly userId?: UserId;
+        readonly identityLoginId?: string;
+        readonly issuedByShell?: boolean;
+      },
       ServerAuthMcpApprovalCodeError | ServerAuthInternalError
     >;
     readonly authenticateBrowserSession: (
@@ -660,6 +683,7 @@ export class EnvironmentAuth extends Context.Service<
       | ServerAuthInvalidOriginError
       | ServerAuthInvalidCredentialError
       | UserDirectory.AccountInactiveError
+      | ServerAuthLocalSignInClosedError
       | ServerAuthInsecureTransportError
       | ServerAuthInternalError
     >;
@@ -671,6 +695,7 @@ export class EnvironmentAuth extends Context.Service<
       UserBrowserSession,
       | ServerAuthInvalidCredentialError
       | UserDirectory.AccountInactiveError
+      | ServerAuthLocalSignInClosedError
       | ServerAuthInsecureTransportError
       | ServerAuthInternalError
     >;
@@ -683,6 +708,7 @@ export class EnvironmentAuth extends Context.Service<
       UserBrowserSession | { readonly response: AuthSecondFactorRequired },
       | ServerAuthInvalidCredentialError
       | UserDirectory.AccountInactiveError
+      | ServerAuthLocalSignInClosedError
       | ServerAuthInsecureTransportError
       | UserDirectory.SecondFactorMissingError
       | UserDirectory.SignInThrottledError
@@ -697,6 +723,7 @@ export class EnvironmentAuth extends Context.Service<
       UserBrowserSession,
       | ServerAuthInvalidCredentialError
       | UserDirectory.AccountInactiveError
+      | ServerAuthLocalSignInClosedError
       | ServerAuthInsecureTransportError
       | UserDirectory.SignInThrottledError
       | ServerAuthInternalError
@@ -706,7 +733,10 @@ export class EnvironmentAuth extends Context.Service<
       token: string,
     ) => Effect.Effect<
       AuthPasskeyRegistrationCeremony,
-      ServerAuthInvalidOriginError | ServerAuthInvalidCredentialError | ServerAuthInternalError
+      | ServerAuthInvalidOriginError
+      | ServerAuthInvalidCredentialError
+      | ServerAuthLocalSignInClosedError
+      | ServerAuthInternalError
     >;
     /** Registers the new passkey, spends the reset link and signs this browser in. */
     readonly redeemResetLink: (
@@ -717,6 +747,7 @@ export class EnvironmentAuth extends Context.Service<
       UserBrowserSession,
       | ServerAuthInvalidOriginError
       | ServerAuthInvalidCredentialError
+      | ServerAuthLocalSignInClosedError
       | ServerAuthInsecureTransportError
       | ServerAuthInternalError
     >;
@@ -728,6 +759,7 @@ export class EnvironmentAuth extends Context.Service<
     ) => Effect.Effect<
       UserBrowserSession,
       | ServerAuthInvalidCredentialError
+      | ServerAuthLocalSignInClosedError
       | ServerAuthInsecureTransportError
       | UserDirectory.AccountChangeRefusedError
       | UserDirectory.LoginNameTakenError
@@ -749,7 +781,10 @@ export class EnvironmentAuth extends Context.Service<
       options?: { readonly identityLoginId?: string },
     ) => Effect.Effect<
       UserBrowserSession,
-      ServerAuthInvalidCredentialError | ServerAuthInsecureTransportError | ServerAuthInternalError
+      | ServerAuthInvalidCredentialError
+      | ServerAuthLocalSignInClosedError
+      | ServerAuthInsecureTransportError
+      | ServerAuthInternalError
     >;
     /** For the Hub's shell (`t3 auth owner-reset`), when the Owner has lost every passkey. */
     readonly issueOwnerResetLink: UserDirectory.UserDirectory["Service"]["issueOwnerResetLink"];
@@ -1127,6 +1162,46 @@ export const make = Effect.gen(function* () {
         ),
   );
 
+  /**
+   * Ticket 08: with local sign-in off, only the Owner, a Keycloak sign-in or the Hub's shell opens
+   * a session (shell-born access is the Owner's own act on the machine). Callers check their
+   * credential first, so a refusal is no oracle; migration 157's trigger refuses the same session.
+   */
+  const localDoorOpen = (
+    userId: UserId | undefined,
+    via: { readonly identityLoginId?: string | undefined; readonly issuedByShell?: boolean },
+  ) => {
+    if (userId === undefined || via.identityLoginId !== undefined || via.issuedByShell === true) {
+      return Effect.succeed(true);
+    }
+    return knownOwnerId.pipe(
+      Effect.flatMap((ownerId) =>
+        ownerId === userId
+          ? Effect.succeed(true)
+          : localSignInClosed(sql).pipe(Effect.map((closed) => !closed)),
+      ),
+      Effect.mapError((cause) => new ServerAuthUserDirectoryError({ cause })),
+    );
+  };
+
+  /** An app, MCP client or pairing link's session behind a closed local door is refused. */
+  const requireLocalDoor = (
+    userId: UserId | undefined,
+    via: { readonly identityLoginId?: string | undefined; readonly issuedByShell?: boolean },
+  ) =>
+    localDoorOpen(userId, via).pipe(
+      Effect.flatMap((open) =>
+        open
+          ? Effect.void
+          : Effect.fail(
+              new ServerAuthInvalidCredentialError({
+                diagnostic:
+                  "Local sign-in is off for everyone but the Owner: only a Keycloak sign-in vouches for this session.",
+              }),
+            ),
+      ),
+    );
+
   const getSessionState: EnvironmentAuth["Service"]["getSessionState"] = Effect.fn(
     "EnvironmentAuth.getSessionState",
   )(function* (request) {
@@ -1216,6 +1291,7 @@ export const make = Effect.gen(function* () {
       .consume(credential)
       .pipe(Effect.mapError(toBootstrapExchangeError));
     const owner = yield* sessionUser(grant.userId);
+    yield* requireLocalDoor(grant.userId, grant);
     const session = yield* sessions
       .issue({
         method: "browser-session-cookie",
@@ -1224,6 +1300,8 @@ export const make = Effect.gen(function* () {
         scopes: grant.scopes,
         // Ticket 07: a link created from a Keycloak session passes its sign-in on.
         ...(grant.identityLoginId === undefined ? {} : { identityLoginId: grant.identityLoginId }),
+        // Ticket 08: and one the shell made, the shell's mark.
+        ...(grant.issuedByShell === true ? { issuedByShell: true } : {}),
         ...(previousSession?.method === "browser-session-cookie"
           ? { replaceSessionId: previousSession.sessionId }
           : {}),
@@ -1246,7 +1324,7 @@ export const make = Effect.gen(function* () {
 
   type ResolvedBootstrapGrant = Pick<
     PairingGrantStore.BootstrapGrant,
-    "scopes" | "subject" | "label" | "userId" | "identityLoginId"
+    "scopes" | "subject" | "label" | "userId" | "identityLoginId" | "issuedByShell"
   > & {
     readonly method: PairingGrantStore.BootstrapGrant["method"] | "reusable-dev-token";
   };
@@ -1311,6 +1389,7 @@ export const make = Effect.gen(function* () {
               return yield* new ServerAuthScopeNotGrantedError({});
             }
             const owner = yield* sessionUser(grant.userId);
+            yield* requireLocalDoor(grant.userId, grant);
             return yield* sessions
               .issue({
                 method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
@@ -1326,6 +1405,7 @@ export const make = Effect.gen(function* () {
                 ...(grant.identityLoginId === undefined
                   ? {}
                   : { identityLoginId: grant.identityLoginId }),
+                ...(grant.issuedByShell === true ? { issuedByShell: true } : {}),
                 replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
                 client: {
                   ...requestMetadata,
@@ -1381,6 +1461,7 @@ export const make = Effect.gen(function* () {
         ...(input?.userId ? { userId: input.userId } : {}),
         ...(input?.purpose ? { purpose: input.purpose } : {}),
         ...(input?.identityLoginId ? { identityLoginId: input.identityLoginId } : {}),
+        ...(input?.issuedByShell === true ? { issuedByShell: true } : {}),
       });
       return {
         id: issued.id,
@@ -1453,6 +1534,8 @@ export const make = Effect.gen(function* () {
             subject: input?.subject ?? DEFAULT_SESSION_SUBJECT,
             ...owner,
             method: "bearer-access-token",
+            // Only the Hub's shell issues these (ticket 08: local sign-in off leaves them).
+            issuedByShell: true,
             scopes: input?.scopes ?? AuthStandardClientScopes,
             client: {
               ...(input?.label ? { label: input.label } : {}),
@@ -1842,11 +1925,13 @@ export const make = Effect.gen(function* () {
   const issueMcpClientSession: EnvironmentAuth["Service"]["issueMcpClientSession"] = (input) =>
     requireSecureTransport(input.client).pipe(
       Effect.andThen(sessionUser(input.userId)),
+      Effect.tap(() => requireLocalDoor(input.userId, input)),
       Effect.flatMap((owner) =>
         sessions.issue({
           subject: MCP_CLIENT_SUBJECT,
           method: "bearer-access-token",
           ...owner,
+          ...(input.issuedByShell === true ? { issuedByShell: true } : {}),
           scopes: mcpClientScopes(input.access),
           ...(input.access === "read-only" ? {} : { runtimeModeCeiling: input.access }),
           ...(input.identityLoginId === undefined
@@ -1917,10 +2002,13 @@ export const make = Effect.gen(function* () {
       return yield* new ServerAuthMcpApprovalCodeError({ reason: "not_a_pairing_code" });
     }
     const approver = yield* approverOf(grant.userId);
-    // Ticket 07: a code created from a Keycloak session passes its sign-in to the client.
-    return grant.identityLoginId === undefined
-      ? approver
-      : { ...approver, identityLoginId: grant.identityLoginId };
+    // Ticket 07: a code created from a Keycloak session passes its sign-in to the client; ticket
+    // 08: a code the shell made, the shell's mark.
+    return {
+      ...approver,
+      ...(grant.identityLoginId === undefined ? {} : { identityLoginId: grant.identityLoginId }),
+      ...(grant.issuedByShell === true ? { issuedByShell: true } : {}),
+    };
   });
 
   const userDirectoryFailure = (cause: UserDirectory.UserDirectoryStorageError) =>
@@ -1972,6 +2060,11 @@ export const make = Effect.gen(function* () {
       return yield* new ServerAuthInvalidCredentialError({
         diagnostic: "The managed policy allows account sign-in only on this machine.",
       });
+    }
+    // Ticket 08: anyone but the Owner, with a local credential checked already, behind a closed
+    // door. A Keycloak sign-in passes `identityLoginId`.
+    if (!user.isOwner && !(yield* localDoorOpen(user.id, options ?? {}))) {
+      return yield* new ServerAuthLocalSignInClosedError({});
     }
     const previousCredential = selectRequestCredential(request, sessions);
     const previousSession =
@@ -2118,6 +2211,9 @@ export const make = Effect.gen(function* () {
       .pipe(
         Effect.catchTags({
           SqlError: (cause) => Effect.fail(new ServerAuthUserDirectoryError({ cause })),
+          // The Owner is never behind the local door (ticket 08).
+          ServerAuthLocalSignInClosedError: (cause) =>
+            Effect.fail(new ServerAuthUserDirectoryError({ cause })),
         }),
       );
     ownerPresence.markExists();
@@ -2259,6 +2355,18 @@ export const make = Effect.gen(function* () {
   const beginResetLinkRegistration: EnvironmentAuth["Service"]["beginResetLinkRegistration"] =
     Effect.fn("EnvironmentAuth.beginResetLinkRegistration")(function* (request, token) {
       const origin = yield* resolvePasskeyOrigin(request);
+      // Ticket 08: no passkey for anyone but the Owner while local sign-in is off; the link stays.
+      const closed = yield* localSignInClosed(sql).pipe(
+        Effect.mapError((cause) => new ServerAuthUserDirectoryError({ cause })),
+      );
+      if (closed) {
+        const status = yield* userDirectory
+          .getResetLinkStatus(token, { keycloakOffered: false, localSignInClosed: true })
+          .pipe(Effect.mapError(userDirectoryFailure));
+        if (status.status === "valid" && status.local === false) {
+          return yield* new ServerAuthLocalSignInClosedError({});
+        }
+      }
       return yield* userDirectory
         .startResetRegistration({ token, origin })
         .pipe(Effect.catchTags(resetLinkFailures));
@@ -2338,6 +2446,8 @@ export const make = Effect.gen(function* () {
     }
     // Refuses a User who was disabled or removed between the approval and the exchange.
     const owner = yield* sessionUser(input.userId);
+    // Ticket 08: approved from a local sign-in, exchanged once local sign-in was turned off.
+    yield* requireLocalDoor(input.userId, input);
     // An approval hands out only what the approving session held.
     const scopes = AuthStandardClientScopes.filter((scope) => input.scopes.includes(scope));
     if (scopes.length === 0) {

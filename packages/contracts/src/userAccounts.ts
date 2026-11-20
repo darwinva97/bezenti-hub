@@ -269,6 +269,13 @@ export const AuthResetLinkStatus = Schema.Union([
     loginName: Schema.optional(Schema.NullOr(Schema.String)),
     /** Whether the link may set a password instead of a passkey (not for the Owner). */
     passwordAllowed: Schema.optional(Schema.Boolean),
+    /**
+     * Ticket 08: whether it may set a passkey or password at all. Not while local sign-in is off
+     * for everyone but the Owner, unless it is the Owner's link.
+     */
+    local: Schema.optional(Schema.Boolean),
+    /** Ticket 08: whether it may bind a Keycloak account instead (Keycloak on; not the Owner). */
+    keycloak: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({ status: Schema.Literal("invalid") }),
 ]);

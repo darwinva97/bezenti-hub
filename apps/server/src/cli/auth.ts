@@ -126,6 +126,8 @@ const pairingCreateCommand = Command.make("create", {
             scopes: flags.scopes,
             subject: "one-time-token",
             ...(userId === undefined ? {} : { userId }),
+            // Keycloak 08: the Owner's own act on the machine; local sign-in off leaves it.
+            issuedByShell: true,
             ...(Option.isSome(flags.ttl) ? { ttl: flags.ttl.value } : {}),
             ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
           });

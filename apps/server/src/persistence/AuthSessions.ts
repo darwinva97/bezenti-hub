@@ -64,6 +64,11 @@ export const CreateAuthSessionInput = Schema.Struct({
   sliding: Schema.optionalKey(Schema.Boolean),
   /** The Keycloak sign-in this session comes from (ticket 02); it ends with it (ticket 07). */
   identityLoginId: Schema.optionalKey(Schema.String),
+  /**
+   * Ticket 08: handed out by the Hub's shell (`t3 auth session issue`, `t3 pair`), so turning
+   * local sign-in off for everyone but the Owner leaves it.
+   */
+  issuedByShell: Schema.optionalKey(Schema.Boolean),
 });
 export type CreateAuthSessionInput = typeof CreateAuthSessionInput.Type;
 
@@ -110,6 +115,11 @@ export const RevokeUnboundSessionsInput = Schema.Struct({
   revokedAt: Schema.DateTimeUtcFromString,
 });
 export type RevokeUnboundSessionsInput = typeof RevokeUnboundSessionsInput.Type;
+
+export const RevokeLocalSessionsInput = Schema.Struct({
+  revokedAt: Schema.DateTimeUtcFromString,
+});
+export type RevokeLocalSessionsInput = typeof RevokeLocalSessionsInput.Type;
 
 export const RevokeIdentityLoginSessionsInput = Schema.Struct({
   loginIds: Schema.Array(Schema.String),
@@ -164,6 +174,13 @@ export class AuthSessionRepository extends Context.Service<
      */
     readonly revokeUnboundForUser: (
       input: RevokeUnboundSessionsInput,
+    ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
+    /**
+     * Ticket 08: revokes the live sessions of every User but the Owner born of a local sign-in:
+     * no Keycloak sign-in vouches for them and the Hub's shell did not hand them out.
+     */
+    readonly revokeLocalForNonOwners: (
+      input: RevokeLocalSessionsInput,
     ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
     /** Revokes the live sessions born of these Keycloak sign-ins (Keycloak sign-in, ticket 06). */
     readonly revokeForIdentityLogins: (
@@ -299,7 +316,8 @@ export const make = Effect.gen(function* () {
           expires_at,
           sliding,
           revoked_at,
-          identity_login_id
+          identity_login_id,
+          issued_by_shell
         )
         SELECT
           ${input.sessionId},
@@ -317,7 +335,8 @@ export const make = Effect.gen(function* () {
           ${input.expiresAt},
           ${input.sliding === true ? 1 : 0},
           NULL,
-          ${input.identityLoginId ?? null}
+          ${input.identityLoginId ?? null},
+          ${input.issuedByShell === true ? 1 : 0}
         -- Ticket 07: a session born of a Keycloak sign-in only while that sign-in is live, so
         -- nothing approved from it outlives its end.
         WHERE ${
@@ -524,6 +543,35 @@ export const make = Effect.gen(function* () {
       Effect.map((rows) => rows.map((row) => row.sessionId)),
     );
 
+  const revokeLocalSessionRows = SqlSchema.findAll({
+    Request: RevokeLocalSessionsInput,
+    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    execute: ({ revokedAt }) =>
+      sql`
+        UPDATE auth_sessions
+        SET revoked_at = ${revokedAt}
+        WHERE revoked_at IS NULL
+          AND identity_login_id IS NULL
+          AND issued_by_shell = 0
+          AND user_id IS NOT NULL
+          AND user_id NOT IN (SELECT user_id FROM users WHERE is_owner = 1)
+        RETURNING session_id AS "sessionId"
+      `,
+  });
+
+  const revokeLocalForNonOwners: AuthSessionRepository["Service"]["revokeLocalForNonOwners"] = (
+    input,
+  ) =>
+    revokeLocalSessionRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "AuthSessionRepository.revokeLocalForNonOwners:query",
+          "AuthSessionRepository.revokeLocalForNonOwners:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => rows.map((row) => row.sessionId)),
+    );
+
   const revokeIdentityLoginSessionRows = SqlSchema.findAll({
     Request: RevokeIdentityLoginSessionsInput,
     Result: Schema.Struct({ sessionId: AuthSessionId }),
@@ -716,6 +764,7 @@ export const make = Effect.gen(function* () {
     revokeAllExcept,
     revokeAllForUser,
     revokeForIdentityLogins,
+    revokeLocalForNonOwners,
     revokeUnboundForUser,
     setLastConnectedAt,
   } satisfies AuthSessionRepository["Service"];

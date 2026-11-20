@@ -287,6 +287,10 @@ const failInactive = (error: UserDirectory.AccountInactiveError) =>
 const failUserSignInInternal = (error: EnvironmentAuth.ServerAuthInternalError) =>
   failEnvironmentInternal("browser_session_issuance_failed", error);
 
+// Ticket 08: likewise said only after the credential checked out.
+const failLocalSignInClosed = (error: EnvironmentAuth.ServerAuthLocalSignInClosedError) =>
+  Effect.fail(new EnvironmentHttpForbiddenError({ message: error.message }));
+
 const failUserSignIn = <A, R>(
   effect: Effect.Effect<
     A,
@@ -299,6 +303,26 @@ const failUserSignIn = <A, R>(
 ) =>
   effect.pipe(
     Effect.catchTags(userSignInFailures),
+    Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, failUserSignInInternal),
+  );
+
+/** A reset link's passkey: as any sign-in, and refused behind a closed local door (ticket 08). */
+const failResetSignIn = <A, R>(
+  effect: Effect.Effect<
+    A,
+    | EnvironmentAuth.ServerAuthInvalidOriginError
+    | EnvironmentAuth.ServerAuthInvalidCredentialError
+    | EnvironmentAuth.ServerAuthLocalSignInClosedError
+    | EnvironmentAuth.ServerAuthInsecureTransportError
+    | EnvironmentAuth.ServerAuthInternalError,
+    R
+  >,
+) =>
+  effect.pipe(
+    Effect.catchTags({
+      ...userSignInFailures,
+      ServerAuthLocalSignInClosedError: failLocalSignInClosed,
+    }),
     Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, failUserSignInInternal),
   );
 
@@ -433,6 +457,7 @@ export const layer = HttpApiBuilder.group(
                 SecondFactorMissingError: (error) =>
                   Effect.fail(new EnvironmentHttpForbiddenError({ message: error.message })),
                 AccountInactiveError: failInactive,
+                ServerAuthLocalSignInClosedError: failLocalSignInClosed,
                 SignInThrottledError: failThrottled,
               }),
               Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, failUserSignInInternal),
@@ -463,6 +488,7 @@ export const layer = HttpApiBuilder.group(
                   userSignInFailures.ServerAuthInsecureTransportError,
                 SignInThrottledError: failThrottled,
                 AccountInactiveError: failInactive,
+                ServerAuthLocalSignInClosedError: failLocalSignInClosed,
               }),
               Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, failUserSignInInternal),
             );
@@ -533,7 +559,18 @@ export const layer = HttpApiBuilder.group(
         Effect.fn("environment.auth.resetLinkStatus")(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
-            return yield* userDirectory.getResetLinkStatus(args.payload.token);
+            // Ticket 08: what the link offers follows Keycloak and the local door.
+            const offers = Option.isNone(signInSettings)
+              ? { keycloakOffered: false, localSignInClosed: false }
+              : yield* Effect.all({
+                  keycloakOffered: signInSettings.value.keycloakOffered,
+                  localSignInClosed: signInSettings.value.localSignInClosed,
+                }).pipe(
+                  Effect.mapError(
+                    (cause) => new UserDirectory.UserDirectoryStorageError({ cause }),
+                  ),
+                );
+            return yield* userDirectory.getResetLinkStatus(args.payload.token, offers);
           },
           Effect.catchTags({
             UserDirectoryStorageError: (error) => failEnvironmentInternal("internal_error", error),
@@ -547,7 +584,7 @@ export const layer = HttpApiBuilder.group(
           const request = yield* HttpServerRequest.HttpServerRequest;
           return yield* serverAuth
             .beginResetLinkRegistration(request, args.payload.token)
-            .pipe(failUserSignIn);
+            .pipe(failResetSignIn);
         }),
       )
       .handle(
@@ -557,7 +594,7 @@ export const layer = HttpApiBuilder.group(
           const request = yield* HttpServerRequest.HttpServerRequest;
           const { response, sessionToken } = yield* serverAuth
             .redeemResetLink(request, args.payload, deriveAuthClientMetadata({ request }))
-            .pipe(failUserSignIn);
+            .pipe(failResetSignIn);
           yield* appendSessionCookie(sessions.cookieName, sessionToken, response.expiresAt);
           yield* appendCredentialResponseHeaders;
           return response;
@@ -580,6 +617,7 @@ export const layer = HttpApiBuilder.group(
                   Effect.fail(new EnvironmentHttpForbiddenError({ message: error.message })),
                 LoginNameTakenError: (error) =>
                   Effect.fail(new EnvironmentHttpConflictError({ message: error.message })),
+                ServerAuthLocalSignInClosedError: failLocalSignInClosed,
                 ServerAuthInvalidCredentialError:
                   userSignInFailures.ServerAuthInvalidCredentialError,
                 ServerAuthInsecureTransportError:
@@ -607,6 +645,10 @@ export const layer = HttpApiBuilder.group(
                     keycloak: yield* signInSettings.value.keycloakOffered.pipe(
                       Effect.catch((error) => failEnvironmentInternal("internal_error", error)),
                     ),
+                    // Ticket 08: off folds the page's local form under «Owner access».
+                    localForMembers: !(yield* signInSettings.value.localSignInClosed.pipe(
+                      Effect.catch((error) => failEnvironmentInternal("internal_error", error)),
+                    )),
                   },
                 };
             const credential = EnvironmentAuth.selectRequestCredential(request, sessions);
@@ -917,7 +959,11 @@ export const layer = HttpApiBuilder.group(
           const { response, sessionToken } = yield* serverAuth
             .completePasskeySignIn(request, args.payload, deriveAuthClientMetadata({ request }))
             .pipe(
-              Effect.catchTags({ ...userSignInFailures, AccountInactiveError: failInactive }),
+              Effect.catchTags({
+                ...userSignInFailures,
+                AccountInactiveError: failInactive,
+                ServerAuthLocalSignInClosedError: failLocalSignInClosed,
+              }),
               Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, failUserSignInInternal),
             );
           yield* appendSessionCookie(sessions.cookieName, sessionToken, response.expiresAt);
@@ -943,6 +989,7 @@ export const layer = HttpApiBuilder.group(
                 ServerAuthInsecureTransportError:
                   userSignInFailures.ServerAuthInsecureTransportError,
                 AccountInactiveError: failInactive,
+                ServerAuthLocalSignInClosedError: failLocalSignInClosed,
               }),
               Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, failUserSignInInternal),
             );

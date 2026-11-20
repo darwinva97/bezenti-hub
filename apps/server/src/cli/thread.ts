@@ -224,6 +224,7 @@ const withThreadTools = Effect.fn("cli.thread.withThreadTools")(function* <A, E,
       environmentAuth.issueMcpClientSession({
         label: "t3 thread cli",
         ...(userId === undefined ? {} : { userId }),
+        issuedByShell: true,
         // Only the Hub's shell runs it. New threads still start at the
         // project's default mode, never at this ceiling by default.
         access: "full-access",

@@ -140,9 +140,9 @@ export const UpdateSignInSettingsRequest = Schema.Struct({
     Schema.Array(KeycloakGroupMappingInput).check(Schema.isMaxLength(MAX_GROUP_MAPPINGS)),
   ),
   /**
-   * A change to the strong-factor lists ends the Keycloak sign-ins of the Owner and Admins that
-   * stop being strong (ticket 06). Without this, a change that would end any is refused (409) with
-   * how many, so the Owner confirms first.
+   * Confirms what the save ends or strands: weak sign-ins of the Owner and Admins (ticket 06), local
+   * sessions when local sign-in turns off, Keycloak sign-ins when Keycloak turns off or moves to
+   * another issuer (ticket 08). Without it such a save is refused (409) saying what and how many.
    */
   endLoginsConfirmed: Schema.optionalKey(Schema.Boolean),
 });
@@ -215,11 +215,18 @@ export const keycloakClientUrls = (base: string) => {
 };
 
 /**
- * Why a Keycloak flow starts (spec, «Intenciones del flujo»): `sign-in` and `invitation` (with its
- * token) without a session; `link` and `step-up` with the browser's own. `step-up` signs nobody
- * in: it comes back with a single-use proof in the fragment (`KEYCLOAK_PROOF_FRAGMENT_PARAM`).
+ * Why a Keycloak flow starts (spec, «Intenciones del flujo»): `sign-in`, `invitation` (with its
+ * token) and `reset` (with a reset link's token, ticket 08) without a session; `link` and `step-up`
+ * with the browser's own. `step-up` signs nobody in: it comes back with a single-use proof in the
+ * fragment (`KEYCLOAK_PROOF_FRAGMENT_PARAM`).
  */
-export const KeycloakFlowIntent = Schema.Literals(["sign-in", "link", "invitation", "step-up"]);
+export const KeycloakFlowIntent = Schema.Literals([
+  "sign-in",
+  "link",
+  "invitation",
+  "step-up",
+  "reset",
+]);
 export type KeycloakFlowIntent = typeof KeycloakFlowIntent.Type;
 
 /** The longest path the browser may come back to. */
@@ -236,6 +243,13 @@ export const KeycloakStartRequest = Schema.Struct({
   returnTo: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_RETURN_TO_LENGTH))),
   reauth: Schema.optionalKey(AuthReauth),
   invitationToken: Schema.optionalKey(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+  ),
+  /**
+   * Ticket 08: a reset link's token, with `reset` and only with it. Checked before the flow leaves
+   * for Keycloak; the Hub keeps only its hash, and spends the link at the callback.
+   */
+  resetToken: Schema.optionalKey(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
   ),
   /**
@@ -292,6 +306,8 @@ export const KeycloakSignInFailure = Schema.Literals([
   "taken",
   // Ticket 06: a `step-up` signed in at Keycloak as someone else than the session's User.
   "identity-mismatch",
+  // Ticket 08: a `reset` whose link expired, was used or replaced meanwhile.
+  "reset-invalid",
   "cancelled",
   "throttled",
   "unavailable",

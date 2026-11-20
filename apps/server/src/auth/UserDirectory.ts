@@ -508,9 +508,41 @@ export class UserDirectory extends Context.Service<
      * ended, so cached principals are dropped and their connections close.
      */
     readonly credentialsChanged: (userId: UserId) => Effect.Effect<void>;
+    /**
+     * What a live link offers (ticket 08): Keycloak (`keycloakOffered`, never for the Owner, whose
+     * link stays the passkey break-glass) and a passkey or password, unless local sign-in is off
+     * for everyone but the Owner and the link is not the Owner's.
+     */
     readonly getResetLinkStatus: (
       token: string,
+      offers?: { readonly keycloakOffered: boolean; readonly localSignInClosed: boolean },
     ) => Effect.Effect<AuthResetLinkStatus, UserDirectoryStorageError>;
+    /**
+     * Ticket 08: whose live reset link this is, and its hash, without spending it. The hash is all
+     * a Keycloak `reset` flow keeps; it spends the link with it at the callback.
+     */
+    readonly inspectResetLink: (token: string) => Effect.Effect<
+      Option.Option<{
+        readonly userId: UserId;
+        readonly isOwner: boolean;
+        readonly tokenHash: string;
+      }>,
+      UserDirectoryStorageError
+    >;
+    /**
+     * Ticket 08, local sign-in turned off for everyone but the Owner: ends every session and
+     * unspent pairing link of theirs born of a local sign-in (no Keycloak sign-in vouches for it,
+     * and the Hub's shell did not hand it out). Run it in the caller's transaction, then
+     * `afterCommit`, so their sockets close.
+     */
+    readonly endLocalSignIns: () => Effect.Effect<
+      {
+        readonly sessions: number;
+        readonly pairingLinks: number;
+        readonly afterCommit: Effect.Effect<void>;
+      },
+      UserDirectoryStorageError
+    >;
     readonly startResetRegistration: (input: {
       readonly token: string;
       readonly origin: string;
@@ -1562,17 +1594,45 @@ const make = Effect.gen(function* () {
 
   const getResetLinkStatus: UserDirectory["Service"]["getResetLinkStatus"] = Effect.fn(
     "UserDirectory.getResetLinkStatus",
+  )(function* (token, offers) {
+    const user = yield* liveResetLinkUser(token);
+    if (Option.isNone(user)) return { status: "invalid" } as const;
+    const { isOwner } = user.value;
+    // Ticket 08: the Owner's link is their passkey break-glass, whatever else is on.
+    const local = isOwner || offers?.localSignInClosed !== true;
+    return {
+      status: "valid",
+      displayName: user.value.displayName,
+      loginName: user.value.loginName,
+      // The Owner's account always needs a passkey or a password with a code.
+      passwordAllowed: local && !isOwner,
+      local,
+      keycloak: !isOwner && offers?.keycloakOffered === true,
+    } as const;
+  });
+
+  const inspectResetLink: UserDirectory["Service"]["inspectResetLink"] = Effect.fn(
+    "UserDirectory.inspectResetLink",
   )(function* (token) {
     const user = yield* liveResetLinkUser(token);
-    return Option.isSome(user)
-      ? ({
-          status: "valid",
-          displayName: user.value.displayName,
-          loginName: user.value.loginName,
-          // The Owner's account always needs a passkey or a password with a code.
-          passwordAllowed: !user.value.isOwner,
-        } as const)
-      : ({ status: "invalid" } as const);
+    if (Option.isNone(user)) return Option.none();
+    return Option.some({
+      userId: user.value.userId,
+      isOwner: user.value.isOwner,
+      tokenHash: yield* hashResetToken(token),
+    });
+  });
+
+  const endLocalSignIns: UserDirectory["Service"]["endLocalSignIns"] = Effect.fn(
+    "UserDirectory.endLocalSignIns",
+  )(function* () {
+    const ended = yield* sessions.revokeLocalForNonOwnersDeferred().pipe(storage);
+    const links = yield* pairingLinks.revokeLocalForNonOwnersDeferred().pipe(storage);
+    return {
+      sessions: ended.revoked,
+      pairingLinks: links.revoked,
+      afterCommit: Effect.all([ended.close, links.close], { discard: true }),
+    };
   });
 
   const startResetRegistration: UserDirectory["Service"]["startResetRegistration"] = Effect.fn(
@@ -1910,6 +1970,8 @@ const make = Effect.gen(function* () {
     checkTotp,
     issueOwnerResetLink,
     getResetLinkStatus,
+    inspectResetLink,
+    endLocalSignIns,
     startResetRegistration,
     verifyResetRegistration,
     redeemResetLink,

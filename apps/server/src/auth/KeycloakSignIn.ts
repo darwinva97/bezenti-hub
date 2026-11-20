@@ -77,6 +77,8 @@ export const REFRESH_TOKEN_KEY_NAME = KeycloakTokens.REFRESH_TOKEN_KEY_NAME;
 export const ACCOUNT_PATH = "/settings/user/account";
 /** Where an `invitation` flow that did not go through lands: the page that started it. */
 const INVITE_PATH = "/invite";
+/** Where a `reset` that did not go through lands (ticket 08); its link is never in an address. */
+const RESET_PATH = "/reset";
 
 /** A refresh token's associated data: a row copied to another login does not open. */
 export const refreshTokenContext = KeycloakTokens.refreshTokenContext;
@@ -100,6 +102,11 @@ interface PendingFlow {
   readonly startedAtMs: number;
   /** For `invitation`: the token, checked at `start` and again at the callback; never sent out. */
   readonly invitationToken: Redacted.Redacted<string> | undefined;
+  /**
+   * For `reset` (ticket 08): whose live reset link started it, and the link's hash, never the
+   * token. The callback spends the link by its hash, in the transaction that binds the identity.
+   */
+  readonly reset: { readonly userId: UserId; readonly tokenHash: string } | undefined;
   readonly expiresAtMs: number;
 }
 
@@ -125,6 +132,8 @@ export class KeycloakStartRefusedError extends Schema.TaggedError<KeycloakStartR
       "unavailable",
       // `invitation` without a live Invitation's token, or a token with another intent.
       "invitation-invalid",
+      // Ticket 08: `reset` without a live reset link of a User other than the Owner's.
+      "reset-invalid",
     ]),
   },
 ) {
@@ -143,6 +152,8 @@ export class KeycloakStartRefusedError extends Schema.TaggedError<KeycloakStartR
         return new InvitationService.InvitationInvalidError({}).message;
       case "no-identity":
         return "Only an account that signs in with Keycloak confirms through it.";
+      case "reset-invalid":
+        return "This reset link expired or was already used.";
       default:
         return "This sign-in cannot start from here.";
     }
@@ -173,6 +184,8 @@ export class KeycloakSignIn extends Context.Service<
         readonly returnTo?: string | undefined;
         readonly reauth?: AuthReauth | undefined;
         readonly invitationToken?: string | undefined;
+        /** Ticket 08: a reset link's token, with `reset` and only with it. */
+        readonly resetToken?: string | undefined;
         readonly strongFactor?: boolean | undefined;
       },
     ) => Effect.Effect<
@@ -340,6 +353,10 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
       if ((input.intent === "invitation") !== (input.invitationToken !== undefined)) {
         return yield* new KeycloakStartRefusedError({ reason: "invitation-invalid" });
       }
+      // And a reset link's token with `reset` and only with it (ticket 08).
+      if ((input.intent === "reset") !== (input.resetToken !== undefined)) {
+        return yield* new KeycloakStartRefusedError({ reason: "reset-invalid" });
+      }
       const nowMs = yield* Clock.currentTimeMillis;
       const clientIp = deriveAuthClientMetadata({ request }).ipAddress;
       // Unauthenticated: a client (an IPv4 address or an IPv6 /64) gets a few starts a minute.
@@ -364,6 +381,20 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           }),
         );
         invitationToken = Redacted.make(input.invitationToken);
+      }
+
+      // Ticket 08: a reset link of a User other than the Owner (the Owner's stays the passkey
+      // break-glass), live now. Checking spends nothing; a dead link counts against the client,
+      // like a wrong code. Only its hash goes with the flow.
+      let reset: PendingFlow["reset"];
+      if (input.resetToken !== undefined) {
+        yield* userDirectory.requireClientNotThrottled(clientIp);
+        const target = yield* userDirectory.inspectResetLink(input.resetToken);
+        if (Option.isNone(target) || target.value.isOwner) {
+          yield* userDirectory.recordClientSignInFailure(clientIp);
+          return yield* new KeycloakStartRefusedError({ reason: "reset-invalid" });
+        }
+        reset = { userId: target.value.userId, tokenHash: target.value.tokenHash };
       }
 
       /** The browser's own User session, for `link` and `step-up`: never a token an app holds. */
@@ -406,7 +437,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
       // Ask the realm for a strong factor (`acr_values`, the Owner's strong `acr` list) when the
       // page asks for one (a retry, or an action that needs it) or the User's Role needs it. It
       // only shapes the request: the callback reads strength from the verified token alone.
-      const boundUser = link?.userId ?? stepUpFor?.userId;
+      const boundUser = link?.userId ?? stepUpFor?.userId ?? reset?.userId;
       const askStrong =
         input.strongFactor === true ||
         (boundUser !== undefined && (yield* userDirectory.requiresStrongSignIn(boundUser)));
@@ -446,6 +477,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           stepUp: stepUpFor,
           startedAtMs: nowMs,
           invitationToken,
+          reset,
           expiresAtMs: nowMs + Duration.toMillis(FLOW_TTL),
         },
         nowMs,
@@ -466,9 +498,12 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           state,
           nonce,
           codeChallenge: yield* sha256(verifier),
-          // `link` and `step-up` ask the person to authenticate again, whatever the SSO session;
-          // `step-up` also asks for an authentication made now.
-          ...(input.intent === "link" || input.intent === "step-up" || askStrong
+          // `link`, `reset` and `step-up` ask the person to authenticate again, whatever the SSO
+          // session; `step-up` also asks for an authentication made now.
+          ...(input.intent === "link" ||
+          input.intent === "reset" ||
+          input.intent === "step-up" ||
+          askStrong
             ? { prompt: "login" as const }
             : {}),
           ...(input.intent === "step-up" ? { maxAge: 0 as const } : {}),
@@ -1005,6 +1040,124 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
   });
 
   /**
+   * `reset` (ticket 08): one transaction spends the link (single use), replaces the identity, drops
+   * the User's local credentials, sessions and pairing links, and starts a session born of this
+   * sign-in. A refusal anywhere leaves the link unspent.
+   */
+  const resetFlow = Effect.fn("KeycloakSignIn.reset")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+    flow: PendingFlow,
+    target: NonNullable<PendingFlow["reset"]>,
+    claims: KeycloakClient.IdTokenClaims,
+    tokens: KeycloakClient.TokenSet,
+    strength: Strength,
+    groupsClaim: string,
+  ) {
+    const { userId } = target;
+    // As a link: an Admin, or one the groups would make an Admin, binds only a strong sign-in.
+    if (!strength.strong) {
+      const needsStrong =
+        (yield* userDirectory
+          .requiresStrongSignIn(userId)
+          .pipe(Effect.mapError(storage("requires strong")))) ||
+        GroupSync.grantsAdmin(
+          yield* groupPlan({ id: userId, isOwner: false }, claims, groupsClaim),
+        );
+      if (needsStrong) {
+        return yield* refuse("strong-factor-required", "reset without strong factor");
+      }
+    }
+    const now = yield* DateTime.now;
+    const nowIso = DateTime.formatIso(now);
+    const done = yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const spent = yield* users
+            .consumeResetLink({ tokenHash: target.tokenHash, now })
+            .pipe(Effect.mapError(storage("spend reset link")));
+          if (Option.isNone(spent) || spent.value !== userId) {
+            return yield* refuse("reset-invalid", "reset link spent or replaced");
+          }
+          yield* inactiveRefusal(userId);
+          const record = yield* users.getById(userId).pipe(Effect.mapError(storage("read user")));
+          if (Option.isNone(record) || record.value.isOwner) {
+            return yield* refuse("reset-invalid", "reset link of no User or the Owner");
+          }
+          const holder = yield* identities
+            .findBySubject(flow.issuer, claims.sub)
+            .pipe(Effect.mapError(storage("find identity")));
+          if (Option.isSome(holder) && holder.value.userId !== userId) {
+            return yield* refuse("taken", "identity of another user");
+          }
+          // Every way in is replaced: the old identity and its sign-ins end first.
+          const identityRemoved = yield* identities
+            .unlink(userId, nowIso)
+            .pipe(Effect.mapError(storage("unlink")));
+          const linked = yield* identities
+            .link({
+              userId,
+              issuer: flow.issuer,
+              subject: claims.sub,
+              username: KeycloakAdmission.identityLabel(claims.preferred_username),
+              email: KeycloakAdmission.identityLabel(claims.email),
+              now: nowIso,
+            })
+            .pipe(Effect.mapError(storage("link")));
+          if (!linked) return yield* refuse("failed", "identity linked meanwhile");
+          yield* users
+            .removePasskeysExcept({ userId, credentialId: "" })
+            .pipe(Effect.mapError(storage("remove passkeys")));
+          yield* users.removePassword(userId).pipe(Effect.mapError(storage("remove password")));
+          yield* users.removeTotp(userId).pipe(Effect.mapError(storage("remove totp")));
+          const closeLinks = yield* pairingLinks
+            .revokeAllForUserDeferred(userId)
+            .pipe(Effect.mapError(storage("revoke pairing links")));
+          const closeSockets = yield* sessions
+            .revokeAllForUserDeferred(userId)
+            .pipe(Effect.mapError(storage("revoke sessions")));
+          const plan = yield* groupPlan({ id: userId, isOwner: false }, claims, groupsClaim);
+          if (!strength.strong && GroupSync.grantsAdmin(plan)) {
+            return yield* refuse("strong-factor-required", "reset without strong factor");
+          }
+          const applied = yield* applyGroups(userId, plan);
+          const loginId = yield* newLogin(userId, flow, claims, tokens, nowIso, strength);
+          const session = yield* issueSession(
+            request,
+            { id: userId, displayName: record.value.displayName, isOwner: false },
+            loginId,
+          );
+          yield* audit
+            .record({
+              actor: AuditLog.userActor(userId),
+              action: "resetLink.redeem",
+              target: { kind: "user", id: userId },
+              detail: { method: "keycloak", ...(identityRemoved ? { identityRemoved: true } : {}) },
+            })
+            .pipe(Effect.mapError(storage("audit")));
+          yield* audit
+            .record({
+              actor: AuditLog.userActor(userId),
+              action: "user.identity.link",
+              target: { kind: "user", id: userId, name: record.value.displayName },
+              detail: { issuer: flow.issuer, credentialsRemoved: true, via: "reset" },
+            })
+            .pipe(Effect.mapError(storage("audit")));
+          return {
+            session,
+            afterCommit: Effect.all([closeSockets, closeLinks, applied.afterCommit], {
+              discard: true,
+            }),
+          };
+        }),
+      )
+      .pipe(Effect.catchTags({ SqlError: () => Effect.fail(refuse("failed", "transaction")) }));
+    // After the commit: the old sessions' sockets close, and their Admin rights are re-read.
+    yield* done.afterCommit;
+    yield* userDirectory.credentialsChanged(userId);
+    return { session: done.session, redirectTo: flow.returnTo };
+  });
+
+  /**
    * `step-up` (ticket 06): the person authenticated again just now, as the identity the session's
    * User signs in with. Nothing is signed in or kept but a proof for that session; whether the
    * sign-in was strong is recorded in it, for `requireStepUp` and `confirmStrongFactor` to weigh.
@@ -1137,26 +1290,36 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           } satisfies CallbackOutcome;
         }
         const { session, redirectTo } =
-          flow.link === undefined
-            ? yield* admit(
+          flow.reset !== undefined
+            ? yield* resetFlow(
                 request,
                 flow,
-                enabled.value.registrationMode,
+                flow.reset,
                 claims,
                 tokens,
-                clientIp,
                 strength,
                 enabled.value.groupsClaim,
               )
-            : yield* link(
-                request,
-                flow,
-                flow.link,
-                claims,
-                tokens,
-                strength,
-                enabled.value.groupsClaim,
-              );
+            : flow.link === undefined
+              ? yield* admit(
+                  request,
+                  flow,
+                  enabled.value.registrationMode,
+                  claims,
+                  tokens,
+                  clientIp,
+                  strength,
+                  enabled.value.groupsClaim,
+                )
+              : yield* link(
+                  request,
+                  flow,
+                  flow.link,
+                  claims,
+                  tokens,
+                  strength,
+                  enabled.value.groupsClaim,
+                );
         return {
           redirectTo,
           session: { token: session.sessionToken, expiresAt: session.response.expiresAt },
@@ -1176,7 +1339,9 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
             ? flow.returnTo
             : flow?.intent === "invitation"
               ? INVITE_PATH
-              : "/sign-in";
+              : flow?.intent === "reset"
+                ? RESET_PATH
+                : "/sign-in";
         return {
           redirectTo: withResult(landing, refusal.failure as KeycloakSignInFailure),
           session: undefined,

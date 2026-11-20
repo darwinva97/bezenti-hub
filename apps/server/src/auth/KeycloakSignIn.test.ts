@@ -204,7 +204,7 @@ describe("Keycloak sign-in (ticket 02)", () => {
     Effect.gen(function* () {
       const { server } = yield* hub();
       const session = yield* server.request("/api/auth/session");
-      assert.deepEqual(session.body.signInOptions, { keycloak: true });
+      assert.deepEqual(session.body.signInOptions, { keycloak: true, localForMembers: true });
     }),
   );
 
@@ -835,7 +835,7 @@ describe("Keycloak sign-in (ticket 02)", () => {
         });
         assert.equal((yield* start(server, { intent: "sign-in" })).status, 403);
         const session = yield* server.request("/api/auth/session");
-        assert.deepEqual(session.body.signInOptions, { keycloak: false });
+        assert.deepEqual(session.body.signInOptions, { keycloak: false, localForMembers: true });
       }),
     );
   });

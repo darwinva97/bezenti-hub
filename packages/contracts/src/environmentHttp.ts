@@ -829,14 +829,15 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
     HttpApiEndpoint.post("resetLinkRegistration", "/api/auth/reset/registration", {
       payload: AuthResetLinkRequest,
       success: AuthPasskeyRegistrationCeremony,
-      error: EnvironmentUserSignInErrors,
+      // Keycloak 08: refused while local sign-in is off for everyone but the Owner.
+      error: [...EnvironmentUserSignInErrors, EnvironmentHttpForbiddenError],
     }),
   )
   .add(
     HttpApiEndpoint.post("redeemResetLink", "/api/auth/reset", {
       payload: AuthResetLinkRedeemRequest,
       success: AuthBrowserSessionResult,
-      error: EnvironmentUserSignInErrors,
+      error: [...EnvironmentUserSignInErrors, EnvironmentHttpForbiddenError],
     }),
   )
   .add(

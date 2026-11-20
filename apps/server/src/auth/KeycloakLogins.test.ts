@@ -4,7 +4,11 @@
  * «also sign out of Keycloak». The real HTTP doors over SQLite in memory and a fake realm; time is
  * TestClock's, and a background re-check is awaited by its outcome or the revocation it causes.
  */
-import { KEYCLOAK_BACKCHANNEL_LOGOUT_PATH } from "@t3tools/contracts";
+import {
+  AuthStandardClientScopes,
+  KEYCLOAK_BACKCHANNEL_LOGOUT_PATH,
+  mcpClientScopes,
+} from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -932,4 +936,83 @@ describe("no token of a sign-in leaks (ticket 07)", () => {
       Effect.provideService(References.MinimumLogLevel, "All"),
     );
   });
+});
+
+describe("apps and MCP clients through a Keycloak browser sign-in (ticket 09)", () => {
+  const standard = new Set<string>(AuthStandardClientScopes);
+  const scopesOf = (session: { readonly scopes: Iterable<string> }) => [...session.scopes].sort();
+
+  it.effect(
+    "a sign-in that returns to /app-sign-in approves the app, which carries the sign-in",
+    () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        yield* keycloakMember(server, realm, "kc-ana");
+        // The page the desktop or mobile app opened, as the browser leaves it for Keycloak.
+        const page = `/app-sign-in?${new URLSearchParams({
+          redirect_uri: APP_REDIRECT,
+          code_challenge: yield* challengeOf(VERIFIER),
+          code_challenge_method: "S256",
+          state: "state-from-the-app-0123",
+          client: "T3 Code desktop",
+        })}`;
+        const back = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-ana" },
+          {
+            intent: "sign-in",
+            returnTo: page,
+          },
+        );
+        assert.equal(back.status, 303, back.text);
+        // Back on the same page with the whole request, and nothing else added.
+        assert.equal(back.location, page);
+        const cookie = back.cookie ?? "";
+        const { loginId } = yield* loginOf(server, cookie);
+        const app = yield* approveApp(server, cookie);
+        const session = yield* server.sessions.verify(app);
+        assert.equal(session.identityLoginId, loginId);
+        // What the Keycloak browser session holds, and no more: the standard scopes a Member has.
+        const approver = yield* server.sessions.verify(tokenOf(cookie));
+        assert.deepEqual(scopesOf(session), scopesOf(approver));
+        assert.isTrue(scopesOf(session).every((scope) => standard.has(scope)));
+        assert.include(scopesOf(session), "orchestration:operate");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a sign-in that returns to /connect-agent approves an MCP client, which carries it",
+    () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        yield* keycloakMember(server, realm, "kc-ana");
+        const page = `/connect-agent?${new URLSearchParams({
+          response_type: "code",
+          client_id: "client-1",
+          redirect_uri: MCP_REDIRECT,
+          code_challenge: yield* challengeOf(VERIFIER),
+          code_challenge_method: "S256",
+          state: "state-1",
+          resource: "http://127.0.0.1/mcp",
+        })}`;
+        const back = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-ana" },
+          {
+            intent: "sign-in",
+            returnTo: page,
+          },
+        );
+        assert.equal(back.status, 303, back.text);
+        assert.equal(back.location, page);
+        const cookie = back.cookie ?? "";
+        const { loginId } = yield* loginOf(server, cookie);
+        const mcp = yield* approveMcpClient(server, cookie);
+        const session = yield* server.sessions.verify(mcp);
+        assert.equal(session.identityLoginId, loginId);
+        assert.deepEqual(scopesOf(session), [...mcpClientScopes("read-only")].sort());
+      }).pipe(Effect.scoped),
+  );
 });

@@ -18,6 +18,7 @@ import {
   addMember,
   type Authenticator,
   bootstrapOwner,
+  type CreationOptions,
   isSignedIn,
   makeAuthenticator,
   passkeyReauth,
@@ -340,6 +341,62 @@ describe("local sign-in off for everyone but the Owner (ticket 08)", () => {
       const users = yield* server.sql<{ n: number }>`SELECT COUNT(*) AS n FROM users`;
       assert.equal(users[0]?.n, 1);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a Platform invitation accepted with a new password or passkey is refused, unspent",
+    () =>
+      Effect.gen(function* () {
+        const { server, owner } = yield* hub;
+        const created = yield* server.request("/api/installation/invitations", {
+          body: {},
+          cookie: owner,
+        });
+        assert.equal(created.status, 200, created.text);
+        const token = created.body.token as string;
+        const off = yield* server.request(SETTINGS, {
+          cookie: owner,
+          body: { localSignInForMembers: false },
+        });
+        assert.equal(off.status, 200, off.text);
+
+        const viaPassword = yield* server.request("/api/invitations/accept", {
+          body: {
+            token,
+            method: "password",
+            displayName: "Grace Hopper",
+            loginName: "grace",
+            password: PASSWORD,
+          },
+        });
+        assert.equal(viaPassword.status, 403);
+        assert.isUndefined(viaPassword.cookie);
+
+        const ceremony = yield* server.request("/api/invitations/registration", {
+          body: { token, displayName: "Grace Hopper" },
+        });
+        assert.equal(ceremony.status, 200, ceremony.text);
+        const authenticator = yield* makeAuthenticator();
+        const response = yield* Effect.promise(() =>
+          authenticator.create(ceremony.body.options as CreationOptions),
+        );
+        const viaPasskey = yield* server.request("/api/invitations/accept", {
+          body: { token, method: "passkey", ceremonyId: ceremony.body.ceremonyId, response },
+        });
+        assert.equal(viaPasskey.status, 403);
+        assert.isUndefined(viaPasskey.cookie);
+
+        // Nothing was kept: the Invitation is still unused, and no User was made.
+        const preview = yield* server.request("/api/invitations/preview", { body: { token } });
+        assert.equal(preview.body.status, "valid");
+        const accepted = yield* server.sql<{ acceptedAt: string | null }>`
+        SELECT accepted_at AS "acceptedAt" FROM space_invitations
+        WHERE invitation_id = ${(created.body.invitation as { id: string }).id}
+      `;
+        assert.deepEqual(accepted, [{ acceptedAt: null }]);
+        const users = yield* server.sql<{ n: number }>`SELECT COUNT(*) AS n FROM users`;
+        assert.equal(users[0]?.n, 1);
+      }).pipe(Effect.scoped),
   );
 
   it.effect("an app approved from a local sign-in before the switch gets no session after", () =>

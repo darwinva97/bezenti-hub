@@ -111,7 +111,7 @@ export function AccountSettingsSection() {
       ) : null}
       <SettingsRow
         title="Sign out"
-        description="Ends this browser's session. Sign in again with your passkey or password."
+        description={signOutDescription(load.status === "loaded" ? load.account : null)}
         control={
           <Button
             disabled={isSigningOut}
@@ -313,6 +313,16 @@ function FormButtons({
 }
 
 /** «Connect Keycloak», or the Keycloak account this User signs in with. */
+/** What signing in again takes: Keycloak for who signs in with it, the passkey for the rest. */
+function signOutDescription(account: AuthAccount | null) {
+  const ends = "Ends this browser's session.";
+  if (account?.identity === undefined)
+    return `${ends} Sign in again with your passkey or password.`;
+  return account.user.isOwner
+    ? `${ends} Sign in again with Keycloak, or with your passkey.`
+    : `${ends} Sign in again with Keycloak.`;
+}
+
 function KeycloakRow({ account, offered }: { account: AuthAccount; offered: boolean }) {
   const [connecting, setConnecting] = useState(false);
   const [stepUp, setStepUp] = useState(() => emptyStepUp(account));

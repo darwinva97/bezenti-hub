@@ -10,6 +10,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { type FakeKeycloak, type FakeSignIn, makeFakeKeycloak } from "./Keycloak.testkit.ts";
@@ -588,6 +589,83 @@ describe("a reset link binds a Keycloak account (ticket 08)", () => {
       });
       assert.equal(viaPasskey.status, 403);
       assert.equal((yield* resetStatus(server, token)).status, "valid");
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("a refusal spends nothing (ticket 08)", () => {
+  it.effect("a password reset while local sign-in is off leaves a live Keycloak socket open", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner, ownerId } = yield* hub;
+      const ana = yield* keycloakMember(server, realm, "kc-ana");
+      const passwordOf = server.sql<{ readonly hash: string; readonly at: string }>`
+        SELECT password_hash AS hash, updated_at AS at FROM user_passwords
+        WHERE user_id = ${ana.id}
+      `;
+      const passwordBefore = yield* passwordOf;
+      const socket = yield* watchSocket(server, ana.cookie);
+      // A revocation published and then rolled back would still tell live sockets to close.
+      const { sessionId } = yield* server.sessions.verify(tokenOf(ana.cookie));
+      const removed: Array<string> = [];
+      yield* server.sessions.streamChanges.pipe(
+        Stream.runForEach((change) =>
+          Effect.sync(() => {
+            if (change.type === "clientRemoved") removed.push(change.sessionId);
+          }),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const token = yield* issueResetLink(server, ana.id, ownerId);
+      const { saved } = yield* saveConfirmed(server, owner, { localSignInForMembers: false });
+      assert.equal(saved.status, 200, saved.text);
+
+      const refused = yield* server.request("/api/auth/reset/password", {
+        body: { token, loginName: ana.id, password: "a brand new password for ana" },
+      });
+      assert.equal(refused.status, 403, refused.text);
+      assert.isUndefined(refused.cookie);
+      // Refused before anything was replaced or revoked: the Keycloak session and socket live on.
+      assert.isUndefined(socket.pollUnsafe());
+      assert.notInclude(removed, sessionId);
+      assert.isTrue(yield* isSignedIn(server, ana.cookie));
+      assert.equal((yield* resetStatus(server, token)).status, "valid");
+      assert.deepEqual(yield* passwordOf, passwordBefore);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a Member's refused recovery code stays unspent, and works once reopened", () =>
+    Effect.gen(function* () {
+      const { server, owner } = yield* hub;
+      const ana = yield* memberWithPassword(server, "ana");
+      // Only the Owner is given codes today; a code of a Member's is stored as the server would.
+      const code = "ABCDEFGHJK";
+      // SHA-256 of the code, as the server stores it.
+      const hash = "f57cbf1e3e471b25db4b8ad0844df41b2dae9c7d1944944d128e49294d412f66";
+      yield* server.sql`
+        INSERT INTO user_recovery_codes (code_hash, user_id, created_at)
+        VALUES (${hash}, ${ana.id}, '2026-01-01T00:00:00.000Z')
+      `;
+      const usedAt = server.sql<{ readonly usedAt: string | null }>`
+        SELECT used_at AS "usedAt" FROM user_recovery_codes WHERE code_hash = ${hash}
+      `;
+      const { saved } = yield* saveConfirmed(server, owner, { localSignInForMembers: false });
+      assert.equal(saved.status, 200, saved.text);
+
+      const refused = yield* server.request("/api/auth/recovery-code/sign-in", { body: { code } });
+      assert.equal(refused.status, 403, refused.text);
+      assert.match(String(refused.body.message), /Keycloak/);
+      assert.isUndefined(refused.cookie);
+      assert.isNull((yield* usedAt)[0]?.usedAt);
+
+      const reopened = yield* server.request(SETTINGS, {
+        cookie: owner,
+        body: { localSignInForMembers: true },
+      });
+      assert.equal(reopened.status, 200, reopened.text);
+      const signedIn = yield* server.request("/api/auth/recovery-code/sign-in", { body: { code } });
+      assert.equal(signedIn.status, 200, signedIn.text);
+      assert.equal(yield* userOf(server, signedIn.cookie), ana.id);
+      assert.isNotNull((yield* usedAt)[0]?.usedAt);
     }).pipe(Effect.scoped),
   );
 });

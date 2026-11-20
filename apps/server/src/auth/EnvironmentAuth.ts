@@ -2269,14 +2269,26 @@ export const make = Effect.gen(function* () {
   const signInWithRecoveryCode: EnvironmentAuth["Service"]["signInWithRecoveryCode"] = Effect.fn(
     "EnvironmentAuth.signInWithRecoveryCode",
   )(function* (request, code, requestMetadata) {
-    const user = yield* userDirectory.redeemRecoveryCode(code).pipe(
-      Effect.catchTags({
-        RecoveryCodeRejectedError: (cause) =>
-          Effect.fail(new ServerAuthInvalidCredentialError({ diagnostic: cause.message })),
-        UserDirectoryStorageError: (cause) => Effect.fail(userDirectoryFailure(cause)),
-      }),
-    );
-    return yield* issueSignInSession(request, user, requestMetadata);
+    // Spending the code and issuing the session commit together: a refusal (a closed local door,
+    // ticket 08) leaves the code unspent.
+    return yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const user = yield* userDirectory.redeemRecoveryCode(code).pipe(
+            Effect.catchTags({
+              RecoveryCodeRejectedError: (cause) =>
+                Effect.fail(new ServerAuthInvalidCredentialError({ diagnostic: cause.message })),
+              UserDirectoryStorageError: (cause) => Effect.fail(userDirectoryFailure(cause)),
+            }),
+          );
+          return yield* issueSignInSession(request, user, requestMetadata);
+        }),
+      )
+      .pipe(
+        Effect.catchTags({
+          SqlError: (cause) => Effect.fail(new ServerAuthUserDirectoryError({ cause })),
+        }),
+      );
   });
 
   const passwordFailures = {
@@ -2352,21 +2364,29 @@ export const make = Effect.gen(function* () {
         Effect.withSpan("EnvironmentAuth.issueOwnerResetLink"),
       );
 
+  /**
+   * Ticket 08: no passkey or password from a reset link of anyone but the Owner while local
+   * sign-in is off. Asked before anything is hashed, replaced or revoked; the link stays unspent.
+   */
+  const requireResetLinkLocal = Effect.fn("EnvironmentAuth.requireResetLinkLocal")(function* (
+    token: string,
+  ) {
+    const closed = yield* localSignInClosed(sql).pipe(
+      Effect.mapError((cause) => new ServerAuthUserDirectoryError({ cause })),
+    );
+    if (!closed) return;
+    const status = yield* userDirectory
+      .getResetLinkStatus(token, { keycloakOffered: false, localSignInClosed: true })
+      .pipe(Effect.mapError(userDirectoryFailure));
+    if (status.status === "valid" && status.local === false) {
+      return yield* new ServerAuthLocalSignInClosedError({});
+    }
+  });
+
   const beginResetLinkRegistration: EnvironmentAuth["Service"]["beginResetLinkRegistration"] =
     Effect.fn("EnvironmentAuth.beginResetLinkRegistration")(function* (request, token) {
       const origin = yield* resolvePasskeyOrigin(request);
-      // Ticket 08: no passkey for anyone but the Owner while local sign-in is off; the link stays.
-      const closed = yield* localSignInClosed(sql).pipe(
-        Effect.mapError((cause) => new ServerAuthUserDirectoryError({ cause })),
-      );
-      if (closed) {
-        const status = yield* userDirectory
-          .getResetLinkStatus(token, { keycloakOffered: false, localSignInClosed: true })
-          .pipe(Effect.mapError(userDirectoryFailure));
-        if (status.status === "valid" && status.local === false) {
-          return yield* new ServerAuthLocalSignInClosedError({});
-        }
-      }
+      yield* requireResetLinkLocal(token);
       return yield* userDirectory
         .startResetRegistration({ token, origin })
         .pipe(Effect.catchTags(resetLinkFailures));
@@ -2379,6 +2399,8 @@ export const make = Effect.gen(function* () {
     const pending = yield* userDirectory
       .verifyResetRegistration({ ceremonyId: input.ceremonyId, origin, response: input.response })
       .pipe(Effect.mapError(passkeyRejected));
+    // A ceremony started before local sign-in was turned off is refused here, before any change.
+    yield* requireResetLinkLocal(input.token);
     // Spending the link, storing the passkey and issuing the session succeed or fail together.
     return yield* sql
       .withTransaction(
@@ -2404,6 +2426,7 @@ export const make = Effect.gen(function* () {
   const redeemResetLinkWithPassword: EnvironmentAuth["Service"]["redeemResetLinkWithPassword"] =
     Effect.fn("EnvironmentAuth.redeemResetLinkWithPassword")(
       function* (request, input, requestMetadata) {
+        yield* requireResetLinkLocal(input.token);
         // Spending the link, replacing the credentials and issuing the session succeed or fail together.
         return yield* sql
           .withTransaction(

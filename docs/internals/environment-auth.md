@@ -781,8 +781,12 @@ that names no Keycloak sign-in and was not issued by the shell:
 - `issueUserBrowserSession`: passkey, password, the TOTP step, recovery code, a
   reset link's passkey or password, and an Invitation accepted with new
   credentials. Each caller has verified the credential first, so the refusal
-  (403, «sign in with Keycloak») is no oracle. A refused recovery code stays
-  unspent, and a refused Invitation or reset link rolls back unspent.
+  (403, «sign in with Keycloak») is no oracle. A recovery code is spent in the
+  session's transaction, so a refused one rolls back unspent, and so does a
+  refused Invitation. A reset link of anyone but the Owner is refused up front
+  while the switch is closed (start and finish of its passkey, and its
+  password), before anything is hashed, replaced or revoked, so the link stays
+  unspent and the User's Keycloak sessions and sockets are untouched.
 - `issueAppSession`, `issueMcpClientSession` and the pairing-link exchanges:
   something approved from a local session before the switch gets no session
   after it.
@@ -805,7 +809,11 @@ transaction. It revokes every session and unspent pairing link of anyone but the
 Owner that carries neither a Keycloak sign-in nor the shell's mark, and closes
 their sockets after the commit. A first save answers 409 with how many Users have
 no Keycloak identity yet (their way back is a reset link) and how many sessions
-and links end; `endLoginsConfirmed` saves it.
+and links end; `endLoginsConfirmed` saves it. Ticket 01 could already save the
+switch closed, so migration 157 ends at upgrade what turning it off ends: when
+the row reads closed it revokes the same sessions and links (no socket is open
+while migrations run) and records one `system` `signIn.settings.update` entry
+with the counts.
 
 **Turning Keycloak off**, or saving a new issuer, ends the Keycloak sign-ins
 nothing can re-check any more (all of them, or the old issuer's) through

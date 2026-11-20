@@ -553,6 +553,25 @@ a taken sign-in name, leaves the link unspent. A signed-in User accepts through
 refuses the Owner, an existing Member, and an Admin Invitation for an account
 that signs in with a password alone.
 
+A **Platform invitation** is a row of the same table with `space_id` and `role`
+both null (a CHECK keeps them null together, migration 156): the Owner's way to
+give one person a User by hand, whatever the Registration mode. Only the Owner
+creates and lists them (`GET`/`POST /api/installation/invitations`, AccessPolicy
+`platformInvitation.manage` on the Installation, then the access scope) and
+revokes them (`/api/invitations/revoke`, which for one also needs `access:write`;
+anyone else hears what an unknown id answers). The token, its hash, the 7 days,
+the single use and the back-off are the same. Accepting one, with local
+credentials or through Keycloak in any mode, creates the User and nothing else:
+no membership, no Role, so it never makes anyone an Admin. It is audited as
+`invitation.accept` with `platform` and no Space, not as `user.register`. A User
+who already exists gets «you already have an account» and the link stays unspent:
+`join` answers 409 `has-account`, and the Keycloak callback signs them in and
+sends them to `/invite?keycloak=has-account` (the code only, never the token).
+Every read of an Organization's Invitations (its list, the conditional spend,
+revoking by Role, deleting the Organization) matches on `space_id` and so never
+sees one; the live lookup tells the two kinds apart and the Organization spend
+cannot spend a Platform invitation.
+
 ### Memberships
 
 [MembershipService](../../apps/server/src/spaces/MembershipService.ts) lists,

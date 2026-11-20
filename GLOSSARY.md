@@ -44,6 +44,10 @@ _Avoid_: Rol, group, permission set
 An offer to join one Organization that the invitee must accept; accepting it creates the user's account if they had none.
 _Avoid_: Sign-up, registration
 
+**Platform invitation**:
+The Owner's Invitation to the Hub itself, without an Organization or a Role: accepting it creates a User and nothing more, whatever the Registration mode. Single use, 7 days, revocable.
+_Avoid_: Hub invitation, manual sign-up
+
 **Environment**:
 One running T3 server and the machine, filesystem, credentials and state it owns: a VPS, a desktop, a laptop.
 _Avoid_: Entorno, machine, host, runner

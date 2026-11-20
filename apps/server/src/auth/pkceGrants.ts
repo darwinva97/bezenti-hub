@@ -38,6 +38,14 @@ export const makeGrantStore = <V extends { readonly expiresAtMs: number }>(capac
         }
         return next;
       }),
+    /** Adds the grant only while fewer than `limit` live ones are held: never evicts another. */
+    putIfRoom: (key: string, value: V, nowMs: number, limit: number) =>
+      Ref.modify(grants, (current) => {
+        const next = new Map(Array.from(current).filter(([, grant]) => grant.expiresAtMs > nowMs));
+        if (next.size >= limit) return [false, next] as const;
+        next.set(key, value);
+        return [true, next] as const;
+      }),
     get: (key: string, nowMs: number) =>
       Effect.map(Ref.get(grants), (current) => {
         const grant = current.get(key);

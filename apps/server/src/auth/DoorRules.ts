@@ -37,10 +37,10 @@ const SIGN_IN_SETTINGS = own(
 );
 /** Keycloak sign-in spec, ticket 02: a flow to the realm and back. */
 const KEYCLOAK_START = own(
-  "public for `sign-in`; `link` needs the browser's own session (never an app's token) and UserDirectory.confirmLinkStepUp (a fresh passkey or password proof; no Admin but the Owner until ticket 06; refused once linked). Only an `Origin` that is the request's own (forwarded only by a trusted proxy) or a trusted one; a few starts a minute per client; the oldest of 1 000 flows goes first; `returnTo` only a path on this Hub",
+  "public for `sign-in`; `link` needs the browser's own session (never an app's token) and UserDirectory.confirmLinkStepUp (a fresh passkey or password proof; no Admin but the Owner until ticket 06; refused once linked). Only an `Origin` that is the request's own (forwarded only by a trusted proxy) or a trusted one; a few starts a minute per client (an IPv4 address or an IPv6 /64), at most 5 pending flows per client (its 6th drops its own oldest), 10 000 on the Hub and then 503, never another client's flow dropped; `returnTo` only a path on this Hub, no dot segments",
 );
 const KEYCLOAK_CALLBACK = own(
-  "the flow its `state` names (single-use, 10 minutes) from the browser that started it (`__Host-` cookie), `iss` = the issuer (RFC 9207), the code exchanged with its PKCE verifier and `client_secret_basic`, the ID token verified (keys, `iss`, `aud`/`azp`, `exp`/`iat`, `nonce`); failures count toward the sign-in back-off; `sign-in`: only a known identity of an active User; `link`: the very session that started it, never another User's identity",
+  "the flow its `state` names (single-use, 10 minutes) from the browser that started it (the `__Host-` cookie over HTTPS, the bare name only on loopback HTTP), `iss` = the issuer (RFC 9207), the code exchanged with its PKCE verifier and `client_secret_basic`, the ID token verified (keys, `iss`, `aud`/`azp`, `exp`/`iat`, `nonce`); failures count toward the sign-in back-off; `sign-in`: only a known identity of an active User; `link`: the very session that started it, never another User's identity",
 );
 const WEBHOOK = own("the task's secret token in the path; runs as the task's creator");
 const THREAD_READ = own(
@@ -347,7 +347,7 @@ export const AMBIENT_COOKIE_RULES: Readonly<Record<string, AmbientCookieRule>> =
   ),
   "auth/clientAdmission.ts: middleware": none("reads no credential"),
   "auth/keycloakSignInHttp.ts: GET KEYCLOAK_CALLBACK_PATH": refused(
-    "the flow cookie through readHubCookie (`__Host-`, none from a preview page); the session cookie through EnvironmentAuth, and no session issued for a request from a preview origin",
+    "the flow cookie through readHubCookie with `hostOnly` (`__Host-` only over HTTPS, bare only on loopback HTTP; none from a preview page); the session cookie through EnvironmentAuth, and no session issued for a request from a preview origin",
   ),
   "device/DeviceHubProxy.ts: * `${DeviceService.DEVICE_HUB_ROUTE_PREFIX}/*`": BY_ENVIRONMENT_AUTH,
   'environments/JoinedHub.ts: GET "/health"': none("public, on a joined machine"),

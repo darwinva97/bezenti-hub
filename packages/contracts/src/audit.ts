@@ -128,7 +128,8 @@ export type AuditActorSource = typeof AuditActorSource.Type;
 export const AUDIT_DETAIL_KEYS = {
   "owner.bootstrap": [],
   "owner.resetLink": [],
-  "resetLink.redeem": ["method"],
+  /** `identityRemoved` when the reset also ended a Keycloak link (Keycloak sign-in, ticket 02). */
+  "resetLink.redeem": ["method", "identityRemoved"],
   "invitation.create": ["role"],
   "invitation.accept": ["role", "newUser"],
   "invitation.revoke": ["role"],

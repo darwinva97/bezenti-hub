@@ -59,6 +59,11 @@ export class UserIdentities extends Context.Service<
       readonly now: string;
     }) => Effect.Effect<void, SqlError.SqlError>;
     readonly insertLogin: (input: NewIdentityLogin) => Effect.Effect<void, SqlError.SqlError>;
+    /**
+     * Ends a User's link (a reset link replaces every way in): the identity goes, and their
+     * Keycloak sign-ins end. True when there was one.
+     */
+    readonly unlink: (userId: UserId, now: string) => Effect.Effect<boolean, SqlError.SqlError>;
   }
 >()("t3/persistence/UserIdentities") {}
 
@@ -140,7 +145,27 @@ const make = Effect.gen(function* () {
     `;
   });
 
-  return UserIdentities.of({ findByUser, findBySubject, link, updateLabels, insertLogin });
+  const unlink: UserIdentities["Service"]["unlink"] = Effect.fn("UserIdentities.unlink")(
+    function* (userId, now) {
+      yield* sql`
+        UPDATE identity_logins SET ended_at = ${now}
+        WHERE user_id = ${userId} AND ended_at IS NULL
+      `;
+      const removed = yield* sql<{ readonly userId: string }>`
+        DELETE FROM user_identities WHERE user_id = ${userId} RETURNING user_id AS "userId"
+      `;
+      return removed.length > 0;
+    },
+  );
+
+  return UserIdentities.of({
+    findByUser,
+    findBySubject,
+    link,
+    updateLabels,
+    insertLogin,
+    unlink,
+  });
 });
 
 export const layer = Layer.effect(UserIdentities, make);

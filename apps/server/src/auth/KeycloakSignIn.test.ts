@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as HttpMiddleware from "effect/http/HttpMiddleware";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
@@ -32,6 +33,7 @@ import {
 } from "./Keycloak.testkit.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
 import * as KeycloakSignIn from "./KeycloakSignIn.ts";
+import * as UserDirectory from "./UserDirectory.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import {
   addMember,
@@ -137,6 +139,12 @@ const callback = (
 const remoteClient = (address: string) => ({
   "x-forwarded-for": address,
   "x-forwarded-proto": "https",
+});
+
+/** `start` from such a client: its page is the Hub's own HTTPS origin. */
+const remoteStart = (address: string) => ({
+  ...remoteClient(address),
+  origin: "https://127.0.0.1",
 });
 
 /** A whole round: start, sign in at the realm as `as`, come back with the flow cookie. */
@@ -658,36 +666,89 @@ describe("Keycloak sign-in (ticket 02)", () => {
       }),
     );
 
-    it.effect("a client gets a few starts a minute, and a full store drops the oldest flow", () =>
+    it.effect("a client gets a few starts a minute; another client is not held back", () =>
       Effect.gen(function* () {
-        const { server, realm } = yield* hub({ flows: { startsPerMinute: 3, maxPendingFlows: 2 } });
-        const first = yield* start(server, { intent: "sign-in" });
-        yield* start(server, { intent: "sign-in" });
-        const third = yield* start(server, { intent: "sign-in" });
-        assert.equal(third.status, 200);
+        const { server } = yield* hub({ flows: { startsPerMinute: 3 } });
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          assert.equal((yield* start(server, { intent: "sign-in" })).status, 200);
+        }
         assert.equal((yield* start(server, { intent: "sign-in" })).status, 429);
-        // Another client is not held back by this one.
         assert.equal(
-          (yield* start(server, { intent: "sign-in" }, { peer: "198.51.100.8" })).status,
+          (yield* start(server, { intent: "sign-in" }, { headers: remoteStart("198.51.100.8") }))
+            .status,
           200,
         );
         yield* TestClock.adjust("1 minute");
         assert.equal((yield* start(server, { intent: "sign-in" })).status, 200);
+      }),
+    );
 
-        // Four flows went in a store of two: the first is gone, the newest still works.
-        const lost = yield* callback(
+    it.effect("addresses in one IPv6 /64 are one client", () =>
+      Effect.gen(function* () {
+        const { server } = yield* hub({ flows: { startsPerMinute: 2 } });
+        const from = (address: string) =>
+          start(server, { intent: "sign-in" }, { headers: remoteStart(address) }).pipe(
+            Effect.map((started) => started.status),
+          );
+        assert.equal(yield* from("2001:db8:1:2::1"), 200);
+        assert.equal(yield* from("2001:db8:1:2::abcd"), 200);
+        assert.equal(yield* from("2001:db8:1:2:ffff::9"), 429);
+        assert.equal(yield* from("2001:db8:1:3::1"), 200);
+      }),
+    );
+
+    it.effect("a client's many starts drop only its own oldest flow, never another's", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const other = yield* start(
           server,
-          yield* realm.signIn(first.authorizationUrl, { sub: "kc-nobody" }),
-          joinCookies(first.flowCookie),
+          { intent: "sign-in" },
+          { headers: remoteStart("198.51.100.30") },
         );
-        assert.equal(resultOf(lost.location), "failed");
-        const kept = yield* start(server, { intent: "sign-in" }, { peer: "198.51.100.9" });
-        const answer = yield* callback(
+        const flood: Array<Effect.Success<ReturnType<typeof start>>> = [];
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const started = yield* start(
+            server,
+            { intent: "sign-in" },
+            { headers: remoteStart("198.51.100.31") },
+          );
+          assert.equal(started.status, 200);
+          flood.push(started);
+        }
+        const comeBack = (started: Effect.Success<ReturnType<typeof start>>, address: string) =>
+          Effect.flatMap(realm.signIn(started.authorizationUrl, { sub: "kc-nobody" }), (back) =>
+            callback(server, back, joinCookies(started.flowCookie), {
+              headers: remoteClient(address),
+            }),
+          ).pipe(Effect.map((answer) => resultOf(answer.location)));
+        // Past 5 pending flows, the flooding client lost its own first one...
+        assert.equal(yield* comeBack(flood[0]!, "198.51.100.31"), "failed");
+        assert.equal(yield* comeBack(flood[5]!, "198.51.100.31"), "unknown");
+        // ...and the other client's flow is still there.
+        assert.equal(yield* comeBack(other, "198.51.100.30"), "unknown");
+      }),
+    );
+
+    it.effect("a full store refuses new starts instead of dropping anyone's flow", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub({ flows: { maxPendingFlows: 2 } });
+        const first = yield* start(
           server,
-          yield* realm.signIn(kept.authorizationUrl, { sub: "kc-nobody" }),
-          joinCookies(kept.flowCookie),
-          { peer: "198.51.100.9" },
+          { intent: "sign-in" },
+          { headers: remoteStart("198.51.100.40") },
         );
+        yield* start(server, { intent: "sign-in" }, { headers: remoteStart("198.51.100.41") });
+        const refused = yield* start(
+          server,
+          { intent: "sign-in" },
+          { headers: remoteStart("198.51.100.42") },
+        );
+        assert.equal(refused.status, 503);
+        assert.isUndefined(refused.flowCookie);
+        const back = yield* realm.signIn(first.authorizationUrl, { sub: "kc-nobody" });
+        const answer = yield* callback(server, back, joinCookies(first.flowCookie), {
+          headers: remoteClient("198.51.100.40"),
+        });
         assert.equal(resultOf(answer.location), "unknown");
       }),
     );
@@ -705,6 +766,74 @@ describe("Keycloak sign-in (ticket 02)", () => {
       }),
     );
   });
+
+  it.effect("over HTTPS only the `__Host-` flow cookie binds the flow", () =>
+    Effect.gen(function* () {
+      const { server, realm, ownerId } = yield* hub();
+      yield* server.sql`
+        INSERT INTO user_identities (user_id, issuer, subject, linked_at, updated_at)
+        VALUES (${ownerId}, ${realm.issuer}, 'kc-ada', '2026-01-01', '2026-01-01')
+      `;
+      const started = yield* start(
+        server,
+        { intent: "sign-in" },
+        { headers: remoteStart("198.51.100.50") },
+      );
+      assert.match(started.flowCookie ?? "", /^__Host-t3_keycloak_flow=/);
+      // The same value under the bare name, as a sibling host could toss it: refused.
+      const tossed = `t3_keycloak_flow=${started.flowCookie?.split("=")[1] ?? ""}`;
+      const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-ada" });
+      const answer = yield* callback(server, back, tossed, {
+        headers: remoteClient("198.51.100.50"),
+      });
+      assert.equal(resultOf(answer.location), "failed");
+      assert.isUndefined(answer.cookie);
+    }),
+  );
+
+  it.effect("a reset link replaces Keycloak too: the old identity no longer signs in", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner, ownerId } = yield* hub();
+      const member = yield* memberWithPassword(server);
+      const linked = yield* roundTrip(
+        server,
+        realm,
+        { sub: "kc-grace" },
+        { intent: "link", reauth: { method: "password", password: PASSWORD } },
+        member.cookie,
+      );
+      assert.equal(linked.status, 303);
+      const issued = yield* Context.get(
+        server.services,
+        UserDirectory.UserDirectory,
+      ).issueResetLink({ userId: UserId.make(member.id), createdBy: UserId.make(ownerId) });
+      assert.isTrue(Option.isSome(issued));
+      const token = Option.isSome(issued) ? issued.value.token : "";
+      const redeemed = yield* server.request("/api/auth/reset/password", {
+        body: { token, loginName: "grace", password: PASSWORD },
+      });
+      assert.equal(redeemed.status, 200, redeemed.text);
+
+      // Only the new password lets them in now; their Keycloak account is a stranger.
+      const viaKeycloak = yield* roundTrip(server, realm, { sub: "kc-grace" });
+      assert.equal(viaKeycloak.location, "/sign-in?keycloak=unknown");
+      const viaPassword = yield* server.request("/api/auth/password/sign-in", {
+        body: { loginName: "grace", password: PASSWORD },
+      });
+      assert.equal(viaPassword.status, 200);
+      assert.equal(yield* userOf(server, viaPassword.cookie), member.id);
+      assert.isUndefined((yield* account(server, viaPassword.cookie ?? "")).identity);
+      const live = yield* server.sql`
+        SELECT login_id FROM identity_logins WHERE user_id = ${member.id} AND ended_at IS NULL
+      `;
+      assert.deepEqual(live, []);
+      const audit = yield* server.request("/api/installation/audit?action=resetLink.redeem", {
+        cookie: owner,
+      });
+      const entries = audit.body.entries as ReadonlyArray<{ detail: Record<string, unknown> }>;
+      assert.deepEqual(entries[0]?.detail, { method: "password", identityRemoved: true });
+    }),
+  );
 
   it.effect("the refresh token is sealed to its login, and no secret or token leaks", () => {
     const recorded: Array<string> = [];
@@ -841,7 +970,19 @@ describe("KeycloakSignIn.safeReturnTo", () => {
   it("keeps a path on this Hub and refuses anything a browser could read as another host", () => {
     assert.equal(KeycloakSignIn.safeReturnTo("/settings/user/account"), "/settings/user/account");
     assert.equal(KeycloakSignIn.safeReturnTo("/connect-agent?a=1#b"), "/connect-agent?a=1#b");
-    for (const value of ["//x.test", "/\\x.test", "x.test", "https://x.test", "/\tx", ""]) {
+    for (const value of [
+      "//x.test",
+      "/\\x.test",
+      "x.test",
+      "https://x.test",
+      "/\tx",
+      "",
+      // Dot segments that a browser would fold into `//x.test`.
+      "/..//x.test",
+      "/.//x.test",
+      "/a/../..//x.test",
+      "/%2e%2e//x.test",
+    ]) {
       assert.isUndefined(KeycloakSignIn.safeReturnTo(value), value);
     }
   });

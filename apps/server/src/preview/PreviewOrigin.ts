@@ -151,11 +151,15 @@ export const readHubCookie = (
   request: HttpServerRequest.HttpServerRequest,
   name: string,
   pattern: PreviewOriginPattern | undefined,
+  /** `hostOnly`: over HTTPS only `__Host-`, previews or not (a sibling host can toss a bare one). */
+  options?: { readonly hostOnly?: boolean },
 ): string | undefined => {
   if (crossesFromPreviewOrigin(pattern, request.headers)) return undefined;
   const hostOnly = request.cookies[`${HOST_PREFIX}${name}`];
   if (hostOnly) return hostOnly;
-  if (pattern !== undefined && request.protocol === "https") return undefined;
+  if ((pattern !== undefined || options?.hostOnly === true) && request.protocol === "https") {
+    return undefined;
+  }
   return request.cookies[name] || undefined;
 };
 

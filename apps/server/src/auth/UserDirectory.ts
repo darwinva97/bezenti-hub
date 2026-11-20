@@ -286,6 +286,12 @@ const makeCeremonyStore = <C extends Ceremony>(capacity: number) => {
   };
 };
 
+/** Whose reset link was spent, and whether it also ended their Keycloak link. */
+export interface ResetRedeemed {
+  readonly user: AuthUser;
+  readonly identityRemoved: boolean;
+}
+
 export class UserDirectory extends Context.Service<
   UserDirectory,
   {
@@ -504,7 +510,7 @@ export class UserDirectory extends Context.Service<
     readonly redeemResetLink: (input: {
       readonly token: string;
       readonly pending: PendingResetPasskey;
-    }) => Effect.Effect<AuthUser, ResetLinkRejectedError | UserDirectoryStorageError>;
+    }) => Effect.Effect<ResetRedeemed, ResetLinkRejectedError | UserDirectoryStorageError>;
     /**
      * Spends a reset link on a new password instead of a passkey, for anyone but the Owner. Like
      * the passkey way, every old credential and session ends. Run it in a transaction.
@@ -514,7 +520,7 @@ export class UserDirectory extends Context.Service<
       readonly loginName: string;
       readonly password: string;
     }) => Effect.Effect<
-      AuthUser,
+      ResetRedeemed,
       | ResetLinkRejectedError
       | AccountChangeRefusedError
       | LoginNameTakenError
@@ -1472,9 +1478,13 @@ const make = Effect.gen(function* () {
       .pipe(storage);
     yield* users.removePassword(userId.value).pipe(storage);
     yield* users.removeTotp(userId.value).pipe(storage);
+    // Every way in is replaced, Keycloak's too: the identity and its sign-ins end.
+    const identityRemoved = yield* identities
+      .unlink(userId.value, DateTime.formatIso(now))
+      .pipe(storage);
     yield* sessions.revokeAllForUser(userId.value).pipe(storage);
     yield* pairingLinks.revokeAllForUser(userId.value).pipe(storage);
-    return toAuthUser(user.value);
+    return { user: toAuthUser(user.value), identityRemoved } satisfies ResetRedeemed;
   });
 
   const redeemResetLinkWithPassword: UserDirectory["Service"]["redeemResetLinkWithPassword"] =
@@ -1505,9 +1515,13 @@ const make = Effect.gen(function* () {
         })
         .pipe(storage);
       if (!saved) return yield* new LoginNameTakenError({});
+      // Every way in is replaced, Keycloak's too: the identity and its sign-ins end.
+      const identityRemoved = yield* identities
+        .unlink(userId.value, DateTime.formatIso(now))
+        .pipe(storage);
       yield* sessions.revokeAllForUser(userId.value).pipe(storage);
       yield* pairingLinks.revokeAllForUser(userId.value).pipe(storage);
-      return toAuthUser(live.value);
+      return { user: toAuthUser(live.value), identityRemoved } satisfies ResetRedeemed;
     });
 
   const startInviteeRegistration: UserDirectory["Service"]["startInviteeRegistration"] = Effect.fn(

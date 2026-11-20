@@ -8,6 +8,7 @@ import {
   EnvironmentHttpApi,
   EnvironmentHttpForbiddenError,
   EnvironmentRateLimitedError,
+  EnvironmentServiceBusyError,
   KEYCLOAK_CALLBACK_PATH,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -39,6 +40,10 @@ const failStart = (error: KeycloakSignIn.KeycloakStartRefusedError) => {
     case "rate-limited":
       return Effect.fail(
         new EnvironmentRateLimitedError({ message: error.message, retryAfterSeconds: 60 }),
+      );
+    case "busy":
+      return Effect.fail(
+        new EnvironmentServiceBusyError({ message: error.message, retryAfterSeconds: 60 }),
       );
     case "unavailable":
       return failEnvironmentInternal("keycloak_unavailable");

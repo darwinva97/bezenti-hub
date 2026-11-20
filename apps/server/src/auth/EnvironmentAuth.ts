@@ -2181,13 +2181,16 @@ export const make = Effect.gen(function* () {
       Effect.fail(userDirectoryFailure(cause)),
   };
 
-  const recordResetRedeemed = (userId: UserId, method: "passkey" | "password") =>
+  const recordResetRedeemed = (
+    redeemed: UserDirectory.ResetRedeemed,
+    method: "passkey" | "password",
+  ) =>
     audit
       .record({
-        actor: AuditLog.userActor(userId),
+        actor: AuditLog.userActor(redeemed.user.id),
         action: "resetLink.redeem",
-        target: { kind: "user", id: userId },
-        detail: { method },
+        target: { kind: "user", id: redeemed.user.id },
+        detail: { method, ...(redeemed.identityRemoved ? { identityRemoved: true } : {}) },
       })
       .pipe(Effect.mapError((cause) => new ServerAuthUserDirectoryError({ cause })));
 
@@ -2233,10 +2236,11 @@ export const make = Effect.gen(function* () {
     return yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          const user = yield* userDirectory
+          const redeemed = yield* userDirectory
             .redeemResetLink({ token: input.token, pending })
             .pipe(Effect.catchTags(resetLinkFailures));
-          yield* recordResetRedeemed(user.id, "passkey");
+          yield* recordResetRedeemed(redeemed, "passkey");
+          const { user } = redeemed;
           return { user, session: yield* issueUserBrowserSession(request, user, requestMetadata) };
         }),
       )
@@ -2257,13 +2261,14 @@ export const make = Effect.gen(function* () {
         return yield* sql
           .withTransaction(
             Effect.gen(function* () {
-              const user = yield* userDirectory.redeemResetLinkWithPassword(input).pipe(
+              const redeemed = yield* userDirectory.redeemResetLinkWithPassword(input).pipe(
                 Effect.catchTags({
                   ResetLinkRejectedError: resetLinkFailures.ResetLinkRejectedError,
                   UserDirectoryStorageError: resetLinkFailures.UserDirectoryStorageError,
                 }),
               );
-              yield* recordResetRedeemed(user.id, "password");
+              yield* recordResetRedeemed(redeemed, "password");
+              const { user } = redeemed;
               return {
                 user,
                 session: yield* issueUserBrowserSession(request, user, requestMetadata),

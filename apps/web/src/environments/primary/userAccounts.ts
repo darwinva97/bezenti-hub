@@ -15,6 +15,7 @@ import {
   EnvironmentModeChangeRefusedError,
   EnvironmentHttpForbiddenError,
   EnvironmentRateLimitedError,
+  EnvironmentServiceBusyError,
 } from "@t3tools/contracts";
 import { startAuthentication, startRegistration, WebAuthnError } from "@simplewebauthn/browser";
 import type * as Context from "effect/Context";
@@ -37,6 +38,7 @@ const isEnvironmentHttpConflictError = Schema.is(EnvironmentHttpConflictError);
 const isEnvironmentModeChangeRefusedError = Schema.is(EnvironmentModeChangeRefusedError);
 const isEnvironmentHttpForbiddenError = Schema.is(EnvironmentHttpForbiddenError);
 const isEnvironmentRateLimitedError = Schema.is(EnvironmentRateLimitedError);
+const isEnvironmentServiceBusyError = Schema.is(EnvironmentServiceBusyError);
 
 function toUserSignInError(cause: unknown, rejectedMessage: string): UserSignInError {
   if (isUserSignInError(cause)) return cause;
@@ -44,7 +46,8 @@ function toUserSignInError(cause: unknown, rejectedMessage: string): UserSignInE
     isEnvironmentHttpConflictError(cause) ||
     isEnvironmentModeChangeRefusedError(cause) ||
     isEnvironmentHttpForbiddenError(cause) ||
-    isEnvironmentRateLimitedError(cause)
+    isEnvironmentRateLimitedError(cause) ||
+    isEnvironmentServiceBusyError(cause)
   ) {
     return new UserSignInError({ message: cause.message, cause });
   }

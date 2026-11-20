@@ -57,6 +57,20 @@ const parseAddress = (input: string | undefined): NetAddress.IpAddress | undefin
   return Result.isSuccess(ip) ? NetAddress.toCanonical(ip.success) : undefined;
 };
 
+/**
+ * Who a per-client limit counts: an IPv4 address, or a whole IPv6 /64, which one customer usually
+ * holds every address of. Unknown clients share one bucket.
+ */
+export const clientBucketOf = (input: string | undefined): string => {
+  const address = parseAddress(input);
+  if (address === undefined) return "unknown";
+  if (!NetAddress.isIpv6Address(address)) return NetAddress.formatIp(address);
+  const network = IpNetwork.fromAddress(address, 64);
+  return Result.isSuccess(network)
+    ? IpNetwork.format(network.success)
+    : NetAddress.formatIp(address);
+};
+
 /** The canonical text of an IP address (IPv4-mapped IPv6 becomes IPv4), or undefined. */
 export const normalizeClientAddress = (input: string | undefined): string | undefined => {
   const address = parseAddress(input);

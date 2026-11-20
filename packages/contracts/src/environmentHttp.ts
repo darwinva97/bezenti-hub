@@ -502,6 +502,20 @@ export class EnvironmentRateLimitedError extends Schema.TaggedError<EnvironmentR
   }
 }
 
+/** The Hub is at a limit of its own, such as too many sign-ins under way; try again shortly. */
+export class EnvironmentServiceBusyError extends Schema.TaggedError<EnvironmentServiceBusyError>()(
+  "EnvironmentServiceBusyError",
+  {
+    message: Schema.String,
+    retryAfterSeconds: Schema.Number,
+  },
+  { httpApiStatus: 503 },
+) {
+  [HttpServerRespondable.symbol]() {
+    return HttpServerResponse.schemaJson(EnvironmentServiceBusyError)(this, { status: 503 });
+  }
+}
+
 const EnvironmentSessionCreationErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentAuthInvalidError,
@@ -861,7 +875,11 @@ class EnvironmentKeycloakSignInHttpApi extends HttpApiGroup.make("keycloakSignIn
   HttpApiEndpoint.post("start", "/api/auth/keycloak/start", {
     payload: KeycloakStartRequest,
     success: KeycloakStartResult,
-    error: [...EnvironmentUserSignInErrors, ...EnvironmentAccountErrors],
+    error: [
+      ...EnvironmentUserSignInErrors,
+      ...EnvironmentAccountErrors,
+      EnvironmentServiceBusyError,
+    ],
   }),
 ) {}
 

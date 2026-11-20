@@ -38,6 +38,7 @@ import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as Users from "../persistence/Users.ts";
 import { crossesFromPreviewOrigin, readHubCookie } from "../preview/PreviewOrigin.ts";
 import * as AccountCredentials from "./AccountCredentials.ts";
+import { clientBucketOf, isLoopbackClientAddress } from "./clientConnection.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
@@ -50,8 +51,10 @@ import { base64UrlEncode, deriveAuthClientMetadata, timingSafeEqualBase64Url } f
 
 /** Long enough to sign in at Keycloak (and register there), short enough that a stray one dies. */
 const FLOW_TTL = Duration.minutes(10);
-/** Flows waiting for their callback; past this the oldest go, so `start` never locks anyone out. */
-const MAX_PENDING_FLOWS = 1_000;
+/** Flows waiting for their callback, all clients together; past it `start` says «try again». */
+const MAX_PENDING_FLOWS = 10_000;
+/** A client's own pending flows; its next start drops its own oldest, never another client's. */
+const FLOWS_PER_CLIENT = 5;
 /** Starts one client may make per minute; the rest are refused until the minute passes. */
 const STARTS_PER_MINUTE = 20;
 const MAX_TRACKED_CLIENTS = 10_000;
@@ -98,6 +101,8 @@ export class KeycloakStartRefusedError extends Schema.TaggedError<KeycloakStartR
       "not-signed-in",
       // Too many starts from this client in a minute.
       "rate-limited",
+      // Too many flows under way on the whole Hub.
+      "busy",
       // The realm's discovery or keys could not be read.
       "unavailable",
     ]),
@@ -109,6 +114,8 @@ export class KeycloakStartRefusedError extends Schema.TaggedError<KeycloakStartR
         return "Sign-in with Keycloak is off on this Hub.";
       case "rate-limited":
         return "Too many attempts. Wait a minute and try again.";
+      case "busy":
+        return "Too many sign-ins are under way. Try again in a minute.";
       case "unavailable":
         return "Keycloak is not answering. Try again in a moment.";
       default:
@@ -164,9 +171,12 @@ export const safeReturnTo = (value: string): string | undefined => {
   if (value.length === 0 || value.length > 2048) return undefined;
   if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return undefined;
   if ([...value].some((char) => char < " " || char === "\u007f")) return undefined;
+  // No `.` or `..` segments, even encoded: resolving them can fold the path into `//host`.
+  const path = value.split(/[?#]/, 1)[0] ?? "";
+  if (path.split("/").some((segment) => /^(\.|%2e){1,2}$/i.test(segment))) return undefined;
   const base = "https://hub.invalid";
   const url = URL.parse(value, base);
-  if (url === null || url.origin !== base) return undefined;
+  if (url === null || url.origin !== base || url.pathname.startsWith("//")) return undefined;
   return `${url.pathname}${url.search}${url.hash}`;
 };
 
@@ -198,6 +208,7 @@ interface Realm {
 export interface FlowBounds {
   readonly maxPendingFlows?: number;
   readonly startsPerMinute?: number;
+  readonly flowsPerClient?: number;
 }
 
 const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBounds) {
@@ -217,9 +228,14 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
   const digester = yield* Digest.Digest;
   const cryptoContext = yield* Effect.context<Aead.Aead | SecureRandom.SecureRandom>();
 
-  const flows = yield* makeGrantStore<PendingFlow>(options.maxPendingFlows ?? MAX_PENDING_FLOWS);
+  const maxPendingFlows = options.maxPendingFlows ?? MAX_PENDING_FLOWS;
+  // Never evicts: `putIfRoom` refuses at the cap, and a client drops only its own flows.
+  const flows = yield* makeGrantStore<PendingFlow>(maxPendingFlows + 1);
   const startsPerMinute = options.startsPerMinute ?? STARTS_PER_MINUTE;
+  const flowsPerClient = options.flowsPerClient ?? FLOWS_PER_CLIENT;
   const startWindows = new Map<string, { windowStartMs: number; count: number }>();
+  /** Each client bucket's pending flow keys, oldest first. */
+  const clientFlows = new Map<string, Array<string>>();
 
   const sha256 = (value: string) =>
     digester.digest(Digest.sha256, new TextEncoder().encode(value)).pipe(
@@ -255,9 +271,8 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     return `${base}${KEYCLOAK_CALLBACK_PATH}`;
   };
 
-  /** Counts this start against its client; false past the minute's allowance. */
-  const allowStart = (clientIp: string | undefined, nowMs: number) => {
-    const key = clientIp ?? "unknown";
+  /** Counts this start against its client bucket; false past the minute's allowance. */
+  const allowStart = (key: string, nowMs: number) => {
     const window = startWindows.get(key);
     if (window === undefined || nowMs - window.windowStartMs >= 60_000) {
       startWindows.delete(key);
@@ -310,6 +325,15 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
 
   const enabledConfig = settings.keycloakConfig;
 
+  /**
+   * The flow cookie under exactly the name `start` set: over HTTPS only `__Host-` (a sibling host
+   * can toss a bare one), the bare name only on loopback HTTP; none from a preview's page.
+   */
+  const flowCookieOf = (request: HttpServerRequest.HttpServerRequest, clientIp?: string) =>
+    request.protocol === "https" || isLoopbackClientAddress(clientIp)
+      ? readHubCookie(request, FLOW_COOKIE_NAME, config.previewOrigin, { hostOnly: true })
+      : undefined;
+
   const start: KeycloakSignIn["Service"]["start"] = Effect.fn("KeycloakSignIn.start")(
     function* (request, input) {
       const returnTo =
@@ -326,9 +350,9 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         return yield* new KeycloakStartRefusedError({ reason: "invalid-origin" });
       }
       const nowMs = yield* Clock.currentTimeMillis;
-      const clientIp = deriveAuthClientMetadata({ request }).ipAddress;
-      // Unauthenticated: a client gets a few starts a minute, and the store keeps the newest.
-      if (!allowStart(clientIp, nowMs)) {
+      // Unauthenticated: a client (an IPv4 address or an IPv6 /64) gets a few starts a minute.
+      const bucket = clientBucketOf(deriveAuthClientMetadata({ request }).ipAddress);
+      if (!allowStart(bucket, nowMs)) {
         return yield* new KeycloakStartRefusedError({ reason: "rate-limited" });
       }
       const enabled = yield* enabledConfig;
@@ -367,8 +391,18 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         randomToken,
         randomToken,
       ]);
-      yield* flows.put(
-        yield* sha256(state),
+      const flowKey = yield* sha256(state);
+      // Past its own cap a client drops its own oldest flows; the others' are never touched.
+      const live: Array<string> = [];
+      for (const key of clientFlows.get(bucket) ?? []) {
+        if ((yield* flows.get(key, nowMs)) !== undefined) live.push(key);
+      }
+      while (live.length >= flowsPerClient) {
+        const oldest = live.shift();
+        if (oldest !== undefined) yield* flows.take(oldest);
+      }
+      const stored = yield* flows.putIfRoom(
+        flowKey,
         {
           intent: input.intent,
           returnTo,
@@ -382,7 +416,15 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           expiresAtMs: nowMs + Duration.toMillis(FLOW_TTL),
         },
         nowMs,
+        maxPendingFlows,
       );
+      if (!stored) return yield* new KeycloakStartRefusedError({ reason: "busy" });
+      clientFlows.delete(bucket);
+      clientFlows.set(bucket, [...live, flowKey]);
+      for (const oldestBucket of clientFlows.keys()) {
+        if (clientFlows.size <= MAX_TRACKED_CLIENTS) break;
+        clientFlows.delete(oldestBucket);
+      }
       const secure = request.protocol === "https";
       return {
         authorizationUrl: KeycloakClient.authorizationUrl(realmNow.discovery, {
@@ -601,7 +643,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         if (flow.expiresAtMs <= (yield* Clock.currentTimeMillis)) {
           return yield* refuse("failed", "expired flow", true);
         }
-        const cookie = readHubCookie(request, FLOW_COOKIE_NAME, config.previewOrigin);
+        const cookie = flowCookieOf(request, clientIp);
         if (
           cookie === undefined ||
           cookie.length > 512 ||

@@ -63,3 +63,26 @@ export function memberRoleChoices(
     ? assignableRoles
     : [member.role, ...assignableRoles];
 }
+
+/** «Managed by Keycloak (group X)»: a Membership a mapped Keycloak group gives (ticket 05). */
+export const managedByKeycloakLabel = (member: { readonly keycloakGroup: string | null }) =>
+  member.keycloakGroup === null
+    ? "Managed by Keycloak"
+    : `Managed by Keycloak (group ${member.keycloakGroup})`;
+
+/** Why nobody changes, removes or leaves such a Membership in the Hub. */
+export const MANAGED_BY_KEYCLOAK_HINT =
+  "Its Role follows the Keycloak group: change the group in Keycloak, or the Owner changes its mapping.";
+
+/** Why a Member a group put in can't leave from the Hub. */
+export const LEAVE_MANAGED_HINT =
+  "You are in this Organization through your Keycloak group, so you leave it by leaving the group.";
+
+/**
+ * Whether the viewer sees a managed Membership's controls held back, with why: they manage others
+ * (an Admin or the Owner, who may assign Roles) and it is someone else's.
+ */
+export const heldByKeycloak = (
+  member: { readonly managedByKeycloak: boolean; readonly isYou: boolean },
+  assignableRoles: ReadonlyArray<SpaceRole>,
+) => member.managedByKeycloak && !member.isYou && assignableRoles.length > 0;

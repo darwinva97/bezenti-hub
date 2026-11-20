@@ -1,15 +1,22 @@
 import {
   type KeycloakCheckResult,
   keycloakClientUrls,
+  type KeycloakGroupMapping,
   type RegistrationMode,
   type SignInSettings,
+  type SpaceId,
+  type SpaceRole,
   type UpdateSignInSettingsRequest,
 } from "@t3tools/contracts";
 import * as Redacted from "effect/Redacted";
 
+/** A group mapping as the form lists it: what the Hub showed, or one added and not saved yet. */
+export type MappingRow = KeycloakGroupMapping;
+
 /**
  * What the Owner edits before saving; an empty `clientSecret` keeps the saved one. The strong
  * factor's `acr` and `amr` values (ticket 06) are typed as a list, separated by commas or spaces.
+ * The groups claim and the group mappings are ticket 05's.
  */
 export interface SignInForm {
   readonly registrationMode: RegistrationMode;
@@ -19,7 +26,57 @@ export interface SignInForm {
   readonly clientSecret: string;
   readonly strongAcr: string;
   readonly strongAmr: string;
+  readonly groupsClaim: string;
+  readonly groupMappings: ReadonlyArray<MappingRow>;
 }
+
+/** A group as the Hub keeps it: trimmed, without one leading `/`. */
+const groupNameOf = (text: string): string => {
+  const trimmed = text.trim();
+  return trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+};
+
+const mappingKey = (mapping: { readonly group: string; readonly spaceId: string }) =>
+  `${mapping.group}\u0000${mapping.spaceId}`;
+
+/**
+ * The form's mappings with one more, or a reason it can't be added: empty group, no Organization,
+ * or that group already mapped to that Organization (change its Role by removing it first).
+ */
+export const withMapping = (
+  settings: SignInSettings,
+  rows: ReadonlyArray<MappingRow>,
+  added: { readonly group: string; readonly spaceId: SpaceId | null; readonly role: SpaceRole },
+): { readonly rows: ReadonlyArray<MappingRow> } | { readonly error: string } => {
+  const group = groupNameOf(added.group);
+  if (group === "") return { error: "Enter the Keycloak group." };
+  const organization = settings.mappableOrganizations.find(
+    (candidate) => candidate.spaceId === added.spaceId,
+  );
+  if (organization === undefined) return { error: "Choose the Organization." };
+  if (
+    rows.some((row) => mappingKey(row) === mappingKey({ group, spaceId: organization.spaceId }))
+  ) {
+    return { error: `${group} is already mapped to ${organization.name}.` };
+  }
+  return {
+    rows: [
+      ...rows,
+      {
+        group,
+        spaceId: organization.spaceId,
+        organizationName: organization.name,
+        role: added.role,
+        enabled: true,
+        archived: false,
+      },
+    ],
+  };
+};
+
+const sameMappings = (a: ReadonlyArray<MappingRow>, b: ReadonlyArray<MappingRow>) =>
+  a.length === b.length &&
+  a.every((row) => b.find((other) => mappingKey(other) === mappingKey(row))?.role === row.role);
 
 /** A typed list of values: split on commas and blanks, without repeats or empties. */
 export const valuesOf = (text: string): ReadonlyArray<string> => [
@@ -37,6 +94,8 @@ export const formOf = (settings: SignInSettings): SignInForm => ({
   clientSecret: "",
   strongAcr: settings.keycloak.strongAcr.join(", "),
   strongAmr: settings.keycloak.strongAmr.join(", "),
+  groupsClaim: settings.keycloak.groupsClaim,
+  groupMappings: settings.groupMappings,
 });
 
 /** Only what the Owner changed; `null` when nothing did. The secret goes only when typed. */
@@ -61,6 +120,15 @@ export const changesOf = (
   const strongAmr = valuesOf(form.strongAmr);
   if (!sameValues(strongAcr, settings.keycloak.strongAcr)) request.strongAcr = strongAcr;
   if (!sameValues(strongAmr, settings.keycloak.strongAmr)) request.strongAmr = strongAmr;
+  if (form.groupsClaim.trim() !== saved.groupsClaim) request.groupsClaim = form.groupsClaim;
+  // The whole list goes when anything in it changed; the Hub works out what was added or removed.
+  if (!sameMappings(form.groupMappings, settings.groupMappings)) {
+    request.groupMappings = form.groupMappings.map(({ group, spaceId, role }) => ({
+      group,
+      spaceId,
+      role,
+    }));
+  }
   return Object.keys(request).length === 0 ? null : request;
 };
 

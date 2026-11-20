@@ -1,3 +1,4 @@
+import { SPACE_ROLE_LABELS } from "@t3tools/client-runtime/spaces/invitations";
 import {
   checkSignInSettings,
   fetchSignInSettings,
@@ -7,6 +8,8 @@ import type {
   KeycloakCheckResult,
   RegistrationMode,
   SignInSettings,
+  SpaceId,
+  SpaceRole,
   UpdateSignInSettingsRequest,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -21,6 +24,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Radio, RadioGroup } from "../ui/radio-group";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { SettingsPageContainer } from "./settingsLayout";
 import {
@@ -30,7 +34,179 @@ import {
   formOf,
   REGISTRATION_MODES,
   type SignInForm,
+  withMapping,
 } from "./signInSettings.logic";
+
+const MAPPING_ROLES: ReadonlyArray<SpaceRole> = ["admin", "member", "guest"];
+const roleItems = MAPPING_ROLES.map((role) => ({ value: role, label: SPACE_ROLE_LABELS[role] }));
+
+/**
+ * Keycloak groups mapped to an Organization and a Role (ticket 05), saved with the rest of the
+ * form. Only Organizations the Owner is an Admin or the Steward of can be chosen; a saved mapping
+ * that no longer qualifies is shown disabled, with why.
+ */
+function KeycloakGroupsFieldset({
+  settings,
+  form,
+  edit,
+}: {
+  readonly settings: SignInSettings;
+  readonly form: SignInForm;
+  readonly edit: (patch: Partial<SignInForm>) => void;
+}) {
+  const [group, setGroup] = useState("");
+  const [spaceId, setSpaceId] = useState<SpaceId | null>(null);
+  const [role, setRole] = useState<SpaceRole>("member");
+  const [problem, setProblem] = useState<string | null>(null);
+  const organizationItems = settings.mappableOrganizations.map((organization) => ({
+    value: organization.spaceId,
+    label: organization.name,
+  }));
+
+  const add = () => {
+    const next = withMapping(settings, form.groupMappings, { group, spaceId, role });
+    if ("error" in next) {
+      setProblem(next.error);
+      return;
+    }
+    setProblem(null);
+    setGroup("");
+    edit({ groupMappings: next.rows });
+  };
+
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="text-sm">Groups</legend>
+      <p className="text-xs text-muted-foreground">
+        Who signs in with a mapped group is in that Organization with that Role, managed by
+        Keycloak: nobody changes or removes it in the Hub, and leaving the group takes it away at
+        their next sign-in. Memberships given by hand stay unless a mapped group of theirs applies.
+      </p>
+      <label className="flex flex-col gap-1 text-sm">
+        Groups claim
+        <Input
+          size="sm"
+          aria-label="Groups claim"
+          value={form.groupsClaim}
+          onChange={(event) => edit({ groupsClaim: event.target.value })}
+        />
+        <span className="text-xs text-muted-foreground">
+          The ID token claim with the person's groups, as the client's group membership mapper names
+          it.
+        </span>
+      </label>
+      {form.groupMappings.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No groups mapped yet.</p>
+      ) : (
+        <ul className="flex flex-col gap-1" aria-label="Group mappings">
+          {form.groupMappings.map((mapping) => (
+            <li
+              key={`${mapping.group}\u0000${mapping.spaceId}`}
+              className="flex flex-col gap-0.5 text-sm"
+            >
+              <span className="flex flex-wrap items-center gap-2">
+                <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{mapping.group}</code>
+                <span>
+                  {mapping.organizationName} · {SPACE_ROLE_LABELS[mapping.role]}
+                </span>
+                {mapping.enabled ? null : (
+                  <Badge size="sm" variant="warning">
+                    Disabled
+                  </Badge>
+                )}
+                {mapping.archived ? (
+                  <Badge size="sm" variant="outline">
+                    Archived
+                  </Badge>
+                ) : null}
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  aria-label={`Remove the mapping of ${mapping.group} to ${mapping.organizationName}`}
+                  onClick={() =>
+                    edit({
+                      groupMappings: form.groupMappings.filter((other) => other !== mapping),
+                    })
+                  }
+                >
+                  Remove
+                </Button>
+              </span>
+              {mapping.enabled ? null : (
+                <span className="text-xs text-warning-foreground">
+                  You are no longer an Admin or the Steward of {mapping.organizationName}, so this
+                  mapping puts nobody in it. Remove it, or ask to be made an Admin there.
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-sm">
+          Group
+          <Input
+            size="sm"
+            aria-label="Keycloak group"
+            placeholder="bezenti"
+            value={group}
+            onChange={(event) => setGroup(event.target.value)}
+          />
+        </label>
+        <div className="flex w-44 flex-col gap-1 text-sm">
+          <span>Organization</span>
+          <Select
+            items={organizationItems}
+            value={spaceId}
+            onValueChange={(value) => setSpaceId(value as SpaceId | null)}
+          >
+            <SelectTrigger aria-label="Organization for the group" size="sm">
+              <SelectValue placeholder="Choose" />
+            </SelectTrigger>
+            <SelectPopup>
+              {organizationItems.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </div>
+        <div className="flex w-32 flex-col gap-1 text-sm">
+          <span>Role</span>
+          <Select
+            items={roleItems}
+            value={role}
+            onValueChange={(value) => {
+              if (value !== null) setRole(value as SpaceRole);
+            }}
+          >
+            <SelectTrigger aria-label="Role for the group" size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopup>
+              {roleItems.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </div>
+        <Button type="button" size="compact" variant="outline" onClick={add}>
+          Add mapping
+        </Button>
+      </div>
+      {settings.mappableOrganizations.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          You can map groups only into Organizations you are an Admin or the Steward of.
+        </p>
+      ) : null}
+      {problem !== null ? <p className="text-destructive text-sm">{problem}</p> : null}
+    </fieldset>
+  );
+}
 
 const SECRET_NOT_STORED =
   "The settings were saved, but the client secret could not be stored. Enter it again.";
@@ -247,7 +423,8 @@ export function PlatformRegistrationSection() {
         <h2 className="text-base font-semibold">Registration</h2>
         <p className="text-sm text-muted-foreground">
           Who may get a User on this Hub when they sign in with Keycloak, whatever Keycloak lets
-          them do. Platform invitations and mapped groups arrive in later updates.
+          them do. Keycloak groups mapped under Keycloak count as an Invitation. Platform
+          invitations arrive in a later update.
         </p>
       </div>
       <RadioGroup
@@ -460,6 +637,7 @@ export function PlatformKeycloakSection() {
           strong; the Hub tells you how many first.
         </p>
       </fieldset>
+      <KeycloakGroupsFieldset settings={settings} form={form} edit={edit} />
       <SaveBar state={state} settings={settings} changes={changes} />
 
       <div className="flex flex-col gap-2">

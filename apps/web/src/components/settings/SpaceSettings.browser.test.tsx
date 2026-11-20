@@ -35,6 +35,8 @@ const memberList: MemberList = {
       canRemove: false,
       pendingAdmin: false,
       canIssueResetLink: false,
+      managedByKeycloak: false,
+      keycloakGroup: null,
     },
     {
       userId: UserId.make("user-me"),
@@ -45,15 +47,20 @@ const memberList: MemberList = {
       canRemove: false,
       pendingAdmin: false,
       canIssueResetLink: false,
+      managedByKeycloak: false,
+      keycloakGroup: null,
     },
   ],
   assignableRoles: [],
   canLeave: true,
 };
 
+/** What the member list answers; a test swaps it and puts it back. */
+let served: MemberList = memberList;
+
 vi.mock("../../lib/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/runtime")>()),
-  runPrimaryHttp: () => Promise.resolve(memberList),
+  runPrimaryHttp: () => Promise.resolve(served),
 }));
 
 const ACME = SpaceId.make("space-acme");
@@ -188,5 +195,63 @@ it("makes the Space it opens the current one", async () => {
     await vi.waitFor(() => expect(useCurrentSpace.getState().currentSpaceId).toBe(ACME));
   } finally {
     stopTracking();
+  }
+});
+
+/** Keycloak sign-in, ticket 05: an Admin's view where a group manages Mia's Membership. */
+const managedList: MemberList = {
+  members: [
+    { ...memberList.members[0]!, isYou: true },
+    {
+      ...memberList.members[1]!,
+      isYou: false,
+      managedByKeycloak: true,
+      keycloakGroup: "bezenti",
+    },
+  ],
+  assignableRoles: ["member", "guest"],
+  canLeave: true,
+};
+
+it("shows who a Keycloak group manages, with Role and remove held back and why", async () => {
+  served = managedList;
+  using _space = showSpace(organization(true));
+  const router = createFrameRouter(`/settings/space/${ACME}/members`);
+  const stopTracking = startMainAppLocationTracking(router);
+  await using _screen = await render(<RouterProvider router={router} />, { router: false });
+  try {
+    await expect.element(page.getByText("Managed by Keycloak (group bezenti)")).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Remove Mia Member" })).toBeDisabled();
+    await expect
+      .element(page.getByRole("combobox", { name: "Role for Mia Member" }))
+      .toBeDisabled();
+    await expect
+      .element(page.getByRole("button", { name: "Remove Mia Member" }))
+      .toHaveAccessibleDescription(/Keycloak group/);
+  } finally {
+    stopTracking();
+    served = memberList;
+  }
+});
+
+it("tells a Member a Keycloak group put in that they leave by leaving the group", async () => {
+  served = {
+    ...memberList,
+    members: [
+      memberList.members[0]!,
+      { ...memberList.members[1]!, managedByKeycloak: true, keycloakGroup: "bezenti" },
+    ],
+    canLeave: false,
+  };
+  using _space = showSpace(organization(false));
+  const router = createFrameRouter(`/settings/space/${ACME}/general`);
+  const stopTracking = startMainAppLocationTracking(router);
+  await using _screen = await render(<RouterProvider router={router} />, { router: false });
+  try {
+    await expect.element(page.getByRole("button", { name: "Leave organization" })).toBeDisabled();
+    await expect.element(page.getByText(/you leave it by leaving the group/)).toBeVisible();
+  } finally {
+    stopTracking();
+    served = memberList;
   }
 });

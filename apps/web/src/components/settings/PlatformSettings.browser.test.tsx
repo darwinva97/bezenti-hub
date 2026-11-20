@@ -1,4 +1,4 @@
-import { UserId } from "@t3tools/contracts";
+import { type SignInSettings, SpaceId, UserId } from "@t3tools/contracts";
 import {
   Outlet,
   RouterProvider,
@@ -20,6 +20,10 @@ import { PlatformSettingsPage } from "./PlatformSettingsPage";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 
 const session = vi.hoisted(() => ({ isOwner: false }));
+/** What the Hub answers: the Users list, unless a test serves the sign-in settings. */
+const served = vi.hoisted((): { signInSettings: SignInSettings | null } => ({
+  signInSettings: null,
+}));
 
 vi.mock("~/environments/primary", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/environments/primary")>()),
@@ -32,18 +36,20 @@ vi.mock("./useAvailableSettingsSearchItems", () => ({
 vi.mock("../../lib/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/runtime")>()),
   runPrimaryHttp: () =>
-    Promise.resolve({
-      users: [
-        {
-          id: UserId.make("user-owner"),
-          displayName: "Olive Owner",
-          loginName: "olive",
-          isOwner: true,
-          status: "active",
-          installationPermissions: [],
-        },
-      ],
-    }),
+    Promise.resolve(
+      served.signInSettings ?? {
+        users: [
+          {
+            id: UserId.make("user-owner"),
+            displayName: "Olive Owner",
+            loginName: "olive",
+            isOwner: true,
+            status: "active",
+            installationPermissions: [],
+          },
+        ],
+      },
+    ),
 }));
 
 function Frame() {
@@ -135,5 +141,67 @@ it("opens Platform for the Owner with its built sections", async () => {
       .toHaveAttribute("aria-current", "page");
   } finally {
     stopTracking();
+  }
+});
+
+it("shows the Owner's Keycloak group mappings, and warns about one that no longer applies", async () => {
+  session.isOwner = true;
+  served.signInSettings = {
+    registrationMode: "invitation-only",
+    localSignInForMembers: true,
+    keycloak: {
+      enabled: true,
+      issuer: "https://auth.example.com/realms/acme",
+      clientId: "t3-hub",
+      clientSecretSet: true,
+      clientSecretUpdatedAt: null,
+      groupsClaim: "groups",
+      strongAcr: [],
+      strongAmr: [],
+    },
+    groupMappings: [
+      {
+        group: "bezenti",
+        spaceId: SpaceId.make("org-bezenti"),
+        organizationName: "Bezenti",
+        role: "member",
+        enabled: true,
+        archived: false,
+      },
+      {
+        group: "legacy",
+        spaceId: SpaceId.make("org-legacy"),
+        organizationName: "Legacy",
+        role: "admin",
+        enabled: false,
+        archived: false,
+      },
+    ],
+    mappableOrganizations: [{ spaceId: SpaceId.make("org-bezenti"), name: "Bezenti" }],
+    publicOrigin: null,
+    updatedAt: null,
+  };
+  const router = createFrameRouter("/settings/platform/keycloak");
+  const stopTracking = startMainAppLocationTracking(router);
+  await using _screen = await render(<RouterProvider router={router} />, { router: false });
+  try {
+    await expect.element(page.getByRole("textbox", { name: "Groups claim" })).toHaveValue("groups");
+    await expect.element(page.getByText("Disabled")).toBeVisible();
+    await expect
+      .element(page.getByText(/You are no longer an Admin or the Steward of Legacy/))
+      .toBeVisible();
+    // Removing it is an unsaved change, saved with the rest of the form.
+    await expect.element(page.getByRole("button", { name: "Save" })).toBeDisabled();
+    // The modal's inert layer takes pointer events in this frame: press it as a keyboard would.
+    (
+      page
+        .getByRole("button", { name: "Remove the mapping of legacy to Legacy" })
+        .element() as HTMLElement
+    ).click();
+    await expect.element(page.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(page.getByText("Disabled").elements()).toHaveLength(0);
+  } finally {
+    stopTracking();
+    served.signInSettings = null;
   }
 });

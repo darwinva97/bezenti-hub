@@ -9,9 +9,13 @@ import {
 } from "@t3tools/client-runtime/spaces/invitations";
 import {
   changeMemberRole,
+  heldByKeycloak,
   issueMemberResetLink,
+  LEAVE_MANAGED_HINT,
   leaveOrganization,
   listMembers,
+  MANAGED_BY_KEYCLOAK_HINT as MANAGED_HINT,
+  managedByKeycloakLabel as managedLabel,
   memberRoleChoices,
   removeMember,
   resetLink,
@@ -40,6 +44,7 @@ import { errorMessageOf as messageOf } from "../../lib/errorMessage";
 import { runPrimaryHttp } from "../../lib/runtime";
 import { loadSpaces, useCurrentSpace } from "../../state/currentSpace";
 import { useCloseAppModal } from "../sidebar/mainAppLocation";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -149,6 +154,8 @@ function SpaceGeneral({ space }: { readonly space: SpaceSummary }) {
   const { members, error: loadError } = useMemberList(isOrganization ? space.id : null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A Keycloak group gives the viewer this Membership (ticket 05): left only by leaving the group.
+  const managedYou = members?.members.find((member) => member.isYou && member.managedByKeycloak);
 
   const leave = async () => {
     const confirmed = await confirmDestructive(
@@ -198,6 +205,28 @@ function SpaceGeneral({ space }: { readonly space: SpaceSummary }) {
               void closeAppModal();
             }}
           />
+        ) : null}
+
+        {members !== null && !members.canLeave && managedYou !== undefined ? (
+          <section className="flex flex-col gap-2" aria-labelledby="space-leave">
+            <h3 id="space-leave" className="text-sm font-medium">
+              Leave
+            </h3>
+            <p className="text-xs text-muted-foreground" id="space-leave-managed">
+              {managedLabel(managedYou)}. {LEAVE_MANAGED_HINT}
+            </p>
+            <div>
+              <Button
+                type="button"
+                variant="destructive-outline"
+                size="sm"
+                disabled
+                aria-describedby="space-leave-managed"
+              >
+                Leave organization
+              </Button>
+            </div>
+          </section>
         ) : null}
 
         {members?.canLeave ? (
@@ -373,13 +402,31 @@ function MemberRow({
   readonly onResetLink: () => void;
 }) {
   const memberRoleItems = roleItems(memberRoleChoices(member, assignableRoles));
+  // Who manages others (an Admin, the Owner) sees a managed Membership's controls, held back.
+  const held = heldByKeycloak(member, assignableRoles);
+  const hintId = `managed-${member.userId}`;
   return (
     <li className="flex items-center justify-between gap-2 text-sm">
-      <span className="min-w-0 truncate">
-        {member.displayName}
-        {member.isYou ? <span className="text-muted-foreground"> (you)</span> : null}
-        {member.pendingAdmin && member.canChangeRole ? (
-          <span className="text-muted-foreground"> · Admin once they add an authenticator app</span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="truncate">
+          {member.displayName}
+          {member.isYou ? <span className="text-muted-foreground"> (you)</span> : null}
+          {member.pendingAdmin && member.canChangeRole ? (
+            <span className="text-muted-foreground">
+              {" "}
+              · Admin once they add an authenticator app
+            </span>
+          ) : null}
+        </span>
+        {member.managedByKeycloak ? (
+          <Badge size="sm" variant="secondary" title={MANAGED_HINT}>
+            {managedLabel(member)}
+          </Badge>
+        ) : null}
+        {held ? (
+          <span id={hintId} className="sr-only">
+            {MANAGED_HINT}
+          </span>
         ) : null}
       </span>
       <span className="flex shrink-0 items-center gap-1">
@@ -403,6 +450,19 @@ function MemberRow({
                   </SelectItem>
                 ))}
               </SelectPopup>
+            </Select>
+          </div>
+        ) : held ? (
+          <div className="w-36">
+            <Select disabled items={memberRoleItems} value={member.role}>
+              <SelectTrigger
+                aria-label={`Role for ${member.displayName}`}
+                aria-describedby={hintId}
+                size="xs"
+                title={MANAGED_HINT}
+              >
+                <SelectValue />
+              </SelectTrigger>
             </Select>
           </div>
         ) : (
@@ -429,6 +489,17 @@ function MemberRow({
             size="xs"
             variant="ghost"
             onClick={onRemove}
+          >
+            Remove
+          </Button>
+        ) : held ? (
+          <Button
+            aria-label={`Remove ${member.displayName}`}
+            aria-describedby={hintId}
+            disabled
+            size="xs"
+            title={MANAGED_HINT}
+            variant="ghost"
           >
             Remove
           </Button>

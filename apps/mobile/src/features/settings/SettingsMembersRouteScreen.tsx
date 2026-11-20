@@ -1,8 +1,12 @@
 import { SPACE_ROLE_LABELS } from "@t3tools/client-runtime/spaces/invitations";
 import {
   changeMemberRole,
+  heldByKeycloak,
+  LEAVE_MANAGED_HINT,
   leaveOrganization,
   listMembers,
+  MANAGED_BY_KEYCLOAK_HINT,
+  managedByKeycloakLabel,
   memberRoleChoices,
   removeMember,
 } from "@t3tools/client-runtime/spaces/memberships";
@@ -125,14 +129,18 @@ export function SettingsMembersRouteScreen() {
     if (members === null) {
       return loadError === null ? null : <ErrorBanner message={loadError} />;
     }
+    // Ticket 05: a Membership a Keycloak group gives is changed only in Keycloak.
+    const managedYou = members.members.find((member) => member.isYou && member.managedByKeycloak);
 
     return (
       <>
         <SettingsSection title={space.name}>
           {members.members.map((member) => {
             const label = member.isYou ? `${member.displayName} (you)` : member.displayName;
-            const roleLabel = `${SPACE_ROLE_LABELS[member.role]}${member.pendingAdmin ? " (pending)" : ""}`;
-            return member.canChangeRole || member.canRemove ? (
+            const roleLabel = `${SPACE_ROLE_LABELS[member.role]}${member.pendingAdmin ? " (pending)" : ""}${member.managedByKeycloak ? ` · ${managedByKeycloakLabel(member)}` : ""}`;
+            return member.canChangeRole ||
+              member.canRemove ||
+              heldByKeycloak(member, members.assignableRoles) ? (
               <ListRow
                 key={member.userId}
                 label={label}
@@ -172,6 +180,36 @@ export function SettingsMembersRouteScreen() {
               tone="danger"
               disabled={busy}
               onPress={() => confirmRemove(selected)}
+            />
+          </SettingsSection>
+        ) : null}
+
+        {selected !== null && heldByKeycloak(selected, members.assignableRoles) ? (
+          <SettingsSection title={managedByKeycloakLabel(selected)}>
+            <ListActionRow
+              label={`Change the Role of ${selected.displayName}`}
+              description={MANAGED_BY_KEYCLOAK_HINT}
+              disabled
+              onPress={() => undefined}
+            />
+            <ListActionRow
+              label={`Remove ${selected.displayName}`}
+              description={MANAGED_BY_KEYCLOAK_HINT}
+              tone="danger"
+              disabled
+              onPress={() => undefined}
+            />
+          </SettingsSection>
+        ) : null}
+
+        {!members.canLeave && managedYou !== undefined ? (
+          <SettingsSection>
+            <ListActionRow
+              label="Leave organization"
+              description={LEAVE_MANAGED_HINT}
+              tone="danger"
+              disabled
+              onPress={() => undefined}
             />
           </SettingsSection>
         ) : null}

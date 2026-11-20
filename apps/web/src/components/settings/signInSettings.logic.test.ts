@@ -1,8 +1,8 @@
-import type { SignInSettings } from "@t3tools/contracts";
+import { type SignInSettings, SpaceId } from "@t3tools/contracts";
 import * as Redacted from "effect/Redacted";
 import { describe, expect, it } from "vite-plus/test";
 
-import { changesOf, clientUrlsOf, formOf, valuesOf } from "./signInSettings.logic";
+import { changesOf, clientUrlsOf, formOf, valuesOf, withMapping } from "./signInSettings.logic";
 
 const saved: SignInSettings = {
   registrationMode: "invitation-only",
@@ -17,6 +17,8 @@ const saved: SignInSettings = {
     strongAcr: [],
     strongAmr: [],
   },
+  groupMappings: [],
+  mappableOrganizations: [{ spaceId: SpaceId.make("org-acme"), name: "Acme" }],
   publicOrigin: null,
   updatedAt: "2026-11-18T10:00:00.000Z",
 };
@@ -61,5 +63,50 @@ describe("the URLs for the Keycloak client", () => {
     const local = clientUrlsOf(null, "http://localhost:5733");
     expect(local.fromPage).toBe(true);
     expect(local.urls[0]?.url).toBe("http://localhost:5733/oauth/keycloak/callback");
+  });
+});
+
+describe("the Keycloak group mappings (ticket 05)", () => {
+  const acme = SpaceId.make("org-acme");
+
+  it("adds a mapping into an Organization the Owner may map into, once", () => {
+    const added = withMapping(saved, [], { group: " /bezenti ", spaceId: acme, role: "member" });
+    expect("rows" in added && added.rows).toEqual([
+      {
+        group: "bezenti",
+        spaceId: acme,
+        organizationName: "Acme",
+        role: "member",
+        enabled: true,
+        archived: false,
+      },
+    ]);
+    const rows = "rows" in added ? added.rows : [];
+    expect(withMapping(saved, rows, { group: "bezenti", spaceId: acme, role: "admin" })).toEqual({
+      error: "bezenti is already mapped to Acme.",
+    });
+    expect(withMapping(saved, rows, { group: " ", spaceId: acme, role: "admin" })).toEqual({
+      error: "Enter the Keycloak group.",
+    });
+    expect(
+      withMapping(saved, rows, {
+        group: "x",
+        spaceId: SpaceId.make("org-someone-elses"),
+        role: "admin",
+      }),
+    ).toEqual({ error: "Choose the Organization." });
+  });
+
+  it("sends the whole list only when it changed, and the claim only when it did", () => {
+    const added = withMapping(saved, [], { group: "bezenti", spaceId: acme, role: "member" });
+    const rows = "rows" in added ? added.rows : [];
+    expect(changesOf(saved, { ...formOf(saved), groupMappings: rows })?.groupMappings).toEqual([
+      { group: "bezenti", spaceId: acme, role: "member" },
+    ]);
+    const mapped = { ...saved, groupMappings: rows };
+    expect(changesOf(mapped, formOf(mapped))).toBeNull();
+    expect(changesOf(mapped, { ...formOf(mapped), groupMappings: [] })?.groupMappings).toEqual([]);
+    expect(changesOf(saved, { ...formOf(saved), groupsClaim: " groups " })).toBeNull();
+    expect(changesOf(saved, { ...formOf(saved), groupsClaim: "teams" })?.groupsClaim).toBe("teams");
   });
 });

@@ -124,6 +124,75 @@ upgrade signs in once more.
 For trying it on one machine, `T3CODE_PREVIEW_ORIGIN=http://*.localhost:3773` (with the Hub's
 port) works without DNS or certificates: browsers send `*.localhost` to this machine.
 
+## Sign in with Keycloak
+
+People you let in sign in with an account of your own Keycloak realm instead of
+a passkey or a password kept in the Hub. Keycloak then holds their password,
+second factor, email verification and password recovery, and a person you disable
+there stops having access to the Hub. You stay in charge of who gets a User and
+of who belongs to which Organization. Set `T3CODE_PUBLIC_URL` first: the
+addresses below are built from it. Your own passkey and recovery codes keep
+working whatever you configure here.
+
+**In Keycloak**, create a client in the realm:
+
+- **Client authentication** on (a confidential client), **Standard flow** on.
+- **Valid redirect URIs:** `https://hub.example.com/oauth/keycloak/callback`
+- **Backchannel logout URL:** `https://hub.example.com/oauth/keycloak/backchannel-logout`,
+  with **Backchannel logout session required** on.
+- **Valid post logout redirect URIs:** `https://hub.example.com/sign-in`
+
+**Platform → Keycloak** shows the three addresses with a **Copy** button each,
+for your own domain. Allow the `offline_access` scope for the client: the Hub
+asks for it, and it is what lets the Hub keep checking an account for up to 30
+days (see below). Copy the client's secret from its **Credentials** tab.
+
+**In T3 Code**, open **Platform → Keycloak** and fill in:
+
+- **Issuer:** the realm's address, `https://auth.example.com/realms/<realm>`.
+- **Client ID** and **Client secret.** The secret is write-only: once saved,
+  nobody can read it back from the Hub, you included. **Replace** sets a new one.
+- **Check** fetches the realm's discovery document and keys and says what the
+  realm offers: back-channel logout, `offline_access` and its `acr` values.
+- Turn **Keycloak active** on. It checks the realm first and stays off if the
+  check fails. **Sign in with Keycloak** then appears on the sign-in page.
+
+**Groups.** To make a Keycloak group give people a Membership, add a mapper to
+the client (**Group Membership**) with **Add to ID token** on, and write its
+claim name in **Groups** (`groups` unless you changed it). A claim that is
+missing from the token means the person has no groups, so set the mapper up
+*before* you add mappings: otherwise every managed Membership would go at the
+next sign-in. A mapping names a group, an Organization and a Role; the list
+offers only Organizations you steward. See
+[Keycloak groups and Memberships](./install.md#keycloak-groups-and-memberships).
+
+**Second factor.** Your Admins and you must sign in to Keycloak with a second
+factor. The Hub trusts only what the verified ID token says, so tell it what
+counts: under **Strong factor**, list the `acr` values and the `amr` values (for
+example `otp` or `webauthn`) that mean a second factor, exactly as the token
+spells them. Add the `acr` and `amr` claims to the client's ID token with
+mappers (Keycloak's authentication-level and authentication-method mappers, or
+your own). **Check** lists the realm's `acr` values. With both lists empty, no
+Keycloak sign-in is strong, and Admins cannot sign in with Keycloak. Members do
+not need a second factor.
+
+**Who may register.** **Platform → Registration** has three modes: **Open**,
+**Invitation only** (the default) and **Closed**; see
+[Registration and invitations](./install.md#registration-modes-and-platform-invitations).
+Keep **Open** off a public Hub until the terms of use that people accept at
+sign-up exist.
+
+**Local sign-in.** The switch **Local sign-in (passkey or password) for
+everyone but you** closes the Hub's own passkeys and passwords to everyone
+else. It turns off only while Keycloak is on, and asks you to confirm first,
+saying how many people and sessions it ends. Turning Keycloak off opens it
+again.
+
+The Hub re-checks every Keycloak sign-in in the background, at most once an
+hour, and back-channel logout ends one the moment Keycloak says it ended. A
+Keycloak that is down does not sign anyone out; the Platform page then warns
+that it has not answered since a time.
+
 ## If something does not work
 
 - **Passkey sign-in says to open the Installation's own address.** The page's
@@ -138,3 +207,15 @@ port) works without DNS or certificates: browsers send `*.localhost` to this mac
 - **Everyone is locked out after one person's failed attempts.** T3 Code does
   not trust the proxy, so it counts every attempt against the proxy's address.
   Add the proxy to `T3CODE_TRUSTED_PROXIES`.
+- **Sign in with Keycloak ends on the realm with a redirect error.** The
+  client's **Valid redirect URIs** does not contain the Hub's address from
+  **Platform → Keycloak**, which follows `T3CODE_PUBLIC_URL`.
+- **Keycloak is rejected, or «Check» fails.** Read what **Check** says: the issuer
+  must be the realm's exact address, and a rejected client usually means a wrong
+  client secret. Nobody is signed out while the realm is unreachable or rejects
+  the client.
+- **Sessions end when the Keycloak session does.** The newest sign-in did not get
+  `offline_access`. Allow that scope for the client.
+- **Back-channel logout never arrives.** Keycloak must reach the Hub's address.
+  On a Hub it cannot reach (a LAN or Tailscale), the hourly re-check ends the
+  sign-in instead, a little later.

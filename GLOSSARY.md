@@ -41,8 +41,12 @@ The fixed set of permissions a Member has in one Organization. Each Member has e
 _Avoid_: Rol, group, permission set
 
 **Invitation**:
-An offer to join one Organization that the invitee must accept; accepting it creates the user's account if they had none.
+A single-use link the invitee must accept. An Organization's Invitation carries a Role and adds them to that Organization; accepting it creates their User if they had none. The Owner's Invitation to the Hub itself is a Platform invitation.
 _Avoid_: Sign-up, registration
+
+**Registration mode**:
+The Owner's setting for who may get a new User when someone signs in with Keycloak: `open` (anyone, with no Organization), `invitation-only` (the default: an Invitation or a Keycloak group the Owner mapped) or `closed` (only a Platform invitation). It never touches existing Users.
+_Avoid_: Sign-up policy, enrollment mode
 
 **Platform invitation**:
 The Owner's Invitation to the Hub itself, without an Organization or a Role: accepting it creates a User and nothing more, whatever the Registration mode. Single use, 7 days, revocable.

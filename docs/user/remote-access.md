@@ -9,8 +9,10 @@ proxy you run, or SSH. This fork has no hosted tunnel.
 ## Sign in to a Hub from the desktop or mobile app
 
 Once a Hub has accounts, the desktop and mobile apps join it by its address and
-you sign in in your browser, with your passkey or your password (and code).
-No pairing code is needed.
+you sign in in your browser, the way you sign in to the Hub: with Keycloak, or
+with your passkey if you are the Owner. No pairing code is needed. The app's
+session ends when the sign-in it came from does, so a Keycloak account that is
+disabled stops the apps too.
 
 - **Desktop:** the desktop app connects to one Hub. Unless this computer is
   your Hub, first turn off **User settings → Machines → This computer → Local

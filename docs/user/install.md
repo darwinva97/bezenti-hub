@@ -212,30 +212,46 @@ goes straight to sign-in; no pairing link or code is needed. A passkey works
 only on the address you registered it on, so create the account from the address
 you plan to keep using. Sign out from **User settings → Account**.
 
-For devices without passkeys, add a password under **User settings → Account**. You choose a sign-in name there too. The Owner must first set up an
+Everyone else signs in with Keycloak once you set it up under **Platform →
+Keycloak** (see [Publish the Hub on your domain](./public-hub.md#sign-in-with-keycloak)),
+and their passwords, second factors and recovery live in Keycloak. Your own
+passkey and recovery codes stay: they are how you always get in, whatever
+Keycloak is doing. You can also **Connect Keycloak** under **User settings →
+Account** to sign in with your Keycloak account as well; your passkey and
+recovery codes keep working.
+
+For a device without a passkey, add a password under **User settings →
+Account**. You choose a sign-in name there too, and first set up an
 authenticator app (1Password, Google Authenticator and similar) in the same
-section, and then signs in with the password plus the app's six-digit code.
-Adding, changing or removing a password or authenticator app asks you to
-confirm it's you with your passkey or current password, and signs out your
-other devices. After repeated wrong passwords or codes, sign-in pauses for a
-while before you can try again.
+section, then sign in with the password plus the app's six-digit code. Adding,
+changing or removing a password or authenticator app asks you to confirm it's
+you with your passkey, your current password, or Keycloak if you connected it,
+and signs out your other devices. After repeated wrong passwords or codes,
+sign-in pauses for a while before you can try again.
 
 ### Your sessions
 
 A browser sign-in lasts 30 days and renews each time you use it, so a device
 you use regularly stays signed in. Tokens for apps, outside agents and scripts
-last 30 days from when they were issued. **User settings → Sessions** lists your
+last 30 days from when they were issued. A person who signs in with Keycloak
+stays signed in only while Keycloak still has their account: the Hub checks in
+the background, at most once an hour while the session is in use, and ends the
+sign-in, with the apps, outside agents and links you approved from it, when the
+account is disabled or deleted, or when Keycloak says the session ended. Keycloak
+being unreachable signs nobody out. **User settings → Sessions** lists your
 browsers, devices and outside agents; revoke any of them there and its open
 connections close at once. The Owner sees and can revoke every User's sessions.
 
 The desktop and mobile apps sign in to a Hub through your browser; see
 [Sign in to a Hub](./remote-access.md#sign-in-to-a-hub-from-the-desktop-or-mobile-app).
 **Create link** in the same section is an optional shortcut: it makes a
-one-time link or QR code that signs another device in as you. A link or
+one-time link or QR code that signs another device in as you, and it ends when
+the sign-in it came from does. Signing out of the Hub from a Keycloak sign-in
+offers **Also sign out of Keycloak** on the page you land on. A link or
 session created from the server's shell (`t3 pair`, `t3 auth session issue`)
 belongs to the Owner.
 
-If you lose every passkey and recovery code, run this in the server's shell:
+If you, the Owner, lose every passkey and recovery code, run this in the server's shell:
 
 ```bash
 t3 auth owner-reset --base-url https://hub.example.com
@@ -276,12 +292,16 @@ joins that project's Space. Each person's choice is remembered in their browser.
 
 Anyone can create an organization from the same selector with **Create
 organization** (on mobile, in the thread list options under **Space**), and
-becomes its Admin. If you sign in with only a password, you act as a Member
-there until you add an authenticator app; meanwhile the Owner runs it. No two
+becomes its Admin. An Admin needs a second factor: with Keycloak, a sign-in
+that Keycloak confirms with one (see
+[Sign in with Keycloak](./public-hub.md#sign-in-with-keycloak)); locally, a
+passkey, or a password with an authenticator app. Without one you act as a
+Member there; meanwhile the Owner runs it. No two
 organizations can have the same name, whatever the case or spacing. As its
 Admin you invite Members and Guests, and an invitation also creates the account
-of someone who has none yet, so anyone with an account can bring new people
-into the Hub this way; the audit log records who invited whom. Archiving or
+of someone who has none yet, if the Hub lets them in (see
+[Registration modes](#registration-modes-and-platform-invitations)); the audit
+log records who invited whom. Archiving or
 deleting an organization and naming its Admins stay with the Owner, who sees
 every organization, also the ones they did not create.
 
@@ -319,6 +339,15 @@ sees the names in your vault and its Variables' values, never a Secret's, and
 changes nothing there; nobody else sees it at all.
 
 ### Disabling and removing people
+
+For people who sign in with Keycloak, the first place to cut access is Keycloak:
+disable or delete their account there. The Hub notices on its next check (within
+about an hour of their using it, at once when Keycloak sends a logout) and ends
+every sign-in they made, apps and outside agents included, so a person who
+leaves the company needs no step in the Hub to lose access. That does not stop
+what already runs as them: their agent turns and scheduled tasks go on until
+you disable them in the Hub. If their Keycloak account is only paused and later
+enabled, they sign in again as the same User.
 
 In **Platform → Users** the Owner can **Disable** a person: they are signed
 out everywhere at once (browsers, the desktop and mobile apps, outside agents and
@@ -387,7 +416,7 @@ in its own file, `master.key` in the Hub's state folder. A copy of the disk or
 of a backup without that file reveals none of them, and without it they are
 lost and everyone signs in again. Until you back it up, **Platform → Master key**
 warns «Back up the master key»: **Download master key backup** asks for your
-passkey (or password and code) and saves it, then asks you to type the first 8
+passkey (or password and code, or Keycloak) and saves it, then asks you to type the first 8
 characters of the key from the saved file; the warning clears only then. From
 the Hub's shell:
 
@@ -665,13 +694,16 @@ lists every invitation with its status (pending, accepted, expired or
 revoked) and has **Revoke** for pending ones.
 
 Opening the link shows the organization, the Role and who invited you, and tells
-you that the Owner can see your Personal space. Enter your name and create your
-account with a passkey, or with a sign-in name and password. An Admin who picks a
-password also sets up an authenticator app on the same page. You land signed in,
-in that organization. If you are already signed in, **Accept invitation** adds
-the organization to your account instead. The mobile app cannot accept
-invitations yet; open the link in a browser. Someone you invite starts in your
-organization, not in the Owner's setup.
+you that the Owner can see your Personal space. With Keycloak on, choose **Sign
+in with Keycloak to accept**: you sign in there and land signed in, in that
+organization, with a User created from your Keycloak account. An invitation for
+Admin needs a Keycloak sign-in with a second factor. While the Hub still allows
+local sign-in for everyone, you can instead create an account with a passkey, or
+a sign-in name and password (an Admin who picks a password also sets up an
+authenticator app on the same page). If you are already signed in, **Accept
+invitation** adds the organization to your account instead. The mobile app
+cannot accept invitations yet; open the link in a browser. Someone you invite
+starts in your organization, not in the Owner's setup.
 
 ### Manage members
 
@@ -683,20 +715,64 @@ open device, and what they created stays in the organization. To come back they
 need a new invitation. **Leave organization** in **Space settings → General** lets
 anyone but the Owner leave.
 
-An Admin needs a passkey, or a password together with an authenticator app.
-Someone made Admin who signs in with only a password stays a Member until they
-add an app: the sidebar shows **Set up an authenticator app to become Admin**,
-which opens **User settings → Account**. Someone with a passkey is an Admin at once,
-signs in with the passkey, and their password works only once they add an app.
+An Admin needs a second factor. With Keycloak that is the sign-in itself: the
+Admin signs in to Keycloak with one, or the Hub says **Retry with second
+factor** and sends them back to confirm it there; an Admin promoted from a weaker
+sign-in is signed out until they do. Locally it is a passkey, or a password
+together with an authenticator app: someone made Admin who signs in with only a
+password stays a Member until they add an app, and the sidebar shows **Set up an
+authenticator app to become Admin**, which opens **User settings → Account**.
 Invitations an Admin made end when they are removed or are no longer an Admin,
 and so do the guest links they created.
 
-Someone who can't sign in anymore can ask the Owner for a reset link: **Reset
-link** next to their name in **Space settings → Members** creates one. It works once
-and expires after an hour. Opening it lets them register a new passkey, or choose
-**Set a new password instead**; either way their old passkeys, password and
-authenticator app stop working and every device is signed out. Anyone holding the
-link can take over the account, so send it only to them.
+For someone who signs in with Keycloak, a lost password or second factor is
+Keycloak's to solve. For someone with a local account, the Owner can send a
+reset link: **Reset link** next to their name in **Space settings → Members**
+creates one. It works once and expires after an hour. If Keycloak is on, opening
+it offers **Continue with Keycloak**, which connects their Keycloak account to
+the User; that also removes their local passkeys, password and authenticator
+app. Otherwise it lets them register a new passkey, or choose **Set a new
+password instead**. Either way the old ones stop working and every device is
+signed out. Anyone holding the link can take over the account, so send it only
+to them. While local sign-in is closed, a reset link of anyone but the Owner can
+only connect Keycloak.
+
+### Registration modes and Platform invitations
+
+Under **Platform → Registration** the Owner chooses who gets a new User when
+someone signs in with Keycloak:
+
+- **Invitation only** (the default): a new person needs an Invitation to an
+  organization or to the Hub, or belongs to a Keycloak group you mapped.
+- **Open:** anyone who signs in gets a User with no organization. The Hub warns
+  that the terms of use people accept are not in place yet; keep it for a Hub
+  that is not public.
+- **Closed:** only a Platform invitation adds someone new.
+
+The mode never touches people who already have a User. A **Platform invitation**
+is the Owner's way to give one person a User by hand whatever the mode: under
+**Registration**, create one and send the link (shown once, single use, 7 days,
+revocable). It creates a User and nothing more: no organization, no Role. Someone
+who already has a User is told so and the link stays unused. A person who
+already has a local account does not register again: they sign in, then use
+**Connect Keycloak** under **User settings → Account**, which moves that account
+to Keycloak (their passkeys, password and authenticator app are removed and
+their other sessions end), or the Owner sends a reset link.
+
+### Keycloak groups and Memberships
+
+A Keycloak group can give people a Membership. In **Platform → Keycloak** map a
+group to an organization and a Role; only organizations you steward can be
+chosen (see [Publish the Hub on your domain](./public-hub.md#sign-in-with-keycloak)
+for the claim). At every sign-in and check, people in the group get that
+Membership, marked managed by Keycloak: nobody, you included, can change its Role,
+remove it or leave it by hand. In **Invitation only**, a mapped group lets a new
+person in without an Invitation.
+
+Lowering a mapping's Role lowers its people when you save; raising one applies at
+their next sign-in. Only leaving the group in Keycloak removes the Membership.
+When a mapping is deleted, or no longer applies, its Memberships stop being
+managed and stay as they are, with their Role, for you to handle by hand.
 
 ### Archive, restore or delete an organization
 
@@ -745,7 +821,7 @@ It prints a link to the Hub's **Register this machine** page and opens it in a
 browser on that machine; add `--no-browser` to only print it, and open the link
 on any device, your phone included. Sign in with your own account, check the
 operating system, hostname and request time, change the name if you like, and
-confirm with your passkey, or your password and authenticator code. Back on the
+confirm with your passkey, your password and authenticator code, or Keycloak. Back on the
 machine, `t3 join` says who approved it (`Approved by Grace (grace) as their
 personal machine. Register it as theirs? [y/N]`); answer `y` only if that is
 you, since anyone who saw the link could have approved it. Without a terminal,
@@ -1068,8 +1144,8 @@ authenticator code. Any other loan waits for that Space to accept it.
 
 **Accept.** An Admin of the organization, or the owner of the Personal space,
 sees the loan under **User settings → Machines → Loans** with the machine, its
-lender and its limits, and accepts it with their passkey or authenticator code.
-A password alone cannot accept a machine. The acceptance warns: «<Lender>
+lender and its limits, and accepts it with their passkey, authenticator code or
+a second factor confirmed in Keycloak. A password alone cannot accept a machine. The acceptance warns: «<Lender>
 controls this machine and can see everything that runs on it: files,
 processes, the Secrets turns receive and each Thread's AI gateway key.» Only
 accept machines of people you trust that much.

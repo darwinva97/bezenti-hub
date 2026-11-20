@@ -143,6 +143,9 @@ const deniedMessage = (action: string, reason: string): string | undefined => {
     return "This Personal space belonged to a removed User: it can only be read, or its content deleted.";
   }
   if (reason === "no-such-member") return "That person is not in this Organization.";
+  if (reason === "managed-by-keycloak") {
+    return "A Keycloak group manages this Membership: change the group or its mapping instead.";
+  }
   if (action.startsWith("membership.") && reason === "owner-only") {
     return "Only the Owner names, changes or removes Admins.";
   }
@@ -631,7 +634,29 @@ export class SpaceDirectory extends Context.Service<
       readonly spaceId: SpaceId;
       readonly userId: UserId;
       readonly role: SpaceRole;
+      /** The mapped Keycloak group that gives it (ticket 05): the Membership is then managed. */
+      readonly keycloakGroup?: string;
     }) => Effect.Effect<boolean, SpaceDirectoryStorageError>;
+    /**
+     * Marks a Membership managed by the Keycloak group named, or manual with `null` (ticket 05);
+     * false when there is none. Run it in the caller's transaction.
+     */
+    readonly setKeycloakManaged: (input: {
+      readonly spaceId: SpaceId;
+      readonly userId: UserId;
+      readonly keycloakGroup: string | null;
+    }) => Effect.Effect<boolean, SpaceDirectoryStorageError>;
+    /** A User's Organization Memberships as the group sync plans on them (ticket 05). */
+    readonly groupMembershipsOf: (userId: UserId) => Effect.Effect<
+      ReadonlyArray<{
+        readonly spaceId: SpaceId;
+        readonly role: SpaceRole;
+        readonly managed: boolean;
+        readonly group: string | null;
+        readonly archived: boolean;
+      }>,
+      SpaceDirectoryStorageError
+    >;
     /**
      * The Organization's Members with what the viewer may do to each. An Organization the viewer
      * cannot see fails exactly like one that does not exist.
@@ -754,11 +779,13 @@ const make = Effect.gen(function* () {
       isOwner: Schema.BooleanFromBit,
       spaceId: Schema.NullOr(SpaceId),
       role: Schema.NullOr(SpaceRole),
+      managedByKeycloak: Schema.NullOr(Schema.BooleanFromBit),
       strongSignIn: Schema.BooleanFromBit,
       inactive: Schema.BooleanFromBit,
     }),
     execute: (userId) => sql`
       SELECT users.is_owner AS "isOwner", m.space_id AS "spaceId", m.role AS role,
+        m.managed_by_keycloak AS "managedByKeycloak",
         (users.disabled_at IS NOT NULL OR users.removed_at IS NOT NULL) AS "inactive",
         (EXISTS (SELECT 1 FROM user_passkeys WHERE user_id = users.user_id)
         OR EXISTS (SELECT 1 FROM user_totp WHERE user_id = users.user_id)
@@ -840,9 +867,12 @@ const make = Effect.gen(function* () {
     const roles = new Map<SpaceId, SpaceRole>();
     const storedRoles = new Map<SpaceId, SpaceRole>();
     const pendingAdmin = new Set<SpaceId>();
+    /** Memberships a Keycloak group manages (ticket 05). */
+    const managed = new Set<SpaceId>();
     for (const row of rows) {
       if (row.spaceId === null || row.role === null) continue;
       storedRoles.set(row.spaceId, row.role);
+      if (row.managedByKeycloak === true) managed.add(row.spaceId);
       const pending = row.role === "admin" && !row.strongSignIn;
       if (pending) pendingAdmin.add(row.spaceId);
       roles.set(row.spaceId, pending ? "member" : row.role);
@@ -853,7 +883,7 @@ const make = Effect.gen(function* () {
       roles,
       inactive: rows[0]?.inactive ?? false,
     } satisfies AccessPolicy.Principal;
-    return { principal, storedRoles, pendingAdmin };
+    return { principal, storedRoles, pendingAdmin, managed };
   }, Effect.mapError(storageError));
 
   const principalOf = (userId: UserId) =>
@@ -1304,16 +1334,55 @@ const make = Effect.gen(function* () {
     readonly spaceId: SpaceId;
     readonly userId: UserId;
     readonly role: SpaceRole;
+    readonly keycloakGroup?: string;
   }) {
     const now = DateTime.formatIso(yield* DateTime.now);
+    const group = input.keycloakGroup ?? null;
     const inserted = yield* sql<{ readonly userId: string }>`
-      INSERT INTO space_memberships (space_id, user_id, role, created_at)
-      VALUES (${input.spaceId}, ${input.userId}, ${input.role}, ${now})
+      INSERT INTO space_memberships
+        (space_id, user_id, role, created_at, managed_by_keycloak, keycloak_group)
+      VALUES (${input.spaceId}, ${input.userId}, ${input.role}, ${now}, ${group === null ? 0 : 1},
+        ${group})
       ON CONFLICT (space_id, user_id) DO NOTHING
       RETURNING user_id AS "userId"
     `.pipe(Effect.mapError(storageError));
     return inserted.length > 0;
   });
+
+  const setKeycloakManaged = Effect.fn("SpaceDirectory.setKeycloakManaged")(function* (input: {
+    readonly spaceId: SpaceId;
+    readonly userId: UserId;
+    readonly keycloakGroup: string | null;
+  }) {
+    const group = input.keycloakGroup;
+    const updated = yield* sql<{ readonly userId: string }>`
+      UPDATE space_memberships
+      SET managed_by_keycloak = ${group === null ? 0 : 1}, keycloak_group = ${group}
+      WHERE space_id = ${input.spaceId} AND user_id = ${input.userId}
+      RETURNING user_id AS "userId"
+    `;
+    return updated.length > 0;
+  }, Effect.mapError(storageError));
+
+  const findGroupMemberships = SqlSchema.findAll({
+    Request: UserId,
+    Result: Schema.Struct({
+      spaceId: SpaceId,
+      role: SpaceRole,
+      managed: Schema.BooleanFromBit,
+      group: Schema.NullOr(Schema.String),
+      archived: Schema.BooleanFromBit,
+    }),
+    execute: (userId) => sql`
+      SELECT m.space_id AS "spaceId", m.role AS role, m.managed_by_keycloak AS managed,
+        m.keycloak_group AS "group", s.archived_at IS NOT NULL AS archived
+      FROM space_memberships AS m JOIN spaces AS s ON s.space_id = m.space_id
+      WHERE m.user_id = ${userId} AND s.kind = 'organization'
+      ORDER BY m.space_id
+    `,
+  });
+  const groupMembershipsOf = (userId: UserId) =>
+    findGroupMemberships(userId).pipe(Effect.mapError(storageError));
 
   const listMemberRows = SqlSchema.findAll({
     Request: SpaceId,
@@ -1321,10 +1390,13 @@ const make = Effect.gen(function* () {
       userId: UserId,
       displayName: Schema.String,
       role: SpaceRole,
+      managedByKeycloak: Schema.BooleanFromBit,
+      keycloakGroup: Schema.NullOr(Schema.String),
       strongSignIn: Schema.BooleanFromBit,
     }),
     execute: (spaceId) => sql`
       SELECT m.user_id AS "userId", u.display_name AS "displayName", m.role AS role,
+        m.managed_by_keycloak AS "managedByKeycloak", m.keycloak_group AS "keycloakGroup",
         (EXISTS (SELECT 1 FROM user_passkeys WHERE user_id = m.user_id)
         OR EXISTS (SELECT 1 FROM user_totp WHERE user_id = m.user_id)
         OR EXISTS (SELECT 1 FROM user_identities WHERE user_id = m.user_id)) AS "strongSignIn"
@@ -1361,33 +1433,38 @@ const make = Effect.gen(function* () {
     const rows = yield* listMemberRows(spaceId).pipe(Effect.mapError(storageError));
     const may = (
       action: AccessPolicy.Action,
-      userId: UserId,
-      role: SpaceRole,
+      row: { readonly userId: UserId; readonly role: SpaceRole; readonly managed: boolean },
       nextRole?: SpaceRole,
     ) =>
       allows(principal, action, {
         kind: "membership",
         space,
-        userId,
-        role,
+        userId: row.userId,
+        role: row.role,
+        managedByKeycloak: row.managed,
         ...(nextRole === undefined ? {} : { nextRole }),
       });
+    const own = rows.find((row) => row.userId === viewer);
     return {
-      members: rows.map((row): MemberSummary => ({
-        userId: row.userId,
-        displayName: row.displayName,
-        role: row.role,
-        pendingAdmin: row.role === "admin" && !row.strongSignIn,
-        isYou: row.userId === viewer,
-        canChangeRole:
-          row.userId !== viewer &&
-          ASSIGNABLE_ROLES.some(
-            (role) => role !== row.role && may("membership.changeRole", row.userId, row.role, role),
-          ),
-        canRemove: row.userId !== viewer && may("membership.remove", row.userId, row.role),
-        canIssueResetLink:
-          row.userId !== viewer && may("membership.resetLink", row.userId, row.role),
-      })),
+      members: rows.map((row): MemberSummary => {
+        const target = { userId: row.userId, role: row.role, managed: row.managedByKeycloak };
+        return {
+          userId: row.userId,
+          displayName: row.displayName,
+          role: row.role,
+          pendingAdmin: row.role === "admin" && !row.strongSignIn,
+          isYou: row.userId === viewer,
+          canChangeRole:
+            row.userId !== viewer &&
+            ASSIGNABLE_ROLES.some(
+              (role) => role !== row.role && may("membership.changeRole", target, role),
+            ),
+          canRemove: row.userId !== viewer && may("membership.remove", target),
+          canIssueResetLink: row.userId !== viewer && may("membership.resetLink", target),
+          managedByKeycloak: row.managedByKeycloak,
+          keycloakGroup: row.managedByKeycloak ? row.keycloakGroup : null,
+        };
+      }),
       // The Roles an Admin may give a Member, which are the ones they may invite as.
       assignableRoles: ASSIGNABLE_ROLES.filter((role) =>
         allows(principal, "membership.changeRole", {
@@ -1395,10 +1472,15 @@ const make = Effect.gen(function* () {
           space,
           userId: viewer,
           role: "guest",
+          managedByKeycloak: false,
           nextRole: role,
         }),
       ),
-      canLeave: may("membership.leave", viewer, principal.roles.get(spaceId) ?? "guest"),
+      canLeave: may("membership.leave", {
+        userId: viewer,
+        role: principal.roles.get(spaceId) ?? "guest",
+        managed: own?.managedByKeycloak ?? false,
+      }),
     } satisfies MemberList;
   });
 
@@ -1411,7 +1493,8 @@ const make = Effect.gen(function* () {
   }) {
     const { principal, space } = yield* visibleOrganization(input.actor, input.spaceId);
     // Decided on the Role they were given: a pending Admin is the Owner's to change too.
-    const role = (yield* membershipsOf(input.target)).storedRoles.get(input.spaceId);
+    const target = yield* membershipsOf(input.target);
+    const role = target.storedRoles.get(input.spaceId);
     if (role === undefined) {
       return yield* new SpaceAccessDeniedError({ action: input.action, reason: "no-such-member" });
     }
@@ -1420,6 +1503,7 @@ const make = Effect.gen(function* () {
       space,
       userId: input.target,
       role,
+      managedByKeycloak: target.managed.has(input.spaceId),
       ...(input.nextRole === undefined ? {} : { nextRole: input.nextRole }),
     });
     return role;
@@ -1927,6 +2011,8 @@ const make = Effect.gen(function* () {
     actingUser,
     threadOwner,
     addMembership,
+    setKeycloakManaged,
+    groupMembershipsOf,
     viewableSpaces,
     revision: Ref.get(revision),
     changed,

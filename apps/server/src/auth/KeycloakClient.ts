@@ -237,7 +237,7 @@ const TokenErrorResponse = Schema.Struct({ error: Schema.String });
 const isTokenErrorResponse = Schema.is(TokenErrorResponse);
 
 /** The claims of a Keycloak ID token the Hub reads; `iss`, `aud`, `exp`, `iat` are the policy's. */
-export const IdTokenClaims = Schema.Struct({
+const KnownIdTokenClaims = Schema.Struct({
   sub: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255)),
   nonce: Schema.optionalKey(Schema.String),
   azp: Schema.optionalKey(Schema.String),
@@ -253,6 +253,13 @@ export const IdTokenClaims = Schema.Struct({
   amr: Schema.optionalKey(Schema.Unknown),
   auth_time: Schema.optionalKey(Schema.Unknown),
 });
+/**
+ * The verified claims, the others kept as they came (unknown): the groups claim's name is the
+ * Owner's to choose (ticket 05), so it is read from here by `GroupSync.groupsOf`.
+ */
+export const IdTokenClaims = Schema.StructWithRest(KnownIdTokenClaims, [
+  Schema.Record(Schema.String, Schema.Unknown),
+]);
 export type IdTokenClaims = typeof IdTokenClaims.Type;
 
 /** RFC 6749 §2.3.1: the client id and secret are form-encoded before Basic authentication. */

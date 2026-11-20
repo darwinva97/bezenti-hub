@@ -25,6 +25,7 @@ import * as Tracer from "effect/Tracer";
 
 import { joinMachine, memberWithPasskey, startJoin } from "../environments/environments.testkit.ts";
 import { isUntracedRequest } from "../http.ts";
+import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as AccountCredentials from "./AccountCredentials.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import {
@@ -2317,4 +2318,399 @@ describe("strong factor from Keycloak (ticket 06)", () => {
       }).pipe(Effect.scoped),
     );
   });
+});
+
+/** A Membership with whether a Keycloak group manages it, and which. */
+const groupMembershipsOf = (server: Server, userId: string) =>
+  server.sql<{ spaceId: string; role: string; managed: number; group: string | null }>`
+    SELECT space_id AS "spaceId", role, managed_by_keycloak AS managed, keycloak_group AS "group"
+    FROM space_memberships WHERE user_id = ${userId} ORDER BY space_id
+  `;
+
+interface GroupAuditRow extends AuditRow {
+  readonly actor: { readonly source: string; readonly userId: string | null };
+  readonly space: { readonly id: string } | null;
+}
+
+const groupAuditOf = (server: Server, owner: string, action: string) =>
+  auditOf(server, owner, action).pipe(Effect.map((rows) => rows as ReadonlyArray<GroupAuditRow>));
+
+/**
+ * Bezenti, an Organization of the Owner's, with `bezenti` mapped to Member and `bezenti-admin`
+ * to Admin; Acme, another of theirs without mappings, for manual Memberships.
+ */
+const bezentiMapped = Effect.fn(function* (server: Server, owner: string) {
+  const bezenti = yield* createOrganization(server, owner, "Bezenti");
+  const acme = yield* createOrganization(server, owner, "Acme");
+  const bezentiId = bezenti.body.id as string;
+  const saved = yield* server.request("/api/installation/sign-in-settings", {
+    cookie: owner,
+    body: {
+      groupMappings: [
+        { group: "bezenti", spaceId: bezentiId, role: "member" },
+        { group: "/bezenti-admin", spaceId: bezentiId, role: "admin" },
+      ],
+    },
+  });
+  assert.equal(saved.status, 200, saved.text);
+  return { bezentiId, acmeId: acme.body.id as string };
+});
+
+const groups = (...names: ReadonlyArray<string>) => ({ groups: names });
+
+describe("Keycloak groups → Memberships (ticket 05)", () => {
+  it.effect("a first sign-in with `bezenti` makes a Member, with `bezenti-admin` an Admin", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner } = yield* hub();
+      const { bezentiId } = yield* bezentiMapped(server, owner);
+      // Invitation only (the default): the mapped group is their permanent Invitation.
+      const lin = yield* roundTrip(server, realm, { sub: "kc-lin", claims: groups("/bezenti") });
+      assert.equal(lin.location, "/");
+      const linId = (yield* userOf(server, lin.cookie)) ?? "";
+      assert.deepEqual(yield* groupMembershipsOf(server, linId), [
+        { spaceId: bezentiId, role: "member", managed: 1, group: "bezenti" },
+      ]);
+      const registered = yield* auditOf(server, owner, "user.register");
+      assert.deepEqual(registered[0]?.detail, { via: "group", issuer: realm.issuer });
+
+      const ada = yield* roundTrip(server, realm, {
+        sub: "kc-ada",
+        claims: { ...STRONG, ...groups("bezenti", "bezenti-admin", "unmapped") },
+      });
+      assert.equal(ada.location, "/");
+      const adaId = (yield* userOf(server, ada.cookie)) ?? "";
+      assert.deepEqual(yield* groupMembershipsOf(server, adaId), [
+        { spaceId: bezentiId, role: "admin", managed: 1, group: "bezenti-admin" },
+      ]);
+
+      // Each new Membership in the audit log, by the server, naming its group.
+      const added = yield* groupAuditOf(server, owner, "membership.add");
+      assert.sameDeepMembers(
+        added.map((row) => ({
+          source: row.actor.source,
+          userId: row.actor.userId,
+          space: row.space?.id,
+          target: row.target.id,
+          detail: row.detail,
+        })),
+        [
+          {
+            source: "system",
+            userId: null,
+            space: bezentiId,
+            target: linId,
+            detail: { role: "member", keycloakGroup: "bezenti" },
+          },
+          {
+            source: "system",
+            userId: null,
+            space: bezentiId,
+            target: adaId,
+            detail: { role: "admin", keycloakGroup: "bezenti-admin" },
+          },
+        ],
+      );
+
+      // The member list says who Keycloak manages, and offers nobody a change.
+      const members = yield* server.request(`/api/spaces/${bezentiId}/members`, {
+        cookie: owner,
+      });
+      const listed = members.body.members as ReadonlyArray<{
+        userId: string;
+        managedByKeycloak: boolean;
+        keycloakGroup: string | null;
+        canChangeRole: boolean;
+        canRemove: boolean;
+        canIssueResetLink: boolean;
+      }>;
+      assert.deepInclude(
+        listed.find((member) => member.userId === linId)!,
+        {
+          managedByKeycloak: true,
+          keycloakGroup: "bezenti",
+          canChangeRole: false,
+          canRemove: false,
+          canIssueResetLink: true,
+        },
+      );
+    }),
+  );
+
+  it.effect(
+    "a second sign-in without the group removes it; a manual Membership elsewhere stays",
+    () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const { bezentiId, acmeId } = yield* bezentiMapped(server, owner);
+        const first = yield* roundTrip(server, realm, { sub: "kc-lin", claims: groups("bezenti") });
+        const linId = (yield* userOf(server, first.cookie)) ?? "";
+        // Invited by hand into Acme, where no group maps.
+        yield* server.sql`
+        INSERT INTO space_memberships (space_id, user_id, role, created_at)
+        VALUES (${acmeId}, ${linId}, 'guest', '2026-01-01T00:00:00.000Z')
+      `;
+        const directory = Context.get(server.services, SpaceDirectory.SpaceDirectory);
+        const heard = yield* (yield* directory.nextMembershipChange(UserId.make(linId))).pipe(
+          Effect.forkScoped({ startImmediately: true }),
+        );
+
+        // Keycloak omits the claim when the person is in no group: an empty list.
+        const second = yield* roundTrip(server, realm, { sub: "kc-lin" });
+        assert.equal(second.location, "/");
+        assert.deepEqual(yield* groupMembershipsOf(server, linId), [
+          { spaceId: acmeId, role: "guest", managed: 0, group: null },
+        ]);
+        // Their connections heard it (after the commit, as every Membership change).
+        yield* Fiber.join(heard);
+        const removed = yield* groupAuditOf(server, owner, "membership.remove");
+        assert.equal(removed.length, 1);
+        assert.deepInclude(removed[0]!, { detail: { keycloakGroup: "bezenti" } });
+        assert.equal(removed[0]!.actor.source, "system");
+        assert.equal(removed[0]!.space?.id, bezentiId);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("the group decides even the last Admin: demoted and removed, audited", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner } = yield* hub();
+      const { bezentiId } = yield* bezentiMapped(server, owner);
+      const ada = yield* roundTrip(server, realm, {
+        sub: "kc-ada",
+        claims: { ...STRONG, ...groups("bezenti-admin") },
+      });
+      const adaId = (yield* userOf(server, ada.cookie)) ?? "";
+      yield* roundTrip(server, realm, {
+        sub: "kc-ada",
+        claims: { ...STRONG, ...groups("bezenti") },
+      });
+      assert.deepEqual(yield* groupMembershipsOf(server, adaId), [
+        { spaceId: bezentiId, role: "member", managed: 1, group: "bezenti" },
+      ]);
+      yield* roundTrip(server, realm, { sub: "kc-ada", claims: STRONG });
+      assert.deepEqual(yield* groupMembershipsOf(server, adaId), []);
+      // Bezenti has no Admin left: Keycloak is the source of truth, and the log shows it.
+      const changed = yield* groupAuditOf(server, owner, "membership.changeRole");
+      assert.deepEqual(changed[0]?.detail, {
+        from: "admin",
+        to: "member",
+        keycloakGroup: "bezenti",
+      });
+      const removed = yield* groupAuditOf(server, owner, "membership.remove");
+      assert.deepEqual(removed[0]?.detail, { keycloakGroup: "bezenti" });
+    }),
+  );
+
+  it.effect("nobody changes, removes or leaves a managed Membership in the Hub", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner } = yield* hub();
+      const { bezentiId } = yield* bezentiMapped(server, owner);
+      // An Admin of Bezenti by hand, whose Keycloak identity is their strong sign-in.
+      const admin = yield* keycloakMember(server, realm, "kc-boss");
+      yield* server.sql`
+        INSERT INTO space_memberships (space_id, user_id, role, created_at)
+        VALUES (${bezentiId}, ${admin.id}, 'admin', '2026-01-01T00:00:00.000Z')
+      `;
+      const lin = yield* roundTrip(server, realm, { sub: "kc-lin", claims: groups("bezenti") });
+      const linId = (yield* userOf(server, lin.cookie)) ?? "";
+
+      for (const [who, cookie] of [
+        ["Admin", admin.cookie],
+        ["Owner", owner],
+      ] as const) {
+        const removed = yield* server.request(`/api/spaces/${bezentiId}/members/remove`, {
+          cookie,
+          body: { userId: linId },
+        });
+        assert.notEqual(removed.status, 200, who);
+        assert.include(String(removed.body.message), "Keycloak group", who);
+        const changed = yield* server.request(`/api/spaces/${bezentiId}/members/role`, {
+          cookie,
+          body: { userId: linId, role: "guest" },
+        });
+        assert.notEqual(changed.status, 200, who);
+        assert.include(String(changed.body.message), "Keycloak group", who);
+      }
+      const left = yield* server.request(`/api/spaces/${bezentiId}/leave`, {
+        cookie: lin.cookie ?? "",
+        body: {},
+      });
+      assert.notEqual(left.status, 200);
+      assert.include(String(left.body.message), "Keycloak group");
+      const listed = yield* server.request(`/api/spaces/${bezentiId}/members`, {
+        cookie: lin.cookie ?? "",
+      });
+      assert.isFalse(listed.body.canLeave);
+      assert.deepEqual(yield* groupMembershipsOf(server, linId), [
+        { spaceId: bezentiId, role: "member", managed: 1, group: "bezenti" },
+      ]);
+    }),
+  );
+
+  it.effect("a manual Membership where a group maps becomes managed, an Invitation's too", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner } = yield* hub();
+      const { bezentiId } = yield* bezentiMapped(server, owner);
+      const invitation = yield* anotherInvite(server, owner, bezentiId, "guest");
+      const joined = yield* roundTrip(
+        server,
+        realm,
+        { sub: "kc-lin", claims: groups("bezenti") },
+        invitationStart(invitation.token),
+      );
+      assert.equal(joined.location, "/");
+      const linId = (yield* userOf(server, joined.cookie)) ?? "";
+      // The Invitation is spent as usual; then where a group maps, Keycloak decides.
+      assert.equal((yield* invitationRow(server, invitation.invitationId))?.acceptedBy, linId);
+      assert.deepEqual(yield* groupMembershipsOf(server, linId), [
+        { spaceId: bezentiId, role: "member", managed: 1, group: "bezenti" },
+      ]);
+      const changed = yield* groupAuditOf(server, owner, "membership.changeRole");
+      assert.deepEqual(changed[0]?.detail, {
+        from: "guest",
+        to: "member",
+        keycloakGroup: "bezenti",
+        managed: "keycloak",
+      });
+    }),
+  );
+
+  describe("an Admin's group and a weak sign-in (ticket 06)", () => {
+    it.effect("an existing User: refused, the Admin Membership stays, weak access ends", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const { bezentiId } = yield* bezentiMapped(server, owner);
+        const weak = yield* roundTrip(server, realm, { sub: "kc-lin", claims: groups("bezenti") });
+        const linId = (yield* userOf(server, weak.cookie)) ?? "";
+        const weakSocket = yield* watchSocket(server, weak.cookie ?? "");
+
+        const promoted = yield* roundTrip(server, realm, {
+          sub: "kc-lin",
+          claims: groups("bezenti", "bezenti-admin"),
+        });
+        assert.equal(promoted.location, "/sign-in?keycloak=strong-factor-required");
+        assert.isUndefined(promoted.cookie);
+        // What Keycloak says is kept; no weak session ever holds the Admin Role.
+        assert.deepEqual(yield* groupMembershipsOf(server, linId), [
+          { spaceId: bezentiId, role: "admin", managed: 1, group: "bezenti-admin" },
+        ]);
+        yield* Fiber.join(weakSocket.socket);
+        assert.isFalse(yield* isSignedIn(server, weak.cookie ?? ""));
+        assert.deepEqual(yield* liveLoginsOf(server, linId), []);
+
+        const strong = yield* roundTrip(server, realm, {
+          sub: "kc-lin",
+          claims: { ...STRONG, ...groups("bezenti-admin") },
+        });
+        assert.equal(yield* userOf(server, strong.cookie), linId);
+      }).pipe(Effect.scoped),
+    );
+
+    it.effect("a new identity: refused, and nothing is created", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        yield* bezentiMapped(server, owner);
+        const users = yield* userCount(server);
+        const refused = yield* roundTrip(server, realm, {
+          sub: "kc-new",
+          claims: groups("bezenti-admin"),
+        });
+        assert.equal(refused.location, "/sign-in?keycloak=strong-factor-required");
+        assert.equal(yield* userCount(server), users);
+        assert.deepEqual(
+          yield* server.sql`SELECT * FROM user_identities WHERE subject = 'kc-new'`,
+          [],
+        );
+      }),
+    );
+
+    it.effect("linking: refused before anything changes; a Member's group links and joins", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const { bezentiId } = yield* bezentiMapped(server, owner);
+        const local = yield* memberWithPassword(server, "member-grace");
+        const link = { intent: "link", reauth: { method: "password", password: PASSWORD } };
+        const weakAdmin = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-grace", claims: groups("bezenti-admin") },
+          link,
+          local.cookie,
+        );
+        assert.equal(resultOf(weakAdmin.location), "strong-factor-required");
+        assert.deepEqual(yield* groupMembershipsOf(server, local.id), []);
+        assert.isUndefined((yield* account(server, local.cookie)).identity);
+
+        const member = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-grace", claims: groups("bezenti") },
+          link,
+          local.cookie,
+        );
+        assert.equal(member.status, 303);
+        assert.isUndefined(resultOf(member.location) ?? undefined);
+        assert.deepEqual(yield* groupMembershipsOf(server, local.id), [
+          { spaceId: bezentiId, role: "member", managed: 1, group: "bezenti" },
+        ]);
+      }),
+    );
+  });
+
+  it.effect("registration closed: a new identity's mapped group admits nobody", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner } = yield* hub();
+      yield* bezentiMapped(server, owner);
+      yield* setMode(server, owner, "closed");
+      const users = yield* userCount(server);
+      const refused = yield* roundTrip(server, realm, { sub: "kc-lin", claims: groups("bezenti") });
+      assert.equal(refused.location, "/sign-in?keycloak=registration-closed");
+      assert.equal(yield* userCount(server), users);
+    }),
+  );
+
+  it.effect("the Owner, who belongs to no Organization, is never put in one by a group", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner, ownerId, authenticator } = yield* hub();
+      yield* bezentiMapped(server, owner);
+      const linked = yield* roundTrip(
+        server,
+        realm,
+        { sub: "kc-owner", claims: { ...STRONG, ...groups("bezenti-admin") } },
+        { intent: "link", reauth: yield* passkeyReauth(server, authenticator) },
+        owner,
+      );
+      assert.equal(linked.status, 303);
+      const again = yield* roundTrip(server, realm, {
+        sub: "kc-owner",
+        claims: { ...STRONG, ...groups("bezenti") },
+      });
+      assert.equal(yield* userOf(server, again.cookie), ownerId);
+      assert.deepEqual(yield* groupMembershipsOf(server, ownerId), []);
+    }),
+  );
+
+  it.effect("the groups claim the Owner names is the one read", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner } = yield* hub();
+      const { bezentiId } = yield* bezentiMapped(server, owner);
+      yield* server.request("/api/installation/sign-in-settings", {
+        cookie: owner,
+        body: { groupsClaim: "teams" },
+      });
+      const ignored = yield* roundTrip(server, realm, {
+        sub: "kc-lin",
+        claims: { groups: ["bezenti"], teams: ["/other"] },
+      });
+      // `groups` is not the claim any more: no mapped group, so invitation only refuses.
+      assert.equal(ignored.location, "/sign-in?keycloak=invitation-only");
+      const read = yield* roundTrip(server, realm, {
+        sub: "kc-lin",
+        claims: { teams: ["/bezenti"] },
+      });
+      const linId = (yield* userOf(server, read.cookie)) ?? "";
+      assert.deepEqual(yield* groupMembershipsOf(server, linId), [
+        { spaceId: bezentiId, role: "member", managed: 1, group: "bezenti" },
+      ]);
+    }),
+  );
 });

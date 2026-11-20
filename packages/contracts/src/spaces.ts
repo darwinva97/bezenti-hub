@@ -75,6 +75,12 @@ export const MemberSummary = Schema.Struct({
   pendingAdmin: Schema.Boolean,
   /** Whether the viewer (only the Owner) may give them a one-time link to reset their sign-in. */
   canIssueResetLink: Schema.Boolean,
+  /**
+   * A mapped Keycloak group gives this Membership (Keycloak sign-in, ticket 05): nobody changes
+   * its Role, removes it or leaves it in the Hub. `keycloakGroup` names the group.
+   */
+  managedByKeycloak: Schema.Boolean,
+  keycloakGroup: Schema.NullOr(Schema.String),
 });
 export type MemberSummary = typeof MemberSummary.Type;
 

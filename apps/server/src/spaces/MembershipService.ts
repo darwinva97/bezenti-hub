@@ -21,6 +21,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
+import * as GroupSync from "../auth/GroupSync.ts";
 import * as UserDirectory from "../auth/UserDirectory.ts";
 import * as SpaceDirectory from "./SpaceDirectory.ts";
 
@@ -72,6 +73,18 @@ export class MembershipService extends Context.Service<
       readonly spaceId: SpaceId;
       readonly userId: UserId;
     }) => Effect.Effect<MemberResetLink, MembershipError>;
+    /**
+     * Ticket 05: applies `planGroupSync`'s changes, one audit entry each (actor `system`), with no
+     * policy check: the Owner's mappings and the verified token decide. Run it in the sign-in's
+     * transaction (a promotion ends weak Keycloak access there), then `afterCommit`.
+     */
+    readonly applyGroupSync: (input: {
+      readonly userId: UserId;
+      readonly changes: ReadonlyArray<GroupSync.GroupChange>;
+    }) => Effect.Effect<
+      { readonly changed: boolean; readonly afterCommit: Effect.Effect<void> },
+      MembershipStorageError
+    >;
   }
 >()("t3/spaces/MembershipService") {}
 
@@ -237,9 +250,10 @@ const make = Effect.gen(function* () {
         spaces
           .authorizeMembership({ actor, action: "membership.leave", spaceId, target: actor })
           .pipe(
-            // Not a Member, or the Owner, who belongs to no Organization: nothing to leave.
+            // Not a Member, or the Owner, who belongs to no Organization: nothing to leave. A
+            // Membership a Keycloak group gives is left by leaving the group (ticket 05).
             Effect.mapError((error) =>
-              error._tag === "SpaceAccessDeniedError"
+              error._tag === "SpaceAccessDeniedError" && error.reason !== "managed-by-keycloak"
                 ? refused("You're not in this Organization.")
                 : refusal(error),
             ),
@@ -293,7 +307,109 @@ const make = Effect.gen(function* () {
     return link;
   });
 
-  return MembershipService.of({ list, changeRole, remove, leave, issueResetLink });
+  const system: AuditLog.AuditActor = { source: "system" };
+
+  const applyGroupSync: MembershipService["Service"]["applyGroupSync"] = Effect.fn(
+    "MembershipService.applyGroupSync",
+  )(function* ({ userId, changes }) {
+    const target = { kind: "user", id: userId } as const;
+    const groupOf = (group: string | null) => (group === null ? {} : { keycloakGroup: group });
+    let changed = false;
+    let promoted = false;
+    for (const change of changes) {
+      const { spaceId } = change;
+      switch (change.kind) {
+        case "add": {
+          const added = yield* spaces
+            .addMembership({ spaceId, userId, role: change.role, keycloakGroup: change.group })
+            .pipe(Effect.mapError(storageError));
+          if (!added) break;
+          yield* recordIn(spaceId, {
+            actor: system,
+            action: "membership.add",
+            target,
+            detail: { role: change.role, keycloakGroup: change.group },
+          });
+          break;
+        }
+        case "changeRole":
+        case "manage": {
+          if (change.from !== change.to) {
+            yield* spaces
+              .setRole({ spaceId, userId, role: change.to })
+              .pipe(Effect.mapError(storageError));
+          }
+          yield* spaces
+            .setKeycloakManaged({ spaceId, userId, keycloakGroup: change.group })
+            .pipe(Effect.mapError(storageError));
+          yield* recordIn(spaceId, {
+            actor: system,
+            action: "membership.changeRole",
+            target,
+            detail: {
+              from: change.from,
+              to: change.to,
+              keycloakGroup: change.group,
+              ...(change.kind === "manage" ? { managed: "keycloak" } : {}),
+            },
+          });
+          break;
+        }
+        case "remove": {
+          const removed = yield* spaces
+            .removeMembership({ spaceId, userId })
+            .pipe(Effect.mapError(storageError));
+          if (!removed) break;
+          yield* recordIn(spaceId, {
+            actor: system,
+            action: "membership.remove",
+            target,
+            detail: groupOf(change.group),
+          });
+          break;
+        }
+        case "release": {
+          yield* spaces
+            .setKeycloakManaged({ spaceId, userId, keycloakGroup: null })
+            .pipe(Effect.mapError(storageError));
+          yield* recordIn(spaceId, {
+            actor: system,
+            action: "membership.changeRole",
+            target,
+            detail: {
+              from: change.role,
+              to: change.role,
+              managed: "manual",
+              ...groupOf(change.group),
+            },
+          });
+          break;
+        }
+        case "relabel":
+          // Only which of their groups names it: nothing anyone may do changes, so no entry.
+          yield* spaces
+            .setKeycloakManaged({ spaceId, userId, keycloakGroup: change.group })
+            .pipe(Effect.mapError(storageError));
+          // What they may see or do is the same: their connections need not reload.
+          continue;
+      }
+      changed = true;
+      if (GroupSync.promotesToAdmin(change)) promoted = true;
+    }
+    // A group that makes them an Admin is a promotion (ticket 06): their weak Keycloak sign-ins,
+    // and the apps and pairing links no sign-in vouches for, end with it.
+    const ended = promoted
+      ? yield* users.endWeakKeycloakLogins(userId).pipe(Effect.mapError(storageError))
+      : { afterCommit: Effect.void };
+    return {
+      changed,
+      afterCommit: changed
+        ? spaces.membershipsChanged([userId]).pipe(Effect.andThen(ended.afterCommit))
+        : ended.afterCommit,
+    };
+  });
+
+  return MembershipService.of({ list, changeRole, remove, leave, issueResetLink, applyGroupSync });
 });
 
 export const layer = Layer.effect(MembershipService, make).pipe(Layer.provide(AuditLog.layer));

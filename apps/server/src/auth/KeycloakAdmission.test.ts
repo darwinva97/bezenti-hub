@@ -41,9 +41,14 @@ const refuse = (reason: string) => ({ kind: "refuse", reason }) as AdmissionOutc
 /** The identity's User, for who needs a strong factor: by default a Member (or nobody yet). */
 type Standing = "owner" | "admin" | "member";
 
-/** As the callback reads it: the Owner, an Admin, or who the Invitation makes an Admin. */
-const requiresStrongFor = (standing: Standing, invitation: InvitationState) =>
-  standing !== "member" || (invitation.kind === "organization" && invitation.role === "admin");
+/**
+ * As the callback reads it: the Owner, an Admin, or who the Invitation or a mapped group (ticket
+ * 05) makes an Admin.
+ */
+const requiresStrongFor = (standing: Standing, invitation: InvitationState, group?: SpaceRole) =>
+  standing !== "member" ||
+  (invitation.kind === "organization" && invitation.role === "admin") ||
+  group === "admin";
 
 /** One row of the spec's table: the same facts in each mode, and what each mode answers. */
 interface Row {
@@ -53,6 +58,8 @@ interface Row {
   readonly invitation: InvitationState;
   readonly standing?: Standing;
   readonly loginStrong?: boolean;
+  /** The Role a mapped Keycloak group of theirs gives (ticket 05); none when no group applies. */
+  readonly group?: SpaceRole;
   readonly open: AdmissionOutcome;
   readonly "invitation-only": AdmissionOutcome;
   readonly closed: AdmissionOutcome;
@@ -169,6 +176,59 @@ const TABLE: ReadonlyArray<Row> = [
     "invitation-only": refuse("invitation-only"),
     closed: refuse("registration-closed"),
   },
+  // Ticket 05: a mapped group is a permanent Invitation, but not where registration is closed.
+  {
+    name: "a new identity with a mapped group",
+    intent: "sign-in",
+    identity: unknown,
+    invitation: none,
+    group: "member",
+    open: createUser,
+    "invitation-only": createUser,
+    closed: refuse("registration-closed"),
+  },
+  {
+    name: "a new identity whose mapped group makes them an Admin, with a weak login",
+    intent: "sign-in",
+    identity: unknown,
+    invitation: none,
+    group: "admin",
+    open: refuse("strong-factor-required"),
+    "invitation-only": refuse("strong-factor-required"),
+    closed: refuse("registration-closed"),
+  },
+  {
+    name: "a new identity whose mapped group makes them an Admin, with a strong login",
+    intent: "sign-in",
+    identity: unknown,
+    invitation: none,
+    group: "admin",
+    loginStrong: true,
+    open: createUser,
+    "invitation-only": createUser,
+    closed: refuse("registration-closed"),
+  },
+  {
+    // The Invitation is accepted as it would be; the group's Membership comes with the User.
+    name: "a new identity with an Invitation and a mapped group",
+    intent: "invitation",
+    identity: unknown,
+    invitation: organization("member"),
+    group: "member",
+    open: createAndJoin,
+    "invitation-only": createAndJoin,
+    closed: refuse("registration-closed"),
+  },
+  {
+    name: "an active User with a mapped group signs in",
+    intent: "sign-in",
+    identity: active,
+    invitation: none,
+    group: "member",
+    open: enter,
+    "invitation-only": enter,
+    closed: enter,
+  },
   // Ticket 06: the Owner and Admins need a strong Keycloak sign-in; Members don't.
   {
     name: "the Owner signs in without a strong factor",
@@ -278,7 +338,8 @@ describe("KeycloakAdmission.decide", () => {
       intent: row.intent,
       identity: row.identity,
       invitation: row.invitation,
-      requiresStrong: requiresStrongFor(row.standing ?? "member", row.invitation),
+      mappedGroup: row.group !== undefined,
+      requiresStrong: requiresStrongFor(row.standing ?? "member", row.invitation, row.group),
       loginStrong: row.loginStrong ?? false,
     });
     assert.deepEqual(outcome, row[mode]);
@@ -294,33 +355,38 @@ describe("KeycloakAdmission.decide", () => {
           identity.kind === "unknown" ? ["member"] : ["owner", "admin", "member"];
         for (const standing of standings) {
           for (const loginStrong of [false, true]) {
-            const inputs: ReadonlyArray<AdmissionInput> = [
-              {
-                mode,
-                intent: "sign-in",
-                identity,
-                invitation: none,
-                requiresStrong: requiresStrongFor(standing, none),
-                loginStrong,
-              },
-              ...[
-                invalid,
-                organization("admin"),
-                organization("member"),
-                organization("guest"),
-              ].map((invitation): AdmissionInput => ({
-                mode,
-                intent: "invitation",
-                identity,
-                invitation,
-                requiresStrong: requiresStrongFor(standing, invitation),
-                loginStrong,
-              })),
-            ];
-            for (const input of inputs) {
-              const rule = ruleFor(input);
-              assert.isDefined(rule, JSON.stringify(input));
-              used.add(rule?.name ?? "");
+            for (const group of [undefined, "member", "admin"] as const) {
+              const mappedGroup = group !== undefined;
+              const inputs: ReadonlyArray<AdmissionInput> = [
+                {
+                  mode,
+                  intent: "sign-in",
+                  identity,
+                  invitation: none,
+                  mappedGroup,
+                  requiresStrong: requiresStrongFor(standing, none, group),
+                  loginStrong,
+                },
+                ...[
+                  invalid,
+                  organization("admin"),
+                  organization("member"),
+                  organization("guest"),
+                ].map((invitation): AdmissionInput => ({
+                  mode,
+                  intent: "invitation",
+                  identity,
+                  invitation,
+                  mappedGroup,
+                  requiresStrong: requiresStrongFor(standing, invitation, group),
+                  loginStrong,
+                })),
+              ];
+              for (const input of inputs) {
+                const rule = ruleFor(input);
+                assert.isDefined(rule, JSON.stringify(input));
+                used.add(rule?.name ?? "");
+              }
             }
           }
         }

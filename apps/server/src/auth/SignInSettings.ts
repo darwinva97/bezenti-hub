@@ -3,12 +3,17 @@
  * The client secret is write-only (`keycloak-client-secret`, read back only by `keycloakConfig`).
  * A strong-list change (ticket 06) ends the Owner's and Admins' sign-ins it makes weak, confirmed.
  */
-import type {
-  KeycloakCheckResult,
-  RegistrationMode,
-  SignInSettings as SignInSettingsView,
-  UpdateSignInSettingsRequest,
-  UserId,
+import {
+  type KeycloakCheckResult,
+  type KeycloakGroupMapping,
+  type MappableOrganization,
+  MAX_GROUP_LENGTH,
+  type RegistrationMode,
+  type SignInSettings as SignInSettingsView,
+  type SpaceId,
+  type SpaceRole,
+  type UpdateSignInSettingsRequest,
+  type UserId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -25,6 +30,7 @@ import * as ServerConfig from "../config.ts";
 import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as AccessPolicy from "./AccessPolicy.ts";
+import * as GroupSync from "./GroupSync.ts";
 import * as KeycloakAdmission from "./KeycloakAdmission.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
@@ -142,8 +148,33 @@ export class SignInSettings extends Context.Service<
      * when the flow starts.
      */
     readonly keycloakOffered: Effect.Effect<boolean, SignInSettingsStorageError>;
+    /**
+     * Internal (ticket 05): the Owner's group mappings as a sign-in applies them, each with
+     * whether it is enabled (the Owner is the Organization's Admin or Steward) and whether its
+     * Organization is archived. No door.
+     */
+    readonly groupMappings: Effect.Effect<
+      ReadonlyArray<GroupSync.GroupMapping>,
+      SignInSettingsStorageError
+    >;
   }
 >()("t3/auth/SignInSettings") {}
+
+/**
+ * The Owner may map a group into Organization `s` only as its Admin or Steward (ADR 0008). Steward
+ * is its creator; NULL counts as the Owner only because those are single-user-era Organizations
+ * (migration 138). plans-and-limits 02 moves this to `spaces.steward_user_id`.
+ */
+const OWNER_MAY_MAP = `(o.user_id IS NOT NULL AND (
+    s.created_by_user_id IS NULL OR s.created_by_user_id = o.user_id
+    OR EXISTS (
+      SELECT 1 FROM space_memberships AS sm
+      WHERE sm.space_id = s.space_id AND sm.user_id = o.user_id AND sm.role = 'admin'
+    )
+  ))`;
+
+const MAPPING_ELSEWHERE =
+  "You can map a group only into an Organization you're an Admin or the Steward of, and not an archived one.";
 
 interface Row {
   readonly registrationMode: RegistrationMode;
@@ -185,6 +216,9 @@ const settingsOf = (row: Row): Settings => ({
   strongAcr: listOf(row.strongAcr),
   strongAmr: listOf(row.strongAmr),
 });
+
+const mappingKey = (mapping: { readonly group: string; readonly spaceId: string }) =>
+  `${mapping.group}\u0000${mapping.spaceId}`;
 
 const sameList = (a: ReadonlyArray<string>, b: ReadonlyArray<string>) =>
   a.length === b.length && a.every((value, index) => value === b[index]);
@@ -263,12 +297,123 @@ const make = Effect.gen(function* () {
       Effect.mapError(storage),
     );
 
+  /** The mappings with their Organization's name, whether they apply and whether it is archived. */
+  const readMappings = sql<{
+    readonly group: string;
+    readonly spaceId: SpaceId;
+    readonly organizationName: string;
+    readonly role: SpaceRole;
+    readonly enabled: number;
+    readonly archived: number;
+  }>`
+    SELECT m.group_name AS "group", m.space_id AS "spaceId", s.name AS "organizationName",
+      m.role AS role, ${sql.literal(OWNER_MAY_MAP)} AS enabled,
+      s.archived_at IS NOT NULL AS archived
+    FROM keycloak_group_mappings AS m JOIN spaces AS s ON s.space_id = m.space_id
+    LEFT JOIN users AS o ON o.is_owner = 1
+    ORDER BY m.group_name, s.name COLLATE NOCASE, m.space_id
+  `.pipe(
+    Effect.mapError(storage),
+    Effect.map((rows) =>
+      rows.map((row): KeycloakGroupMapping => ({
+        group: row.group,
+        spaceId: row.spaceId,
+        organizationName: row.organizationName,
+        role: row.role,
+        enabled: row.enabled === 1,
+        archived: row.archived === 1,
+      })),
+    ),
+  );
+
+  /** Where a new mapping may point: the Organizations, not archived, the Owner may map into. */
+  const readMappable = sql<MappableOrganization>`
+    SELECT s.space_id AS "spaceId", s.name AS name
+    FROM spaces AS s LEFT JOIN users AS o ON o.is_owner = 1
+    WHERE s.kind = 'organization' AND s.archived_at IS NULL AND ${sql.literal(OWNER_MAY_MAP)}
+    ORDER BY s.name COLLATE NOCASE, s.space_id
+  `.pipe(Effect.mapError(storage));
+
+  /** The mappings a change asks for: groups trimmed, without a leading `/`, each pair once. */
+  const mappingsFrom = Effect.fn("SignInSettings.mappingsFrom")(function* (
+    mappings: UpdateSignInSettingsRequest["groupMappings"],
+  ) {
+    if (mappings === undefined) return undefined;
+    const seen = new Set<string>();
+    const kept: Array<{ group: string; spaceId: SpaceId; role: SpaceRole }> = [];
+    for (const mapping of mappings) {
+      const group = GroupSync.normalizeGroup(mapping.group.trim());
+      if (group === "") return yield* invalid("Enter the group of each mapping.");
+      if (hasControl(group)) {
+        return yield* invalid("A mapping's group has a character that can't be typed.");
+      }
+      if (group.length > MAX_GROUP_LENGTH) {
+        return yield* invalid(`A group name has at most ${MAX_GROUP_LENGTH} characters.`);
+      }
+      const key = mappingKey({ group, spaceId: mapping.spaceId });
+      if (seen.has(key)) {
+        return yield* invalid(`The group ${group} is mapped to the same Organization twice.`);
+      }
+      seen.add(key);
+      kept.push({ group, spaceId: mapping.spaceId, role: mapping.role });
+    }
+    return kept;
+  });
+
+  /**
+   * Inside the settings' transaction: a managed Membership in an Organization left without an
+   * enabled mapping becomes manual, its Role kept, so it never stays where nobody may change it.
+   * Archived Organizations are left as they are. Returns whose Memberships changed.
+   */
+  const releaseUnmapped = Effect.fn("SignInSettings.releaseUnmapped")(function* (
+    actor: UserId,
+    spaceIds: ReadonlyArray<SpaceId>,
+  ) {
+    const remaining = yield* readMappings;
+    const users: Array<UserId> = [];
+    for (const spaceId of new Set(spaceIds)) {
+      if (remaining.some((mapping) => mapping.spaceId === spaceId && mapping.enabled)) continue;
+      const managed = yield* sql<{
+        readonly userId: UserId;
+        readonly role: SpaceRole;
+        readonly group: string | null;
+      }>`
+        SELECT m.user_id AS "userId", m.role AS role, m.keycloak_group AS "group"
+        FROM space_memberships AS m JOIN spaces AS s ON s.space_id = m.space_id
+        WHERE m.space_id = ${spaceId} AND m.managed_by_keycloak = 1 AND s.archived_at IS NULL
+      `.pipe(Effect.mapError(storage));
+      for (const membership of managed) {
+        yield* spaces
+          .setKeycloakManaged({ spaceId, userId: membership.userId, keycloakGroup: null })
+          .pipe(Effect.mapError(storage));
+        yield* audit
+          .record({
+            actor: AuditLog.userActor(actor),
+            action: "membership.changeRole",
+            spaceId,
+            target: { kind: "user", id: membership.userId },
+            detail: {
+              from: membership.role,
+              to: membership.role,
+              managed: "manual",
+              ...(membership.group === null ? {} : { keycloakGroup: membership.group }),
+            },
+          })
+          .pipe(Effect.mapError(storage));
+        users.push(membership.userId);
+      }
+    }
+    return users;
+  });
+
   const viewOf = Effect.fn("SignInSettings.viewOf")(function* (row: Row) {
     const settings = settingsOf(row);
     // Whether a secret is saved is the store's answer, not the row's: a secret that could not be
     // stored after its row was saved (see `update`) reads as missing, never as saved.
     const secretSet = Option.isSome(yield* storedSecret);
     return {
+      groupMappings: yield* readMappings,
+      mappableOrganizations: yield* readMappable,
       registrationMode: settings.registrationMode,
       localSignInForMembers: settings.localSignInForMembers,
       keycloak: {
@@ -336,6 +481,35 @@ const make = Effect.gen(function* () {
           const groupsClaim = yield* textOf(request.groupsClaim, "Enter the groups claim.");
           const strongAcr = yield* listFrom(request.strongAcr, "acr");
           const strongAmr = yield* listFrom(request.strongAmr, "amr");
+          // Ticket 05: the whole list of mappings, against the saved one. A mapping kept as it is
+          // stays even if the Owner may no longer make it (it is disabled); a new one, or a new
+          // Role for one, must point where the Owner is an Admin or the Steward.
+          const nextMappings = yield* mappingsFrom(request.groupMappings);
+          let mappingsAdded: ReadonlyArray<{ group: string; spaceId: SpaceId; role: SpaceRole }> =
+            [];
+          let mappingsRemoved: ReadonlyArray<KeycloakGroupMapping> = [];
+          if (nextMappings !== undefined) {
+            const saved = yield* readMappings;
+            const savedByKey = new Map(saved.map((mapping) => [mappingKey(mapping), mapping]));
+            const nextByKey = new Map(
+              nextMappings.map((mapping) => [mappingKey(mapping), mapping]),
+            );
+            mappingsRemoved = saved.filter(
+              (mapping) => nextByKey.get(mappingKey(mapping))?.role !== mapping.role,
+            );
+            mappingsAdded = nextMappings.filter(
+              (mapping) => savedByKey.get(mappingKey(mapping))?.role !== mapping.role,
+            );
+            if (mappingsAdded.length > 0) {
+              const mappable = new Set(
+                (yield* readMappable).map((organization) => organization.spaceId),
+              );
+              if (mappingsAdded.some((mapping) => !mappable.has(mapping.spaceId))) {
+                return yield* invalid(MAPPING_ELSEWHERE);
+              }
+            }
+          }
+          const mappingsChanged = mappingsAdded.length > 0 || mappingsRemoved.length > 0;
           const secret =
             request.clientSecret === undefined ? undefined : Redacted.value(request.clientSecret);
           if (secret !== undefined) {
@@ -399,6 +573,7 @@ const make = Effect.gen(function* () {
             ...(next.clientId !== was.clientId ? ["clientId"] : []),
             ...(secret !== undefined ? ["clientSecret"] : []),
             ...(next.groupsClaim !== was.groupsClaim ? ["groupsClaim"] : []),
+            ...(mappingsChanged ? ["groupMappings"] : []),
             ...(!sameList(next.strongAcr, was.strongAcr) ? ["strongAcr"] : []),
             ...(!sameList(next.strongAmr, was.strongAmr) ? ["strongAmr"] : []),
           ];
@@ -463,6 +638,28 @@ const make = Effect.gen(function* () {
                     closes.push(done.afterCommit);
                   }
                 }
+                let released: ReadonlyArray<UserId> = [];
+                if (mappingsChanged) {
+                  for (const mapping of mappingsRemoved) {
+                    yield* sql`
+                      DELETE FROM keycloak_group_mappings
+                      WHERE group_name = ${mapping.group} AND space_id = ${mapping.spaceId}
+                    `;
+                  }
+                  for (const mapping of mappingsAdded) {
+                    yield* sql`
+                      INSERT INTO keycloak_group_mappings
+                        (group_name, space_id, role, created_at, created_by)
+                      VALUES (${mapping.group}, ${mapping.spaceId}, ${mapping.role}, ${now},
+                        ${actor})
+                    `;
+                  }
+                  released = yield* releaseUnmapped(
+                    actor,
+                    mappingsRemoved.map((mapping) => mapping.spaceId),
+                  );
+                }
+                if (released.length > 0) closes.push(spaces.membershipsChanged(released));
                 const close = Effect.all(closes, { discard: true });
                 yield* audit.record({
                   actor: AuditLog.userActor(actor),
@@ -475,6 +672,15 @@ const make = Effect.gen(function* () {
                     localSignInForMembers: next.localSignInForMembers,
                     issuer: next.issuer,
                     secretReplaced: secret !== undefined,
+                    ...(next.groupsClaim !== was.groupsClaim
+                      ? { groupsClaim: next.groupsClaim }
+                      : {}),
+                    ...(mappingsChanged
+                      ? {
+                          mappingsAdded: mappingsAdded.length,
+                          mappingsRemoved: mappingsRemoved.length,
+                        }
+                      : {}),
                     ...(listsChanged
                       ? {
                           strongAcr: next.strongAcr.join(" "),
@@ -549,7 +755,27 @@ const make = Effect.gen(function* () {
     Effect.withSpan("SignInSettings.keycloakOffered"),
   );
 
-  return SignInSettings.of({ read, update, check, keycloakConfig, keycloakOffered });
+  const groupMappings: SignInSettings["Service"]["groupMappings"] = readMappings.pipe(
+    Effect.map((mappings) =>
+      mappings.map((mapping): GroupSync.GroupMapping => ({
+        group: mapping.group,
+        spaceId: mapping.spaceId,
+        role: mapping.role,
+        enabled: mapping.enabled,
+        archived: mapping.archived,
+      })),
+    ),
+    Effect.withSpan("SignInSettings.groupMappings"),
+  );
+
+  return SignInSettings.of({
+    read,
+    update,
+    check,
+    keycloakConfig,
+    keycloakOffered,
+    groupMappings,
+  });
 });
 
 export const layer = Layer.effect(SignInSettings, make);

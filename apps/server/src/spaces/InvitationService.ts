@@ -249,6 +249,7 @@ const DENIED_REASONS: Record<AccessPolicy.DenyReason, string> = {
   "hub-machine": ADMINS_INVITE,
   sandbox: ADMINS_INVITE,
   "other-space": ADMINS_INVITE,
+  "managed-by-keycloak": ADMINS_INVITE,
 };
 
 const deniedReason = (reason: string) =>

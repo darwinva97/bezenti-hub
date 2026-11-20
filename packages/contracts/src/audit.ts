@@ -17,6 +17,8 @@ export const AuditAction = Schema.Literals([
   "membership.remove",
   "membership.leave",
   "membership.resetLink",
+  // Keycloak sign-in, ticket 05: a mapped Keycloak group gave someone a Membership.
+  "membership.add",
   "installationPermission.grant",
   "installationPermission.revoke",
   "user.disable",
@@ -135,10 +137,16 @@ export const AUDIT_DETAIL_KEYS = {
   "invitation.create": ["role"],
   "invitation.accept": ["role", "newUser"],
   "invitation.revoke": ["role"],
-  "membership.changeRole": ["from", "to"],
-  "membership.remove": [],
+  /**
+   * Ticket 05: `keycloakGroup` when a mapped group decided it (actor `system`), and `managed` when
+   * it moved between `keycloak` and `manual` (a group took over a manual one, or its mapping went).
+   */
+  "membership.changeRole": ["from", "to", "keycloakGroup", "managed"],
+  /** `keycloakGroup`: the group whose leaving took it (ticket 05, actor `system`). */
+  "membership.remove": ["keycloakGroup"],
   "membership.leave": [],
   "membership.resetLink": [],
+  "membership.add": ["role", "keycloakGroup"],
   "installationPermission.grant": ["permission"],
   "installationPermission.revoke": ["permission"],
   "user.disable": ["from"],
@@ -160,6 +168,9 @@ export const AUDIT_DETAIL_KEYS = {
     "strongAcr",
     "strongAmr",
     "loginsEnded",
+    "groupsClaim",
+    "mappingsAdded",
+    "mappingsRemoved",
   ],
   /**
    * The realm the identity comes from and whether the User's own passkeys, password and TOTP went

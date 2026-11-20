@@ -593,6 +593,39 @@ link records its creator and stops working once that User may no longer create
 guest links on its Thread (checked on every guest request), which covers removal
 and demotion without a write to the Thread.
 
+#### Memberships a Keycloak group manages
+
+The Owner maps Keycloak groups to an Organization and a Role
+(`keycloak_group_mappings`, edited as a whole list in the sign-in settings). Every
+Keycloak sign-in and link runs the pure
+[`planGroupSync`](../../apps/server/src/auth/GroupSync.ts) over the User's
+Memberships, the groups in the ID token's claim the Owner named (absent means
+none; a leading `/` is ignored on both sides) and the mappings. Per mapped
+Organization the highest matching Role wins: it adds a managed Membership, moves a
+managed one's Role, or takes a manual one over. With no matching group, a managed
+Membership goes and a manual one stays. Archived Organizations are left alone.
+`MembershipService.applyGroupSync` writes the changes in the sign-in's own
+transaction, with one audit entry each (actor `system`, detail `keycloakGroup`).
+A managed Membership (`space_memberships.managed_by_keycloak`) is Deny for Role
+changes, removal and leaving, for everyone and the Owner too. Keycloak is the
+source of truth, so a group can demote or remove an Organization's last Admin.
+
+A group that makes someone an Admin is a promotion: their weak Keycloak access
+ends in the same transaction. A weak sign-in carrying such a group is still
+refused, but its mapping is committed first. A link refuses before its
+transaction, since the identity is not the User's until it commits. A new identity with a
+mapped group is admitted under «invitation only» (a permanent Invitation), never
+under «closed». The Owner holds no Memberships and is skipped.
+
+A mapping may point only into an Organization whose Admin or Steward the Owner is
+(today the creator, with a missing creator counting as the Owner for single-user-era
+Organizations), so a group never puts the Owner into someone else's Organization. A
+saved mapping that stops qualifying reads `enabled: false`, applies nothing and
+shows a warning. When an Organization is left with no enabled mapping, its managed
+Memberships turn manual with their Role kept: immediately when the Owner removes
+the mapping, otherwise at the next sign-in. Deleting an Organization deletes its
+mappings (foreign key).
+
 ### Disabled and removed Users
 
 [InstallationUserService](../../apps/server/src/spaces/InstallationUserService.ts)

@@ -39,7 +39,10 @@ import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as Users from "../persistence/Users.ts";
 import { crossesFromPreviewOrigin, readHubCookie } from "../preview/PreviewOrigin.ts";
 import * as InvitationService from "../spaces/InvitationService.ts";
+import * as MembershipService from "../spaces/MembershipService.ts";
+import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as AccountCredentials from "./AccountCredentials.ts";
+import * as GroupSync from "./GroupSync.ts";
 import { clientBucketOf, isLoopbackClientAddress } from "./clientConnection.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as KeycloakAdmission from "./KeycloakAdmission.ts";
@@ -222,16 +225,6 @@ const withProof = (path: string, proofId: string) => {
   return `${url.pathname}${url.search}${url.hash}`;
 };
 
-/**
- * Ticket 05's seam: the group mapping (`planGroupSync`) runs here, before who needs a strong
- * factor is read, and commits on its own, so a refusal for a weak sign-in keeps the memberships it
- * changed (they reflect what Keycloak says). Until ticket 05 there are no mappings to apply.
- */
-const syncGroupsBeforeAdmission = (
-  _identity: KeycloakAdmission.IdentityState,
-  _claims: KeycloakClient.IdTokenClaims,
-): Effect.Effect<void, CallbackRefusal> => Effect.void;
-
 /** Internal: a refusal and whether it counts toward the client's sign-in back-off. */
 class CallbackRefusal extends Schema.TaggedError<CallbackRefusal>()("CallbackRefusal", {
   failure: Schema.String,
@@ -277,6 +270,8 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
   const audit = yield* AuditLog.AuditLog;
   const invitations = yield* InvitationService.InvitationService;
   const stepUpProofs = yield* KeycloakStepUpProofs.KeycloakStepUpProofs;
+  const memberships = yield* MembershipService.MembershipService;
+  const spaceDirectory = yield* SpaceDirectory.SpaceDirectory;
   const sql = yield* SqlClient.SqlClient;
   const random = yield* SecureRandom.SecureRandom;
   const digester = yield* Digest.Digest;
@@ -623,6 +618,39 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     return loginId;
   });
 
+  /**
+   * Ticket 05: what the token's groups change for a User (`planGroupSync`), read inside the
+   * caller's transaction. `undefined` is a new identity, with no Memberships yet. The Owner
+   * belongs to no Organization, so no group puts them in one.
+   */
+  const groupPlan = Effect.fn("KeycloakSignIn.groupPlan")(function* (
+    user: { readonly id: UserId; readonly isOwner: boolean } | undefined,
+    claims: KeycloakClient.IdTokenClaims,
+    groupsClaim: string,
+  ) {
+    if (user?.isOwner === true) return [];
+    const mappings = yield* settings.groupMappings.pipe(Effect.mapError(storage("mappings")));
+    const current =
+      user === undefined
+        ? []
+        : yield* spaceDirectory
+            .groupMembershipsOf(user.id)
+            .pipe(Effect.mapError(storage("group memberships")));
+    return GroupSync.planGroupSync({
+      memberships: current,
+      groups: GroupSync.groupsOf(claims, groupsClaim),
+      mappings,
+    });
+  });
+
+  /** Applies a plan in the caller's transaction; `afterCommit` once it commits. */
+  const applyGroups = (userId: UserId, changes: ReadonlyArray<GroupSync.GroupChange>) =>
+    changes.length === 0
+      ? Effect.succeed({ afterCommit: Effect.void })
+      : memberships
+          .applyGroupSync({ userId, changes })
+          .pipe(Effect.mapError(storage("apply groups")));
+
   /** An existing, active User's sign-in: fresh labels, a new login and its session. */
   const signIn = Effect.fn("KeycloakSignIn.signIn")(function* (
     request: HttpServerRequest.HttpServerRequest,
@@ -691,30 +719,39 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     return { user, session };
   });
 
-  /** Open registration: the new User alone, audited `user.register`. */
-  const register = (
+  /**
+   * A new User without an Invitation, audited `user.register`: by open registration, or by a
+   * mapped group (ticket 05), whose Memberships come with the User in the same transaction.
+   */
+  const register = Effect.fn("KeycloakSignIn.register")(function* (
     request: HttpServerRequest.HttpServerRequest,
     flow: PendingFlow,
     claims: KeycloakClient.IdTokenClaims,
     tokens: KeycloakClient.TokenSet,
     strength: Strength,
-  ) =>
-    sql
+    groupsClaim: string,
+  ) {
+    const { session, afterCommit } = yield* sql
       .withTransaction(
         Effect.gen(function* () {
           const { user, session } = yield* newUser(request, flow, claims, tokens, strength);
+          const plan = yield* groupPlan({ id: user.id, isOwner: false }, claims, groupsClaim);
+          const applied = yield* applyGroups(user.id, plan);
           yield* audit
             .record({
               actor: AuditLog.userActor(user.id),
               action: "user.register",
               target: { kind: "user", id: user.id, name: user.displayName },
-              detail: { via: "open", issuer: flow.issuer },
+              detail: { via: GroupSync.anyAdded(plan) ? "group" : "open", issuer: flow.issuer },
             })
             .pipe(Effect.mapError(storage("audit")));
-          return session;
+          return { session, afterCommit: applied.afterCommit };
         }),
       )
       .pipe(Effect.catchTags({ SqlError: () => Effect.fail(refuse("failed", "transaction")) }));
+    yield* afterCommit;
+    return session;
+  });
 
   /** The token of an `invitation` flow, re-read now: it may have expired or been revoked. */
   const invitationNow = (
@@ -767,6 +804,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     tokens: KeycloakClient.TokenSet,
     clientIp: string | undefined,
     strength: Strength,
+    groupsClaim: string,
   ) {
     const found = yield* identities
       .findBySubject(flow.issuer, claims.sub)
@@ -783,51 +821,94 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           : { kind: "inactive", userId, removed: inactive.removed };
     }
     const invitation = yield* invitationNow(flow, clientIp);
-    yield* syncGroupsBeforeAdmission(identity, claims);
-    // Read after the mapping: an Owner or Admin now, or one this Invitation would make.
-    const requiresStrong =
-      (identity.kind === "active" &&
-        (yield* userDirectory
-          .requiresStrongSignIn(identity.userId)
-          .pipe(Effect.mapError(storage("requires strong"))))) ||
-      (invitation.kind === "organization" && invitation.role === "admin");
+    const invitationMakesAdmin = invitation.kind === "organization" && invitation.role === "admin";
+    const intent = flow.intent === "invitation" ? "invitation" : "sign-in";
+    const token = flow.invitationToken === undefined ? "" : Redacted.value(flow.invitationToken);
+
+    if (identity.kind === "active") {
+      const { userId } = identity;
+      const record = yield* users.getById(userId).pipe(Effect.mapError(storage("read user")));
+      if (Option.isNone(record)) return yield* refuse("unknown", "identity without user");
+      // Ticket 05: mapping, strong-factor read, decision and session share one transaction. A
+      // weak sign-in's refusal still commits the mapping (spec «Factor fuerte»), its promotion
+      // having ended their weak access, and is returned after. `link` refuses before instead.
+      const done = yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const plan = yield* groupPlan(
+              { id: userId, isOwner: record.value.isOwner },
+              claims,
+              groupsClaim,
+            );
+            const applied = yield* applyGroups(userId, plan);
+            // Read after the mapping: an Owner or Admin now, or one this Invitation would make.
+            const requiresStrong =
+              (yield* userDirectory
+                .requiresStrongSignIn(userId)
+                .pipe(Effect.mapError(storage("requires strong")))) || invitationMakesAdmin;
+            const outcome = KeycloakAdmission.decide({
+              mode,
+              intent,
+              identity,
+              invitation,
+              mappedGroup: GroupSync.anyAdded(plan),
+              requiresStrong,
+              loginStrong: strength.strong,
+            });
+            if (outcome.kind !== "enter" && outcome.kind !== "enter-and-join") {
+              return {
+                refusal: outcome.kind === "refuse" ? outcome.reason : ("failed" as const),
+                afterCommit: applied.afterCommit,
+              };
+            }
+            const session = yield* signIn(request, flow, userId, claims, tokens, strength);
+            return { outcome: outcome.kind, session, afterCommit: applied.afterCommit };
+          }),
+        )
+        .pipe(Effect.catchTags({ SqlError: () => Effect.fail(refuse("failed", "transaction")) }));
+      // Once committed: their connections hear the Memberships, ended sessions lose sockets.
+      yield* done.afterCommit;
+      if ("refusal" in done) return yield* refuse(done.refusal, "admission");
+      const session = done.session;
+      if (done.outcome === "enter") return { session, redirectTo: flow.returnTo };
+      // `enter-and-join`: signed in whatever the Invitation says, as they are this Hub's User
+      // already. A link found dead just now is the refusal `join` would give, counted once.
+      const joined =
+        invitation.kind === "invalid"
+          ? ("invitation-invalid" as const)
+          : yield* invitations.join(userId, token, clientIp).pipe(
+              Effect.as(undefined),
+              Effect.catch((error) => Effect.succeed(joinRefusal(error))),
+            );
+      return {
+        session,
+        redirectTo: joined === undefined ? flow.returnTo : withResult(INVITE_PATH, joined),
+      };
+    }
+
+    // A new identity: what its groups would give, planned on no Memberships, admits it (a mapped
+    // group is a permanent Invitation) and says whether it needs a strong factor. Nothing about a
+    // refused one is kept.
+    const plan =
+      identity.kind === "unknown" ? yield* groupPlan(undefined, claims, groupsClaim) : [];
     const outcome = KeycloakAdmission.decide({
       mode,
-      intent: flow.intent === "invitation" ? "invitation" : "sign-in",
+      intent,
       identity,
       invitation,
-      requiresStrong,
+      mappedGroup: GroupSync.anyAdded(plan),
+      requiresStrong: invitationMakesAdmin || GroupSync.grantsAdmin(plan),
       loginStrong: strength.strong,
     });
-    const token = flow.invitationToken === undefined ? "" : Redacted.value(flow.invitationToken);
     switch (outcome.kind) {
       case "refuse":
         // Nothing about a refused new identity is kept; the Invitation is untouched.
         return yield* refuse(outcome.reason, "admission");
-      case "enter": {
-        if (identity.kind !== "active") return yield* refuse("failed", "admission");
-        const session = yield* signIn(request, flow, identity.userId, claims, tokens, strength);
-        return { session, redirectTo: flow.returnTo };
-      }
-      case "enter-and-join": {
-        if (identity.kind !== "active") return yield* refuse("failed", "admission");
-        // Signed in whatever the Invitation says: they are this Hub's User already.
-        const session = yield* signIn(request, flow, identity.userId, claims, tokens, strength);
-        // A link found dead just now is the refusal `join` would give, counted once.
-        const joined =
-          invitation.kind === "invalid"
-            ? ("invitation-invalid" as const)
-            : yield* invitations.join(identity.userId, token, clientIp).pipe(
-                Effect.as(undefined),
-                Effect.catch((error) => Effect.succeed(joinRefusal(error))),
-              );
-        return {
-          session,
-          redirectTo: joined === undefined ? flow.returnTo : withResult(INVITE_PATH, joined),
-        };
-      }
+      case "enter":
+      case "enter-and-join":
+        return yield* refuse("failed", "admission");
       case "create-user": {
-        const session = yield* register(request, flow, claims, tokens, strength);
+        const session = yield* register(request, flow, claims, tokens, strength, groupsClaim);
         return { session, redirectTo: flow.returnTo };
       }
       case "create-user-and-join": {
@@ -859,7 +940,18 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
                       Effect.fail(refuse("failed", "invitation storage")),
                   }),
                 );
-              return { session: created.session, afterCommit: redeemed.afterCommit };
+              // Ticket 05: the groups, planned on the Membership just accepted, so where a group
+              // maps into the same Organization it takes the Invitation's over.
+              const plan = yield* groupPlan(
+                { id: created.user.id, isOwner: false },
+                claims,
+                groupsClaim,
+              );
+              const applied = yield* applyGroups(created.user.id, plan);
+              return {
+                session: created.session,
+                afterCommit: Effect.andThen(redeemed.afterCommit, applied.afterCommit),
+              };
             }),
           )
           .pipe(Effect.catchTags({ SqlError: () => Effect.fail(refuse("failed", "transaction")) }));
@@ -876,16 +968,29 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     claims: KeycloakClient.IdTokenClaims,
     tokens: KeycloakClient.TokenSet,
     strength: Strength,
+    groupsClaim: string,
   ) {
     const { userId } = linkTo;
-    // The Owner and Admins sign in with a strong factor from now on: a weak one links nothing.
-    if (
-      !strength.strong &&
-      (yield* userDirectory
-        .requiresStrongSignIn(userId)
-        .pipe(Effect.mapError(storage("requires strong"))))
-    ) {
-      return yield* refuse("strong-factor-required", "link without strong factor");
+    // The Owner and Admins sign in with a strong factor from now on: a weak one links nothing,
+    // nor does one whose groups (ticket 05) would make them an Admin. Unlike a sign-in, which
+    // commits the mapping and then refuses (`admit`), a link refuses before its transaction:
+    // until it commits the identity is not this User's, so its groups say nothing about them.
+    if (!strength.strong) {
+      const owner = yield* users.getById(userId).pipe(Effect.mapError(storage("read user")));
+      const needsStrong =
+        (yield* userDirectory
+          .requiresStrongSignIn(userId)
+          .pipe(Effect.mapError(storage("requires strong")))) ||
+        GroupSync.grantsAdmin(
+          yield* groupPlan(
+            { id: userId, isOwner: Option.isSome(owner) && owner.value.isOwner },
+            claims,
+            groupsClaim,
+          ),
+        );
+      if (needsStrong) {
+        return yield* refuse("strong-factor-required", "link without strong factor");
+      }
     }
     const now = DateTime.formatIso(yield* DateTime.now);
     const done = yield* sql
@@ -928,6 +1033,12 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           const closeSockets = yield* sessions
             .revokeAllForUserDeferred(userId)
             .pipe(Effect.mapError(storage("revoke sessions")));
+          // Ticket 05: a link is a Keycloak sign-in, so its groups apply, read again here.
+          const plan = yield* groupPlan({ id: userId, isOwner }, claims, groupsClaim);
+          if (!strength.strong && GroupSync.grantsAdmin(plan)) {
+            return yield* refuse("strong-factor-required", "link without strong factor");
+          }
+          const applied = yield* applyGroups(userId, plan);
           const loginId = yield* newLogin(userId, flow, claims, tokens, now, strength);
           const session = yield* issueSession(
             request,
@@ -942,7 +1053,12 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
               detail: { issuer: flow.issuer, credentialsRemoved: !isOwner },
             })
             .pipe(Effect.mapError(storage("audit")));
-          return { session, afterCommit: Effect.all([closeSockets, closeLinks]) };
+          return {
+            session,
+            afterCommit: Effect.all([closeSockets, closeLinks, applied.afterCommit], {
+              discard: true,
+            }),
+          };
         }),
       )
       .pipe(Effect.catchTags({ SqlError: () => Effect.fail(refuse("failed", "transaction")) }));
@@ -1094,8 +1210,17 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
                 tokens,
                 clientIp,
                 strength,
+                enabled.value.groupsClaim,
               )
-            : yield* link(request, flow, flow.link, claims, tokens, strength);
+            : yield* link(
+                request,
+                flow,
+                flow.link,
+                claims,
+                tokens,
+                strength,
+                enabled.value.groupsClaim,
+              );
         return {
           redirectTo,
           session: { token: session.sessionToken, expiresAt: session.response.expiresAt },

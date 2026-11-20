@@ -64,14 +64,26 @@ const archivedGracesProject = owned("project", "grace", { archived: true });
 const membership = (
   userId: string,
   role: SpaceRole,
-  options: { readonly nextRole?: SpaceRole; readonly space?: AccessPolicy.SpaceResource } = {},
+  options: {
+    readonly nextRole?: SpaceRole;
+    readonly space?: AccessPolicy.SpaceResource;
+    readonly managedByKeycloak?: boolean;
+  } = {},
 ): AccessPolicy.MembershipResource => ({
   kind: "membership",
   space: options.space ?? organization,
   userId: UserId.make(userId),
   role,
+  managedByKeycloak: options.managedByKeycloak ?? false,
   ...(options.nextRole === undefined ? {} : { nextRole: options.nextRole }),
 });
+// Keycloak sign-in, ticket 05: Memberships a mapped Keycloak group manages.
+const managedGrace = (nextRole?: SpaceRole) =>
+  membership("grace", "member", {
+    managedByKeycloak: true,
+    ...(nextRole === undefined ? {} : { nextRole }),
+  });
+const managedAda = membership("ada", "admin", { managedByKeycloak: true });
 // Grace the Member, Linus the Guest and Hedy, a second Admin, as targets.
 const grace = (nextRole?: SpaceRole | { readonly space: AccessPolicy.SpaceResource }) =>
   typeof nextRole === "object"
@@ -558,6 +570,49 @@ const rows: ReadonlyArray<Row> = [
     "membership.resetLink",
     linusAs(),
     deny("role-not-allowed"),
+  ],
+  // Ticket 05: a Membership a Keycloak group manages changes only in Keycloak, for everyone.
+  [
+    "Admin cannot change a managed Member's Role",
+    admin,
+    "membership.changeRole",
+    managedGrace("guest"),
+    deny("managed-by-keycloak"),
+  ],
+  [
+    "Owner cannot change a managed Member's Role",
+    owner,
+    "membership.changeRole",
+    managedGrace("admin"),
+    deny("managed-by-keycloak"),
+  ],
+  [
+    "Admin cannot remove a managed Member",
+    admin,
+    "membership.remove",
+    managedGrace(),
+    deny("managed-by-keycloak"),
+  ],
+  [
+    "Owner cannot remove a managed Member",
+    owner,
+    "membership.remove",
+    managedGrace(),
+    deny("managed-by-keycloak"),
+  ],
+  [
+    "a managed Admin cannot leave",
+    admin,
+    "membership.leave",
+    managedAda,
+    deny("managed-by-keycloak"),
+  ],
+  [
+    "Owner still issues a managed Member's reset link",
+    owner,
+    "membership.resetLink",
+    managedGrace(),
+    allow,
   ],
   [
     "Memberships exist only in Organizations",

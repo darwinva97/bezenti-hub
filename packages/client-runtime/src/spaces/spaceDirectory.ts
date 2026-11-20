@@ -118,6 +118,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "membership.remove": "Removed a Member",
   "membership.leave": "Left the Organization",
   "membership.resetLink": "Issued a reset link",
+  "membership.add": "Added through a Keycloak group",
   "installationPermission.grant": "Granted an Installation permission",
   "installationPermission.revoke": "Revoked an Installation permission",
   "user.disable": "Disabled a User",

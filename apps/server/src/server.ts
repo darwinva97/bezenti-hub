@@ -568,6 +568,8 @@ const layerAuth = Layer.mergeAll(
   // so a link's back-off is one.
   KeycloakSignIn.layer.pipe(
     Layer.provide(InvitationService.layer),
+    // Group mappings (ticket 05) apply through MembershipService, in the sign-in's transaction.
+    Layer.provide(MembershipService.layer),
     Layer.provideMerge(SignInSettings.layer.pipe(Layer.provide(AuditLog.layer))),
     Layer.provideMerge(KeycloakClient.layerLive),
     Layer.provide(AuditLog.layer),

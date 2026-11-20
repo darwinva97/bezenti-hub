@@ -5,7 +5,8 @@
  */
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime } from "./baseSchemas.ts";
+import { IsoDateTime, SpaceId } from "./baseSchemas.ts";
+import { SpaceRole } from "./spaces.ts";
 import { AuthReauth } from "./userAccounts.ts";
 
 /**
@@ -49,11 +50,54 @@ export const KeycloakSettings = Schema.Struct({
 });
 export type KeycloakSettings = typeof KeycloakSettings.Type;
 
+/** The longest Keycloak group name a mapping names (a full path such as `/acme/dev` included). */
+export const MAX_GROUP_LENGTH = 255;
+/** The most group mappings the Owner keeps. */
+const MAX_GROUP_MAPPINGS = 200;
+
+/**
+ * A Keycloak group mapped to an Organization and a Role (ticket 05): who signs in with the group
+ * is in the Organization with that Role, managed by Keycloak. `group` is kept without a leading
+ * `/`, and matches the token's group with or without one.
+ */
+export const KeycloakGroupMappingInput = Schema.Struct({
+  group: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_GROUP_LENGTH + 1)),
+  spaceId: SpaceId,
+  role: SpaceRole,
+});
+export type KeycloakGroupMappingInput = typeof KeycloakGroupMappingInput.Type;
+
+export const KeycloakGroupMapping = Schema.Struct({
+  group: Schema.String,
+  spaceId: SpaceId,
+  organizationName: Schema.String,
+  role: SpaceRole,
+  /**
+   * Whether the sign-in applies it: only while the Owner is an Admin or the Steward of the
+   * Organization, so a group never puts the Owner into someone else's Organization (ADR 0008).
+   * A disabled one is shown with a warning and applies nothing.
+   */
+  enabled: Schema.Boolean,
+  /** Archived Organizations are left as they are until restored. */
+  archived: Schema.Boolean,
+});
+export type KeycloakGroupMapping = typeof KeycloakGroupMapping.Type;
+
+/** An Organization a new mapping may name: not archived, and the Owner its Admin or Steward. */
+export const MappableOrganization = Schema.Struct({
+  spaceId: SpaceId,
+  name: Schema.String,
+});
+export type MappableOrganization = typeof MappableOrganization.Type;
+
 export const SignInSettings = Schema.Struct({
   registrationMode: RegistrationMode,
   /** Whether a User other than the Owner may sign in with a passkey or password (ticket 08). */
   localSignInForMembers: Schema.Boolean,
   keycloak: KeycloakSettings,
+  /** Keycloak groups mapped to Organizations and Roles (ticket 05). */
+  groupMappings: Schema.Array(KeycloakGroupMapping),
+  mappableOrganizations: Schema.Array(MappableOrganization),
   /** `T3CODE_PUBLIC_URL`'s origin: the base of the URLs to give Keycloak; else the page's own. */
   publicOrigin: Schema.NullOr(Schema.String),
   updatedAt: Schema.NullOr(IsoDateTime),
@@ -77,6 +121,10 @@ export const UpdateSignInSettingsRequest = Schema.Struct({
   groupsClaim: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_CLAIM_LENGTH))),
   strongAcr: Schema.optionalKey(StrongValues),
   strongAmr: Schema.optionalKey(StrongValues),
+  /** The whole list of group mappings (ticket 05); left out keeps the saved one. */
+  groupMappings: Schema.optionalKey(
+    Schema.Array(KeycloakGroupMappingInput).check(Schema.isMaxLength(MAX_GROUP_MAPPINGS)),
+  ),
   /**
    * A change to the strong-factor lists ends the Keycloak sign-ins of the Owner and Admins that
    * stop being strong (ticket 06). Without this, a change that would end any is refused (409) with

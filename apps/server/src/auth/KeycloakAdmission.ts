@@ -32,6 +32,11 @@ export interface AdmissionInput {
   readonly identity: IdentityState;
   readonly invitation: InvitationState;
   /**
+   * Whether a mapped Keycloak group of theirs gives them a Membership (ticket 05): for a new
+   * identity, a permanent Invitation the Owner set up on purpose.
+   */
+  readonly mappedGroup: boolean;
+  /**
    * Whether the result needs a strong factor: the identity's User is the Owner or an Admin (after
    * the group mapping, ticket 05), or the Invitation makes them one.
    */
@@ -91,9 +96,13 @@ export const RULES: ReadonlyArray<AdmissionRule> = [
     outcome: () => refuse("registration-closed"),
   },
   {
+    // A mapped group (ticket 05) is a permanent Invitation: see its row below.
     name: "new identity, invitation only",
     when: (input) =>
-      isNew(input) && input.invitation.kind === "none" && input.mode === "invitation-only",
+      isNew(input) &&
+      input.invitation.kind === "none" &&
+      input.mode === "invitation-only" &&
+      !input.mappedGroup,
     outcome: () => refuse("invitation-only"),
   },
   {
@@ -127,6 +136,17 @@ export const RULES: ReadonlyArray<AdmissionRule> = [
   {
     name: "new identity, open registration",
     when: (input) => isNew(input) && input.invitation.kind === "none" && input.mode === "open",
+    outcome: () => ({ kind: "create-user" }),
+  },
+  {
+    // Ticket 05: the Owner mapped one of their groups on purpose, so «invitation only» admits
+    // them, with the group's Memberships. Where registration is closed it does not (above).
+    name: "new identity, mapped group, invitation only",
+    when: (input) =>
+      isNew(input) &&
+      input.invitation.kind === "none" &&
+      input.mappedGroup &&
+      input.mode === "invitation-only",
     outcome: () => ({ kind: "create-user" }),
   },
 ];

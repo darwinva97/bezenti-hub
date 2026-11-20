@@ -42,6 +42,11 @@ export interface MembershipResource {
   readonly space: SpaceResource;
   readonly userId: UserId;
   readonly role: SpaceRole;
+  /**
+   * A mapped Keycloak group gives and takes this Membership (Keycloak sign-in, ticket 05): its
+   * Role, its removal and leaving it are Keycloak's, so nobody changes them in the Hub.
+   */
+  readonly managedByKeycloak: boolean;
   /** For `membership.changeRole`: the Role asked for. */
   readonly nextRole?: SpaceRole;
 }
@@ -398,6 +403,11 @@ export type DenyReason =
   | "sandbox"
   /** A Sandbox runs only the Threads of its own Space. */
   | "other-space"
+  /**
+   * A Membership a Keycloak group manages (ticket 05): the next sign-in would undo any change, so
+   * the Owner changes the mapping or the group instead.
+   */
+  | "managed-by-keycloak"
   | "wrong-resource";
 
 export type Decision =
@@ -622,6 +632,13 @@ const decideOwned = (principal: Principal, action: Action, item: OwnedResource):
   }
 };
 
+/** What nobody does to a Membership a Keycloak group manages (ticket 05). */
+const MANAGED_MEMBERSHIP_ACTIONS: ReadonlySet<Action> = new Set([
+  "membership.changeRole",
+  "membership.remove",
+  "membership.leave",
+]);
+
 /**
  * Rules on someone's Membership. Anyone leaves; Admins change and remove Members and Guests, but
  * never touch an Admin or make one, and issue no reset links: only the Owner does.
@@ -633,6 +650,10 @@ const decideMembership = (
 ): Decision => {
   const { space } = target;
   if (space.kind !== "organization") return deny("wrong-resource");
+  // Keycloak decides a managed Membership, the Owner's hand included; a reset link is no change.
+  if (target.managedByKeycloak && MANAGED_MEMBERSHIP_ACTIONS.has(action)) {
+    return deny("managed-by-keycloak");
+  }
   if (action === "membership.leave") {
     if (target.userId !== principal.userId) return deny("not-yours");
     return principal.roles.has(space.id) ? allow : deny("not-a-member");

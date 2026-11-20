@@ -198,6 +198,8 @@ interface PendingCode {
   readonly access: AuthMcpClientAccess;
   /** Who approved it, and so whom the issued client acts as. */
   readonly userId: UserId | undefined;
+  /** The approving session's (or code's) Keycloak sign-in (ticket 07): the client ends with it. */
+  readonly identityLoginId: string | undefined;
   readonly expiresAtMs: number;
 }
 
@@ -206,6 +208,8 @@ export interface ApprovingSession {
   readonly csrfToken: string;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly userId: UserId | undefined;
+  /** Ticket 07: the session's Keycloak sign-in, which the approved client inherits. */
+  readonly identityLoginId?: string | undefined;
 }
 
 export type ApprovalDecision = Exclude<AuthMcpApprovalDecision, { readonly _tag: "deny" }>;
@@ -434,6 +438,7 @@ const make = Effect.gen(function* () {
                 csrfToken: token,
                 scopes: session.scopes,
                 userId: session.userId,
+                identityLoginId: session.identityLoginId,
               })),
             )
           : Effect.undefined,
@@ -464,6 +469,7 @@ const make = Effect.gen(function* () {
     authorization: AuthorizationRequest,
     access: AuthMcpClientAccess,
     userId: UserId | undefined,
+    identityLoginId: string | undefined,
   ) {
     const now = yield* Clock.currentTimeMillis;
     const code = Buffer.from(yield* random.randomBytes(32)).toString("base64url");
@@ -477,6 +483,7 @@ const make = Effect.gen(function* () {
         resource: authorization.resource,
         access,
         userId,
+        identityLoginId,
         expiresAtMs: now + AUTHORIZATION_CODE_TTL_MS,
       });
       return next;
@@ -526,6 +533,7 @@ const make = Effect.gen(function* () {
       });
     // The client acts as whoever approved it: the signed-in User, or the User a code was issued to.
     let approver: UserId | undefined;
+    let identityLoginId: string | undefined;
     if (decision._tag === "pairing-code") {
       // A signed-in browser approves as its User, so a code may only be that User's. Spending
       // the code and recording the approval commit together: a failed entry leaves the code.
@@ -552,6 +560,7 @@ const make = Effect.gen(function* () {
           Effect.catchTags({ SqlError: notRecorded }),
         );
       approver = granted.userId;
+      identityLoginId = granted.identityLoginId;
     } else {
       const session = yield* approvingBrowserSession(input.request, input.authorization);
       if (
@@ -567,11 +576,12 @@ const make = Effect.gen(function* () {
         });
       }
       approver = session.userId;
+      identityLoginId = session.identityLoginId;
       yield* requireNamed(approver);
       // Recorded before the code exists: an approval the log missed never signs anyone in.
       yield* recordApproval(approver).pipe(Effect.catch(notRecorded));
     }
-    const code = yield* mintCode(input.authorization, decision.access, approver);
+    const code = yield* mintCode(input.authorization, decision.access, approver, identityLoginId);
     return redirectWith(input.authorization.redirectUri, {
       code,
       state: input.authorization.state,
@@ -630,6 +640,9 @@ const make = Effect.gen(function* () {
           label: pending.clientName,
           access: pending.access,
           ...(pending.userId === undefined ? {} : { userId: pending.userId }),
+          ...(pending.identityLoginId === undefined
+            ? {}
+            : { identityLoginId: pending.identityLoginId }),
           client: deriveAuthClientMetadata({ request }),
         })
         .pipe(

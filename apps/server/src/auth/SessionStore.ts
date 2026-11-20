@@ -17,6 +17,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
@@ -64,6 +65,8 @@ export interface VerifiedSession {
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
   readonly runtimeModeCeiling?: RuntimeMode;
+  /** The Keycloak sign-in the session comes from, directly or inherited (ticket 07). */
+  readonly identityLoginId?: string;
 }
 
 export interface VerifiedWebSocketTicket extends VerifiedSession {
@@ -456,7 +459,20 @@ export class SessionStore extends Context.Service<
      */
     readonly revokeForIdentityLoginsDeferred: (
       loginIds: ReadonlyArray<string>,
-    ) => Effect.Effect<Effect.Effect<number>, SessionCredentialInternalError>;
+    ) => Effect.Effect<
+      { readonly revoked: number; readonly close: Effect.Effect<number> },
+      SessionCredentialInternalError
+    >;
+    /** The Keycloak sign-in a session comes from (ticket 07); none for any other session. */
+    readonly identityLoginOf: (
+      sessionId: AuthSessionId,
+    ) => Effect.Effect<string | undefined, SessionCredentialInternalError>;
+    /**
+     * Ticket 07: the next Keycloak sign-in due a re-check, signalled when one of its sessions is
+     * used (an HTTP request, an open socket) more than RECHECK_INTERVAL after its last check.
+     * Signals never wait: past the queue's room they are dropped, and the next use signals again.
+     */
+    readonly takeDueLogin: Effect.Effect<string>;
     /**
      * Revokes a User's sessions born of no Keycloak sign-in (apps, MCP clients, pairing) in the
      * caller's transaction: how many, and what closes their sockets once it commits.
@@ -477,6 +493,10 @@ const DEFAULT_SESSION_TTL = Duration.days(30);
 // A sliding session is written back at most this often, not on every request.
 const SLIDING_RENEWAL_INTERVAL = Duration.hours(1);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
+/** Ticket 07: a Keycloak sign-in in use is re-checked with the realm at most this often. */
+export const RECHECK_INTERVAL = Duration.hours(1);
+/** Due sign-ins waiting for KeycloakLogins; never blocks a request, drops past this. */
+const MAX_DUE_LOGINS = 1024;
 
 const SessionClaims = Schema.Struct({
   v: Schema.Literals([1, 2]),
@@ -555,6 +575,15 @@ const make = Effect.gen(function* () {
   );
   const connectedSessionsRef = yield* Ref.make(new Map<AuthSessionId, number>());
   const changesPubSub = yield* PubSub.unbounded<SessionCredentialChange>();
+  const dueLogins = yield* Queue.dropping<string>(MAX_DUE_LOGINS);
+  const recheckMs = Duration.toMillis(RECHECK_INTERVAL);
+  /** Ticket 07: a use of a session born of a Keycloak sign-in last checked over an hour ago. */
+  const signalIfDue = (row: AuthSessions.AuthSessionRecord, nowMs: number) =>
+    row.identityLoginId !== null &&
+    row.identityLoginCheckedAt !== null &&
+    row.identityLoginCheckedAt.epochMilliseconds + recheckMs <= nowMs
+      ? Queue.offer(dueLogins, row.identityLoginId).pipe(Effect.asVoid)
+      : Effect.void;
   // Newest session per DPoP key. A live socket moves to it at expiry, so a
   // client that renews its short-lived token keeps its socket.
   const latestSessionByProofKey = new Map<string, AuthSessionId>();
@@ -935,6 +964,7 @@ const make = Effect.gen(function* () {
             ),
           )
         : expiresAt;
+      yield* signalIfDue(row.value, observedAt.epochMilliseconds);
 
       return {
         sessionId: claims.sid,
@@ -947,6 +977,9 @@ const make = Effect.gen(function* () {
         scopes: row.value.scopes,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
         ...(claims.rtc ? { runtimeModeCeiling: claims.rtc } : {}),
+        ...(row.value.identityLoginId === null
+          ? {}
+          : { identityLoginId: row.value.identityLoginId }),
       } satisfies VerifiedSession;
     },
   );
@@ -1175,8 +1208,17 @@ const make = Effect.gen(function* () {
       const sessionIds = yield* authSessions
         .revokeForIdentityLogins({ loginIds, revokedAt: yield* DateTime.now })
         .pipe(Effect.mapError((cause) => new ActiveSessionsListError({ cause })));
-      return closeRevoked(sessionIds);
+      return { revoked: sessionIds.length, close: closeRevoked(sessionIds) };
     });
+
+  const identityLoginOf: SessionStore["Service"]["identityLoginOf"] = Effect.fn(
+    "SessionStore.identityLoginOf",
+  )(function* (sessionId) {
+    const row = yield* authSessions
+      .getById({ sessionId })
+      .pipe(Effect.mapError((cause) => new ActiveSessionsListError({ cause })));
+    return Option.isSome(row) ? (row.value.identityLoginId ?? undefined) : undefined;
+  });
 
   const revokeUnboundForUserDeferred: SessionStore["Service"]["revokeUnboundForUserDeferred"] =
     Effect.fn("SessionStore.revokeUnboundForUserDeferred")(function* (userId) {
@@ -1221,12 +1263,28 @@ const make = Effect.gen(function* () {
           }
         });
         let current = original.value;
+        /** When this socket last signalled its Keycloak sign-in due (ticket 07). */
+        let signalledAtMs = 0;
         while (true) {
           const rows = yield* Effect.forEach(chain, readRow);
           if (rows.some((row) => Option.isNone(row) || row.value.revokedAt !== null)) return;
           const latest = rows.at(-1);
           if (latest !== undefined && Option.isSome(latest)) current = latest.value;
           const now = yield* DateTime.now;
+          // Ticket 07: an open socket is use of its Keycloak sign-in too, so it signals the
+          // re-check when due, and again an interval later while it stays unchecked.
+          let untilRecheck = Number.POSITIVE_INFINITY;
+          if (current.identityLoginId !== null && current.identityLoginCheckedAt !== null) {
+            const dueAtMs =
+              Math.max(current.identityLoginCheckedAt.epochMilliseconds, signalledAtMs) + recheckMs;
+            if (dueAtMs <= now.epochMilliseconds) {
+              yield* Queue.offer(dueLogins, current.identityLoginId);
+              signalledAtMs = now.epochMilliseconds;
+              untilRecheck = recheckMs;
+            } else {
+              untilRecheck = dueAtMs - now.epochMilliseconds;
+            }
+          }
           // An open socket is use: a sliding session renews an interval before its deadline.
           if (current.sliding) {
             const untilRenewal =
@@ -1234,7 +1292,10 @@ const make = Effect.gen(function* () {
               Duration.toMillis(SLIDING_RENEWAL_INTERVAL) -
               now.epochMilliseconds;
             if (untilRenewal > 0) {
-              yield* Effect.raceFirst(nextRemoval, Effect.sleep(Duration.millis(untilRenewal)));
+              yield* Effect.raceFirst(
+                nextRemoval,
+                Effect.sleep(Duration.millis(Math.min(untilRenewal, untilRecheck))),
+              );
               continue;
             }
             const renewed = yield* renewSliding(current, now).pipe(
@@ -1247,7 +1308,10 @@ const make = Effect.gen(function* () {
           }
           const remaining = current.expiresAt.epochMilliseconds - now.epochMilliseconds;
           if (remaining > 0) {
-            yield* Effect.raceFirst(nextRemoval, Effect.sleep(Duration.millis(remaining)));
+            yield* Effect.raceFirst(
+              nextRemoval,
+              Effect.sleep(Duration.millis(Math.min(remaining, untilRecheck))),
+            );
             continue;
           }
           const successorId =
@@ -1296,6 +1360,8 @@ const make = Effect.gen(function* () {
     revokeAllForUserDeferred,
     revokeForIdentityLoginsDeferred,
     revokeUnboundForUserDeferred,
+    identityLoginOf,
+    takeDueLogin: Queue.take(dueLogins),
     markConnected,
     markDisconnected,
   });

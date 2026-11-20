@@ -90,6 +90,18 @@ export const MappableOrganization = Schema.Struct({
 });
 export type MappableOrganization = typeof MappableOrganization.Type;
 
+/**
+ * Keycloak's re-checks for the Owner's warnings (ticket 07): the first failure since the last good
+ * one and why (`unreachable`: no answer or a 5xx; `rejected`: the Hub's client refused, such as a
+ * wrong secret), and whether the newest sign-in got `offline_access` (null before any).
+ */
+export const KeycloakStatus = Schema.Struct({
+  unreachableSince: Schema.NullOr(IsoDateTime),
+  problem: Schema.NullOr(Schema.Literals(["unreachable", "rejected"])),
+  lastLoginOffline: Schema.NullOr(Schema.Boolean),
+});
+export type KeycloakStatus = typeof KeycloakStatus.Type;
+
 export const SignInSettings = Schema.Struct({
   registrationMode: RegistrationMode,
   /** Whether a User other than the Owner may sign in with a passkey or password (ticket 08). */
@@ -101,6 +113,8 @@ export const SignInSettings = Schema.Struct({
   /** `T3CODE_PUBLIC_URL`'s origin: the base of the URLs to give Keycloak; else the page's own. */
   publicOrigin: Schema.NullOr(Schema.String),
   updatedAt: Schema.NullOr(IsoDateTime),
+  /** Ticket 07: Keycloak's re-checks and the newest sign-in's `offline_access`. */
+  keycloakStatus: Schema.optionalKey(KeycloakStatus),
 });
 export type SignInSettings = typeof SignInSettings.Type;
 
@@ -237,6 +251,22 @@ export type KeycloakStartRequest = typeof KeycloakStartRequest.Type;
 /** Where the browser goes next: the realm's sign-in page. */
 export const KeycloakStartResult = Schema.Struct({ authorizationUrl: Schema.String });
 export type KeycloakStartResult = typeof KeycloakStartResult.Type;
+
+/**
+ * «Salir también de Keycloak» (ticket 07): the handle the sign-out answered. Spending it ends that
+ * Keycloak sign-in, with the apps, MCP clients and pairing links approved from it.
+ */
+export const KeycloakSignOutRequest = Schema.Struct({
+  handle: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+});
+export type KeycloakSignOutRequest = typeof KeycloakSignOutRequest.Type;
+
+/** Where the browser goes to leave Keycloak too; null when the realm offers no such address. */
+export const KeycloakSignOutResult = Schema.Struct({ endSessionUrl: Schema.NullOr(Schema.String) });
+export type KeycloakSignOutResult = typeof KeycloakSignOutResult.Type;
+
+/** The fragment parameter of `/sign-in` that carries the sign-out's handle to the page. */
+export const KEYCLOAK_SIGN_OUT_FRAGMENT_PARAM = "keycloak-sign-out";
 
 /** The query parameter the callback adds to the page it sends a refused browser to. */
 export const KEYCLOAK_RESULT_PARAM = "keycloak";

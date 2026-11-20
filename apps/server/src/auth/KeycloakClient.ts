@@ -44,6 +44,12 @@ const KEYCLOAK_SCOPES = "openid profile email offline_access";
 const ID_TOKEN_CLOCK_TOLERANCE = "60 seconds";
 /** An ID token older than a flow is not one this flow asked for. */
 const ID_TOKEN_MAX_AGE = "10 minutes";
+/** A logout token is acted on only this soon after Keycloak issued it (ticket 07). */
+const LOGOUT_TOKEN_MAX_AGE = "2 minutes";
+/** The event a back-channel logout token carries (OpenID Connect Back-Channel Logout 1.0). */
+const BACKCHANNEL_LOGOUT_EVENT = "http://schemas.openid.net/event/backchannel-logout";
+/** The longest `jti` the Hub remembers. */
+const MAX_JTI_LENGTH = 256;
 
 /**
  * The HTTP client for the realm, apart from the Hub's: it must never follow a redirect, so a 3xx
@@ -262,6 +268,24 @@ export const IdTokenClaims = Schema.StructWithRest(KnownIdTokenClaims, [
 ]);
 export type IdTokenClaims = typeof IdTokenClaims.Type;
 
+/** The claims of a logout token the Hub reads (ticket 07); `nonce` only to refuse one with it. */
+const LogoutTokenClaims = Schema.Struct({
+  sub: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255))),
+  sid: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255))),
+  azp: Schema.optionalKey(Schema.String),
+  nonce: Schema.optionalKey(Schema.Unknown),
+  events: Schema.Record(Schema.String, Schema.Unknown),
+});
+
+/** A verified logout token: whom it signs out, and its id for the replay cache. */
+export interface LogoutToken {
+  readonly sub: string | undefined;
+  readonly sid: string | undefined;
+  readonly jti: string;
+  /** Seconds since the epoch. */
+  readonly iat: number;
+}
+
 /** RFC 6749 §2.3.1: the client id and secret are form-encoded before Basic authentication. */
 const formEncode = (value: string) => new URLSearchParams({ v: value }).toString().slice(2);
 
@@ -313,8 +337,36 @@ export class KeycloakClient extends Context.Service<
     readonly verifyIdToken: (
       keys: Jwks.Jwks["Service"],
       idToken: Redacted.Redacted<string>,
-      expected: { readonly issuer: string; readonly clientId: string; readonly nonce: string },
+      expected: {
+        readonly issuer: string;
+        readonly clientId: string;
+        /** The flow's; undefined for a refreshed token (ticket 07), which has no flow. */
+        readonly nonce: string | undefined;
+      },
     ) => Effect.Effect<IdTokenClaims, KeycloakFlowError>;
+    /**
+     * Ticket 07: a refresh token for new tokens at the token endpoint (`client_secret_basic`).
+     * `invalid-grant` is the realm refusing the refresh token itself (a disabled or deleted
+     * account, an ended or expired session); anything else says nothing about the person.
+     */
+    readonly refresh: (
+      discovery: KeycloakDiscovery,
+      input: {
+        readonly clientId: string;
+        readonly clientSecret: Redacted.Redacted<string>;
+        readonly refreshToken: Redacted.Redacted<string>;
+      },
+    ) => Effect.Effect<TokenSet, KeycloakFlowError>;
+    /**
+     * Ticket 07: verifies a back-channel logout token as an ID token (keys, algorithms, `iss`,
+     * `aud`/`azp`, `exp` when present), issued at most LOGOUT_TOKEN_MAX_AGE ago, with a `jti`,
+     * the back-channel logout event, no `nonce`, and a `sid` or a `sub`.
+     */
+    readonly verifyLogoutToken: (
+      keys: Jwks.Jwks["Service"],
+      logoutToken: Redacted.Redacted<string>,
+      expected: { readonly issuer: string; readonly clientId: string },
+    ) => Effect.Effect<LogoutToken, KeycloakFlowError>;
   }
 >()("t3/auth/KeycloakClient") {}
 
@@ -579,23 +631,21 @@ const makeClient = Effect.gen(function* () {
     );
   };
 
-  const exchangeCode: KeycloakClient["Service"]["exchangeCode"] = Effect.fn(
-    "KeycloakClient.exchangeCode",
-  )(function* (discovery, input) {
+  /** A token endpoint request (code or refresh), its answer read within the caps. */
+  const tokenRequest = (
+    discovery: KeycloakDiscovery,
+    client: { readonly clientId: string; readonly clientSecret: Redacted.Redacted<string> },
+    params: Record<string, string>,
+  ) => {
     const request = HttpClientRequest.post(discovery.tokenEndpoint).pipe(
       HttpClientRequest.basicAuth(
-        formEncode(input.clientId),
-        Redacted.make(formEncode(Redacted.value(input.clientSecret))),
+        formEncode(client.clientId),
+        Redacted.make(formEncode(Redacted.value(client.clientSecret))),
       ),
       HttpClientRequest.setHeader("accept", "application/json"),
-      HttpClientRequest.bodyUrlParams({
-        grant_type: "authorization_code",
-        code: Redacted.value(input.code),
-        redirect_uri: input.redirectUri,
-        code_verifier: Redacted.value(input.codeVerifier),
-      }),
+      HttpClientRequest.bodyUrlParams(params),
     );
-    return yield* Effect.gen(function* () {
+    return Effect.gen(function* () {
       const response = yield* http
         .execute(request)
         .pipe(Effect.mapError(() => flowError("unreachable", "token endpoint")));
@@ -633,6 +683,78 @@ const makeClient = Effect.gen(function* () {
         orElse: () => Effect.fail(flowError("unreachable", "token endpoint timeout")),
       }),
     );
+  };
+
+  const exchangeCode: KeycloakClient["Service"]["exchangeCode"] = Effect.fn(
+    "KeycloakClient.exchangeCode",
+  )(function* (discovery, input) {
+    return yield* tokenRequest(discovery, input, {
+      grant_type: "authorization_code",
+      code: Redacted.value(input.code),
+      redirect_uri: input.redirectUri,
+      code_verifier: Redacted.value(input.codeVerifier),
+    });
+  });
+
+  const refresh: KeycloakClient["Service"]["refresh"] = Effect.fn("KeycloakClient.refresh")(
+    function* (discovery, input) {
+      return yield* tokenRequest(discovery, input, {
+        grant_type: "refresh_token",
+        refresh_token: Redacted.value(input.refreshToken),
+      });
+    },
+  );
+
+  const verifyLogoutToken: KeycloakClient["Service"]["verifyLogoutToken"] = Effect.fn(
+    "KeycloakClient.verifyLogoutToken",
+  )(function* (keys, logoutToken, expected) {
+    const verified = yield* Jwt.verifyWithKeySet(LogoutTokenClaims, logoutToken, {
+      algorithms: ID_TOKEN_ALGORITHMS,
+      issuer: expected.issuer,
+      audience: expected.clientId,
+      clockTolerance: ID_TOKEN_CLOCK_TOLERANCE,
+      maxTokenAge: LOGOUT_TOKEN_MAX_AGE,
+      requiredClaims: ["iss", "aud", "iat", "jti"],
+    }).pipe(
+      Effect.provideService(Jwks.Jwks, keys),
+      Effect.provideService(Signature.Signature, signature),
+      Effect.mapError((error) =>
+        flowError(
+          "invalid-token",
+          JoseError.isJoseError(error)
+            ? `logout token: ${error.reason._tag}`
+            : "logout token: claims",
+        ),
+      ),
+    );
+    const { claims, registeredClaims } = verified;
+    const audiences =
+      typeof registeredClaims.aud === "string" ? [registeredClaims.aud] : registeredClaims.aud;
+    if (
+      (claims.azp !== undefined || (audiences?.length ?? 0) > 1) &&
+      claims.azp !== expected.clientId
+    ) {
+      return yield* flowError("invalid-token", "logout token: azp");
+    }
+    // Never an ID token passed off as a logout token: no nonce, and the logout event.
+    if ("nonce" in claims) return yield* flowError("invalid-token", "logout token: nonce");
+    const event = claims.events[BACKCHANNEL_LOGOUT_EVENT];
+    if (typeof event !== "object" || event === null || Array.isArray(event)) {
+      return yield* flowError("invalid-token", "logout token: events");
+    }
+    const jti = registeredClaims.jti;
+    if (jti === undefined || jti.length === 0 || jti.length > MAX_JTI_LENGTH) {
+      return yield* flowError("invalid-token", "logout token: jti");
+    }
+    if (claims.sid === undefined && claims.sub === undefined) {
+      return yield* flowError("invalid-token", "logout token: no sid nor sub");
+    }
+    return {
+      sub: claims.sub,
+      sid: claims.sid,
+      jti,
+      iat: registeredClaims.iat ?? 0,
+    } satisfies LogoutToken;
   });
 
   const verifyIdToken: KeycloakClient["Service"]["verifyIdToken"] = Effect.fn(
@@ -664,13 +786,24 @@ const makeClient = Effect.gen(function* () {
     ) {
       return yield* flowError("invalid-token", "id token: azp");
     }
-    if (claims.nonce === undefined || !sameText(claims.nonce, expected.nonce)) {
+    if (
+      expected.nonce !== undefined &&
+      (claims.nonce === undefined || !sameText(claims.nonce, expected.nonce))
+    ) {
       return yield* flowError("invalid-token", "id token: nonce");
     }
     return claims;
   });
 
-  return KeycloakClient.of({ discover, keySet, check, exchangeCode, verifyIdToken });
+  return KeycloakClient.of({
+    discover,
+    keySet,
+    check,
+    exchangeCode,
+    verifyIdToken,
+    refresh,
+    verifyLogoutToken,
+  });
 });
 
 /** The adapter over a given KeycloakHttp; ID tokens are verified with Node's crypto. */

@@ -353,6 +353,7 @@ export const HTTP_DOOR_RULES: Record<string, DoorRule> = {
   "appSignIn.approve": none("sign-in"),
   "appSignIn.token": none("sign-in"),
   "keycloakSignIn.start": none("sign-in: the realm's sign-in address for a new flow"),
+  "keycloakSignIn.signOut": none("sign-out: the realm's end-session address"),
   "mcpOAuth.protectedResource": none("MCP sign-in"),
   "mcpOAuth.mcpProtectedResource": none("MCP sign-in"),
   "mcpOAuth.authorizationServer": none("MCP sign-in"),
@@ -486,6 +487,9 @@ export const RAW_DOOR_RULES: Record<string, DoorRule> = {
     unmasked: "a dev server's pages (as preview.proxyHttp), live, never stored",
   },
   "auth/clientAdmission.ts: middleware": none("admission"),
+  "auth/keycloakSignInHttp.ts: POST KEYCLOAK_BACKCHANNEL_LOGOUT_PATH": none(
+    "sign-out: an empty 200 or 400, never a Thread's output",
+  ),
   "auth/keycloakSignInHttp.ts: GET KEYCLOAK_CALLBACK_PATH": none(
     "sign-in: a redirect and a session cookie, never a Thread's output",
   ),

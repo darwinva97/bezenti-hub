@@ -30,6 +30,8 @@ export const AuditAction = Schema.Literals([
   "user.identity.link",
   // Ticket 03: a User created by signing in through Keycloak without an Invitation.
   "user.register",
+  // Ticket 07: a Keycloak sign-in ended, with the sessions and pairing links born of it.
+  "keycloak.login.end",
   "organization.create",
   "organization.archive",
   "organization.restore",
@@ -185,6 +187,13 @@ export const AUDIT_DETAIL_KEYS = {
    * identity comes from. Never the subject, the email or a token.
    */
   "user.register": ["via", "issuer"],
+  /**
+   * Ticket 07: why a Keycloak sign-in ended (`refresh-refused`: the realm refused its refresh
+   * token, as for a disabled account; `backchannel`: Keycloak's logout; `sign-out`: «Salir también
+   * de Keycloak»; `no-refresh-token`: nothing to re-check it with), and how many sessions and
+   * pairing links ended with it. Never the subject, the `sid` or a token.
+   */
+  "keycloak.login.end": ["reason", "sessions", "pairingLinks"],
   "organization.create": [],
   "organization.archive": [],
   "organization.restore": [],

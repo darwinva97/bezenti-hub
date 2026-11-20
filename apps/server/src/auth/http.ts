@@ -37,6 +37,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as CurrentPrincipal from "./CurrentPrincipal.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import * as KeycloakLogins from "./KeycloakLogins.ts";
 import * as SessionStore from "./SessionStore.ts";
 import * as SignInSettings from "./SignInSettings.ts";
 import * as UserDirectory from "./UserDirectory.ts";
@@ -412,6 +413,8 @@ export const layer = HttpApiBuilder.group(
     const userDirectory = yield* UserDirectory.UserDirectory;
     // Absent only where a test serves these routes without the sign-in settings.
     const signInSettings = yield* Effect.serviceOption(SignInSettings.SignInSettings);
+    // Ticket 07: «also sign out of Keycloak»; absent likewise where Keycloak is not served.
+    const keycloakLogins = yield* Effect.serviceOption(KeycloakLogins.KeycloakLogins);
 
     return handlers
       .handle(
@@ -812,6 +815,8 @@ export const layer = HttpApiBuilder.group(
             return yield* serverAuth.issuePairingCredential(
               { ...args.payload, scopes: delegatedScopes },
               session.userId,
+              // Ticket 07: the link inherits this session's Keycloak sign-in, if any.
+              session.sessionId,
             );
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
@@ -952,13 +957,20 @@ export const layer = HttpApiBuilder.group(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const request = yield* HttpServerRequest.HttpServerRequest;
-            const signedOut = yield* serverAuth.signOut(request);
+            const { signedOut, identityLoginId } = yield* serverAuth.signOut(request);
             yield* expireSessionCookies(
               sessions.legacyCookieName === undefined
                 ? [sessions.cookieName]
                 : [sessions.cookieName, sessions.legacyCookieName],
             );
-            return { signedOut };
+            // Ticket 07: a session born of a Keycloak sign-in may end that sign-in too.
+            const handle =
+              identityLoginId === undefined || Option.isNone(keycloakLogins)
+                ? undefined
+                : yield* keycloakLogins.value.signOutHandle(identityLoginId);
+            return handle === undefined
+              ? { signedOut }
+              : { signedOut, keycloakSignOutHandle: handle };
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("client_session_revoke_failed", error),

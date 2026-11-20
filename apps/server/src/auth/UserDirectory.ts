@@ -463,8 +463,24 @@ export class UserDirectory extends Context.Service<
       UserDirectoryStorageError
     >;
     /**
-     * For a User who signs in with Keycloak: ends their weak Keycloak sign-ins with their sessions,
-     * and (but the Owner's) every session born of no sign-in and unspent pairing link. Run it in the
+     * Ticket 07, the one way a Keycloak sign-in ends: these live sign-ins end (their sealed tokens
+     * dropped) with every session and unspent pairing link born of them, the apps, MCP clients
+     * and links approved from them included. Run it in the caller's transaction, then
+     * `afterCommit`, so their sockets close.
+     */
+    readonly endKeycloakLogins: (loginIds: ReadonlyArray<string>) => Effect.Effect<
+      {
+        readonly ended: ReadonlyArray<UserIdentities.EndedLogin>;
+        readonly sessions: number;
+        readonly pairingLinks: number;
+        readonly afterCommit: Effect.Effect<void>;
+      },
+      UserDirectoryStorageError
+    >;
+    /**
+     * For a User who signs in with Keycloak: ends their weak Keycloak sign-ins with all born of
+     * them (ticket 07: the apps, MCP clients and pairing links they approved too), and (but the
+     * Owner's) every session and unspent pairing link born of no sign-in. Run it in the
      * transaction that made them an Admin, then `afterCommit`, so their sockets close.
      */
     readonly endWeakKeycloakLogins: (userId: UserId) => Effect.Effect<
@@ -1470,23 +1486,47 @@ const make = Effect.gen(function* () {
     }
     const now = DateTime.formatIso(yield* DateTime.now);
     const loginIds = yield* identities.endWeakLogins(userId, now).pipe(storage);
-    const closeLogins = yield* sessions.revokeForIdentityLoginsDeferred(loginIds).pipe(storage);
+    // Ticket 07: what their weak sign-ins approved (apps, MCP clients, pairing links) inherited
+    // them, so it ends with them; what a strong one approved stays.
+    const bound = yield* sessions.revokeForIdentityLoginsDeferred(loginIds).pipe(storage);
+    const boundLinks = yield* pairingLinks.revokeForIdentityLoginsDeferred(loginIds).pipe(storage);
     if (user.value.isOwner) {
-      // The Owner's sessions without a Keycloak sign-in are their local break-glass ones.
+      // The Owner's sessions and links without a Keycloak sign-in are their local break-glass.
       return {
         ended: loginIds.length,
         signedOut: loginIds.length > 0,
-        afterCommit: Effect.asVoid(closeLogins),
+        afterCommit: Effect.all([bound.close, boundLinks.close], { discard: true }),
       };
     }
-    // Apps, MCP clients and pairing links carry no sign-in to weigh (ticket 07 makes them inherit
-    // one): any may have come from a weak sign-in, so none outlives the promotion.
+    // What carries no sign-in (a local sign-in's, or approved before ticket 07) has nothing to
+    // weigh: any may have come from a weak sign-in, so none outlives the promotion.
     const unbound = yield* sessions.revokeUnboundForUserDeferred(userId).pipe(storage);
-    const closeLinks = yield* pairingLinks.revokeAllForUserDeferred(userId).pipe(storage);
+    const closeLinks = yield* pairingLinks.revokeUnboundForUserDeferred(userId).pipe(storage);
     return {
       ended: loginIds.length,
       signedOut: loginIds.length > 0 || unbound.revoked > 0,
-      afterCommit: Effect.all([closeLogins, unbound.close, closeLinks], { discard: true }),
+      afterCommit: Effect.all([bound.close, boundLinks.close, unbound.close, closeLinks], {
+        discard: true,
+      }),
+    };
+  });
+
+  const endKeycloakLogins: UserDirectory["Service"]["endKeycloakLogins"] = Effect.fn(
+    "UserDirectory.endKeycloakLogins",
+  )(function* (loginIds) {
+    if (loginIds.length === 0) {
+      return { ended: [], sessions: 0, pairingLinks: 0, afterCommit: Effect.void };
+    }
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const ended = yield* identities.endLogins(loginIds, now).pipe(storage);
+    const endedIds = ended.map((login) => login.loginId);
+    const bound = yield* sessions.revokeForIdentityLoginsDeferred(endedIds).pipe(storage);
+    const links = yield* pairingLinks.revokeForIdentityLoginsDeferred(endedIds).pipe(storage);
+    return {
+      ended,
+      sessions: bound.revoked,
+      pairingLinks: links.revoked,
+      afterCommit: Effect.all([bound.close, links.close], { discard: true }),
     };
   });
 
@@ -1812,6 +1852,7 @@ const make = Effect.gen(function* () {
     createIdentityUser,
     hasStrongSignIn,
     endWeakKeycloakLogins,
+    endKeycloakLogins,
     keycloakSessionMayBecomeAdmin,
     requiresStrongSignIn: requiresStrongSignInOf,
     issueResetLink,

@@ -44,6 +44,10 @@ export const AuthSessionRecord = Schema.Struct({
   sliding: Schema.Boolean,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  /** The Keycloak sign-in the session comes from, directly or inherited (ticket 07). */
+  identityLoginId: Schema.NullOr(Schema.String),
+  /** When that sign-in was last re-checked with Keycloak (ticket 07; by id only). */
+  identityLoginCheckedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
 export type AuthSessionRecord = typeof AuthSessionRecord.Type;
 
@@ -192,6 +196,8 @@ const AuthSessionDbRow = Schema.Struct({
   sliding: Schema.BooleanFromBit,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  identityLoginId: Schema.NullOr(Schema.String),
+  identityLoginCheckedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
 
 const AuthSessionRawDbRow = Schema.Struct({
@@ -211,6 +217,8 @@ const AuthSessionRawDbRow = Schema.Struct({
   sliding: Schema.Unknown,
   lastConnectedAt: Schema.Unknown,
   revokedAt: Schema.Unknown,
+  identityLoginId: Schema.Unknown,
+  identityLoginCheckedAt: Schema.Unknown,
 });
 
 const decodeAuthSessionDbRow = Schema.decodeUnknownEffect(AuthSessionDbRow);
@@ -235,7 +243,19 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
     sliding: row.sliding,
     lastConnectedAt: row.lastConnectedAt,
     revokedAt: row.revokedAt,
+    identityLoginId: row.identityLoginId,
+    identityLoginCheckedAt: row.identityLoginCheckedAt,
   };
+}
+
+/** Ticket 07: the Keycloak sign-in a new session would come from has ended. */
+export class IdentityLoginEndedError extends Schema.TaggedError<IdentityLoginEndedError>()(
+  "IdentityLoginEndedError",
+  { sessionId: Schema.String },
+) {
+  override get message(): string {
+    return "The Keycloak sign-in this session would come from has ended.";
+  }
 }
 
 function toPersistenceSqlOrDecodeError(
@@ -258,8 +278,9 @@ export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   const insertSessionRow = (ignoreExisting: boolean) =>
-    SqlSchema.void({
+    SqlSchema.findAll({
       Request: CreateAuthSessionInput,
+      Result: Schema.Struct({ sessionId: AuthSessionId }),
       execute: (input) =>
         sql`
         INSERT INTO auth_sessions (
@@ -280,7 +301,7 @@ export const make = Effect.gen(function* () {
           revoked_at,
           identity_login_id
         )
-        VALUES (
+        SELECT
           ${input.sessionId},
           ${input.subject},
           ${input.userId},
@@ -297,8 +318,18 @@ export const make = Effect.gen(function* () {
           ${input.sliding === true ? 1 : 0},
           NULL,
           ${input.identityLoginId ?? null}
-        )
+        -- Ticket 07: a session born of a Keycloak sign-in only while that sign-in is live, so
+        -- nothing approved from it outlives its end.
+        WHERE ${
+          input.identityLoginId === undefined
+            ? sql`1`
+            : sql`EXISTS (
+                SELECT 1 FROM identity_logins
+                WHERE login_id = ${input.identityLoginId} AND ended_at IS NULL
+              )`
+        }
         ${ignoreExisting ? sql`ON CONFLICT(session_id) DO NOTHING` : sql``}
+        RETURNING session_id AS "sessionId"
       `,
     });
   const createSessionRow = insertSessionRow(false);
@@ -325,12 +356,18 @@ export const make = Effect.gen(function* () {
           expires_at AS "expiresAt",
           sliding AS "sliding",
           last_connected_at AS "lastConnectedAt",
-          -- A disabled or removed User's session reads as revoked even if revoking it failed.
+          -- A disabled or removed User's session reads as revoked even if revoking it failed, and
+          -- so does one whose Keycloak sign-in ended (ticket 07).
           COALESCE(
             revoked_at,
             (SELECT COALESCE(u.removed_at, u.disabled_at) FROM users u
-              WHERE u.user_id = auth_sessions.user_id)
-          ) AS "revokedAt"
+              WHERE u.user_id = auth_sessions.user_id),
+            (SELECT l.ended_at FROM identity_logins l
+              WHERE l.login_id = auth_sessions.identity_login_id)
+          ) AS "revokedAt",
+          identity_login_id AS "identityLoginId",
+          (SELECT l.checked_at FROM identity_logins l
+            WHERE l.login_id = auth_sessions.identity_login_id) AS "identityLoginCheckedAt"
         FROM auth_sessions
         WHERE session_id = ${sessionId}
       `,
@@ -376,7 +413,9 @@ export const make = Effect.gen(function* () {
           expires_at AS "expiresAt",
           sliding AS "sliding",
           last_connected_at AS "lastConnectedAt",
-          revoked_at AS "revokedAt"
+          revoked_at AS "revokedAt",
+          identity_login_id AS "identityLoginId",
+          NULL AS "identityLoginCheckedAt"
         FROM auth_sessions
         WHERE revoked_at IS NULL
           AND (expires_at > ${now} OR ${sql.in("session_id", connectedSessionIds)})
@@ -512,8 +551,18 @@ export const make = Effect.gen(function* () {
           Effect.map((rows) => rows.map((row) => row.sessionId)),
         );
 
-  const create: AuthSessionRepository["Service"]["create"] = (input) =>
+  /** A session that names an ended Keycloak sign-in is not written: an error, never a session. */
+  const insertedOrFail = (input: CreateAuthSessionInput) =>
     createSessionRow(input).pipe(
+      Effect.flatMap((rows) =>
+        rows.length > 0 || input.identityLoginId === undefined
+          ? Effect.void
+          : Effect.fail(new IdentityLoginEndedError({ sessionId: input.sessionId })),
+      ),
+    );
+
+  const create: AuthSessionRepository["Service"]["create"] = (input) =>
+    insertedOrFail(input).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "AuthSessionRepository.create:query",
@@ -530,9 +579,7 @@ export const make = Effect.gen(function* () {
       .withTransaction(
         revokeActiveSessionsForReplacement(input).pipe(
           Effect.flatMap((revokedRows) =>
-            createSessionRow(input.session).pipe(
-              Effect.as(revokedRows.map((row) => row.sessionId)),
-            ),
+            insertedOrFail(input.session).pipe(Effect.as(revokedRows.map((row) => row.sessionId))),
           ),
         ),
       )
@@ -548,6 +595,7 @@ export const make = Effect.gen(function* () {
 
   const createIfAbsent: AuthSessionRepository["Service"]["createIfAbsent"] = (input) =>
     createSessionRowIfAbsent(input).pipe(
+      Effect.asVoid,
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "AuthSessionRepository.createIfAbsent:query",

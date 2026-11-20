@@ -124,6 +124,8 @@ export interface AuthenticatedSession {
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
   readonly expiresAt?: DateTime.DateTime;
+  /** The Keycloak sign-in the session comes from, directly or inherited (ticket 07). */
+  readonly identityLoginId?: string;
 }
 
 const serverAuthInternalErrorContext = {
@@ -502,6 +504,8 @@ export class EnvironmentAuth extends Context.Service<
       /** A device that pairs with the link signs in as this User; without one, as the Owner. */
       readonly userId?: UserId;
       readonly purpose?: "startup";
+      /** Ticket 07: the creating session's Keycloak sign-in; the link and its sessions end with it. */
+      readonly identityLoginId?: string;
     }) => Effect.Effect<
       IssuedPairingLink,
       ServerAuthInternalError | ManagedLimits.ManagedPolicyRefusedError
@@ -509,6 +513,8 @@ export class EnvironmentAuth extends Context.Service<
     readonly issuePairingCredential: (
       input?: AuthCreatePairingCredentialInput,
       creator?: UserId,
+      /** Ticket 07: the creating session, whose Keycloak sign-in the link inherits. */
+      fromSessionId?: AuthSessionId,
     ) => Effect.Effect<
       AuthPairingCredentialResult,
       ServerAuthInternalError | ManagedLimits.ManagedPolicyRefusedError
@@ -589,6 +595,8 @@ export class EnvironmentAuth extends Context.Service<
       readonly userId?: UserId;
       readonly access: AuthMcpClientAccess;
       readonly client: AuthRequestMetadata;
+      /** Ticket 07: the approving session's (or code's) Keycloak sign-in; it ends with it. */
+      readonly identityLoginId?: string;
     }) => Effect.Effect<
       {
         readonly sessionId: AuthSessionId;
@@ -608,7 +616,7 @@ export class EnvironmentAuth extends Context.Service<
       access: AuthMcpClientAccess,
       options?: { readonly asUser?: UserId | undefined },
     ) => Effect.Effect<
-      { readonly userId?: UserId },
+      { readonly userId?: UserId; readonly identityLoginId?: string },
       ServerAuthMcpApprovalCodeError | ServerAuthInternalError
     >;
     readonly authenticateBrowserSession: (
@@ -755,6 +763,8 @@ export class EnvironmentAuth extends Context.Service<
       readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
       readonly client: AuthRequestMetadata;
       readonly proofKeyThumbprint?: string;
+      /** Ticket 07: the approving browser session's Keycloak sign-in; the app ends with it. */
+      readonly identityLoginId?: string;
     }) => Effect.Effect<
       AuthAccessTokenResult,
       ServerAuthInvalidCredentialError | ServerAuthInsecureTransportError | ServerAuthInternalError
@@ -764,9 +774,14 @@ export class EnvironmentAuth extends Context.Service<
      * signing out of a Hub on desktop or mobile ends that session on the Hub too. False when it
      * carried none it may end.
      */
-    readonly signOut: (
-      request: HttpServerRequest.HttpServerRequest,
-    ) => Effect.Effect<boolean, ServerAuthInternalError>;
+    readonly signOut: (request: HttpServerRequest.HttpServerRequest) => Effect.Effect<
+      {
+        readonly signedOut: boolean;
+        /** Ticket 07: a browser session's Keycloak sign-in, which «also sign out» may end. */
+        readonly identityLoginId?: string;
+      },
+      ServerAuthInternalError
+    >;
   }
 >()("t3/auth/EnvironmentAuth") {}
 
@@ -996,6 +1011,7 @@ export const make = Effect.gen(function* () {
         scopes: session.scopes,
         ...(session.proofKeyThumbprint ? { proofKeyThumbprint: session.proofKeyThumbprint } : {}),
         ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
+        ...(session.identityLoginId ? { identityLoginId: session.identityLoginId } : {}),
       })),
       Effect.flatMap(heldByUser),
     );
@@ -1206,6 +1222,8 @@ export const make = Effect.gen(function* () {
         subject: grant.subject,
         ...owner,
         scopes: grant.scopes,
+        // Ticket 07: a link created from a Keycloak session passes its sign-in on.
+        ...(grant.identityLoginId === undefined ? {} : { identityLoginId: grant.identityLoginId }),
         ...(previousSession?.method === "browser-session-cookie"
           ? { replaceSessionId: previousSession.sessionId }
           : {}),
@@ -1228,7 +1246,7 @@ export const make = Effect.gen(function* () {
 
   type ResolvedBootstrapGrant = Pick<
     PairingGrantStore.BootstrapGrant,
-    "scopes" | "subject" | "label" | "userId"
+    "scopes" | "subject" | "label" | "userId" | "identityLoginId"
   > & {
     readonly method: PairingGrantStore.BootstrapGrant["method"] | "reusable-dev-token";
   };
@@ -1305,6 +1323,9 @@ export const make = Effect.gen(function* () {
                       ttl: Duration.hours(1),
                     }
                   : {}),
+                ...(grant.identityLoginId === undefined
+                  ? {}
+                  : { identityLoginId: grant.identityLoginId }),
                 replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
                 client: {
                   ...requestMetadata,
@@ -1359,6 +1380,7 @@ export const make = Effect.gen(function* () {
         ...(input?.proofKeyThumbprint ? { proofKeyThumbprint: input.proofKeyThumbprint } : {}),
         ...(input?.userId ? { userId: input.userId } : {}),
         ...(input?.purpose ? { purpose: input.purpose } : {}),
+        ...(input?.identityLoginId ? { identityLoginId: input.identityLoginId } : {}),
       });
       return {
         id: issued.id,
@@ -1553,13 +1575,23 @@ export const make = Effect.gen(function* () {
   const issuePairingCredential: EnvironmentAuth["Service"]["issuePairingCredential"] = (
     input,
     creator,
+    fromSessionId,
   ) =>
-    createPairingLink({
-      scopes: input?.scopes ?? AuthStandardClientScopes,
-      subject: "one-time-token",
-      ...(creator ? { userId: creator } : {}),
-      ...(input?.label ? { label: input.label } : {}),
-    }).pipe(
+    (fromSessionId === undefined
+      ? Effect.succeed(undefined)
+      : sessions
+          .identityLoginOf(fromSessionId)
+          .pipe(Effect.mapError((cause) => new ServerAuthPairingLinkCreationError({ cause })))
+    ).pipe(
+      Effect.flatMap((identityLoginId) =>
+        createPairingLink({
+          scopes: input?.scopes ?? AuthStandardClientScopes,
+          subject: "one-time-token",
+          ...(creator ? { userId: creator } : {}),
+          ...(input?.label ? { label: input.label } : {}),
+          ...(identityLoginId === undefined ? {} : { identityLoginId }),
+        }),
+      ),
       Effect.map(toPairingCredential),
       Effect.withSpan("EnvironmentAuth.issuePairingCredential"),
     );
@@ -1817,6 +1849,9 @@ export const make = Effect.gen(function* () {
           ...owner,
           scopes: mcpClientScopes(input.access),
           ...(input.access === "read-only" ? {} : { runtimeModeCeiling: input.access }),
+          ...(input.identityLoginId === undefined
+            ? {}
+            : { identityLoginId: input.identityLoginId }),
           client: { ...input.client, label: input.label, deviceType: "bot" },
         }),
       ),
@@ -1881,7 +1916,11 @@ export const make = Effect.gen(function* () {
     if (grant.method !== "one-time-token" && grant.method !== "reusable-dev-token") {
       return yield* new ServerAuthMcpApprovalCodeError({ reason: "not_a_pairing_code" });
     }
-    return yield* approverOf(grant.userId);
+    const approver = yield* approverOf(grant.userId);
+    // Ticket 07: a code created from a Keycloak session passes its sign-in to the client.
+    return grant.identityLoginId === undefined
+      ? approver
+      : { ...approver, identityLoginId: grant.identityLoginId };
   });
 
   const userDirectoryFailure = (cause: UserDirectory.UserDirectoryStorageError) =>
@@ -2315,6 +2354,7 @@ export const make = Effect.gen(function* () {
         ...(input.proofKeyThumbprint
           ? { proofKeyThumbprint: input.proofKeyThumbprint, ttl: Duration.hours(1) }
           : {}),
+        ...(input.identityLoginId === undefined ? {} : { identityLoginId: input.identityLoginId }),
         client: input.client,
       })
       .pipe(
@@ -2347,12 +2387,20 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((session) =>
         // The reusable dev session is shared across worktrees and is not this browser's to end.
         session.subject === "reusable-dev-token"
-          ? Effect.succeed(false)
-          : sessions
-              .revoke(session.sessionId)
-              .pipe(Effect.mapError((cause) => new ServerAuthSessionRevocationError({ cause }))),
+          ? Effect.succeed({ signedOut: false })
+          : sessions.revoke(session.sessionId).pipe(
+              Effect.mapError((cause) => new ServerAuthSessionRevocationError({ cause })),
+              Effect.map((signedOut) =>
+                // Ticket 07: only a browser's page offers to leave Keycloak too.
+                signedOut &&
+                session.method === "browser-session-cookie" &&
+                session.identityLoginId !== undefined
+                  ? { signedOut, identityLoginId: session.identityLoginId }
+                  : { signedOut },
+              ),
+            ),
       ),
-      Effect.catchIf(isServerAuthCredentialError, () => Effect.succeed(false)),
+      Effect.catchIf(isServerAuthCredentialError, () => Effect.succeed({ signedOut: false })),
       Effect.withSpan("EnvironmentAuth.signOut"),
     );
 

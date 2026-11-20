@@ -888,8 +888,10 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
     ServerHttp.layerOtlpTracesProxyRoute,
-    // Where Keycloak sends the browser back (Keycloak sign-in, ticket 02).
+    // Where Keycloak sends the browser back (Keycloak sign-in, ticket 02), and where it posts
+    // its back-channel logout tokens (ticket 07).
     KeycloakSignInHttp.layerCallbackRoute,
+    KeycloakSignInHttp.layerBackchannelLogoutRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
     GuestHttp.layer,

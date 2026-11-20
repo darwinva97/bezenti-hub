@@ -34,6 +34,8 @@ export interface BootstrapGrant {
   readonly proofKeyThumbprint?: string;
   /** The User who created the link; a link from the Hub's shell has none. */
   readonly userId?: UserId;
+  /** The Keycloak sign-in of the session that created it (ticket 07): its sessions inherit it. */
+  readonly identityLoginId?: string;
   readonly expiresAt: DateTime.DateTime;
 }
 
@@ -220,6 +222,8 @@ export class PairingGrantStore extends Context.Service<
       readonly proofKeyThumbprint?: string;
       readonly userId?: UserId;
       readonly purpose?: "startup";
+      /** Ticket 07: the creating session's Keycloak sign-in; the link ends with it. */
+      readonly identityLoginId?: string;
     }) => Effect.Effect<IssuedBootstrapCredential, BootstrapCredentialInternalError>;
     readonly listActive: () => Effect.Effect<
       ReadonlyArray<AuthPairingLink>,
@@ -245,6 +249,17 @@ export class PairingGrantStore extends Context.Service<
     readonly revokeAllForUserDeferred: (
       userId: UserId,
     ) => Effect.Effect<Effect.Effect<number>, BootstrapCredentialInternalError>;
+    /** Ticket 07: a User's unspent links no Keycloak sign-in vouches for, deferred likewise. */
+    readonly revokeUnboundForUserDeferred: (
+      userId: UserId,
+    ) => Effect.Effect<Effect.Effect<number>, BootstrapCredentialInternalError>;
+    /** Ticket 07: the unspent links created from these Keycloak sign-ins, deferred likewise. */
+    readonly revokeForIdentityLoginsDeferred: (
+      loginIds: ReadonlyArray<string>,
+    ) => Effect.Effect<
+      { readonly revoked: number; readonly close: Effect.Effect<number> },
+      BootstrapCredentialInternalError
+    >;
     readonly consume: (
       credential: string,
       input?: {
@@ -441,6 +456,7 @@ const make = Effect.gen(function* () {
         userId: input?.userId ?? null,
         createdAt: now,
         expiresAt: expiresAt,
+        ...(input?.identityLoginId === undefined ? {} : { identityLoginId: input.identityLoginId }),
       })
       .pipe(
         Effect.mapError(
@@ -601,6 +617,9 @@ const make = Effect.gen(function* () {
             ? { proofKeyThumbprint: consumed.value.proofKeyThumbprint }
             : {}),
           ...(consumed.value.userId ? { userId: consumed.value.userId } : {}),
+          ...(consumed.value.identityLoginId
+            ? { identityLoginId: consumed.value.identityLoginId }
+            : {}),
           expiresAt: consumed.value.expiresAt,
         } satisfies BootstrapGrant;
       }
@@ -686,6 +705,33 @@ const make = Effect.gen(function* () {
       return Effect.forEach(ids, emitRemoved, { discard: true }).pipe(Effect.as(ids.length));
     });
 
+  const revokeUnboundForUserDeferred: PairingGrantStore["Service"]["revokeUnboundForUserDeferred"] =
+    Effect.fn("PairingGrantStore.revokeUnboundForUserDeferred")(function* (userId) {
+      const revokedAt = yield* DateTime.now;
+      const ids = yield* pairingLinks
+        .revokeUnspentForUser({ userId, unboundOnly: true, revokedAt })
+        .pipe(
+          Effect.mapError((cause) => new PairingLinkRevokeError({ pairingLinkId: userId, cause })),
+        );
+      return Effect.forEach(ids, emitRemoved, { discard: true }).pipe(Effect.as(ids.length));
+    });
+
+  const revokeForIdentityLoginsDeferred: PairingGrantStore["Service"]["revokeForIdentityLoginsDeferred"] =
+    Effect.fn("PairingGrantStore.revokeForIdentityLoginsDeferred")(function* (loginIds) {
+      const revokedAt = yield* DateTime.now;
+      const ids = yield* pairingLinks
+        .revokeForIdentityLogins({ loginIds, revokedAt })
+        .pipe(
+          Effect.mapError(
+            (cause) => new PairingLinkRevokeError({ pairingLinkId: "identity-logins", cause }),
+          ),
+        );
+      return {
+        revoked: ids.length,
+        close: Effect.forEach(ids, emitRemoved, { discard: true }).pipe(Effect.as(ids.length)),
+      };
+    });
+
   const revokeAllForUser: PairingGrantStore["Service"]["revokeAllForUser"] = Effect.fn(
     "PairingGrantStore.revokeAllForUser",
   )(function* (userId) {
@@ -697,6 +743,8 @@ const make = Effect.gen(function* () {
     creatorOf,
     revokeAllForUser,
     revokeAllForUserDeferred,
+    revokeUnboundForUserDeferred,
+    revokeForIdentityLoginsDeferred,
     issueOneTimeToken,
     listActive,
     get streamChanges() {

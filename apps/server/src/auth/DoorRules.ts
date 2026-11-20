@@ -42,6 +42,14 @@ const KEYCLOAK_START = own(
 const KEYCLOAK_CALLBACK = own(
   "the flow its `state` names (single-use, 10 minutes) from the browser that started it (the `__Host-` cookie over HTTPS, the bare name only on loopback HTTP), `iss` = the issuer (RFC 9207), the code exchanged with its PKCE verifier and `client_secret_basic`, the ID token verified (keys, `iss`, `aud`/`azp`, `exp`/`iat`, `nonce`); failures count toward the sign-in back-off; `sign-in` and `invitation`: KeycloakAdmission.decide over the Registration mode, the identity (issuer + subject, never an email), and the Invitation read again now; a new User (no sign-in name, its identity, login and session, and `user.register`) in one transaction, with an Organization Invitation inside InvitationService.redeemForNewUser (the conditional spend, the Role of the spent row, the membership and `invitation.accept`: a refusal leaves it unspent); an existing User joins through InvitationService.join with its refusals; whether the sign-in is strong is read from the verified token alone (`acr`/`amr` against the Owner's lists, exactly), and the Owner, an Admin, or who an Admin Invitation makes one is refused without it (ticket 06; the Owner's local sign-in is untouched); `link`: the very session that started it, never another User's identity, and a strong sign-in for the Owner or an Admin; `step-up`: the very session that started it, the same issuer and subject as its User's identity, an `auth_time` after the flow started (30 s skew), and it signs nobody in: a single-use proof (5 minutes, that session and User only, spent by UserDirectory.requireStepUp/confirmStrongFactor, which needs it strong) in the redirect's fragment, never its query",
 );
+/** Ticket 07: «also sign out of Keycloak», after the browser signed out. */
+const KEYCLOAK_SIGN_OUT = own(
+  "public: only the single-use handle the browser's own sign-out answered (random, kept hashed, 10 minutes, at most 10 000 and then none is handed out, never logged), from an `Origin` the Hub takes as its own; ends that Keycloak sign-in with the sessions, apps, MCP clients and pairing links born of it (UserDirectory.endKeycloakLogins, audited `keycloak.login.end`) and answers the realm's end-session address with `id_token_hint` (the sign-in's sealed ID token, dropped as it ends), `client_id` and `post_logout_redirect_uri` on the Hub's own origin",
+);
+/** Ticket 07: the realm's back-channel logout. */
+const KEYCLOAK_BACKCHANNEL = own(
+  "public, for the realm: a urlencoded body of at most 16 KiB with exactly one `logout_token` (8 KiB), verified like an ID token (the realm's keys and algorithms, `iss`, `aud`/`azp`, `exp` when present) plus `iat` at most 2 minutes old (60 s skew), a `jti`, the back-channel logout event and no `nonce`, then a `jti` never seen (10 000 remembered for 4 minutes, only after the signature passes; full refuses, never forgets one); ends the live sign-ins of its `sid` (and `sub`), or without `sid` all of its `sub`, with all born of them (UserDirectory.endKeycloakLogins, audited); 200 or 400, never echoing the token; untraced",
+);
 const WEBHOOK = own("the task's secret token in the path; runs as the task's creator");
 const THREAD_READ = own(
   "SpaceVisibility.visibleThreadIds like getThreadProjection: hidden answers thread_not_found",
@@ -109,6 +117,7 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "environments.sshInstallStart": SSH_INSTALL,
   "environments.sshInstallStatus": SSH_INSTALL,
   "environments.startJoin": ENVIRONMENTS,
+  "keycloakSignIn.signOut": KEYCLOAK_SIGN_OUT,
   "keycloakSignIn.start": KEYCLOAK_START,
   "installationUsers.list": OWNER,
   "installationUsers.setStatus": OWNER,
@@ -231,6 +240,7 @@ export const RAW_ROUTE_RULES: Readonly<Record<string, DoorRule>> = {
     "every request: public clients wait for an Owner; answers nothing else itself",
   ),
   "auth/keycloakSignInHttp.ts: GET KEYCLOAK_CALLBACK_PATH": KEYCLOAK_CALLBACK,
+  "auth/keycloakSignInHttp.ts: POST KEYCLOAK_BACKCHANNEL_LOGOUT_PATH": KEYCLOAK_BACKCHANNEL,
   "http.ts: middleware": own("compression; answers nothing itself"),
   "server.ts: middleware": own("waits for startup; answers nothing itself"),
   'ws.ts: GET "/ws"': own("a session; every RPC by RPC_SPACE_ACCESS"),
@@ -354,6 +364,9 @@ export const AMBIENT_COOKIE_RULES: Readonly<Record<string, AmbientCookieRule>> =
     "EnvironmentAuth reads a session cookie past isBrowserOriginAllowed; auth/http.ts sets or clears one only off a preview origin",
   ),
   "auth/clientAdmission.ts: middleware": none("reads no credential"),
+  "auth/keycloakSignInHttp.ts: POST KEYCLOAK_BACKCHANNEL_LOGOUT_PATH": none(
+    "reads no cookie at all: the realm's signed logout token in the body",
+  ),
   "auth/keycloakSignInHttp.ts: GET KEYCLOAK_CALLBACK_PATH": refused(
     "the flow cookie through readHubCookie with `hostOnly` (`__Host-` only over HTTPS, bare only on loopback HTTP; none from a preview page); the session cookie through EnvironmentAuth, and no session issued for a request from a preview origin",
   ),

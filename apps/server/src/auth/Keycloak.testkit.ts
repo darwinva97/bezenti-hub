@@ -1,7 +1,7 @@
 /**
- * A fake Keycloak realm in process, where the Hub's `KeycloakHttp` goes instead of the network:
- * discovery, keys and the token endpoint. `signIn` plays the person at Keycloak's sign-in page;
- * `serve` changes an answer; `requests` lists what the Hub asked. Its `.test` issuer never resolves.
+ * A fake Keycloak realm in process (its `.test` issuer never resolves): `signIn` plays the person at
+ * the sign-in page, `serve` changes an answer. Ticket 07: refresh tokens rotate (a spent one is
+ * `invalid_grant`), `refreshAs` bends a person's refreshes, `logoutToken` signs a logout token.
  */
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Clock from "effect/Clock";
@@ -98,6 +98,22 @@ interface PendingCode {
   readonly as: FakeSignIn;
 }
 
+/** A live refresh token's session at the fake realm. */
+interface RefreshSession {
+  readonly pending: PendingCode;
+  readonly sid: string;
+}
+
+/** How the realm answers a person's refreshes (ticket 07). */
+export type RefreshMode =
+  | { readonly kind: "ok"; readonly claims?: Record<string, unknown> }
+  /** The account is disabled, deleted or its session ended: `invalid_grant`. */
+  | { readonly kind: "refused" }
+  /** Keycloak answers 503. */
+  | { readonly kind: "unavailable" }
+  /** No connection at all. */
+  | { readonly kind: "unreachable" };
+
 const Claims = Schema.Record(Schema.String, Schema.Unknown);
 
 const base64Url = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url");
@@ -145,6 +161,15 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
   const codes = new Map<string, PendingCode>();
   /** Every refresh token the realm handed out, to look for it where it must not be. */
   const refreshTokens: Array<string> = [];
+  /** Every ID token it handed out, likewise. */
+  const idTokens: Array<string> = [];
+  /** Live refresh tokens: each refresh spends its token and hands out a new one. */
+  const refreshSessions = new Map<string, RefreshSession>();
+  /** The newest SSO session (`sid`) of each person, for back-channel logout tokens. */
+  const sidsBySub = new Map<string, string>();
+  const refreshModes = new Map<string, RefreshMode>();
+  /** How many refresh requests reached the token endpoint, and how many were reuses. */
+  const refreshCounts = { requests: 0, reused: 0 };
   let counter = 0;
 
   const respond = (
@@ -162,9 +187,12 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
     return HttpClientResponse.fromWeb(request, response);
   };
 
-  const idToken = Effect.fnUntraced(function* (pending: PendingCode) {
+  const idToken = Effect.fnUntraced(function* (
+    pending: PendingCode,
+    sid: string,
+    extra: Record<string, unknown> = {},
+  ) {
     const now = Math.floor((yield* Clock.currentTimeMillis) / 1000);
-    counter += 1;
     const claims: Record<string, unknown> = {
       iss: issuer,
       sub: pending.as.sub,
@@ -173,12 +201,12 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
       exp: now + 300,
       iat: now,
       auth_time: now,
-      sid: `fake-sso-session-${counter}`,
+      sid,
       preferred_username: pending.as.username ?? pending.as.sub,
       email: pending.as.email ?? `${pending.as.sub}@example.test`,
       ...(pending.nonce === undefined ? {} : { nonce: pending.nonce }),
     };
-    for (const [name, value] of Object.entries(pending.as.claims ?? {})) {
+    for (const [name, value] of Object.entries({ ...pending.as.claims, ...extra })) {
       if (value === undefined) delete claims[name];
       else claims[name] = value;
     }
@@ -187,8 +215,63 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
       "ES256",
     );
     const token = yield* Jwt.sign(Claims, claims, key, { kid: "fake-realm-1", typ: "JWT" });
+    idTokens.push(Redacted.value(token));
     return Redacted.value(token);
   }, Effect.provide(NodeCrypto.layer));
+
+  /** A new refresh token for this session, the realm's to recognise. */
+  const newRefreshToken = (session: RefreshSession) => {
+    counter += 1;
+    const refreshToken = `fake-refresh-token-${counter}-q8w7e6r5t4y3u2i1`;
+    refreshTokens.push(refreshToken);
+    refreshSessions.set(refreshToken, session);
+    return refreshToken;
+  };
+
+  /** Ticket 07: `grant_type=refresh_token`, rotating, as the person's mode says. */
+  const refreshGrant = Effect.fnUntraced(function* (
+    request: HttpClientRequest.HttpClientRequest,
+    url: URL,
+    form: Map<string, string>,
+  ) {
+    refreshCounts.requests += 1;
+    const presented = form.get("refresh_token") ?? "";
+    const session = refreshSessions.get(presented);
+    const mode =
+      session === undefined
+        ? undefined
+        : (refreshModes.get(session.pending.as.sub) ?? { kind: "ok" });
+    if (mode?.kind === "unreachable") return "unreachable" as const;
+    if (mode?.kind === "unavailable") return respond(request, url, 503, { error: "unavailable" });
+    if (session === undefined) {
+      if (refreshTokens.includes(presented)) refreshCounts.reused += 1;
+      return respond(request, url, 400, {
+        error: "invalid_grant",
+        error_description: "Token is not active",
+      });
+    }
+    // Spent, whatever comes next: Keycloak's refresh token rotation.
+    refreshSessions.delete(presented);
+    if (mode?.kind === "refused") {
+      return respond(request, url, 400, {
+        error: "invalid_grant",
+        error_description: "Account disabled",
+      });
+    }
+    return respond(request, url, 200, {
+      access_token: `fake-access-token-${counter}`,
+      token_type: "Bearer",
+      expires_in: 300,
+      id_token: yield* idToken(
+        session.pending,
+        session.sid,
+        mode?.kind === "ok" ? mode.claims : {},
+      ),
+      refresh_token: newRefreshToken(session),
+      refresh_expires_in: 0,
+      scope: "openid profile email offline_access",
+    });
+  });
 
   const tokenEndpoint = Effect.fnUntraced(function* (
     request: HttpClientRequest.HttpClientRequest,
@@ -212,6 +295,7 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
           return [formDecode(name), formDecode(value)] as const;
         }),
     );
+    if (form.get("grant_type") === "refresh_token") return yield* refreshGrant(request, url, form);
     const code = form.get("code") ?? "";
     const pending = codes.get(code);
     // A code is spent the first time it is presented, whatever comes next.
@@ -229,17 +313,18 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
       });
     }
     counter += 1;
-    const refreshToken = `fake-refresh-token-${counter}-q8w7e6r5t4y3u2i1`;
-    if (pending.as.noRefreshToken !== true) refreshTokens.push(refreshToken);
+    const sid = `fake-sso-session-${counter}`;
+    sidsBySub.set(pending.as.sub, sid);
+    const session: RefreshSession = { pending, sid };
     return respond(request, url, 200, {
       access_token: `fake-access-token-${counter}`,
       token_type: "Bearer",
       expires_in: 300,
-      id_token: yield* idToken(pending),
+      id_token: yield* idToken(pending, sid),
       ...(pending.as.noRefreshToken === true
         ? { scope: "openid profile email" }
         : {
-            refresh_token: refreshToken,
+            refresh_token: newRefreshToken(session),
             refresh_expires_in: 0,
             scope: "openid profile email offline_access",
           }),
@@ -249,7 +334,17 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
   const client = HttpClient.make((request, url) => {
     requests.push(url.href);
     if (url.href === tokenUrl(issuer) && request.method === "POST" && !answers.has(url.href)) {
-      return tokenEndpoint(request, url).pipe(Effect.orDie);
+      return tokenEndpoint(request, url).pipe(
+        Effect.orDie,
+        Effect.filterOrFail(
+          (response): response is HttpClientResponse.HttpClientResponse =>
+            response !== "unreachable",
+          () =>
+            new HttpClientError.HttpClientError({
+              reason: new HttpClientError.TransportError({ request, description: "unreachable" }),
+            }),
+        ),
+      );
     }
     const answer = answers.get(url.href) ?? { status: 404, json: { error: "not found" } };
     if (answer === "hang") return Effect.never;
@@ -308,10 +403,56 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
       return callback.href;
     });
 
+  /**
+   * Ticket 07: a back-channel logout token as the realm signs it, for `sid` and/or `sub`;
+   * `claims` bends it (`undefined` drops a claim), `foreignKey` signs it with a stranger's key.
+   */
+  const logoutToken = Effect.fnUntraced(function* (input: {
+    readonly sid?: string;
+    readonly sub?: string;
+    readonly claims?: Record<string, unknown>;
+    readonly foreignKey?: boolean;
+  }) {
+    const now = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+    counter += 1;
+    const claims: Record<string, unknown> = {
+      iss: issuer,
+      aud: clientId,
+      iat: now,
+      exp: now + 120,
+      jti: `fake-logout-${counter}`,
+      typ: "Logout",
+      events: { "http://schemas.openid.net/event/backchannel-logout": {} },
+      ...(input.sid === undefined ? {} : { sid: input.sid }),
+      ...(input.sub === undefined ? {} : { sub: input.sub }),
+    };
+    for (const [name, value] of Object.entries(input.claims ?? {})) {
+      if (value === undefined) delete claims[name];
+      else claims[name] = value;
+    }
+    const key = yield* Jwk.importPrivate(
+      (input.foreignKey === true ? foreignKey : signingKey).privateKey,
+      "ES256",
+    );
+    return Redacted.value(
+      yield* Jwt.sign(Claims, claims, key, { kid: "fake-realm-1", typ: "logout+jwt" }),
+    );
+  }, Effect.provide(NodeCrypto.layer));
+
   return {
     issuer,
     clientId,
     clientSecret,
+    /** Ticket 07: how the realm answers this person's refreshes from now on. */
+    refreshAs: (sub: string, mode: RefreshMode) => {
+      refreshModes.set(sub, mode);
+    },
+    /** Ticket 07: refresh requests that reached the realm, and reuses of a spent token. */
+    refreshCounts,
+    /** Ticket 07: the newest SSO session of a person, as their ID token's `sid`. */
+    sidOf: (sub: string) => sidsBySub.get(sub),
+    idTokens,
+    logoutToken,
     /** Put the fake where the Hub's Keycloak requests go. */
     layer: Layer.succeed(KeycloakHttp, client),
     /** The realm's signing key; its public half is in the served key set. */

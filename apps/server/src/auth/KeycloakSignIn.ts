@@ -22,33 +22,31 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { HttpServerRequest } from "effect/http";
-import type * as Jwks from "effect/jose/Jwks";
 
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as ServerConfig from "../config.ts";
 import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as Users from "../persistence/Users.ts";
-import { crossesFromPreviewOrigin, readHubCookie } from "../preview/PreviewOrigin.ts";
+import { readHubCookie } from "../preview/PreviewOrigin.ts";
 import * as InvitationService from "../spaces/InvitationService.ts";
-import * as MembershipService from "../spaces/MembershipService.ts";
-import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
-import * as AccountCredentials from "./AccountCredentials.ts";
 import * as GroupSync from "./GroupSync.ts";
 import { clientBucketOf, isLoopbackClientAddress } from "./clientConnection.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as KeycloakAdmission from "./KeycloakAdmission.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
+import * as KeycloakGroups from "./KeycloakGroups.ts";
+import * as KeycloakLogins from "./KeycloakLogins.ts";
+import * as KeycloakRealm from "./KeycloakRealm.ts";
 import * as KeycloakStepUpProofs from "./KeycloakStepUpProofs.ts";
+import * as KeycloakTokens from "./keycloakTokens.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
+import { makeHubOrigin } from "./keycloakOrigins.ts";
 import { makeGrantStore } from "./pkceGrants.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
@@ -65,8 +63,6 @@ const FLOWS_PER_CLIENT = 5;
 /** Starts one client may make per minute; the rest are refused until the minute passes. */
 const STARTS_PER_MINUTE = 20;
 const MAX_TRACKED_CLIENTS = 10_000;
-/** How long a realm's discovery document and key set are kept before being read again. */
-const REALM_TTL = Duration.minutes(10);
 /**
  * A `step-up`'s `auth_time` may be this much before the flow started: the realm's clock and the
  * Hub's differ a little. Anything older is an authentication from before this confirmation.
@@ -75,15 +71,15 @@ const AUTH_TIME_SKEW = Duration.seconds(30);
 
 /** The flow cookie: `__Host-` over HTTPS (Path=/, no Domain), the bare name on loopback HTTP. */
 export const FLOW_COOKIE_NAME = "t3_keycloak_flow";
-/** The key in the Hub's encrypted store that seals refresh tokens. */
-export const REFRESH_TOKEN_KEY_NAME = "identity-login-key";
+/** The key in the Hub's encrypted store that seals refresh tokens (and ID tokens, ticket 07). */
+export const REFRESH_TOKEN_KEY_NAME = KeycloakTokens.REFRESH_TOKEN_KEY_NAME;
 /** Where a `link` lands by default: the User's account settings. */
 export const ACCOUNT_PATH = "/settings/user/account";
 /** Where an `invitation` flow that did not go through lands: the page that started it. */
 const INVITE_PATH = "/invite";
 
 /** A refresh token's associated data: a row copied to another login does not open. */
-export const refreshTokenContext = (loginId: string) => `identity-login:${loginId}`;
+export const refreshTokenContext = KeycloakTokens.refreshTokenContext;
 
 interface PendingFlow {
   readonly intent: KeycloakFlowIntent;
@@ -236,15 +232,7 @@ class CallbackRefusal extends Schema.TaggedError<CallbackRefusal>()("CallbackRef
 const refuse = (failure: KeycloakSignInFailure, detail: string, counted = false) =>
   new CallbackRefusal({ failure, counted, detail });
 
-interface Realm {
-  readonly issuer: string;
-  readonly discovery: KeycloakClient.KeycloakDiscovery;
-  readonly keys: Jwks.Jwks["Service"];
-  readonly scope: Scope.Closeable;
-  readonly expiresAtMs: number;
-}
-
-export interface FlowBounds {
+export interface FlowBounds extends KeycloakLogins.LoginsBounds {
   readonly maxPendingFlows?: number;
   readonly startsPerMinute?: number;
   readonly flowsPerClient?: number;
@@ -270,8 +258,8 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
   const audit = yield* AuditLog.AuditLog;
   const invitations = yield* InvitationService.InvitationService;
   const stepUpProofs = yield* KeycloakStepUpProofs.KeycloakStepUpProofs;
-  const memberships = yield* MembershipService.MembershipService;
-  const spaceDirectory = yield* SpaceDirectory.SpaceDirectory;
+  const keycloakGroups = yield* KeycloakGroups.KeycloakGroups;
+  const keycloakRealm = yield* KeycloakRealm.KeycloakRealm;
   const sql = yield* SqlClient.SqlClient;
   const random = yield* SecureRandom.SecureRandom;
   const digester = yield* Digest.Digest;
@@ -293,31 +281,14 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     );
   const randomToken = random.randomBytes(32).pipe(Effect.map((bytes) => base64UrlEncode(bytes)));
 
-  // The Hub's own page origins besides the request's: the public URL and the dev servers'.
-  const trustedOrigins = new Set<string>([
-    ...(config.publicUrl === undefined ? [] : [config.publicUrl.origin]),
-    ...(config.devUrl === undefined ? [] : [config.devUrl.origin]),
-    ...config.devAllowedOrigins,
-  ]);
-
   /**
    * Where the realm sends the browser back: `T3CODE_PUBLIC_URL` when set, else the page's own
-   * origin, taken only when it is the request's own (scheme and host as the client-connection
-   * middleware resolved them: forwarded only by a trusted proxy) or one the Hub trusts.
+   * origin, taken only when it is the request's own or one the Hub trusts (`keycloakOrigins.ts`).
    */
+  const hubOrigin = makeHubOrigin(config);
   const redirectUriFor = (request: HttpServerRequest.HttpServerRequest) => {
-    const origin = request.headers.origin;
-    if (origin === undefined || crossesFromPreviewOrigin(config.previewOrigin, request.headers)) {
-      return undefined;
-    }
-    const host = request.headers.host;
-    const own = host === undefined ? null : URL.parse(`${request.protocol}://${host}`);
-    const allowed =
-      trustedOrigins.has(origin) ||
-      (config.publicUrl === undefined && own !== null && own.origin === origin);
-    if (!allowed) return undefined;
-    const base = config.publicUrl?.origin ?? origin;
-    return `${base}${KEYCLOAK_CALLBACK_PATH}`;
+    const base = hubOrigin(request);
+    return base === undefined ? undefined : `${base}${KEYCLOAK_CALLBACK_PATH}`;
   };
 
   /** Counts this start against its client bucket; false past the minute's allowance. */
@@ -336,41 +307,8 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     return window.count <= startsPerMinute;
   };
 
-  // One realm at a time: discovery and its key set, read again after REALM_TTL or for another
-  // issuer. jose's remote key set keeps its own cache and refetches for an unknown `kid`.
-  let realm: Realm | undefined;
-  const realmLock = yield* Semaphore.make(1);
-  const dropRealm = Effect.suspend(() => {
-    const current = realm;
-    realm = undefined;
-    return current === undefined ? Effect.void : Scope.close(current.scope, Exit.void);
-  });
-  yield* Effect.addFinalizer(() => dropRealm);
-  const realmFor = (issuer: string) =>
-    realmLock.withPermits(1)(
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        if (realm !== undefined && realm.issuer === issuer && realm.expiresAtMs > now) {
-          return realm;
-        }
-        yield* dropRealm;
-        const discovery = yield* keycloak.discover(issuer);
-        const scope = yield* Scope.make();
-        const keys = yield* keycloak.keySet(discovery).pipe(
-          Scope.provide(scope),
-          Effect.onError(() => Scope.close(scope, Exit.void)),
-        );
-        const fresh: Realm = {
-          issuer,
-          discovery,
-          keys,
-          scope,
-          expiresAtMs: now + Duration.toMillis(REALM_TTL),
-        };
-        realm = fresh;
-        return fresh;
-      }),
-    );
+  // The configured realm's discovery and keys, shared with the re-checks (ticket 07).
+  const realmFor = keycloakRealm.realmFor;
 
   const enabledConfig = settings.keycloakConfig;
 
@@ -547,19 +485,16 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
 
   const storage = (detail: string) => () => refuse("failed", detail);
 
-  const sealRefreshToken = (loginId: string, token: Redacted.Redacted<string> | undefined) =>
+  const sealToken = (
+    kind: KeycloakTokens.TokenKind,
+    loginId: string,
+    token: Redacted.Redacted<string> | undefined,
+  ) =>
     token === undefined
       ? Effect.succeed(null)
-      : secretStore.getOrCreateRandom(REFRESH_TOKEN_KEY_NAME, 32).pipe(
-          Effect.flatMap((key) =>
-            AccountCredentials.seal(
-              key,
-              new TextEncoder().encode(Redacted.value(token)),
-              refreshTokenContext(loginId),
-            ),
-          ),
+      : KeycloakTokens.seal(secretStore, kind, loginId, token).pipe(
           Effect.provide(cryptoContext),
-          Effect.mapError(storage("seal refresh token")),
+          Effect.mapError(storage(`seal ${kind} token`)),
         );
 
   const inactiveRefusal = (userId: UserId) =>
@@ -607,7 +542,9 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         issuer: flow.issuer,
         subject: claims.sub,
         keycloakSid: claims.sid ?? null,
-        refreshTokenSealed: yield* sealRefreshToken(loginId, tokens.refreshToken),
+        refreshTokenSealed: yield* sealToken("refresh", loginId, tokens.refreshToken),
+        // Ticket 07: the latest ID token, for «also sign out of Keycloak»'s `id_token_hint`.
+        idTokenSealed: yield* sealToken("id", loginId, tokens.idToken),
         offline: tokens.refreshToken !== undefined && tokens.scopes.includes("offline_access"),
         strong: strength.strong,
         acr: strength.evidence.acr,
@@ -623,37 +560,20 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
    * caller's transaction. `undefined` is a new identity, with no Memberships yet. The Owner
    * belongs to no Organization, so no group puts them in one.
    */
-  const groupPlan = Effect.fn("KeycloakSignIn.groupPlan")(function* (
+  const groupPlan = (
     user: { readonly id: UserId; readonly isOwner: boolean } | undefined,
     claims: KeycloakClient.IdTokenClaims,
     groupsClaim: string,
-  ) {
-    if (user?.isOwner === true) return [];
-    const mappings = yield* settings.groupMappings.pipe(Effect.mapError(storage("mappings")));
-    const current =
-      user === undefined
-        ? []
-        : yield* spaceDirectory
-            .groupMembershipsOf(user.id)
-            .pipe(Effect.mapError(storage("group memberships")));
-    return GroupSync.planGroupSync({
-      memberships: current,
-      groups: GroupSync.groupsOf(
-        claims,
-        groupsClaim,
-        new Set(mappings.map((mapping) => mapping.group)),
-      ),
-      mappings,
-    });
-  });
+  ) =>
+    keycloakGroups
+      .plan(user, claims, groupsClaim)
+      .pipe(Effect.mapError((error) => refuse("failed", error.step)));
 
   /** Applies a plan in the caller's transaction; `afterCommit` once it commits. */
   const applyGroups = (userId: UserId, changes: ReadonlyArray<GroupSync.GroupChange>) =>
-    changes.length === 0
-      ? Effect.succeed({ afterCommit: Effect.void })
-      : memberships
-          .applyGroupSync({ userId, changes })
-          .pipe(Effect.mapError(storage("apply groups")));
+    keycloakGroups
+      .apply(userId, changes)
+      .pipe(Effect.mapError((error) => refuse("failed", error.step)));
 
   /** An existing, active User's sign-in: fresh labels, a new login and its session. */
   const signIn = Effect.fn("KeycloakSignIn.signIn")(function* (
@@ -1259,7 +1179,18 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
   return KeycloakSignIn.of({ start, callback });
 });
 
+/**
+ * The flows and the re-checks (ticket 07) over one realm cache and one group sync, so a refresh
+ * applies Keycloak's groups exactly as a sign-in does.
+ */
 export const layerWith = (options: FlowBounds = {}) =>
-  Layer.effect(KeycloakSignIn, makeWith(options));
+  Layer.merge(
+    Layer.effect(KeycloakSignIn, makeWith(options)),
+    KeycloakLogins.layerWith(
+      options.maxRememberedJtis === undefined
+        ? {}
+        : { maxRememberedJtis: options.maxRememberedJtis },
+    ),
+  ).pipe(Layer.provideMerge(KeycloakGroups.layer), Layer.provideMerge(KeycloakRealm.layer));
 
 export const layer = layerWith();

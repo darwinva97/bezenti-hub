@@ -39,6 +39,8 @@ interface PendingCode {
   readonly redirectUri: string;
   readonly codeChallenge: string;
   readonly clientLabel: string | undefined;
+  /** The approving session's Keycloak sign-in (ticket 07): the app's session ends with it. */
+  readonly identityLoginId: string | undefined;
   readonly expiresAtMs: number;
 }
 
@@ -128,6 +130,7 @@ const make = Effect.gen(function* () {
         redirectUri: input.redirectUri,
         codeChallenge: input.codeChallenge,
         clientLabel: input.clientLabel?.slice(0, 80),
+        identityLoginId: session.identityLoginId,
         expiresAtMs: now + APP_SIGN_IN_CODE_TTL_MS,
       };
       // Recorded before the code exists: an approval the log missed never signs anyone in.
@@ -172,6 +175,9 @@ const make = Effect.gen(function* () {
       scopes: pending.scopes,
       client: label === undefined ? client : { ...client, label },
       ...(proofKeyThumbprint === undefined ? {} : { proofKeyThumbprint }),
+      ...(pending.identityLoginId === undefined
+        ? {}
+        : { identityLoginId: pending.identityLoginId }),
     });
   });
 

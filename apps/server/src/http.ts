@@ -10,7 +10,7 @@ import {
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
-import { KEYCLOAK_CALLBACK_PATH } from "@t3tools/contracts";
+import { KEYCLOAK_BACKCHANNEL_LOGOUT_PATH, KEYCLOAK_CALLBACK_PATH } from "@t3tools/contracts";
 import * as ByteSize from "effect/ByteSize";
 import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import * as Data from "effect/Data";
@@ -340,10 +340,12 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
   ),
 );
 
-// Keycloak's callback carries the authorization code and `state` in its query.
+// Keycloak's callback carries the authorization code and `state` in its query; its back-channel
+// logout (ticket 07), a logout token in its body.
 const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([
   OTLP_TRACES_PROXY_PATH,
   KEYCLOAK_CALLBACK_PATH,
+  KEYCLOAK_BACKCHANNEL_LOGOUT_PATH,
 ]);
 
 /** Requests whose address holds a credential, so no trace keeps it. */

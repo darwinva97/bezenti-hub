@@ -1,8 +1,7 @@
 /**
- * Keycloak sign-in over HTTP (Keycloak sign-in spec, ticket 02): `POST /api/auth/keycloak/start`
- * answers the realm's sign-in address and sets the flow's `__Host-` cookie; the raw route
- * `GET /oauth/keycloak/callback` is where the realm sends the browser back, and answers only a
- * redirect: to `returnTo` with a session cookie, or to a page with `?keycloak=<code>`.
+ * Keycloak over HTTP: `start` sets the flow's `__Host-` cookie and answers the realm's address; the
+ * callback answers only a redirect (ticket 02). Ticket 07: «also sign out of Keycloak», and the raw
+ * route where the realm posts its back-channel logout tokens.
  */
 import {
   EnvironmentHttpApi,
@@ -10,13 +9,16 @@ import {
   EnvironmentHttpForbiddenError,
   EnvironmentRateLimitedError,
   EnvironmentServiceBusyError,
+  KEYCLOAK_BACKCHANNEL_LOGOUT_PATH,
   KEYCLOAK_CALLBACK_PATH,
 } from "@t3tools/contracts";
+import * as ByteSize from "effect/ByteSize";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import * as Cookies from "effect/http/Cookies";
 import * as HttpEffect from "effect/http/HttpEffect";
+import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import {
@@ -27,6 +29,7 @@ import {
   failEnvironmentInternal,
   failEnvironmentInvalidRequest,
 } from "./http.ts";
+import * as KeycloakLogins from "./KeycloakLogins.ts";
 import * as KeycloakSignIn from "./KeycloakSignIn.ts";
 import * as SessionStore from "./SessionStore.ts";
 
@@ -66,41 +69,105 @@ export const layerApi = HttpApiBuilder.group(
   "keycloakSignIn",
   Effect.fnUntraced(function* (handlers) {
     const keycloakSignIn = yield* KeycloakSignIn.KeycloakSignIn;
-    return handlers.handle(
-      "start",
-      Effect.fn("environment.keycloakSignIn.start")(function* (args) {
-        yield* annotateEnvironmentRequest(args.endpoint.name);
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const started = yield* keycloakSignIn.start(request, args.payload).pipe(
-          Effect.catchTags({
-            KeycloakStartRefusedError: failStart,
-            AccountChangeRefusedError: (error) =>
-              Effect.fail(new EnvironmentHttpForbiddenError({ message: error.message })),
-            SignInThrottledError: (error) =>
-              Effect.fail(
-                new EnvironmentRateLimitedError({
-                  message: error.message,
-                  retryAfterSeconds: error.retryAfterSeconds,
-                }),
-              ),
-            UserDirectoryStorageError: (error) => failEnvironmentInternal("internal_error", error),
-            SignInSettingsStorageError: (error) =>
-              failEnvironmentInternal("sign_in_settings_failed", error),
-            InvitationStorageError: (error) => failEnvironmentInternal("invitations_failed", error),
-          }),
-        );
-        const cookies = Cookies.set(Cookies.empty, started.cookie.name, started.cookie.value, {
-          ...flowCookieAttributes(started.cookie.secure),
-          maxAge: FLOW_COOKIE_MAX_AGE,
-        });
-        if (Result.isFailure(cookies)) {
-          return yield* failEnvironmentInternal("browser_session_cookie_failed");
+    const keycloakLogins = yield* KeycloakLogins.KeycloakLogins;
+    return handlers
+      .handle(
+        "signOut",
+        Effect.fn("environment.keycloakSignIn.signOut")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const done = yield* keycloakLogins.signOut(request, args.payload.handle).pipe(
+            Effect.catchTags({
+              KeycloakSignOutRefusedError: (error) =>
+                error.reason === "invalid-origin"
+                  ? failEnvironmentInvalidRequest("invalid_origin")
+                  : Effect.fail(new EnvironmentHttpBadRequestError({ message: error.message })),
+            }),
+          );
+          yield* appendCredentialResponseHeaders;
+          return done;
+        }),
+      )
+      .handle(
+        "start",
+        Effect.fn("environment.keycloakSignIn.start")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const started = yield* keycloakSignIn.start(request, args.payload).pipe(
+            Effect.catchTags({
+              KeycloakStartRefusedError: failStart,
+              AccountChangeRefusedError: (error) =>
+                Effect.fail(new EnvironmentHttpForbiddenError({ message: error.message })),
+              SignInThrottledError: (error) =>
+                Effect.fail(
+                  new EnvironmentRateLimitedError({
+                    message: error.message,
+                    retryAfterSeconds: error.retryAfterSeconds,
+                  }),
+                ),
+              UserDirectoryStorageError: (error) =>
+                failEnvironmentInternal("internal_error", error),
+              SignInSettingsStorageError: (error) =>
+                failEnvironmentInternal("sign_in_settings_failed", error),
+              InvitationStorageError: (error) =>
+                failEnvironmentInternal("invitations_failed", error),
+            }),
+          );
+          const cookies = Cookies.set(Cookies.empty, started.cookie.name, started.cookie.value, {
+            ...flowCookieAttributes(started.cookie.secure),
+            maxAge: FLOW_COOKIE_MAX_AGE,
+          });
+          if (Result.isFailure(cookies)) {
+            return yield* failEnvironmentInternal("browser_session_cookie_failed");
+          }
+          yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+            Effect.succeed(HttpServerResponse.mergeCookies(response, cookies.success)),
+          );
+          yield* appendCredentialResponseHeaders;
+          return { authorizationUrl: started.authorizationUrl };
+        }),
+      );
+  }),
+);
+
+/** The largest back-channel logout request body read: one form field with a logout token. */
+const MAX_BACKCHANNEL_BODY_BYTES = 16 * 1024;
+
+/**
+ * Ticket 07, the realm's back-channel logout: a form with `logout_token` and nothing to do with
+ * cookies. 200 once the sign-ins it names have ended (or none matched), 400 for anything else;
+ * the answer never echoes the token. Untraced (`isUntracedRequest`): the token is in the body.
+ */
+export const layerBackchannelLogoutRoute = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    const keycloakLogins = yield* KeycloakLogins.KeycloakLogins;
+    const answer = (status: 200 | 400) =>
+      HttpServerResponse.empty({
+        status,
+        headers: { "cache-control": "no-store" },
+      });
+    yield* router.add("POST", KEYCLOAK_BACKCHANNEL_LOGOUT_PATH, (request) =>
+      Effect.gen(function* () {
+        const type = request.headers["content-type"] ?? "";
+        const length = Number(request.headers["content-length"] ?? "0");
+        if (
+          !type.toLowerCase().startsWith("application/x-www-form-urlencoded") ||
+          length > MAX_BACKCHANNEL_BODY_BYTES
+        ) {
+          return answer(400);
         }
-        yield* HttpEffect.appendPreResponseHandler((_request, response) =>
-          Effect.succeed(HttpServerResponse.mergeCookies(response, cookies.success)),
+        const text = yield* request.text.pipe(
+          Effect.provideService(
+            HttpIncomingMessage.MaxBodySize,
+            ByteSize.bytes(MAX_BACKCHANNEL_BODY_BYTES),
+          ),
+          Effect.orElseSucceed(() => undefined),
         );
-        yield* appendCredentialResponseHeaders;
-        return { authorizationUrl: started.authorizationUrl };
+        if (text === undefined || text.length > MAX_BACKCHANNEL_BODY_BYTES) return answer(400);
+        const tokens = new URLSearchParams(text).getAll("logout_token");
+        if (tokens.length !== 1) return answer(400);
+        const outcome = yield* keycloakLogins.backchannelLogout(tokens[0] ?? "");
+        return answer(outcome === "ok" ? 200 : 400);
       }),
     );
   }),

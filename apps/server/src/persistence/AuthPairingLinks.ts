@@ -30,6 +30,8 @@ export const AuthPairingLinkRecord = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
   consumedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  /** The Keycloak sign-in of the session that created it (ticket 07); it ends with it. */
+  identityLoginId: Schema.NullOr(Schema.String),
 });
 export type AuthPairingLinkRecord = typeof AuthPairingLinkRecord.Type;
 
@@ -44,6 +46,7 @@ export const CreateAuthPairingLinkInput = Schema.Struct({
   userId: Schema.NullOr(UserId),
   createdAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
+  identityLoginId: Schema.optionalKey(Schema.String),
 });
 export type CreateAuthPairingLinkInput = typeof CreateAuthPairingLinkInput.Type;
 
@@ -86,6 +89,7 @@ const AuthPairingLinkRawDbRow = Schema.Struct({
   expiresAt: Schema.Unknown,
   consumedAt: Schema.Unknown,
   revokedAt: Schema.Unknown,
+  identityLoginId: Schema.Unknown,
 });
 
 const decodeAuthPairingLinkDbRow = Schema.decodeUnknownEffect(AuthPairingLinkRecord);
@@ -117,10 +121,27 @@ export class AuthPairingLinkRepository extends Context.Service<
     >;
     readonly revokeUnspentForUser: (input: {
       readonly userId: UserId;
+      /** Only the links no Keycloak sign-in vouches for (ticket 07). */
+      readonly unboundOnly?: boolean;
+      readonly revokedAt: DateTime.Utc;
+    }) => Effect.Effect<ReadonlyArray<string>, AuthPairingLinkRepositoryError>;
+    /** Ends the unspent links created from these Keycloak sign-ins (ticket 07). */
+    readonly revokeForIdentityLogins: (input: {
+      readonly loginIds: ReadonlyArray<string>;
       readonly revokedAt: DateTime.Utc;
     }) => Effect.Effect<ReadonlyArray<string>, AuthPairingLinkRepositoryError>;
   }
 >()("t3/persistence/AuthPairingLinks/AuthPairingLinkRepository") {}
+
+/** Ticket 07: the Keycloak sign-in a new pairing link would come from has ended. */
+export class PairingLinkLoginEndedError extends Schema.TaggedError<PairingLinkLoginEndedError>()(
+  "PairingLinkLoginEndedError",
+  { pairingLinkId: Schema.String },
+) {
+  override get message(): string {
+    return "The Keycloak sign-in this pairing link would come from has ended.";
+  }
+}
 
 function toPersistenceSqlOrDecodeError(
   sqlOperation: string,
@@ -141,8 +162,9 @@ function toPersistenceSqlOrDecodeError(
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const createPairingLinkRow = SqlSchema.void({
+  const createPairingLinkRow = SqlSchema.findAll({
     Request: CreateAuthPairingLinkInput,
+    Result: Schema.Struct({ id: Schema.String }),
     execute: (input) =>
       sql`
         INSERT INTO auth_pairing_links (
@@ -157,9 +179,10 @@ export const make = Effect.gen(function* () {
           created_at,
           expires_at,
           consumed_at,
-          revoked_at
+          revoked_at,
+          identity_login_id
         )
-        VALUES (
+        SELECT
           ${input.id},
           ${input.credential},
           ${input.method},
@@ -171,8 +194,18 @@ export const make = Effect.gen(function* () {
           ${input.createdAt},
           ${input.expiresAt},
           NULL,
-          NULL
-        )
+          NULL,
+          ${input.identityLoginId ?? null}
+        -- Ticket 07: a link from a Keycloak session only while that sign-in is live.
+        WHERE ${
+          input.identityLoginId === undefined
+            ? sql`1`
+            : sql`EXISTS (
+                SELECT 1 FROM identity_logins
+                WHERE login_id = ${input.identityLoginId} AND ended_at IS NULL
+              )`
+        }
+        RETURNING id AS "id"
       `,
   });
 
@@ -194,6 +227,14 @@ export const make = Effect.gen(function* () {
           AND revoked_at IS NULL
           AND consumed_at IS NULL
           AND expires_at > ${now}
+          -- Ticket 07: never spent once the Keycloak sign-in it came from has ended.
+          AND (
+            identity_login_id IS NULL
+            OR EXISTS (
+              SELECT 1 FROM identity_logins AS l
+              WHERE l.login_id = auth_pairing_links.identity_login_id AND l.ended_at IS NULL
+            )
+          )
           AND (
             proof_key_thumbprint IS NULL
             OR proof_key_thumbprint = ${proofKeyThumbprint}
@@ -224,7 +265,8 @@ export const make = Effect.gen(function* () {
           created_at AS "createdAt",
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
-          revoked_at AS "revokedAt"
+          revoked_at AS "revokedAt",
+          identity_login_id AS "identityLoginId"
       `,
   });
 
@@ -245,7 +287,8 @@ export const make = Effect.gen(function* () {
           created_at AS "createdAt",
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
-          revoked_at AS "revokedAt"
+          revoked_at AS "revokedAt",
+          identity_login_id AS "identityLoginId"
         FROM auth_pairing_links
         WHERE revoked_at IS NULL
           AND consumed_at IS NULL
@@ -285,7 +328,8 @@ export const make = Effect.gen(function* () {
           created_at AS "createdAt",
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
-          revoked_at AS "revokedAt"
+          revoked_at AS "revokedAt",
+          identity_login_id AS "identityLoginId"
         FROM auth_pairing_links
         WHERE credential = ${credential}
       `,
@@ -293,6 +337,11 @@ export const make = Effect.gen(function* () {
 
   const create: AuthPairingLinkRepository["Service"]["create"] = (input) =>
     createPairingLinkRow(input).pipe(
+      Effect.flatMap((rows) =>
+        rows.length > 0
+          ? Effect.void
+          : Effect.fail(new PairingLinkLoginEndedError({ pairingLinkId: input.id })),
+      ),
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "AuthPairingLinkRepository.create:query",
@@ -362,12 +411,31 @@ export const make = Effect.gen(function* () {
   });
 
   const revokeUnspentRowsForUser = SqlSchema.findAll({
-    Request: Schema.Struct({ userId: UserId, revokedAt: Schema.DateTimeUtcFromString }),
+    Request: Schema.Struct({
+      userId: UserId,
+      unboundOnly: Schema.Boolean,
+      revokedAt: Schema.DateTimeUtcFromString,
+    }),
     Result: Schema.Struct({ id: Schema.String }),
-    execute: ({ userId, revokedAt }) => sql`
+    execute: ({ userId, unboundOnly, revokedAt }) => sql`
       UPDATE auth_pairing_links
       SET revoked_at = ${revokedAt}
       WHERE user_id = ${userId} AND revoked_at IS NULL AND consumed_at IS NULL
+        ${unboundOnly ? sql`AND identity_login_id IS NULL` : sql``}
+      RETURNING id AS "id"
+    `,
+  });
+
+  const revokeIdentityLoginRows = SqlSchema.findAll({
+    Request: Schema.Struct({
+      loginIds: Schema.Array(Schema.String),
+      revokedAt: Schema.DateTimeUtcFromString,
+    }),
+    Result: Schema.Struct({ id: Schema.String }),
+    execute: ({ loginIds, revokedAt }) => sql`
+      UPDATE auth_pairing_links
+      SET revoked_at = ${revokedAt}
+      WHERE revoked_at IS NULL AND consumed_at IS NULL AND ${sql.in("identity_login_id", loginIds)}
       RETURNING id AS "id"
     `,
   });
@@ -387,7 +455,11 @@ export const make = Effect.gen(function* () {
   const revokeUnspentForUser: AuthPairingLinkRepository["Service"]["revokeUnspentForUser"] = (
     input,
   ) =>
-    revokeUnspentRowsForUser(input).pipe(
+    revokeUnspentRowsForUser({
+      userId: input.userId,
+      unboundOnly: input.unboundOnly === true,
+      revokedAt: input.revokedAt,
+    }).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "AuthPairingLinkRepository.revokeUnspentForUser:query",
@@ -396,6 +468,21 @@ export const make = Effect.gen(function* () {
       ),
       Effect.map((rows) => rows.map((row) => row.id)),
     );
+
+  const revokeForIdentityLogins: AuthPairingLinkRepository["Service"]["revokeForIdentityLogins"] = (
+    input,
+  ) =>
+    input.loginIds.length === 0
+      ? Effect.succeed([])
+      : revokeIdentityLoginRows(input).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "AuthPairingLinkRepository.revokeForIdentityLogins:query",
+              "AuthPairingLinkRepository.revokeForIdentityLogins:decodeRows",
+            ),
+          ),
+          Effect.map((rows) => rows.map((row) => row.id)),
+        );
 
   const revoke: AuthPairingLinkRepository["Service"]["revoke"] = (input) =>
     revokePairingLinkRow(input).pipe(
@@ -444,6 +531,7 @@ export const make = Effect.gen(function* () {
     getByCredential,
     getUnspentCreator,
     revokeUnspentForUser,
+    revokeForIdentityLogins,
   } satisfies AuthPairingLinkRepository["Service"];
 });
 

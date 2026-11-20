@@ -127,6 +127,12 @@ export type AuthRecoveryCodeSignInRequest = typeof AuthRecoveryCodeSignInRequest
 
 export const AuthSignOutResult = Schema.Struct({
   signedOut: Schema.Boolean,
+  /**
+   * Keycloak sign-in, ticket 07: when the session came from a live Keycloak sign-in, a single-use
+   * handle (10 minutes) the signed-out page may spend at `/api/auth/keycloak/sign-out` to end that
+   * sign-in too, with the apps approved from it, and leave Keycloak. Never logged.
+   */
+  keycloakSignOutHandle: Schema.optionalKey(Schema.String),
 });
 export type AuthSignOutResult = typeof AuthSignOutResult.Type;
 

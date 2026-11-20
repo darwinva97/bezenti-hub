@@ -14,6 +14,7 @@ import {
   EnvironmentHttpForbiddenError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
@@ -23,6 +24,7 @@ import {
   failEnvironmentInternal,
   requireEnvironmentScope,
 } from "./http.ts";
+import * as KeycloakLogins from "./KeycloakLogins.ts";
 import * as SignInSettings from "./SignInSettings.ts";
 
 const OWNER_ONLY = "Only the Owner manages the sign-in settings.";
@@ -33,6 +35,15 @@ export const layer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const spaces = yield* SpaceDirectory.SpaceDirectory;
     const settings = yield* SignInSettings.SignInSettings;
+    // Ticket 07: Keycloak's re-checks for the Owner's warnings; absent where a test serves no realm.
+    const keycloakLogins = yield* Effect.serviceOption(KeycloakLogins.KeycloakLogins);
+    const withStatus = <A extends object>(view: A) =>
+      Option.isNone(keycloakLogins)
+        ? Effect.succeed(view)
+        : Effect.map(keycloakLogins.value.status, (keycloakStatus) => ({
+            ...view,
+            keycloakStatus,
+          }));
 
     const forbidden = () => Effect.fail(new EnvironmentHttpForbiddenError({ message: OWNER_ONLY }));
     const failStorage = (error: SignInSettings.SignInSettingsStorageError) =>
@@ -71,6 +82,7 @@ export const layer = HttpApiBuilder.group(
               SignInSettingsDeniedError: forbidden,
               SignInSettingsStorageError: failStorage,
             }),
+            Effect.flatMap(withStatus),
           );
         }),
       )
@@ -91,6 +103,7 @@ export const layer = HttpApiBuilder.group(
               SignInSettingsConfirmError: (error) =>
                 Effect.fail(new EnvironmentHttpConflictError({ message: error.message })),
             }),
+            Effect.flatMap(withStatus),
           );
         }),
       )

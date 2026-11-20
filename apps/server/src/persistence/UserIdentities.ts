@@ -29,6 +29,8 @@ export interface NewIdentityLogin {
   readonly keycloakSid: string | null;
   /** The refresh token, sealed with the login's id as associated data; null when none came. */
   readonly refreshTokenSealed: string | null;
+  /** The ID token, sealed likewise (ticket 07: «also sign out of Keycloak»'s `id_token_hint`). */
+  readonly idTokenSealed: string | null;
   readonly offline: boolean;
   /** Whether it counts as a strong factor (ticket 06), and the `acr`/`amr` that said so. */
   readonly strong: boolean;
@@ -46,6 +48,24 @@ export interface LiveLogin {
   readonly amr: ReadonlyArray<string>;
   /** The User is the Owner or an Admin of some Organization: they need a strong sign-in. */
   readonly requiresStrong: boolean;
+}
+
+/** What a re-check reads of a sign-in (ticket 07). Sealed values only, never a token. */
+export interface LoginForRefresh {
+  readonly loginId: string;
+  readonly userId: UserId;
+  readonly issuer: string;
+  readonly subject: string;
+  readonly keycloakSid: string | null;
+  readonly refreshTokenSealed: string | null;
+  readonly checkedAt: string;
+  readonly ended: boolean;
+}
+
+/** A sign-in that just ended, and whose it was (ticket 07: for the audit entry). */
+export interface EndedLogin {
+  readonly loginId: string;
+  readonly userId: UserId;
 }
 
 export class UserIdentities extends Context.Service<
@@ -105,11 +125,40 @@ export class UserIdentities extends Context.Service<
       userIds: ReadonlyArray<UserId>,
       now: string,
     ) => Effect.Effect<number, SqlError.SqlError>;
-    /** Ends these live sign-ins; the ones it ended. */
+    /** Ends these live sign-ins, dropping their sealed tokens; the ones it ended. */
     readonly endLogins: (
       loginIds: ReadonlyArray<string>,
       now: string,
-    ) => Effect.Effect<ReadonlyArray<string>, SqlError.SqlError>;
+    ) => Effect.Effect<ReadonlyArray<EndedLogin>, SqlError.SqlError>;
+    /** Ticket 07: a sign-in as a re-check reads it. */
+    readonly loginForRefresh: (
+      loginId: string,
+    ) => Effect.Effect<Option.Option<LoginForRefresh>, SqlError.SqlError>;
+    /**
+     * Ticket 07: a good re-check, on a live sign-in only: `checked_at`, the new sealed refresh token
+     * (the old one kept when Keycloak sent none) and ID token. False when it ended meanwhile.
+     */
+    readonly saveRefresh: (input: {
+      readonly loginId: string;
+      readonly refreshTokenSealed: string | null;
+      readonly idTokenSealed: string;
+      readonly now: string;
+    }) => Effect.Effect<boolean, SqlError.SqlError>;
+    /** Ticket 07: the sealed ID token of a live sign-in, for `id_token_hint`. */
+    readonly sealedIdToken: (
+      loginId: string,
+    ) => Effect.Effect<Option.Option<string>, SqlError.SqlError>;
+    /**
+     * Ticket 07, back-channel logout: the live sign-ins of Keycloak's SSO session `sid` (of
+     * `subject` when given), or without `sid` every live one of the identity.
+     */
+    readonly liveLoginsFor: (input: {
+      readonly issuer: string;
+      readonly sid: string | undefined;
+      readonly subject: string | undefined;
+    }) => Effect.Effect<ReadonlyArray<string>, SqlError.SqlError>;
+    /** Ticket 07: whether the newest Keycloak sign-in got `offline_access`; none before any. */
+    readonly newestLoginOffline: () => Effect.Effect<Option.Option<boolean>, SqlError.SqlError>;
     /**
      * Ends a User's link (a reset link replaces every way in): the identity goes, and their
      * Keycloak sign-ins end. True when there was one.
@@ -191,12 +240,13 @@ const make = Effect.gen(function* () {
   )(function* (input) {
     yield* sql`
       INSERT INTO identity_logins (
-        login_id, user_id, issuer, subject, keycloak_sid, refresh_token_sealed, strong, offline,
-        acr, amr_json, created_at, checked_at
+        login_id, user_id, issuer, subject, keycloak_sid, refresh_token_sealed, id_token_sealed,
+        strong, offline, acr, amr_json, created_at, checked_at
       )
       VALUES (
         ${input.loginId}, ${input.userId}, ${input.issuer}, ${input.subject},
-        ${input.keycloakSid}, ${input.refreshTokenSealed}, ${input.strong ? 1 : 0},
+        ${input.keycloakSid}, ${input.refreshTokenSealed}, ${input.idTokenSealed},
+        ${input.strong ? 1 : 0},
         ${input.offline ? 1 : 0}, ${input.acr}, ${encodeAmr(input.amr)},
         ${input.now}, ${input.now}
       )
@@ -248,7 +298,8 @@ const make = Effect.gen(function* () {
     "UserIdentities.endWeakLogins",
   )(function* (userId, now) {
     const rows = yield* sql<{ readonly loginId: string }>`
-      UPDATE identity_logins SET ended_at = ${now}
+      UPDATE identity_logins
+      SET ended_at = ${now}, refresh_token_sealed = NULL, id_token_sealed = NULL
       WHERE user_id = ${userId} AND ended_at IS NULL AND strong = 0
       RETURNING login_id AS "loginId"
     `;
@@ -278,7 +329,7 @@ const make = Effect.gen(function* () {
             AND identity_login_id IS NULL AND expires_at > ${now})
         + (SELECT COUNT(*) FROM auth_pairing_links
           WHERE ${sql.in("user_id", userIds)} AND revoked_at IS NULL AND consumed_at IS NULL
-            AND expires_at > ${now}) AS count
+            AND identity_login_id IS NULL AND expires_at > ${now}) AS count
     `;
     return rows[0]?.count ?? 0;
   });
@@ -286,19 +337,101 @@ const make = Effect.gen(function* () {
   const endLogins: UserIdentities["Service"]["endLogins"] = Effect.fn("UserIdentities.endLogins")(
     function* (loginIds, now) {
       if (loginIds.length === 0) return [];
-      const rows = yield* sql<{ readonly loginId: string }>`
-        UPDATE identity_logins SET ended_at = ${now}
+      const rows = yield* sql<{ readonly loginId: string; readonly userId: UserId }>`
+        UPDATE identity_logins
+        SET ended_at = ${now}, refresh_token_sealed = NULL, id_token_sealed = NULL
         WHERE ended_at IS NULL AND ${sql.in("login_id", loginIds)}
-        RETURNING login_id AS "loginId"
+        RETURNING login_id AS "loginId", user_id AS "userId"
       `;
-      return rows.map((row) => row.loginId);
+      return rows.map((row) => ({ loginId: row.loginId, userId: row.userId }));
     },
   );
+
+  const loginForRefresh: UserIdentities["Service"]["loginForRefresh"] = Effect.fn(
+    "UserIdentities.loginForRefresh",
+  )(function* (loginId) {
+    const rows = yield* sql<{
+      readonly loginId: string;
+      readonly userId: UserId;
+      readonly issuer: string;
+      readonly subject: string;
+      readonly keycloakSid: string | null;
+      readonly refreshTokenSealed: string | null;
+      readonly checkedAt: string;
+      readonly endedAt: string | null;
+    }>`
+      SELECT login_id AS "loginId", user_id AS "userId", issuer, subject,
+        keycloak_sid AS "keycloakSid", refresh_token_sealed AS "refreshTokenSealed",
+        checked_at AS "checkedAt", ended_at AS "endedAt"
+      FROM identity_logins WHERE login_id = ${loginId}
+    `;
+    const row = rows[0];
+    return row === undefined
+      ? Option.none()
+      : Option.some({
+          loginId: row.loginId,
+          userId: row.userId,
+          issuer: row.issuer,
+          subject: row.subject,
+          keycloakSid: row.keycloakSid,
+          refreshTokenSealed: row.refreshTokenSealed,
+          checkedAt: row.checkedAt,
+          ended: row.endedAt !== null,
+        });
+  });
+
+  const saveRefresh: UserIdentities["Service"]["saveRefresh"] = Effect.fn(
+    "UserIdentities.saveRefresh",
+  )(function* (input) {
+    const rows = yield* sql<{ readonly loginId: string }>`
+      UPDATE identity_logins
+      SET checked_at = ${input.now},
+        refresh_token_sealed = COALESCE(${input.refreshTokenSealed}, refresh_token_sealed),
+        id_token_sealed = ${input.idTokenSealed}
+      WHERE login_id = ${input.loginId} AND ended_at IS NULL
+      RETURNING login_id AS "loginId"
+    `;
+    return rows.length > 0;
+  });
+
+  const sealedIdToken: UserIdentities["Service"]["sealedIdToken"] = Effect.fn(
+    "UserIdentities.sealedIdToken",
+  )(function* (loginId) {
+    const rows = yield* sql<{ readonly sealed: string | null }>`
+      SELECT id_token_sealed AS sealed FROM identity_logins
+      WHERE login_id = ${loginId} AND ended_at IS NULL
+    `;
+    return Option.fromNullishOr(rows[0]?.sealed);
+  });
+
+  const liveLoginsFor: UserIdentities["Service"]["liveLoginsFor"] = Effect.fn(
+    "UserIdentities.liveLoginsFor",
+  )(function* ({ issuer, sid, subject }) {
+    if (sid === undefined && subject === undefined) return [];
+    const rows = yield* sql<{ readonly loginId: string }>`
+      SELECT login_id AS "loginId" FROM identity_logins
+      WHERE ended_at IS NULL AND issuer = ${issuer}
+        ${sid === undefined ? sql`` : sql`AND keycloak_sid = ${sid}`}
+        ${subject === undefined ? sql`` : sql`AND subject = ${subject}`}
+    `;
+    return rows.map((row) => row.loginId);
+  });
+
+  const newestLoginOffline: UserIdentities["Service"]["newestLoginOffline"] = Effect.fn(
+    "UserIdentities.newestLoginOffline",
+  )(function* () {
+    const rows = yield* sql<{ readonly offline: number }>`
+      SELECT offline FROM identity_logins ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `;
+    const row = rows[0];
+    return row === undefined ? Option.none() : Option.some(row.offline === 1);
+  });
 
   const unlink: UserIdentities["Service"]["unlink"] = Effect.fn("UserIdentities.unlink")(
     function* (userId, now) {
       yield* sql`
-        UPDATE identity_logins SET ended_at = ${now}
+        UPDATE identity_logins
+        SET ended_at = ${now}, refresh_token_sealed = NULL, id_token_sealed = NULL
         WHERE user_id = ${userId} AND ended_at IS NULL
       `;
       const removed = yield* sql<{ readonly userId: string }>`
@@ -318,6 +451,11 @@ const make = Effect.gen(function* () {
     setStrength,
     endWeakLogins,
     endLogins,
+    loginForRefresh,
+    saveRefresh,
+    sealedIdToken,
+    liveLoginsFor,
+    newestLoginOffline,
     sessionLoginStrong,
     unboundAccessCount,
     unlink,

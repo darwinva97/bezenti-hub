@@ -11,6 +11,8 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import {
   KeycloakCheckResult,
+  KeycloakSignOutRequest,
+  KeycloakSignOutResult,
   KeycloakStartRequest,
   KeycloakStartResult,
   SignInSettings,
@@ -871,18 +873,28 @@ class EnvironmentAppSignInHttpApi extends HttpApiGroup.make("appSignIn")
 // and `invitation` (a dead token is a 400) need no session; `link` the browser's own session and
 // a fresh proof of the credential; `step-up` that of a User who signs in with Keycloak. Forbidden: Keycloak is off, or the
 // account may not link (`message` says why).
-class EnvironmentKeycloakSignInHttpApi extends HttpApiGroup.make("keycloakSignIn").add(
-  HttpApiEndpoint.post("start", "/api/auth/keycloak/start", {
-    payload: KeycloakStartRequest,
-    success: KeycloakStartResult,
-    error: [
-      ...EnvironmentUserSignInErrors,
-      ...EnvironmentAccountErrors,
-      EnvironmentServiceBusyError,
-      EnvironmentHttpBadRequestError,
-    ],
-  }),
-) {}
+class EnvironmentKeycloakSignInHttpApi extends HttpApiGroup.make("keycloakSignIn")
+  .add(
+    HttpApiEndpoint.post("start", "/api/auth/keycloak/start", {
+      payload: KeycloakStartRequest,
+      success: KeycloakStartResult,
+      error: [
+        ...EnvironmentUserSignInErrors,
+        ...EnvironmentAccountErrors,
+        EnvironmentServiceBusyError,
+        EnvironmentHttpBadRequestError,
+      ],
+    }),
+  )
+  // Ticket 07: «Salir también de Keycloak», with the handle the sign-out answered (no session:
+  // the browser has just signed out). Bad request: an unknown, spent or expired handle.
+  .add(
+    HttpApiEndpoint.post("signOut", "/api/auth/keycloak/sign-out", {
+      payload: KeycloakSignOutRequest,
+      success: KeycloakSignOutResult,
+      error: [...EnvironmentUserSignInErrors, EnvironmentHttpBadRequestError],
+    }),
+  ) {}
 
 class EnvironmentMcpOAuthHttpApi extends HttpApiGroup.make("mcpOAuth")
   .add(

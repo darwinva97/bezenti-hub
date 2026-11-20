@@ -487,6 +487,9 @@ export const serveAuthHttpWith = Effect.fn(function* (
   const routes = Layer.mergeAll(
     apiRoutes,
     KeycloakSignInHttp.layerCallbackRoute.pipe(Layer.provide(Layer.succeedContext(services))),
+    KeycloakSignInHttp.layerBackchannelLogoutRoute.pipe(
+      Layer.provide(Layer.succeedContext(services)),
+    ),
   );
   const { handler, dispose } = HttpRouter.toWebHandler(routes, { disableLogger: true });
   yield* Effect.addFinalizer(() => Effect.promise(dispose));

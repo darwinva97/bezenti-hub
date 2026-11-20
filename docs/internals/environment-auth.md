@@ -1,7 +1,9 @@
 # Environment authentication
 
 The environment issues its own sessions and enforces their capabilities. A
-session comes from a pairing grant or from a User signing in to a local account.
+session comes from a pairing grant, from a User signing in to a local account
+(the Owner's passkey and recovery codes always, everyone else's while the Owner
+keeps local sign-in open) or from a User signing in with Keycloak.
 
 ## Authority survives transport changes
 
@@ -94,6 +96,33 @@ assumes the old passkeys are lost or stolen, so in one transaction it spends the
 link, replaces every passkey with the new one, revokes the Owner's sessions and
 issues a new one.
 
+A User who signs in with Keycloak has a `user_identities` row: the realm's
+`iss` and the token's `sub`, never an email, which anyone can claim and a realm
+can reuse. The User's display name comes from the `name` claim, else
+`preferred_username`. The flow
+([KeycloakSignIn](../../apps/server/src/auth/KeycloakSignIn.ts)) is the code
+flow with PKCE, a `state` bound to the browser by a `__Host-` cookie, a `nonce`
+and RFC 9207 `iss`; one `intent` says why it started (`sign-in`, `invitation`,
+`link`, `step-up`, `reset`), so a path that needs a session (`link`, `step-up`)
+takes the browser's own, and the flow is spent the first time the browser comes
+back. Who gets in is one table
+([KeycloakAdmission](../../apps/server/src/auth/KeycloakAdmission.ts)): the
+Registration mode, the identity, the Invitation read again at the callback, a
+mapped group and the strength of the sign-in, first match wins. A new rule is a
+new row there, not a branch at a caller. The realm, client and strong-factor
+lists live in `sign_in_settings` (the Owner's alone); the client secret is
+sealed in the Hub's secret store and write-only (ADR 0012), so a read says
+only that one is saved.
+
+The Hub asks for `offline_access` on every flow. Keycloak's ordinary refresh
+token dies with the realm's SSO session, which idles out in hours or days; the
+Hub's session lasts 30 days and must be able to ask «is this account still
+enabled?» in that time. An offline token is the one that outlives the SSO idle,
+so it makes the re-check possible. A realm that does not grant it still signs
+people in, but their Hub sessions then end with the Keycloak session, and the
+Owner's settings warn about it. Taking the other road, matching the realm's
+SSO idle to 30 days, would put that setting in the Owner's hands for no gain.
+
 ### The session cookie
 
 A browser session is an `HttpOnly`, `SameSite=Lax` cookie on `/`, host-only (no `Domain`), named
@@ -143,6 +172,12 @@ server side:
   never more. A restart drops pending codes;
   the app just signs in again. Like other app tokens it lasts 30 days from
   issue and does not slide.
+- An app session approved from a browser session born of a Keycloak sign-in
+  carries that sign-in's `identity_login_id` and ends with it (see
+  [Keycloak sign-ins after the callback](#keycloak-sign-ins-after-the-callback)),
+  so disabling the account in Keycloak reaches the desktop and mobile apps too.
+  The page itself offers whatever the sign-in page offers, Keycloak included, since
+  it signs in as any browser does; the code the app receives never names how.
 - Signing out (`POST /api/auth/sign-out`) ends the request's own session,
   cookie or token, so removing a Hub from an app revokes its session there. The
   client also signs out a new session it could not save, and the previous one
@@ -548,7 +583,12 @@ of password sign-in. Accepting verifies the passkey, or hashes the password and
 checks the TOTP code, first; then one transaction creates the User, spends the
 Invitation with a conditional `UPDATE` (so of two racing accepts one wins),
 adds the membership and issues the browser session. A refusal inside it, such as
-a taken sign-in name, leaves the link unspent. A signed-in User accepts through
+a taken sign-in name, leaves the link unspent. Through Keycloak
+(`/api/auth/keycloak/start` with the `invitation` intent and the token, which
+the Hub checks and then keeps on its side), the callback applies the admission
+table: a new identity under «closed» is refused an Organization Invitation, and
+an Invitation that died meanwhile never gets an empty User, even in «open».
+While local sign-in is closed, `/invite` offers no new local credentials. A signed-in User accepts through
 `/api/invitations/join`, which adds the Organization to their User instead; it
 refuses the Owner, an existing Member, and an Admin Invitation for an account
 that signs in with a password alone.
@@ -595,8 +635,9 @@ them may have come from the password; their password then answers
 `SecondFactorMissingError`. Promoting a User who signs in with Keycloak (a Role
 change, accepting an Admin Invitation, creating an Organization) ends their
 Keycloak sign-ins that were not strong, with their sessions and sockets, and
-every session born of no sign-in (apps, MCP clients, pairing) and unspent
-pairing link, since nothing vouches for their strength until ticket 07. Accepting
+every session born of no sign-in (local sign-in sessions, apps approved
+before inheritance, unbound pairing links), since nothing vouches for their
+strength; what a strong sign-in approved stays (see Inheritance below). Accepting
 an Admin Invitation or creating an Organization themselves needs a session born
 of a strong Keycloak sign-in: from a weak one they could never sign in as an
 Admin again. So every live session of a Keycloak Admin is strong; that is why a
@@ -663,6 +704,19 @@ afterwards. Every ending goes through `UserDirectory.endKeycloakLogins`: the row
 ends, its sealed tokens are dropped, and every session and unspent pairing link
 born of it is revoked in the caller's transaction. Sockets close after the
 commit. A session whose sign-in has ended also reads as revoked on its own.
+
+**Why the re-check is in the background and fails open.** A refresh asks the
+realm over the network, and a session is used on every request and socket: if the
+request waited for the answer, a slow Keycloak would slow the whole Hub, and a
+Keycloak outage would take it down. So use only queues the question, and the
+answer arrives a little late. The question has two kinds of failure with opposite
+answers. A refresh token the realm *refuses* is the realm saying the account is
+gone, so the sign-in ends. Anything else (no answer, a timeout, a 5xx) tells the
+Hub nothing about the account, and ending sessions on it would sign out
+everybody, the Owner's Admins included, for as long as Keycloak is down. The Hub
+therefore fails open without a limit and shows the Owner a warning, so that a
+disabled account that stays on during an outage is a visible, temporary gap
+rather than a silent one. Back-channel logout and the next good refresh close it.
 
 **Re-check.** Using a session born of a sign-in counts as use of that sign-in: an
 HTTP request it signs, or a socket held open on it. When use comes more than an
@@ -945,7 +999,12 @@ changing or removing a password and confirming or removing TOTP therefore need
 a step-up proof in the same request: a fresh passkey assertion, or the current
 password plus a code when TOTP is enrolled. Only an account with no credential
 yet is exempt. A User who signs in with Keycloak has no local credential, so
-they always need a Keycloak `step-up` proof: a flow with `prompt=login` and
+they always need a Keycloak `step-up` proof. A session alone cannot stand in
+for the person: it may have been stolen, and the account has no local factor to
+ask for instead, so the only thing that can say «the person this account belongs to is
+here now» is the realm. Without such a proof nothing that installs a lasting
+way in (connecting, a credential change, approving a machine) goes through. The
+proof is: a flow with `prompt=login` and
 `max_age=0` whose ID token is the session User's own identity, authenticated
 after the flow started (30 s skew). It leaves a single-use proof, 5 minutes,
 for that browser session and User only, handed back in the URL fragment (never

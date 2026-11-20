@@ -338,13 +338,34 @@ export async function startKeycloak(input: {
   window.location.assign(started.authorizationUrl);
 }
 
-export async function signOut(): Promise<void> {
+/**
+ * Signs this browser out of the Hub. When its session came from a Keycloak sign-in, answers the
+ * handle that «Also sign out of Keycloak» spends (ticket 07).
+ */
+export async function signOut(): Promise<{ readonly keycloakSignOutHandle?: string }> {
   try {
-    await request((client) => client.auth.signOut({ headers: {} }));
+    const result = await request((client) => client.auth.signOut({ headers: {} }));
+    return result.keycloakSignOutHandle === undefined
+      ? {}
+      : { keycloakSignOutHandle: result.keycloakSignOutHandle };
   } finally {
     // Custom theme CSS never outlives a session: whoever signs in next is not restyled by it.
     dropThemeCss();
   }
+}
+
+/**
+ * «Also sign out of Keycloak» (ticket 07): ends the Keycloak sign-in the browser just signed out
+ * of, with the apps and outside agents approved from it, then leaves the realm too.
+ */
+export async function signOutOfKeycloak(handle: string): Promise<"left" | "ended"> {
+  const result = await request(
+    (client) => client.keycloakSignIn.signOut({ payload: { handle } }),
+    "This sign-out has expired. Sign out of Keycloak from its own page.",
+  );
+  if (result.endSessionUrl === null) return "ended";
+  window.location.assign(result.endSessionUrl);
+  return "left";
 }
 
 export function fetchInvitationPreview(token: string): Promise<InvitationPreview> {

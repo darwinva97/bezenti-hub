@@ -2,6 +2,7 @@ import {
   type AuthAccount,
   KEYCLOAK_PROOF_FRAGMENT_PARAM,
   KEYCLOAK_RESULT_PARAM,
+  KEYCLOAK_SIGN_OUT_FRAGMENT_PARAM,
   KeycloakSignInFailure,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -27,6 +28,21 @@ export const keycloakReturnTo = (location: {
 export const keycloakProofOf = (hash: string): string | null => {
   const proofId = new URLSearchParams(hash.replace(/^#/, "")).get(KEYCLOAK_PROOF_FRAGMENT_PARAM);
   return proofId === null || proofId === "" ? null : proofId;
+};
+
+/**
+ * Where a signed-out browser lands (ticket 07): the sign-in page, with the sign-out's handle for
+ * «Also sign out of Keycloak» in the fragment, never the query, so no server log keeps it.
+ */
+export const signedOutLocation = (keycloakSignOutHandle: string | undefined) =>
+  keycloakSignOutHandle === undefined
+    ? "/sign-in"
+    : `/sign-in#${new URLSearchParams({ [KEYCLOAK_SIGN_OUT_FRAGMENT_PARAM]: keycloakSignOutHandle })}`;
+
+/** The sign-out's handle the signed-out page was sent with; null when none. */
+export const keycloakSignOutHandleOf = (hash: string): string | null => {
+  const handle = new URLSearchParams(hash.replace(/^#/, "")).get(KEYCLOAK_SIGN_OUT_FRAGMENT_PARAM);
+  return handle === null || handle === "" ? null : handle;
 };
 
 /** A User who signs in only with Keycloak confirms through it: nothing local to confirm with. */

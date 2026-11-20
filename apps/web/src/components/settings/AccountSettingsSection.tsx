@@ -13,7 +13,7 @@ import {
   startKeycloak,
   startTotpEnrollment,
 } from "../../environments/primary/userAccounts";
-import { keycloakResultMessage } from "../auth/keycloakSignIn.logic";
+import { keycloakResultMessage, signedOutLocation } from "../auth/keycloakSignIn.logic";
 import { errorMessageOf } from "../../lib/errorMessage";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -70,8 +70,9 @@ export function AccountSettingsSection() {
 
   const handleSignOut = async () => {
     setIsSigningOut(true);
-    await signOut().catch(() => undefined);
-    window.location.replace("/sign-in");
+    const signedOut = await signOut().catch(() => ({ keycloakSignOutHandle: undefined }));
+    // Ticket 07: from a Keycloak sign-in, the page offers to leave Keycloak too.
+    window.location.replace(signedOutLocation(signedOut.keycloakSignOutHandle));
   };
   const onChanged = (account: AuthAccount) => setLoad({ status: "loaded", account });
   const keycloakOffered = session.data?.signInOptions?.keycloak === true;

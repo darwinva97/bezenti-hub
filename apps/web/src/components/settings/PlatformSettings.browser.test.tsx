@@ -203,3 +203,45 @@ it("shows the Owner's Keycloak group mappings, and warns about one that no longe
     served.signInSettings = null;
   }
 });
+
+it("warns the Owner when Keycloak rejects the Hub and the newest sign-in got no offline_access", async () => {
+  session.isOwner = true;
+  served.signInSettings = {
+    registrationMode: "invitation-only",
+    localSignInForMembers: true,
+    keycloak: {
+      enabled: true,
+      issuer: "https://auth.example.com/realms/acme",
+      clientId: "t3-hub",
+      clientSecretSet: true,
+      clientSecretUpdatedAt: null,
+      groupsClaim: "groups",
+      strongAcr: [],
+      strongAmr: [],
+    },
+    groupMappings: [],
+    mappableOrganizations: [],
+    publicOrigin: null,
+    updatedAt: null,
+    // Keycloak sign-in, ticket 07.
+    keycloakStatus: {
+      unreachableSince: "2026-11-20T10:00:00.000Z",
+      problem: "rejected",
+      lastLoginOffline: false,
+    },
+  };
+  const router = createFrameRouter("/settings/platform/keycloak");
+  const stopTracking = startMainAppLocationTracking(router);
+  await using _screen = await render(<RouterProvider router={router} />, { router: false });
+  try {
+    await expect
+      .element(
+        page.getByText(/Keycloak has rejected this Hub's client since .*check its client secret/),
+      )
+      .toBeVisible();
+    await expect.element(page.getByText(/did not get offline_access/)).toBeVisible();
+  } finally {
+    stopTracking();
+    served.signInSettings = null;
+  }
+});

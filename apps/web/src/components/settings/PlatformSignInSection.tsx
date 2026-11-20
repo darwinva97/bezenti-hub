@@ -32,6 +32,7 @@ import {
   checkLinesOf,
   clientUrlsOf,
   formOf,
+  keycloakWarningsOf,
   REGISTRATION_MODES,
   type SignInForm,
   withMapping,
@@ -485,6 +486,9 @@ export function PlatformKeycloakSection() {
   const changes = changesOf(settings, form);
   const keycloak = settings.keycloak;
   const { fromPage, urls } = clientUrlsOf(settings.publicOrigin, window.location.origin);
+  const warnings = keycloakWarningsOf(keycloak.enabled, settings.keycloakStatus, (iso) =>
+    new Date(iso).toLocaleString(),
+  );
   const edit = (patch: Partial<SignInForm>) => state.setForm({ ...form, ...patch });
 
   const save = async (payload: UpdateSignInSettingsRequest, kind: "save" | "toggle") => {
@@ -544,6 +548,11 @@ export function PlatformKeycloakSection() {
               : "Turning it on checks the realm first, and it stays off if the check fails."}
         </p>
       </div>
+      {warnings.map((warning) => (
+        <Alert key={warning} variant="warning">
+          <AlertDescription>{warning}</AlertDescription>
+        </Alert>
+      ))}
 
       <label className="flex flex-col gap-1 text-sm">
         Issuer

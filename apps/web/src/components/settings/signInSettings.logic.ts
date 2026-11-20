@@ -1,5 +1,6 @@
 import {
   type KeycloakCheckResult,
+  type KeycloakStatus,
   keycloakClientUrls,
   type KeycloakGroupMapping,
   type RegistrationMode,
@@ -168,6 +169,34 @@ export const clientUrlsOf = (
 };
 
 /** «Check» in a few lines for the Owner. */
+/**
+ * The Owner's warnings about Keycloak's re-checks (ticket 07), while it is on: a realm that does
+ * not answer, or rejects the Hub's client (a wrong secret looks like nothing else), and a newest
+ * sign-in without `offline_access`. `formatDate` writes the date as the page does.
+ */
+export const keycloakWarningsOf = (
+  enabled: boolean,
+  status: KeycloakStatus | undefined,
+  formatDate: (iso: string) => string,
+): ReadonlyArray<string> => {
+  if (!enabled || status === undefined) return [];
+  const warnings: Array<string> = [];
+  if (status.unreachableSince !== null) {
+    const since = formatDate(status.unreachableSince);
+    warnings.push(
+      status.problem === "rejected"
+        ? `Keycloak has rejected this Hub's client since ${since}: check its client secret. Nobody is signed out meanwhile, so a disabled account is not signed out either.`
+        : `Keycloak has not answered since ${since}. Nobody is signed out meanwhile; disabled accounts are signed out once it answers again.`,
+    );
+  }
+  if (status.lastLoginOffline === false) {
+    warnings.push(
+      "The newest Keycloak sign-in did not get offline_access, so Hub sessions end when the Keycloak session ends. Allow the offline_access scope for this client in Keycloak.",
+    );
+  }
+  return warnings;
+};
+
 export const checkLinesOf = (result: KeycloakCheckResult): ReadonlyArray<string> =>
   result._tag === "failed"
     ? [result.message]

@@ -6,12 +6,14 @@ import {
   signInWithPassword,
   signInWithRecoveryCode,
   signInWithTotp,
+  signOutOfKeycloak,
   startKeycloak,
 } from "../../environments/primary/userAccounts";
 import {
   keycloakResultCode,
   keycloakResultMessage,
   keycloakReturnTo,
+  keycloakSignOutHandleOf,
 } from "./keycloakSignIn.logic";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -47,6 +49,33 @@ export function SignInSurface({
   const [retryStrong] = useState(
     () => keycloakResultCode(window.location.search) === "strong-factor-required",
   );
+  // Ticket 07: a browser just signed out of a Keycloak sign-in may leave Keycloak too.
+  const [signOutHandle] = useState(() => {
+    const handle = keycloakSignOutHandleOf(window.location.hash);
+    // Kept in this page's state only, never in its address or history (read once, then dropped).
+    if (handle !== null) {
+      queueMicrotask(() =>
+        window.history.replaceState(window.history.state, "", window.location.pathname),
+      );
+    }
+    return handle;
+  });
+  const [keycloakSignOut, setKeycloakSignOut] = useState<"offered" | "leaving" | "ended">(
+    "offered",
+  );
+  const leaveKeycloak = (handle: string) => {
+    setKeycloakSignOut("leaving");
+    setErrorMessage("");
+    signOutOfKeycloak(handle).then(
+      (outcome) => {
+        if (outcome === "ended") setKeycloakSignOut("ended");
+      },
+      (cause: unknown) => {
+        setKeycloakSignOut("ended");
+        setErrorMessage(cause instanceof Error ? cause.message : "Sign-out failed.");
+      },
+    );
+  };
   const startKeycloakSignIn = (strongFactor: boolean) => {
     // The browser leaves for the realm; only a refusal to start comes back here.
     setIsSubmitting(true);
@@ -100,6 +129,26 @@ export function SignInSurface({
       <StandalonePageHeader title="Sign in" description={description} />
 
       <div className="mt-6 space-y-4">
+        {signOutHandle !== null && keycloakSignOut !== "ended" ? (
+          <Alert>
+            <AlertDescription>
+              <p>You signed out of this Hub. Keycloak may still sign you back in with one click.</p>
+              <p className="mt-1">
+                Signing out of Keycloak too also signs out the apps and outside agents you approved
+                from this browser&apos;s Keycloak sign-in.
+              </p>
+              <Button
+                className="mt-2"
+                disabled={keycloakSignOut === "leaving"}
+                size="sm"
+                variant="outline"
+                onClick={() => leaveKeycloak(signOutHandle)}
+              >
+                {keycloakSignOut === "leaving" ? "Signing out..." : "Also sign out of Keycloak"}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {keycloakOffered && retryStrong ? (
           <Button disabled={isSubmitting} size="sm" onClick={() => startKeycloakSignIn(true)}>
             Retry with second factor

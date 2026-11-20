@@ -2,7 +2,14 @@ import { type SignInSettings, SpaceId } from "@t3tools/contracts";
 import * as Redacted from "effect/Redacted";
 import { describe, expect, it } from "vite-plus/test";
 
-import { changesOf, clientUrlsOf, formOf, valuesOf, withMapping } from "./signInSettings.logic";
+import {
+  changesOf,
+  clientUrlsOf,
+  formOf,
+  keycloakWarningsOf,
+  valuesOf,
+  withMapping,
+} from "./signInSettings.logic";
 
 const saved: SignInSettings = {
   registrationMode: "invitation-only",
@@ -48,6 +55,36 @@ describe("the strong-factor lists", () => {
     const listed = { ...saved, keycloak: { ...saved.keycloak, strongAcr: ["critica"] } };
     expect(changesOf(listed, formOf(listed))).toBeNull();
     expect(changesOf(listed, { ...formOf(listed), strongAcr: "" })?.strongAcr).toEqual([]);
+  });
+});
+
+describe("Keycloak's warnings for the Owner (ticket 07)", () => {
+  const date = (iso: string) => `on ${iso.slice(0, 10)}`;
+  const healthy = { unreachableSince: null, problem: null, lastLoginOffline: true } as const;
+
+  it("tell a realm that does not answer from one that rejects the Hub's client", () => {
+    expect(keycloakWarningsOf(true, healthy, date)).toEqual([]);
+    const down = keycloakWarningsOf(
+      true,
+      { ...healthy, unreachableSince: "2026-11-20T10:00:00.000Z", problem: "unreachable" },
+      date,
+    );
+    expect(down).toHaveLength(1);
+    expect(down[0]).toMatch(/has not answered since on 2026-11-20/);
+    const rejected = keycloakWarningsOf(
+      true,
+      { ...healthy, unreachableSince: "2026-11-20T10:00:00.000Z", problem: "rejected" },
+      date,
+    );
+    expect(rejected[0]).toMatch(/rejected this Hub's client .*client secret/);
+  });
+
+  it("say when the newest sign-in got no offline_access, and nothing while Keycloak is off", () => {
+    const offline = { ...healthy, lastLoginOffline: false };
+    expect(keycloakWarningsOf(true, offline, date)[0]).toMatch(/offline_access/);
+    expect(keycloakWarningsOf(false, offline, date)).toEqual([]);
+    expect(keycloakWarningsOf(true, undefined, date)).toEqual([]);
+    expect(keycloakWarningsOf(true, { ...healthy, lastLoginOffline: null }, date)).toEqual([]);
   });
 });
 

@@ -5,6 +5,8 @@ import {
   keycloakResultCode,
   keycloakResultMessage,
   keycloakReturnTo,
+  keycloakSignOutHandleOf,
+  signedOutLocation,
 } from "./keycloakSignIn.logic";
 
 describe("keycloakReturnTo", () => {
@@ -26,6 +28,18 @@ describe("keycloakProofOf", () => {
     expect(keycloakProofOf("#other=1")).toBeNull();
     expect(keycloakProofOf("#keycloakProof=")).toBeNull();
     expect(keycloakProofOf("")).toBeNull();
+  });
+});
+
+describe("signedOutLocation (ticket 07)", () => {
+  it("carries the sign-out's handle in the fragment only, and reads it back", () => {
+    expect(signedOutLocation(undefined)).toBe("/sign-in");
+    const location = signedOutLocation("a+b/c");
+    expect(location.startsWith("/sign-in#")).toBe(true);
+    expect(location).not.toContain("?");
+    expect(keycloakSignOutHandleOf(location.slice(location.indexOf("#")))).toBe("a+b/c");
+    expect(keycloakSignOutHandleOf("#other=1")).toBeNull();
+    expect(keycloakSignOutHandleOf("#keycloak-sign-out=")).toBeNull();
   });
 });
 

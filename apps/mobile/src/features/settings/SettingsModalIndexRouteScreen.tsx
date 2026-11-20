@@ -4,7 +4,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { useHubAccount } from "../../state/hub-account";
 import { useHubConnection } from "../../state/use-remote-environment-registry";
+import {
+  keycloakAccountRow,
+  openableHubUrl,
+  USER_ACCOUNT_BROWSER_PATH,
+} from "./keycloakAccount.logic";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
@@ -23,7 +29,11 @@ function SettingsModalIndexRouteScreen(props: { readonly modal: SettingsModalId 
   const insets = useSafeAreaInsets();
   const context = useSettingsModalContext();
   const { selectedTargets } = useSettingsEnvironmentFilter();
-  const hubBaseUrl = useHubConnection()?.httpBaseUrl ?? null;
+  const hub = useHubConnection();
+  const hubBaseUrl = hub?.httpBaseUrl ?? null;
+  const keycloak = keycloakAccountRow(useHubAccount(props.modal === "user" ? hub : null));
+  // Built from the address this phone saved for the Hub, never from a URL in the Hub's answer.
+  const accountUrl = openableHubUrl(hubBrowserUrl(hubBaseUrl, USER_ACCOUNT_BROWSER_PATH));
   const pages = settingsModalPages(props.modal, context);
 
   // What mobile has no screen for opens in the system browser, on the Hub's public URL.
@@ -77,6 +87,24 @@ function SettingsModalIndexRouteScreen(props: { readonly modal: SettingsModalId 
             ))}
           </SettingsSection>
         )}
+        {keycloak !== null ? (
+          <SettingsSection title="Keycloak">
+            {keycloak.kind === "connect" && accountUrl !== null ? (
+              <SettingsRow
+                icon="safari"
+                label="Connect Keycloak"
+                value={keycloak.value}
+                onPress={() => void tryOpenExternalUrl(accountUrl, "hub-settings")}
+              />
+            ) : (
+              <SettingsRow
+                icon="person.crop.circle"
+                label={keycloak.kind === "linked" ? "Signed in with Keycloak" : "Keycloak"}
+                value={keycloak.value}
+              />
+            )}
+          </SettingsSection>
+        ) : null}
         {browser !== null && browserUrl !== null ? (
           <SettingsSection title="In the browser">
             <SettingsRow

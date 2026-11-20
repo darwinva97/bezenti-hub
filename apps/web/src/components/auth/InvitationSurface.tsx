@@ -26,7 +26,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { QRCodeSvg } from "../ui/qr-code";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
-import { keycloakResultMessage } from "./keycloakSignIn.logic";
+import { keycloakResultCode, keycloakResultMessage } from "./keycloakSignIn.logic";
 import { canRegisterPasskeys } from "./OwnerSetupSurface";
 
 const isLoginName = Schema.is(AuthLoginName);
@@ -163,21 +163,35 @@ export function InvitationSurface({
 function AcceptWithKeycloak({ token }: { readonly token: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const accept = () => {
+  // Refused for a sign-in without the second factor the Role needs: offer to ask for it.
+  const [retryStrong] = useState(
+    () => keycloakResultCode(window.location.search) === "strong-factor-required",
+  );
+  const accept = (strongFactor: boolean) => {
     setBusy(true);
     setError("");
-    startKeycloak({ intent: "invitation", invitationToken: token, returnTo: "/" }).catch(
-      (cause: unknown) => {
-        setError(messageOf(cause, "Could not start signing in with Keycloak."));
-        setBusy(false);
-      },
-    );
+    startKeycloak({
+      intent: "invitation",
+      invitationToken: token,
+      returnTo: "/",
+      strongFactor,
+    }).catch((cause: unknown) => {
+      setError(messageOf(cause, "Could not start signing in with Keycloak."));
+      setBusy(false);
+    });
   };
   return (
     <div className="space-y-2">
-      <Button disabled={busy} size="sm" variant="outline" onClick={accept}>
-        Sign in with Keycloak to accept
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        {retryStrong ? (
+          <Button disabled={busy} size="sm" onClick={() => accept(true)}>
+            Retry with second factor
+          </Button>
+        ) : null}
+        <Button disabled={busy} size="sm" variant="outline" onClick={() => accept(false)}>
+          Sign in with Keycloak to accept
+        </Button>
+      </div>
       <p className="text-xs text-muted-foreground">
         Already have an account on this Hub? Sign in with it first, then open this link again. Or
         create an account below.

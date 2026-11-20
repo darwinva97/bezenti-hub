@@ -2,7 +2,7 @@ import type { SignInSettings } from "@t3tools/contracts";
 import * as Redacted from "effect/Redacted";
 import { describe, expect, it } from "vite-plus/test";
 
-import { changesOf, clientUrlsOf, formOf } from "./signInSettings.logic";
+import { changesOf, clientUrlsOf, formOf, valuesOf } from "./signInSettings.logic";
 
 const saved: SignInSettings = {
   registrationMode: "invitation-only",
@@ -32,6 +32,20 @@ describe("sign-in settings form", () => {
     expect(changed?.registrationMode).toBe("closed");
     expect(changed?.issuer).toBeUndefined();
     expect(Redacted.value(changed!.clientSecret!)).toBe("new-secret");
+  });
+});
+
+describe("the strong-factor lists", () => {
+  it("are typed with commas or blanks, and sent only when they change", () => {
+    expect(valuesOf(" critica, basico  critica,,")).toEqual(["critica", "basico"]);
+    expect(valuesOf("  ")).toEqual([]);
+    expect(changesOf(saved, { ...formOf(saved), strongAcr: " " })).toBeNull();
+    const changed = changesOf(saved, { ...formOf(saved), strongAcr: "critica", strongAmr: "otp" });
+    expect(changed?.strongAcr).toEqual(["critica"]);
+    expect(changed?.strongAmr).toEqual(["otp"]);
+    const listed = { ...saved, keycloak: { ...saved.keycloak, strongAcr: ["critica"] } };
+    expect(changesOf(listed, formOf(listed))).toBeNull();
+    expect(changesOf(listed, { ...formOf(listed), strongAcr: "" })?.strongAcr).toEqual([]);
   });
 });
 

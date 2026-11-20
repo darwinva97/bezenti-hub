@@ -7,7 +7,7 @@ import {
   denyEnvironmentJoin,
   fetchEnvironmentJoinRequest,
 } from "~/environments/primary/hubEnvironments";
-import { fetchAccount } from "~/environments/primary/userAccounts";
+import { fetchAccount, startKeycloak } from "~/environments/primary/userAccounts";
 import { errorMessageOf } from "~/lib/errorMessage";
 import { emptyStepUp, StepUpFields, toStepUp } from "../settings/AccountSettingsSection";
 import { Alert, AlertDescription } from "../ui/alert";
@@ -15,9 +15,67 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { UsedBySelect } from "../settings/UsedBySelect";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
+import {
+  confirmsWithKeycloak,
+  keycloakProofOf,
+  keycloakResultMessage,
+} from "./keycloakSignIn.logic";
 import { SignInSurface } from "./SignInSurface";
 
 type Outcome = "approved" | "cancelled" | null;
+
+/** What the form held when the page left to confirm through Keycloak, by join request. */
+interface Stashed {
+  readonly name: string;
+  readonly use: "personal" | SpaceId;
+}
+const stashKey = (requestId: string) => `t3:register-environment:${requestId}`;
+
+const stashForm = (requestId: string, form: Stashed) => {
+  try {
+    window.sessionStorage.setItem(stashKey(requestId), JSON.stringify(form));
+  } catch {
+    // Without storage the page comes back with the machine's own name; nothing is lost.
+  }
+};
+
+const takeStashedForm = (requestId: string): Stashed | null => {
+  try {
+    const raw = window.sessionStorage.getItem(stashKey(requestId));
+    window.sessionStorage.removeItem(stashKey(requestId));
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "name" in parsed &&
+      "use" in parsed &&
+      typeof parsed.name === "string" &&
+      typeof parsed.use === "string"
+    ) {
+      return { name: parsed.name, use: parsed.use as Stashed["use"] };
+    }
+  } catch {
+    // Unreadable: start from the machine's own name.
+  }
+  return null;
+};
+
+/**
+ * The proof a Keycloak confirmation came back with, taken off the address at once (history too):
+ * it serves this page once, and never stays where a copied link or a screenshot would carry it.
+ */
+const takeKeycloakProof = () => {
+  const proofId = keycloakProofOf(window.location.hash);
+  if (proofId !== null) {
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${window.location.search}`,
+    );
+  }
+  return proofId;
+};
 
 /**
  * The page `t3 join` links to, from any device. The Owner, or a User allowed to register their own
@@ -33,8 +91,44 @@ export function RegisterEnvironmentSurface({ signedIn }: { readonly signedIn: bo
   const [use, setUse] = useState<"personal" | SpaceId>("personal");
   const [stepUp, setStepUp] = useState<ReturnType<typeof emptyStepUp> | null>(null);
   const [pending, setPending] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
+  // A Keycloak confirmation that did not go through comes back with `?keycloak=<why>`.
+  const [errorMessage, setErrorMessage] = useState(
+    () => keycloakResultMessage(window.location.search) ?? "",
+  );
   const [outcome, setOutcome] = useState<Outcome>(null);
+  // Back from «Confirm with Keycloak»: the approval it left for resumes once, with this proof.
+  const [keycloakProof] = useState(takeKeycloakProof);
+
+  const decide = async (decision: () => Promise<string | null>, next: Outcome) => {
+    setPending(true);
+    setErrorMessage("");
+    try {
+      const redirectTo = await decision();
+      // A browser on the machine itself goes back to `t3 join`; elsewhere this page says so.
+      if (redirectTo !== null) window.location.replace(redirectTo);
+      setOutcome(next);
+    } catch (cause) {
+      setErrorMessage(errorMessageOf(cause, "The machine could not be registered."));
+    }
+    setPending(false);
+  };
+
+  /** Leaves for Keycloak to confirm it's you; the form waits in this tab until the page is back. */
+  const confirmWithKeycloak = (form: Stashed) => {
+    if (requestId === null) return;
+    setPending(true);
+    setErrorMessage("");
+    stashForm(requestId, form);
+    startKeycloak({
+      intent: "step-up",
+      returnTo: `${window.location.pathname}${window.location.search}`,
+      // Approving a machine needs a strong factor, whatever the Role.
+      strongFactor: true,
+    }).catch((cause: unknown) => {
+      setErrorMessage(errorMessageOf(cause, "Could not start confirming with Keycloak."));
+      setPending(false);
+    });
+  };
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the join request and the account's sign-in methods from the server.
   useEffect(() => {
@@ -56,6 +150,34 @@ export function RegisterEnvironmentSurface({ signedIn }: { readonly signedIn: bo
         }
         setAccount(loadedAccount);
         setStepUp(emptyStepUp(loadedAccount));
+        if (keycloakProof === null) return;
+        if (loaded.status !== "pending" || loaded.viewerMayApprove !== true) return;
+        // Back from Keycloak: the form as it was left, approved at once with the proof.
+        const form = takeStashedForm(requestId) ?? { name: loaded.name ?? "", use: "personal" };
+        setName(form.name);
+        setUse(form.use);
+        if (form.name.trim() === "") return;
+        setPending(true);
+        approveEnvironmentJoin({
+          requestId,
+          name: form.name.trim(),
+          stepUp: { method: "keycloak", proofId: keycloakProof },
+          dedicatedSpaceId: loaded.dedicatedSpaces?.find((space) => space.id === form.use)?.id,
+        })
+          .then(
+            (redirectTo) => {
+              if (redirectTo !== null) window.location.replace(redirectTo);
+              if (current) setOutcome("approved");
+            },
+            (cause: unknown) => {
+              if (current) {
+                setErrorMessage(errorMessageOf(cause, "The machine could not be registered."));
+              }
+            },
+          )
+          .finally(() => {
+            if (current) setPending(false);
+          });
       },
       (cause: unknown) => {
         if (current) setErrorMessage(errorMessageOf(cause, "Could not load this registration."));
@@ -64,7 +186,7 @@ export function RegisterEnvironmentSurface({ signedIn }: { readonly signedIn: bo
     return () => {
       current = false;
     };
-  }, [signedIn, requestId]);
+  }, [signedIn, requestId, keycloakProof]);
 
   const ended = (title: string, description: string) => (
     <StandalonePage>
@@ -140,19 +262,7 @@ export function RegisterEnvironmentSurface({ signedIn }: { readonly signedIn: bo
   }
 
   const dedicatedTo = request?.dedicatedSpaces?.find((space) => space.id === use);
-  const decide = async (decision: () => Promise<string | null>, next: Outcome) => {
-    setPending(true);
-    setErrorMessage("");
-    try {
-      const redirectTo = await decision();
-      // A browser on the machine itself goes back to `t3 join`; elsewhere this page says so.
-      if (redirectTo !== null) window.location.replace(redirectTo);
-      setOutcome(next);
-    } catch (cause) {
-      setErrorMessage(errorMessageOf(cause, "The machine could not be registered."));
-    }
-    setPending(false);
-  };
+  const viaKeycloak = account !== null && confirmsWithKeycloak(account);
 
   return (
     <StandalonePage>
@@ -180,6 +290,10 @@ export function RegisterEnvironmentSurface({ signedIn }: { readonly signedIn: bo
           className="mt-6 flex max-w-sm flex-col gap-3"
           onSubmit={(event) => {
             event.preventDefault();
+            if (viaKeycloak) {
+              confirmWithKeycloak({ name: name.trim(), use });
+              return;
+            }
             void decide(
               () =>
                 approveEnvironmentJoin({
@@ -229,10 +343,25 @@ export function RegisterEnvironmentSurface({ signedIn }: { readonly signedIn: bo
                 : new Date(request.requestedAt).toLocaleString()}
             </dd>
           </dl>
-          <StepUpFields account={account} disabled={pending} value={stepUp} onChange={setStepUp} />
+          {viaKeycloak ? (
+            <p className="text-xs text-muted-foreground">
+              You will confirm it's you with Keycloak, with your second factor, and come back here.
+            </p>
+          ) : (
+            <StepUpFields
+              account={account}
+              disabled={pending}
+              value={stepUp}
+              onChange={setStepUp}
+            />
+          )}
           <div className="flex flex-wrap gap-2">
             <Button disabled={pending || name.trim() === ""} type="submit">
-              {pending ? "Registering…" : "Register this machine"}
+              {pending
+                ? "Registering…"
+                : viaKeycloak
+                  ? "Confirm with Keycloak"
+                  : "Register this machine"}
             </Button>
             <Button
               disabled={pending}

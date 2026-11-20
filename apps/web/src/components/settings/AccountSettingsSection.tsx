@@ -356,13 +356,11 @@ function KeycloakRow({ account, offered }: { account: AuthAccount; offered: bool
     <SettingsRow
       title="Keycloak"
       description={
-        account.keycloakLink === "admins-later"
-          ? "Connecting Keycloak is available soon for Admins."
-          : account.keycloakLink === "needs-reset"
-            ? "Ask the Owner for a reset link to connect Keycloak to this account."
-            : account.user.isOwner
-              ? "Sign in with your Keycloak account. You keep your passkey and recovery codes."
-              : "Sign in with your Keycloak account from now on. Your passkeys, password and authenticator app here are removed, and your other sessions end."
+        account.keycloakLink === "needs-reset"
+          ? "Ask the Owner for a reset link to connect Keycloak to this account."
+          : account.user.isOwner
+            ? "Sign in with your Keycloak account. You keep your passkey and recovery codes."
+            : "Sign in with your Keycloak account from now on. Your passkeys, password and authenticator app here are removed, and your other sessions end."
       }
       control={
         account.keycloakLink === "allowed" && !connecting ? (

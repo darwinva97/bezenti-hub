@@ -49,12 +49,30 @@ const fetchSettings = () =>
 
 type Pending = "save" | "check" | "toggle" | null;
 
+/** The Hub refused a change until it is confirmed (409): a strong-list change that ends sign-ins. */
+const isConflict = (cause: unknown): boolean => {
+  const tagOf = (value: unknown) =>
+    typeof value === "object" && value !== null && "_tag" in value ? value._tag : undefined;
+  return (
+    tagOf(cause) === "EnvironmentHttpConflictError" ||
+    tagOf((cause as { readonly cause?: unknown } | null)?.cause) === "EnvironmentHttpConflictError"
+  );
+};
+
+/** A change the Hub asked the Owner to confirm first, in its words (how many sign-ins end). */
+interface ToConfirm {
+  readonly message: string;
+  readonly payload: UpdateSignInSettingsRequest;
+  readonly kind: "save" | "toggle";
+}
+
 /** The sign-in settings as the Hub holds them, the Owner's unsaved edits, and saving. */
 function useSignInSettings() {
   const [settings, setSettings] = useState<SignInSettings | null>(null);
   const [form, setForm] = useState<SignInForm | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending>(null);
+  const [toConfirm, setToConfirm] = useState<ToConfirm | null>(null);
 
   const show = (next: SignInSettings) => {
     setSettings(next);
@@ -82,6 +100,7 @@ function useSignInSettings() {
   const save = async (payload: UpdateSignInSettingsRequest, kind: "save" | "toggle") => {
     setPending(kind);
     setError(null);
+    setToConfirm(null);
     let saved = false;
     try {
       show(
@@ -93,15 +112,36 @@ function useSignInSettings() {
       );
       saved = true;
     } catch (cause) {
-      setError(errorOf(cause, "Could not save the sign-in settings."));
-      // The row may be saved though its secret was refused: show what the Hub holds now.
-      void fetchSettings().then(setSettings, () => undefined);
+      if (isConflict(cause) && payload.endLoginsConfirmed !== true) {
+        // Nothing was saved: the Hub says how many sign-ins the change ends; the Owner decides.
+        setToConfirm({
+          message: messageOf(cause, "This change ends Keycloak sign-ins."),
+          payload,
+          kind,
+        });
+      } else {
+        setError(errorOf(cause, "Could not save the sign-in settings."));
+        // The row may be saved though its secret was refused: show what the Hub holds now.
+        void fetchSettings().then(setSettings, () => undefined);
+      }
     }
     setPending(null);
     return saved;
   };
 
-  return { settings, form, setForm, show, error, setError, pending, setPending, save };
+  return {
+    settings,
+    form,
+    setForm,
+    show,
+    error,
+    setError,
+    pending,
+    setPending,
+    save,
+    toConfirm,
+    setToConfirm,
+  };
 }
 
 type SignInState = ReturnType<typeof useSignInSettings>;
@@ -154,6 +194,38 @@ function SaveBar({
         ) : null}
       </div>
       {state.error ? <p className="text-destructive text-sm">{state.error}</p> : null}
+      {state.toConfirm !== null ? (
+        <Alert variant="warning">
+          <AlertDescription>
+            <span>{state.toConfirm.message}</span>
+            <span className="mt-2 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="compact"
+                variant="destructive"
+                disabled={state.pending !== null}
+                onClick={() => {
+                  const { payload, kind } = state.toConfirm ?? {};
+                  if (payload !== undefined && kind !== undefined) {
+                    void state.save({ ...payload, endLoginsConfirmed: true }, kind);
+                  }
+                }}
+              >
+                End them and save
+              </Button>
+              <Button
+                type="button"
+                size="compact"
+                variant="ghost"
+                disabled={state.pending !== null}
+                onClick={() => state.setToConfirm(null)}
+              >
+                Cancel
+              </Button>
+            </span>
+          </AlertDescription>
+        </Alert>
+      ) : null}
     </>
   );
 }
@@ -352,6 +424,42 @@ export function PlatformKeycloakSection() {
           Write-only: once saved, nobody can read it from the Hub, you included.
         </span>
       </div>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm">Strong factor</legend>
+        <p className="text-xs text-muted-foreground">
+          The Owner and Admins need a Keycloak sign-in with a second factor: one whose `acr` is in
+          the first list, or with an `amr` value in the second. Exact values only. Empty lists: no
+          Keycloak sign-in is strong, and the Owner and Admins can't sign in with Keycloak.
+        </p>
+        <label className="flex flex-col gap-1 text-sm">
+          acr values
+          <Input
+            size="sm"
+            aria-label="Strong acr values"
+            placeholder="critica"
+            value={form.strongAcr}
+            onChange={(event) => edit({ strongAcr: event.target.value })}
+          />
+          <span className="text-xs text-muted-foreground">
+            The realm's level of authentication for MFA, e.g. `critica`; «Check» lists the realm's.
+            Sign-ins that need a second factor ask Keycloak for these.
+          </span>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          amr values
+          <Input
+            size="sm"
+            aria-label="Strong amr values"
+            placeholder="otp, webauthn"
+            value={form.strongAmr}
+            onChange={(event) => edit({ strongAmr: event.target.value })}
+          />
+        </label>
+        <p className="text-xs text-muted-foreground">
+          Saving a change ends the Keycloak sign-ins of the Owner and Admins that no longer count as
+          strong; the Hub tells you how many first.
+        </p>
+      </fieldset>
       <SaveBar state={state} settings={settings} changes={changes} />
 
       <div className="flex flex-col gap-2">

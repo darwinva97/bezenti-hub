@@ -8,7 +8,11 @@ import {
   signInWithTotp,
   startKeycloak,
 } from "../../environments/primary/userAccounts";
-import { keycloakResultMessage, keycloakReturnTo } from "./keycloakSignIn.logic";
+import {
+  keycloakResultCode,
+  keycloakResultMessage,
+  keycloakReturnTo,
+} from "./keycloakSignIn.logic";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -39,6 +43,23 @@ export function SignInSurface({
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const keycloakOffered = usePrimarySessionState().data?.signInOptions?.keycloak === true;
+  // Refused for a sign-in without the second factor the Role needs: offer to ask for it.
+  const [retryStrong] = useState(
+    () => keycloakResultCode(window.location.search) === "strong-factor-required",
+  );
+  const startKeycloakSignIn = (strongFactor: boolean) => {
+    // The browser leaves for the realm; only a refusal to start comes back here.
+    setIsSubmitting(true);
+    setErrorMessage("");
+    startKeycloak({
+      intent: "sign-in",
+      returnTo: keycloakReturnTo(window.location),
+      strongFactor,
+    }).catch((cause: unknown) => {
+      setErrorMessage(cause instanceof Error ? cause.message : "Sign-in failed.");
+      setIsSubmitting(false);
+    });
+  };
 
   const attempt = async (
     signIn: () => Promise<{ readonly totpChallengeId: string } | "signed-in" | void>,
@@ -79,23 +100,17 @@ export function SignInSurface({
       <StandalonePageHeader title="Sign in" description={description} />
 
       <div className="mt-6 space-y-4">
+        {keycloakOffered && retryStrong ? (
+          <Button disabled={isSubmitting} size="sm" onClick={() => startKeycloakSignIn(true)}>
+            Retry with second factor
+          </Button>
+        ) : null}
         {keycloakOffered ? (
           <Button
             disabled={isSubmitting}
             size="sm"
             variant="outline"
-            onClick={() => {
-              // The browser leaves for the realm; only a refusal to start comes back here.
-              setIsSubmitting(true);
-              setErrorMessage("");
-              startKeycloak({
-                intent: "sign-in",
-                returnTo: keycloakReturnTo(window.location),
-              }).catch((cause: unknown) => {
-                setErrorMessage(cause instanceof Error ? cause.message : "Sign-in failed.");
-                setIsSubmitting(false);
-              });
-            }}
+            onClick={() => startKeycloakSignIn(false)}
           >
             Sign in with Keycloak
           </Button>

@@ -196,6 +196,8 @@ export function fetchAccount(): Promise<AuthAccount> {
 export type StepUp =
   | { readonly method: "password"; readonly password: string; readonly totpCode?: string }
   | { readonly method: "passkey" }
+  /** A confirmation through Keycloak (`step-up`), for a User who signs in with it. */
+  | { readonly method: "keycloak"; readonly proofId: string }
   | { readonly method: "none" };
 
 const STEP_UP_REJECTED = "Confirming it's you failed: check your password, code or passkey.";
@@ -203,6 +205,7 @@ const STEP_UP_REJECTED = "Confirming it's you failed: check your password, code 
 export async function toReauth(stepUp: StepUp): Promise<AuthReauth | undefined> {
   if (stepUp.method === "none") return undefined;
   if (stepUp.method === "password") return stepUp;
+  if (stepUp.method === "keycloak") return { method: "keycloak", proofId: stepUp.proofId };
   const ceremony = await request((client) => client.auth.passkeyChallenge({}));
   return { method: "passkey", ceremonyId: ceremony.ceremonyId, response: await assert(ceremony) };
 }
@@ -305,15 +308,16 @@ export async function signInWithRecoveryCode(code: string): Promise<void> {
 }
 
 /**
- * Starts a Keycloak flow and sends the browser to the realm's sign-in page: `sign-in` from the
- * sign-in page, `link` from the account page with proof of the current credential, `invitation`
- * from `/invite` with the Invitation's token (checked before the browser leaves).
+ * Starts a Keycloak flow and sends the browser to the realm: `sign-in`, `link` (with proof of the
+ * current credential), `invitation` (with its token) or `step-up` (back with `#keycloakProof=`).
+ * `strongFactor` asks the realm for the second factor the Owner listed.
  */
 export async function startKeycloak(input: {
-  readonly intent: "sign-in" | "link" | "invitation";
+  readonly intent: "sign-in" | "link" | "invitation" | "step-up";
   readonly returnTo: string;
   readonly stepUp?: StepUp;
   readonly invitationToken?: string;
+  readonly strongFactor?: boolean;
 }): Promise<void> {
   const reauth = input.stepUp === undefined ? undefined : await toReauth(input.stepUp);
   const started = await request(
@@ -326,6 +330,7 @@ export async function startKeycloak(input: {
           ...(input.invitationToken === undefined
             ? {}
             : { invitationToken: input.invitationToken }),
+          ...(input.strongFactor === true ? { strongFactor: true } : {}),
         },
       }),
     input.intent === "link" ? STEP_UP_REJECTED : "Sign in to this Hub first.",

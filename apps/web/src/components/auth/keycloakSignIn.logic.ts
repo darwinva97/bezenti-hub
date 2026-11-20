@@ -1,4 +1,9 @@
-import { KEYCLOAK_RESULT_PARAM, KeycloakSignInFailure } from "@t3tools/contracts";
+import {
+  type AuthAccount,
+  KEYCLOAK_PROOF_FRAGMENT_PARAM,
+  KEYCLOAK_RESULT_PARAM,
+  KeycloakSignInFailure,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 const isFailure = Schema.is(KeycloakSignInFailure);
@@ -15,14 +20,33 @@ export const keycloakReturnTo = (location: {
   return `${location.pathname}${search === "" ? "" : `?${search}`}`;
 };
 
+/**
+ * The proof a Keycloak confirmation (`step-up`) came back with, from the page's fragment; never
+ * the query, so it reaches no server log or `Referer`.
+ */
+export const keycloakProofOf = (hash: string): string | null => {
+  const proofId = new URLSearchParams(hash.replace(/^#/, "")).get(KEYCLOAK_PROOF_FRAGMENT_PARAM);
+  return proofId === null || proofId === "" ? null : proofId;
+};
+
+/** A User who signs in only with Keycloak confirms through it: nothing local to confirm with. */
+export const confirmsWithKeycloak = (account: AuthAccount) =>
+  account.identity !== undefined && !account.hasPasskey && !account.hasPassword;
+
 // Said to everyone alike: it never tells whether some account here exists.
 const ALREADY_HERE =
   "If you already have an account here, sign in with it and connect Keycloak in your account settings.";
 
+/** Why the last Keycloak flow was refused, from the page's `?keycloak=`; null when none. */
+export const keycloakResultCode = (search: string): KeycloakSignInFailure | null => {
+  const code = new URLSearchParams(search).get(KEYCLOAK_RESULT_PARAM);
+  return code === null || !isFailure(code) ? null : code;
+};
+
 /** Why the last Keycloak sign-in was refused, from the page's `?keycloak=`, in plain words. */
 export const keycloakResultMessage = (search: string): string | null => {
-  const code = new URLSearchParams(search).get(KEYCLOAK_RESULT_PARAM);
-  if (code === null || !isFailure(code)) return null;
+  const code = keycloakResultCode(search);
+  if (code === null) return null;
   switch (code) {
     case "unknown":
       return "This Hub doesn't know you yet. Ask its Owner for an invitation.";
@@ -37,7 +61,9 @@ export const keycloakResultMessage = (search: string): string | null => {
     case "owner":
       return "You're the Owner, who already sees every Organization.";
     case "strong-factor-required":
-      return "Admin invitations need a strong sign-in; available soon. Ask for a Member invitation for now.";
+      return "Your Role needs a second factor in Keycloak. Retry and confirm with it there.";
+    case "identity-mismatch":
+      return "You signed in at Keycloak with another account than this one's. Try again with yours.";
     case "disabled":
       return "The Owner disabled this account. Ask them to turn it back on.";
     case "removed":

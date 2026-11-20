@@ -7,14 +7,27 @@ import {
 } from "@t3tools/contracts";
 import * as Redacted from "effect/Redacted";
 
-/** What the Owner edits before saving; an empty `clientSecret` keeps the saved one. */
+/**
+ * What the Owner edits before saving; an empty `clientSecret` keeps the saved one. The strong
+ * factor's `acr` and `amr` values (ticket 06) are typed as a list, separated by commas or spaces.
+ */
 export interface SignInForm {
   readonly registrationMode: RegistrationMode;
   readonly localSignInForMembers: boolean;
   readonly issuer: string;
   readonly clientId: string;
   readonly clientSecret: string;
+  readonly strongAcr: string;
+  readonly strongAmr: string;
 }
+
+/** A typed list of values: split on commas and blanks, without repeats or empties. */
+export const valuesOf = (text: string): ReadonlyArray<string> => [
+  ...new Set(text.split(/[\s,]+/).filter((value) => value !== "")),
+];
+
+const sameValues = (a: ReadonlyArray<string>, b: ReadonlyArray<string>) =>
+  a.length === b.length && a.every((value, index) => value === b[index]);
 
 export const formOf = (settings: SignInSettings): SignInForm => ({
   registrationMode: settings.registrationMode,
@@ -22,6 +35,8 @@ export const formOf = (settings: SignInSettings): SignInForm => ({
   issuer: settings.keycloak.issuer ?? "",
   clientId: settings.keycloak.clientId ?? "",
   clientSecret: "",
+  strongAcr: settings.keycloak.strongAcr.join(", "),
+  strongAmr: settings.keycloak.strongAmr.join(", "),
 });
 
 /** Only what the Owner changed; `null` when nothing did. The secret goes only when typed. */
@@ -42,6 +57,10 @@ export const changesOf = (
   if (form.issuer.trim() !== saved.issuer) request.issuer = form.issuer;
   if (form.clientId.trim() !== saved.clientId) request.clientId = form.clientId;
   if (form.clientSecret !== "") request.clientSecret = Redacted.make(form.clientSecret);
+  const strongAcr = valuesOf(form.strongAcr);
+  const strongAmr = valuesOf(form.strongAmr);
+  if (!sameValues(strongAcr, settings.keycloak.strongAcr)) request.strongAcr = strongAcr;
+  if (!sameValues(strongAmr, settings.keycloak.strongAmr)) request.strongAmr = strongAmr;
   return Object.keys(request).length === 0 ? null : request;
 };
 

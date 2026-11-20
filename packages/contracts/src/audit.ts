@@ -188,10 +188,9 @@ export const AUDIT_DETAIL_KEYS = {
    */
   "user.register": ["via", "issuer"],
   /**
-   * Ticket 07: why a Keycloak sign-in ended (`refresh-refused`: the realm refused its refresh
-   * token, as for a disabled account; `backchannel`: Keycloak's logout; `sign-out`: «Salir también
-   * de Keycloak»; `no-refresh-token`: nothing to re-check it with), and how many sessions and
-   * pairing links ended with it. Never the subject, the `sid` or a token.
+   * Ticket 07: why a Keycloak sign-in ended (`refresh-refused`, `backchannel`, `sign-out`,
+   * `no-refresh-token`, `token-unusable`, `keycloak-off`, `issuer-changed`; see KeycloakLogins)
+   * and how many sessions and pairing links ended with it. Never the subject, `sid` or a token.
    */
   "keycloak.login.end": ["reason", "sessions", "pairingLinks"],
   "organization.create": [],

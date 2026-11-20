@@ -655,8 +655,8 @@ holds a token. It runs one refresh at a time per sign-in (at most 8 at once).
 
 - **A refused refresh token** (`invalid_grant`: the account is disabled or
   deleted, or the session ended or expired) ends the sign-in.
-- **No answer, a 5xx, another refusal or a bad ID token** ends nothing, on
-  purpose: a Keycloak outage must not sign everyone out. The Owner's sign-in
+- **No answer, a timeout, a 5xx, another refusal, or a discovery or key-set
+  failure** ends nothing, on purpose: a Keycloak outage must not sign everyone out. The Owner's sign-in
   settings show «not answering since …», or «rejected» when the realm refuses
   the Hub's client (a wrong secret). Disabled accounts are not signed out
   meanwhile, so the two must look different. Re-checks then back off from 1 to
@@ -669,6 +669,12 @@ holds a token. It runs one refresh at a time per sign-in (at most 8 at once).
 - **A sign-in with no refresh token**, or one whose issuer is no longer the
   configured one, or any sign-in while Keycloak is off, ends at its first
   re-check: nothing can vouch for it.
+- **A sign-in whose own tokens are unusable** ends too (`token-unusable`): its
+  refresh token won't open (a lost or replaced store key), the refreshed ID token
+  fails verification or names another subject, or the new tokens can't be sealed.
+  This blames the sign-in, never Keycloak, so it sets no back-off and no warning.
+- **The Hub's own storage failing** (reading the sign-in, saving it, ending it)
+  changes nothing and blames nobody; the next use tries again.
 
 The one-at-a-time rule is a `Set` in memory, so it assumes a single Hub process,
 as production runs today. If two replicas refreshed the same rotating refresh
@@ -690,9 +696,11 @@ untraced route.
   full it refuses rather than forget one that could then be replayed.
 - **Ending:** with `sid` it ends that SSO session's live sign-ins (of `sub` too
   when given). Without `sid` it ends every live sign-in of the identity.
-- **Answer:** 200, also when nothing matched, or an empty 400. On a Hub that
-  Keycloak cannot reach (LAN, Tailscale), the hourly re-check covers the same
-  cases more slowly.
+- **Answer:** 200, also when nothing matched, or an empty 400. If the sign-ins it
+  names can't be ended, it answers 500 and forgets the `jti`, so Keycloak's retry
+  is taken: never a 200 Keycloak would record as delivered. On a Hub that Keycloak
+  cannot reach (LAN, Tailscale), the hourly re-check covers the same cases more
+  slowly.
 
 **Inheritance.** Some things approved from a session born of a sign-in carry that
 sign-in's id:
@@ -730,10 +738,12 @@ why the page says so. It answers the realm's `end_session_endpoint` with
 `client_id`, `post_logout_redirect_uri` (`<base>/sign-in`) and `id_token_hint`.
 The hint is the sign-in's latest ID token, read before the sign-in ends; OPs
 accept an expired one. The Hub ends the sign-in itself because an offline session
-outlives Keycloak's SSO logout, so no back-channel call would come for it.
-Audit: `keycloak.login.end` with its reason (`refresh-refused`, `backchannel`,
-`sign-out`, `no-refresh-token`, `keycloak-off`, `issuer-changed`) and how many
-sessions and links ended with it.
+outlives Keycloak's SSO logout, so no back-channel call would come for it. If
+the sign-in can't be ended, the answer is an error with no realm address, and the
+handle is given back for a retry until it expires. Audit: `keycloak.login.end`
+with its reason (`refresh-refused`, `backchannel`, `sign-out`, `no-refresh-token`,
+`token-unusable`, `keycloak-off`, `issuer-changed`) and how many sessions and
+links ended with it.
 
 ### Disabled and removed Users
 

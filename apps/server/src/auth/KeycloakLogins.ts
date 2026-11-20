@@ -70,12 +70,25 @@ export type LoginEndReason =
   | "sign-out"
   | "no-refresh-token"
   | "keycloak-off"
-  | "issuer-changed";
+  | "issuer-changed"
+  // The sign-in's own tokens are unusable: its refresh token won't open, the refreshed ID token
+  // fails verification or names someone else, or the new tokens can't be sealed.
+  | "token-unusable";
 
 /** How one re-check ended, for whoever waits on it (tests, never a clock). */
 export interface RecheckOutcome {
   readonly loginId: string;
   readonly outcome: "refreshed" | "ended" | "kept" | "skipped";
+}
+
+/** «Also sign out of Keycloak» could not end the sign-in; the handle is given back for a retry. */
+export class KeycloakSignOutFailedError extends Schema.TaggedError<KeycloakSignOutFailedError>()(
+  "KeycloakSignOutFailedError",
+  {},
+) {
+  override get message(): string {
+    return "The Keycloak sign-in could not be ended. Try again.";
+  }
 }
 
 /** «Also sign out of Keycloak» refused: an unknown, spent or expired handle, or a foreign page. */
@@ -95,9 +108,10 @@ export class KeycloakLogins extends Context.Service<
   {
     /**
      * A back-channel logout token from the realm: verified (see KeycloakClient.verifyLogoutToken),
-     * its `jti` never seen before, then the sign-ins it names end. `invalid` answers 400.
+     * its `jti` never seen before, then the sign-ins it names end. `invalid` answers 400;
+     * `failed` (they could not be ended) answers 500 and forgets the `jti`, so a retry is taken.
      */
-    readonly backchannelLogout: (logoutToken: string) => Effect.Effect<"ok" | "invalid">;
+    readonly backchannelLogout: (logoutToken: string) => Effect.Effect<"ok" | "invalid" | "failed">;
     /** After signing out a browser session born of `loginId`: a handle to end it too, if live. */
     readonly signOutHandle: (loginId: string) => Effect.Effect<string | undefined>;
     /**
@@ -107,7 +121,10 @@ export class KeycloakLogins extends Context.Service<
     readonly signOut: (
       request: HttpServerRequest.HttpServerRequest,
       handle: string,
-    ) => Effect.Effect<{ readonly endSessionUrl: string | null }, KeycloakSignOutRefusedError>;
+    ) => Effect.Effect<
+      { readonly endSessionUrl: string | null },
+      KeycloakSignOutRefusedError | KeycloakSignOutFailedError
+    >;
     /** The Owner's warnings: Keycloak not answering since when and why; the newest sign-in. */
     readonly status: Effect.Effect<KeycloakStatus>;
     /** Each re-check's end, from the moment this runs. */
@@ -121,12 +138,26 @@ interface SignOutHandle {
   readonly expiresAtMs: number;
 }
 
-/** A re-check that ended up neither refreshed nor ended: Keycloak's problem, never the person's. */
+/** The realm or the way to it failed (network, timeout, 5xx, another 4xx, discovery, keys). */
 class RecheckProblem extends Schema.TaggedError<RecheckProblem>()("RecheckProblem", {
   kind: Schema.Literals(["unreachable", "rejected"]),
   /** Which step, for the log: never a value. */
   detail: Schema.String,
 }) {}
+
+/** This sign-in's own tokens are unusable: it ends, and Keycloak is not blamed. */
+class LoginUnusable extends Schema.TaggedError<LoginUnusable>()("LoginUnusable", {
+  detail: Schema.String,
+}) {}
+
+/** The Hub's own storage failed: nothing changes, nobody is blamed, the next use tries again. */
+class RecheckStorageFailed extends Schema.TaggedError<RecheckStorageFailed>()(
+  "RecheckStorageFailed",
+  { detail: Schema.String },
+) {}
+
+/** Ending sign-ins failed in the Hub's storage: never reported as done. */
+class LoginEndFailed extends Schema.TaggedError<LoginEndFailed>()("LoginEndFailed", {}) {}
 
 export interface LoginsBounds {
   /** Logout tokens' `jti`s remembered at once (MAX_REMEMBERED_JTIS). */
@@ -161,7 +192,7 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
 
   /**
    * Ends these sign-ins, one audit entry each, in one transaction; their sockets close once it
-   * commits. A failure is logged (never a value) and leaves them as they were.
+   * commits. A failure leaves them as they were and fails (`LoginEndFailed`), never reports 0.
    */
   const endLogins = (
     loginIds: ReadonlyArray<string>,
@@ -194,7 +225,9 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
           .pipe(
             Effect.flatMap(({ ended, close }) => Effect.as(close, ended)),
             Effect.catch(() =>
-              Effect.logWarning("Could not end a Keycloak sign-in.", { reason }).pipe(Effect.as(0)),
+              Effect.logWarning("Could not end a Keycloak sign-in.", { reason }).pipe(
+                Effect.andThen(Effect.fail(new LoginEndFailed())),
+              ),
             ),
           );
 
@@ -224,42 +257,59 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
   });
 
   const unreachable = (detail: string) => () => new RecheckProblem({ kind: "unreachable", detail });
+  const unusable = (detail: string) => () => new LoginUnusable({ detail });
+  const storageFailed = (detail: string) => () => new RecheckStorageFailed({ detail });
+  const system = { source: "system" } as const;
+  /** Ends one sign-in from a re-check; a storage failure keeps it for the next use to retry. */
+  const endFromRecheck = (loginId: string, reason: LoginEndReason) =>
+    endLogins([loginId], reason, system).pipe(
+      Effect.as("ended" as const),
+      Effect.mapError(storageFailed(`end ${reason}`)),
+    );
 
   /** Ticket 07: one sign-in's re-check, under its turn. */
-  const recheck = Effect.fn("KeycloakLogins.recheck")(function* (
+  const recheck = (loginId: string) =>
+    recheckTokens(loginId).pipe(
+      Effect.catchTags({
+        // Its own tokens are unusable: nothing can re-check it, so it ends, as without one (A1).
+        LoginUnusable: (failure) =>
+          Effect.logWarning("A Keycloak sign-in's tokens are unusable; it ends.", {
+            step: failure.detail,
+          }).pipe(Effect.andThen(endFromRecheck(loginId, "token-unusable"))),
+      }),
+    );
+
+  const recheckTokens = Effect.fn("KeycloakLogins.recheck")(function* (
     loginId: string,
-  ): Effect.fn.Return<RecheckOutcome["outcome"], RecheckProblem> {
+  ): Effect.fn.Return<
+    RecheckOutcome["outcome"],
+    RecheckProblem | LoginUnusable | RecheckStorageFailed
+  > {
     const found = yield* identities
       .loginForRefresh(loginId)
-      .pipe(Effect.mapError(unreachable("read login")));
+      .pipe(Effect.mapError(storageFailed("read login")));
     if (Option.isNone(found) || found.value.ended) return "skipped";
     const login = found.value;
     const nowMs = yield* Clock.currentTimeMillis;
     const checkedAtMs = Date.parse(login.checkedAt);
     // Another turn re-checked it meanwhile.
     if (checkedAtMs + Duration.toMillis(SessionStore.RECHECK_INTERVAL) > nowMs) return "skipped";
-    const enabled = yield* settings.keycloakConfig.pipe(Effect.mapError(unreachable("settings")));
-    const system = { source: "system" } as const;
+    const enabled = yield* settings.keycloakConfig.pipe(Effect.mapError(storageFailed("settings")));
     // Without the realm it came from nothing can re-check it, so it ends (spec «Desactivar»).
-    if (Option.isNone(enabled)) {
-      yield* endLogins([loginId], "keycloak-off", system);
-      return "ended";
-    }
+    if (Option.isNone(enabled)) return yield* endFromRecheck(loginId, "keycloak-off");
     if (enabled.value.issuer !== login.issuer) {
-      yield* endLogins([loginId], "issuer-changed", system);
-      return "ended";
+      return yield* endFromRecheck(loginId, "issuer-changed");
     }
     if (nowMs < backoffUntilMs) return "skipped";
     if (login.refreshTokenSealed === null) {
-      yield* endLogins([loginId], "no-refresh-token", system);
-      return "ended";
+      return yield* endFromRecheck(loginId, "no-refresh-token");
     }
     const refreshToken = yield* KeycloakTokens.open(
       secretStore,
       "refresh",
       loginId,
       login.refreshTokenSealed,
-    ).pipe(Effect.provide(cryptoContext), Effect.mapError(unreachable("open refresh token")));
+    ).pipe(Effect.provide(cryptoContext), Effect.mapError(unusable("open refresh token")));
     const realm = yield* keycloakRealm
       .realmFor(login.issuer)
       .pipe(Effect.mapError(unreachable("realm")));
@@ -286,22 +336,19 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
     if (tokens.refused) {
       // A disabled or deleted account, an ended or expired session: the sign-in is over.
       yield* noteHealthy;
-      yield* endLogins([loginId], "refresh-refused", system);
-      return "ended";
+      return yield* endFromRecheck(loginId, "refresh-refused");
     }
+    // Keycloak answered: whatever is wrong from here on is this sign-in's, never the realm's.
+    yield* noteHealthy;
     const claims = yield* keycloak
       .verifyIdToken(realm.keys, tokens.tokens.idToken, {
         issuer: login.issuer,
         clientId: enabled.value.clientId,
         nonce: undefined,
       })
-      .pipe(
-        Effect.mapError(
-          (error) => new RecheckProblem({ kind: "unreachable", detail: error.detail }),
-        ),
-      );
+      .pipe(Effect.mapError((error) => new LoginUnusable({ detail: error.detail })));
     if (claims.sub !== login.subject) {
-      return yield* new RecheckProblem({ kind: "unreachable", detail: "id token: sub" });
+      return yield* new LoginUnusable({ detail: "id token: sub" });
     }
     const now = DateTime.formatIso(yield* DateTime.now);
     const sealedRefresh =
@@ -312,23 +359,24 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
             "refresh",
             loginId,
             tokens.tokens.refreshToken,
-          ).pipe(Effect.provide(cryptoContext), Effect.mapError(unreachable("seal refresh token")));
+          ).pipe(Effect.provide(cryptoContext), Effect.mapError(unusable("seal refresh token")));
     const sealedId = yield* KeycloakTokens.seal(
       secretStore,
       "id",
       loginId,
       tokens.tokens.idToken,
-    ).pipe(Effect.provide(cryptoContext), Effect.mapError(unreachable("seal id token")));
+    ).pipe(Effect.provide(cryptoContext), Effect.mapError(unusable("seal id token")));
     // Saved on its own, before anything else and before the turn is released: Keycloak may have
     // rotated the refresh token, and the next re-check must use the new one.
     const saved = yield* identities
       .saveRefresh({ loginId, refreshTokenSealed: sealedRefresh, idTokenSealed: sealedId, now })
-      .pipe(Effect.mapError(unreachable("save refresh")));
-    yield* noteHealthy;
+      .pipe(Effect.mapError(storageFailed("save refresh")));
     if (!saved) return "skipped";
     // The groups, as at a sign-in (KeycloakGroups): the labels and Memberships in one
     // transaction; an Admin group on a weak sign-in ends it there (onPromotedToAdmin).
-    const user = yield* users.getById(login.userId).pipe(Effect.mapError(unreachable("read user")));
+    const user = yield* users
+      .getById(login.userId)
+      .pipe(Effect.mapError(storageFailed("read user")));
     if (Option.isNone(user)) return "refreshed";
     const applied = yield* sql
       .withTransaction(
@@ -368,7 +416,12 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
   const runRecheck = (loginId: string) =>
     recheck(loginId).pipe(
       Effect.catchTags({
+        // Only the realm or the way to it backs off and shows the Owner a Keycloak problem.
         RecheckProblem: (failure) => noteProblem(failure).pipe(Effect.as("kept" as const)),
+        RecheckStorageFailed: (failure) =>
+          Effect.logWarning("A Keycloak re-check could not read or write the Hub's storage.", {
+            step: failure.detail,
+          }).pipe(Effect.as("kept" as const)),
       }),
       Effect.catchCause(() =>
         Effect.logWarning("A Keycloak re-check failed unexpectedly.").pipe(
@@ -434,11 +487,20 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
         return "invalid" as const;
       }
       seenJtis.set(token.jti, nowMs + Duration.toMillis(JTI_TTL));
-      const loginIds = yield* identities
+      // Ending failed: the `jti` is forgotten, so Keycloak's retry is taken, and the answer is an
+      // error, never a 200 Keycloak would take as delivered. Nothing matching stays a 200.
+      return yield* identities
         .liveLoginsFor({ issuer: enabled.value.issuer, sid: token.sid, subject: token.sub })
-        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-      yield* endLogins(loginIds, "backchannel", { source: "system" });
-      return "ok" as const;
+        .pipe(
+          Effect.flatMap((loginIds) => endLogins(loginIds, "backchannel", system)),
+          Effect.as("ok" as const),
+          Effect.catch(() =>
+            Effect.sync(() => seenJtis.delete(token.jti)).pipe(
+              Effect.andThen(Effect.logWarning("Back-channel logout could not end the sign-ins.")),
+              Effect.as("failed" as const),
+            ),
+          ),
+        );
     },
     Effect.withTracerEnabled(false),
   );
@@ -475,8 +537,9 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
       if (origin === undefined) {
         return yield* new KeycloakSignOutRefusedError({ reason: "invalid-origin" });
       }
-      // Spent the first time it is presented, whatever happens next.
-      const entry = yield* handles.take(yield* sha256(handle));
+      // Spent the first time it is presented; given back only if the ending fails.
+      const handleKey = yield* sha256(handle);
+      const entry = yield* handles.take(handleKey);
       const nowMs = yield* Clock.currentTimeMillis;
       if (entry === undefined || entry.expiresAtMs <= nowMs) {
         return yield* new KeycloakSignOutRefusedError({ reason: "invalid-handle" });
@@ -494,7 +557,17 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
             Effect.provide(cryptoContext),
             Effect.orElseSucceed(() => undefined),
           );
-      yield* endLogins([entry.loginId], "sign-out", AuditLog.userActor(entry.userId));
+      const ended = yield* endLogins(
+        [entry.loginId],
+        "sign-out",
+        AuditLog.userActor(entry.userId),
+      ).pipe(Effect.result);
+      if (ended._tag === "Failure") {
+        // Never sent to Keycloak while the Hub's sign-in and its apps live on: an error, and the
+        // handle back for a retry until it expires.
+        yield* handles.putIfRoom(handleKey, entry, nowMs, MAX_SIGN_OUT_HANDLES);
+        return yield* new KeycloakSignOutFailedError();
+      }
       const enabled = yield* settings.keycloakConfig.pipe(
         Effect.orElseSucceed(() => Option.none()),
       );

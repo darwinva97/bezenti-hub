@@ -333,7 +333,63 @@ describe("re-checking a Keycloak sign-in in use (ticket 07)", () => {
       assert.equal(ended[0]?.detail.reason, "no-refresh-token");
     }).pipe(Effect.scoped),
   );
+
+  it.effect("a refresh token that won't open ends that sign-in; Keycloak isn't blamed", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner } = yield* hub();
+      const ana = yield* keycloakMember(server, realm, "kc-ana");
+      const bea = yield* keycloakMember(server, realm, "kc-bea");
+      const anaLogin = (yield* loginOf(server, ana.cookie)).loginId;
+      const beaLogin = (yield* loginOf(server, bea.cookie)).loginId;
+      // Sealed for another sign-in: it never opens under Ana's (a lost or replaced store key alike).
+      yield* server.sql`
+        UPDATE identity_logins SET refresh_token_sealed = (
+          SELECT refresh_token_sealed FROM identity_logins WHERE login_id = ${beaLogin}
+        ) WHERE login_id = ${anaLogin}
+      `;
+      yield* TestClock.adjust("61 minutes");
+      const anaDone = yield* nextRecheck(server, anaLogin);
+      yield* use(server, ana.cookie);
+      assert.equal(yield* Fiber.join(anaDone), "ended");
+      assert.isFalse(yield* isSignedIn(server, ana.cookie));
+      const ended = yield* auditOf(server, owner, "keycloak.login.end");
+      assert.deepEqual(
+        ended.map((row) => ({ target: row.target.id, reason: row.detail.reason })),
+        [{ target: ana.id, reason: "token-unusable" }],
+      );
+      // No back-off and no outage warning: Bea's sign-in is re-checked right away.
+      const beaDone = yield* nextRecheck(server, beaLogin);
+      yield* use(server, bea.cookie);
+      assert.equal(yield* Fiber.join(beaDone), "refreshed");
+      assert.deepInclude(yield* statusOf(server, owner), { unreachableSince: null, problem: null });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a refreshed ID token naming someone else ends that sign-in", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner } = yield* hub();
+      const ana = yield* keycloakMember(server, realm, "kc-ana");
+      const { loginId } = yield* loginOf(server, ana.cookie);
+      realm.refreshAs("kc-ana", { kind: "ok", claims: { sub: "kc-someone-else" } });
+      yield* TestClock.adjust("61 minutes");
+      const done = yield* nextRecheck(server, loginId);
+      yield* use(server, ana.cookie);
+      assert.equal(yield* Fiber.join(done), "ended");
+      assert.isFalse(yield* isSignedIn(server, ana.cookie));
+      const ended = yield* auditOf(server, owner, "keycloak.login.end");
+      assert.equal(ended[0]?.detail.reason, "token-unusable");
+      assert.deepInclude(yield* statusOf(server, owner), { unreachableSince: null, problem: null });
+    }).pipe(Effect.scoped),
+  );
 });
+
+/** Makes every ending of a Keycloak sign-in fail in storage until `allowEnding`. */
+const refuseEnding = (server: Server) =>
+  server.sql`
+    CREATE TRIGGER kc7_refuse_ending BEFORE UPDATE OF ended_at ON identity_logins
+    BEGIN SELECT RAISE(ABORT, 'refused for the test'); END
+  `;
+const allowEnding = (server: Server) => server.sql`DROP TRIGGER kc7_refuse_ending`;
 
 /**
  * Bezenti, an Organization of the Owner's, with `bezenti` mapped to Member and `bezenti-admin` to
@@ -519,6 +575,24 @@ describe("back-channel logout (ticket 07)", () => {
       yield* TestClock.adjust("5 minutes");
       const fresh = yield* realm.logoutToken({ sub: "kc-ana" });
       assert.equal((yield* backchannel(server, { logout_token: fresh })).status, 200);
+      assert.isFalse(yield* isSignedIn(server, member.cookie));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("an ending that fails answers an error, and Keycloak's retry is taken", () =>
+    Effect.gen(function* () {
+      const { server, realm } = yield* hub();
+      const member = yield* keycloakMember(server, realm, "kc-ana");
+      const token = yield* realm.logoutToken({ sub: "kc-ana" });
+      yield* refuseEnding(server);
+      const failed = yield* backchannel(server, { logout_token: token });
+      assert.equal(failed.status, 500);
+      assert.equal(failed.text, "");
+      assert.isTrue(yield* isSignedIn(server, member.cookie));
+      // The same token again, once the Hub can write: not a replay, and it signs them out.
+      yield* allowEnding(server);
+      const retried = yield* backchannel(server, { logout_token: token });
+      assert.equal(retried.status, 200);
       assert.isFalse(yield* isSignedIn(server, member.cookie));
     }).pipe(Effect.scoped),
   );
@@ -743,6 +817,29 @@ describe("«also sign out of Keycloak» (ticket 07)", () => {
       // The handle serves once.
       const again = yield* server.request("/api/auth/keycloak/sign-out", { body: { handle } });
       assert.equal(again.status, 400);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("an ending that fails answers an error, no realm address, and the handle again", () =>
+    Effect.gen(function* () {
+      const { server, realm } = yield* hub();
+      const member = yield* keycloakMember(server, realm, "kc-ana");
+      const app = yield* approveApp(server, member.cookie);
+      const signedOut = yield* server.request("/api/auth/sign-out", {
+        cookie: member.cookie,
+        body: {},
+      });
+      const handle = signedOut.body.keycloakSignOutHandle as string;
+      yield* refuseEnding(server);
+      const failed = yield* server.request("/api/auth/keycloak/sign-out", { body: { handle } });
+      assert.equal(failed.status, 500);
+      assert.isUndefined(failed.body.endSessionUrl);
+      assert.isTrue(yield* tokenAlive(server, app));
+      yield* allowEnding(server);
+      const retried = yield* server.request("/api/auth/keycloak/sign-out", { body: { handle } });
+      assert.equal(retried.status, 200, retried.text);
+      assert.isString(retried.body.endSessionUrl);
+      assert.isFalse(yield* tokenAlive(server, app));
     }).pipe(Effect.scoped),
   );
 

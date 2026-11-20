@@ -82,6 +82,8 @@ export const layerApi = HttpApiBuilder.group(
                 error.reason === "invalid-origin"
                   ? failEnvironmentInvalidRequest("invalid_origin")
                   : Effect.fail(new EnvironmentHttpBadRequestError({ message: error.message })),
+              KeycloakSignOutFailedError: (error) =>
+                failEnvironmentInternal("internal_error", error),
             }),
           );
           yield* appendCredentialResponseHeaders;
@@ -141,7 +143,7 @@ const MAX_BACKCHANNEL_BODY_BYTES = 16 * 1024;
 export const layerBackchannelLogoutRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const keycloakLogins = yield* KeycloakLogins.KeycloakLogins;
-    const answer = (status: 200 | 400) =>
+    const answer = (status: 200 | 400 | 500) =>
       HttpServerResponse.empty({
         status,
         headers: { "cache-control": "no-store" },
@@ -167,7 +169,7 @@ export const layerBackchannelLogoutRoute = HttpRouter.use((router) =>
         const tokens = new URLSearchParams(text).getAll("logout_token");
         if (tokens.length !== 1) return answer(400);
         const outcome = yield* keycloakLogins.backchannelLogout(tokens[0] ?? "");
-        return answer(outcome === "ok" ? 200 : 400);
+        return answer(outcome === "ok" ? 200 : outcome === "invalid" ? 400 : 500);
       }),
     );
   }),

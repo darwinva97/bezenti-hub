@@ -867,9 +867,9 @@ class EnvironmentAppSignInHttpApi extends HttpApiGroup.make("appSignIn")
     }),
   ) {}
 
-// Keycloak sign-in spec, ticket 02: a flow to the realm starts here and comes back to the raw
-// route `/oauth/keycloak/callback`. `sign-in` needs no session; `link` needs the browser's own
-// session and a fresh proof of the User's current credential. Forbidden: Keycloak is off, or the
+// Keycloak sign-in: a flow starts here and comes back to `/oauth/keycloak/callback`. `sign-in`
+// and `invitation` (with its token; a dead one is a 400) need no session; `link` needs the
+// browser's own session and a fresh proof of the credential. Forbidden: Keycloak is off, or the
 // account may not link (`message` says why).
 class EnvironmentKeycloakSignInHttpApi extends HttpApiGroup.make("keycloakSignIn").add(
   HttpApiEndpoint.post("start", "/api/auth/keycloak/start", {
@@ -879,6 +879,7 @@ class EnvironmentKeycloakSignInHttpApi extends HttpApiGroup.make("keycloakSignIn
       ...EnvironmentUserSignInErrors,
       ...EnvironmentAccountErrors,
       EnvironmentServiceBusyError,
+      EnvironmentHttpBadRequestError,
     ],
   }),
 ) {}

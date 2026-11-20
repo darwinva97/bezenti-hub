@@ -37,9 +37,11 @@ import * as ServerConfig from "../config.ts";
 import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as Users from "../persistence/Users.ts";
 import { crossesFromPreviewOrigin, readHubCookie } from "../preview/PreviewOrigin.ts";
+import * as InvitationService from "../spaces/InvitationService.ts";
 import * as AccountCredentials from "./AccountCredentials.ts";
 import { clientBucketOf, isLoopbackClientAddress } from "./clientConnection.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import * as KeycloakAdmission from "./KeycloakAdmission.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import { makeGrantStore } from "./pkceGrants.ts";
@@ -67,6 +69,8 @@ export const FLOW_COOKIE_NAME = "t3_keycloak_flow";
 export const REFRESH_TOKEN_KEY_NAME = "identity-login-key";
 /** Where a `link` lands by default: the User's account settings. */
 export const ACCOUNT_PATH = "/settings/user/account";
+/** Where an `invitation` flow that did not go through lands: the page that started it. */
+const INVITE_PATH = "/invite";
 
 /** A refresh token's associated data: a row copied to another login does not open. */
 export const refreshTokenContext = (loginId: string) => `identity-login:${loginId}`;
@@ -84,6 +88,8 @@ interface PendingFlow {
   readonly clientId: string;
   /** For `link`: the User and the browser session that proved their credential at `start`. */
   readonly link: { readonly userId: UserId; readonly sessionId: AuthSessionId } | undefined;
+  /** For `invitation`: the token, checked at `start` and again at the callback; never sent out. */
+  readonly invitationToken: Redacted.Redacted<string> | undefined;
   readonly expiresAtMs: number;
 }
 
@@ -105,6 +111,8 @@ export class KeycloakStartRefusedError extends Schema.TaggedError<KeycloakStartR
       "busy",
       // The realm's discovery or keys could not be read.
       "unavailable",
+      // `invitation` without a live Invitation's token, or a token with another intent.
+      "invitation-invalid",
     ]),
   },
 ) {
@@ -118,6 +126,9 @@ export class KeycloakStartRefusedError extends Schema.TaggedError<KeycloakStartR
         return "Too many sign-ins are under way. Try again in a minute.";
       case "unavailable":
         return "Keycloak is not answering. Try again in a moment.";
+      case "invitation-invalid":
+        // As the Invitation's preview says it: unknown, used, expired or revoked alike.
+        return new InvitationService.InvitationInvalidError({}).message;
       default:
         return "This sign-in cannot start from here.";
     }
@@ -147,6 +158,7 @@ export class KeycloakSignIn extends Context.Service<
         readonly intent: KeycloakFlowIntent;
         readonly returnTo?: string | undefined;
         readonly reauth?: AuthReauth | undefined;
+        readonly invitationToken?: string | undefined;
       },
     ) => Effect.Effect<
       { readonly authorizationUrl: string; readonly cookie: FlowCookie },
@@ -155,6 +167,7 @@ export class KeycloakSignIn extends Context.Service<
       | UserDirectory.SignInThrottledError
       | UserDirectory.UserDirectoryStorageError
       | SignInSettings.SignInSettingsStorageError
+      | InvitationService.InvitationStorageError
     >;
     /** Never fails: every refusal is a redirect with `?keycloak=<code>`. */
     readonly callback: (
@@ -223,6 +236,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
   const pairingLinks = yield* PairingGrantStore.PairingGrantStore;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const audit = yield* AuditLog.AuditLog;
+  const invitations = yield* InvitationService.InvitationService;
   const sql = yield* SqlClient.SqlClient;
   const random = yield* SecureRandom.SecureRandom;
   const digester = yield* Digest.Digest;
@@ -349,9 +363,14 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
       if (redirectUri === undefined) {
         return yield* new KeycloakStartRefusedError({ reason: "invalid-origin" });
       }
+      // A token comes with `invitation` and only with it.
+      if ((input.intent === "invitation") !== (input.invitationToken !== undefined)) {
+        return yield* new KeycloakStartRefusedError({ reason: "invitation-invalid" });
+      }
       const nowMs = yield* Clock.currentTimeMillis;
+      const clientIp = deriveAuthClientMetadata({ request }).ipAddress;
       // Unauthenticated: a client (an IPv4 address or an IPv6 /64) gets a few starts a minute.
-      const bucket = clientBucketOf(deriveAuthClientMetadata({ request }).ipAddress);
+      const bucket = clientBucketOf(clientIp);
       if (!allowStart(bucket, nowMs)) {
         return yield* new KeycloakStartRefusedError({ reason: "rate-limited" });
       }
@@ -360,6 +379,19 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         return yield* new KeycloakStartRefusedError({ reason: "off" });
       }
       const { issuer, clientId } = enabled.value;
+
+      // A link no longer valid fails here, before the person leaves for Keycloak. Checking spends
+      // nothing and says no more than the Invitation's preview; a dead link counts against it.
+      let invitationToken: PendingFlow["invitationToken"];
+      if (input.invitationToken !== undefined) {
+        yield* invitations.inspect(input.invitationToken, clientIp).pipe(
+          Effect.catchTags({
+            InvitationInvalidError: () =>
+              Effect.fail(new KeycloakStartRefusedError({ reason: "invitation-invalid" })),
+          }),
+        );
+        invitationToken = Redacted.make(input.invitationToken);
+      }
 
       let link: PendingFlow["link"];
       if (input.intent === "link") {
@@ -413,6 +445,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           issuer,
           clientId,
           link,
+          invitationToken,
           expiresAtMs: nowMs + Duration.toMillis(FLOW_TTL),
         },
         nowMs,
@@ -513,19 +546,14 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     return loginId;
   });
 
+  /** An existing, active User's sign-in: fresh labels, a new login and its session. */
   const signIn = Effect.fn("KeycloakSignIn.signIn")(function* (
     request: HttpServerRequest.HttpServerRequest,
     flow: PendingFlow,
+    userId: UserId,
     claims: KeycloakClient.IdTokenClaims,
     tokens: KeycloakClient.TokenSet,
   ) {
-    const identity = yield* identities
-      .findBySubject(flow.issuer, claims.sub)
-      .pipe(Effect.mapError(storage("find identity")));
-    // Admission of someone new is ticket 03. Nothing about them is kept.
-    if (Option.isNone(identity)) return yield* refuse("unknown", "unknown identity");
-    const { userId } = identity.value;
-    yield* inactiveRefusal(userId);
     const record = yield* users.getById(userId).pipe(Effect.mapError(storage("read user")));
     if (Option.isNone(record)) return yield* refuse("unknown", "identity without user");
     const user: AuthUser = {
@@ -540,8 +568,8 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           yield* identities
             .updateLabels({
               userId,
-              username: claims.preferred_username ?? null,
-              email: claims.email ?? null,
+              username: KeycloakAdmission.identityLabel(claims.preferred_username),
+              email: KeycloakAdmission.identityLabel(claims.email),
               now,
             })
             .pipe(Effect.mapError(storage("update labels")));
@@ -550,6 +578,205 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         }),
       )
       .pipe(Effect.catchTags({ SqlError: () => Effect.fail(refuse("failed", "transaction")) }));
+  });
+
+  /**
+   * A User for a new identity, run inside the caller's transaction: the User (no sign-in name, a
+   * cleaned display name), the identity by issuer and subject, the login and the session. Never
+   * matched to anyone by email.
+   */
+  const newUser = Effect.fn("KeycloakSignIn.newUser")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+    flow: PendingFlow,
+    claims: KeycloakClient.IdTokenClaims,
+    tokens: KeycloakClient.TokenSet,
+  ) {
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const user = yield* userDirectory
+      .createIdentityUser(KeycloakAdmission.newUserDisplayName(claims))
+      .pipe(Effect.mapError(storage("create user")));
+    const linked = yield* identities
+      .link({
+        userId: user.id,
+        issuer: flow.issuer,
+        subject: claims.sub,
+        username: KeycloakAdmission.identityLabel(claims.preferred_username),
+        email: KeycloakAdmission.identityLabel(claims.email),
+        now,
+      })
+      .pipe(Effect.mapError(storage("link new identity")));
+    // The same identity's other callback got there first; trying again signs in.
+    if (!linked) return yield* refuse("failed", "identity created meanwhile");
+    const loginId = yield* newLogin(user.id, flow, claims, tokens, now);
+    const session = yield* issueSession(request, user, loginId);
+    return { user, session };
+  });
+
+  /** Open registration: the new User alone, audited `user.register`. */
+  const register = (
+    request: HttpServerRequest.HttpServerRequest,
+    flow: PendingFlow,
+    claims: KeycloakClient.IdTokenClaims,
+    tokens: KeycloakClient.TokenSet,
+  ) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const { user, session } = yield* newUser(request, flow, claims, tokens);
+          yield* audit
+            .record({
+              actor: AuditLog.userActor(user.id),
+              action: "user.register",
+              target: { kind: "user", id: user.id, name: user.displayName },
+              detail: { via: "open", issuer: flow.issuer },
+            })
+            .pipe(Effect.mapError(storage("audit")));
+          return session;
+        }),
+      )
+      .pipe(Effect.catchTags({ SqlError: () => Effect.fail(refuse("failed", "transaction")) }));
+
+  /** The token of an `invitation` flow, re-read now: it may have expired or been revoked. */
+  const invitationNow = (
+    flow: PendingFlow,
+    clientIp: string | undefined,
+  ): Effect.Effect<KeycloakAdmission.InvitationState, CallbackRefusal> =>
+    flow.invitationToken === undefined
+      ? Effect.succeed({ kind: "none" })
+      : invitations.inspect(Redacted.value(flow.invitationToken), clientIp).pipe(
+          Effect.map(({ role }) => ({ kind: "organization", role }) as const),
+          Effect.catchTags({
+            InvitationInvalidError: () => Effect.succeed({ kind: "invalid" } as const),
+            SignInThrottledError: () => Effect.fail(refuse("throttled", "invitation throttled")),
+            InvitationStorageError: () => Effect.fail(refuse("failed", "read invitation")),
+          }),
+        );
+
+  /** What `/api/invitations/join` refused, as a code for the page to say in its words. */
+  const joinRefusal = (
+    error:
+      | InvitationService.InvitationInvalidError
+      | InvitationService.InvitationRefusedError
+      | InvitationService.InvitationConflictError
+      | UserDirectory.SignInThrottledError
+      | InvitationService.InvitationStorageError,
+  ): KeycloakSignInFailure => {
+    switch (error._tag) {
+      case "InvitationInvalidError":
+        return "invitation-invalid";
+      case "InvitationRefusedError":
+        return error.code ?? "failed";
+      case "InvitationConflictError":
+        return error.code ?? "failed";
+      case "SignInThrottledError":
+        return "throttled";
+      case "InvitationStorageError":
+        return "failed";
+    }
+  };
+
+  /**
+   * `sign-in` and `invitation`: who the identity becomes is `KeycloakAdmission.decide`'s, from
+   * the Registration mode, the identity's User and the Invitation the flow carries.
+   */
+  const admit = Effect.fn("KeycloakSignIn.admit")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+    flow: PendingFlow,
+    mode: KeycloakAdmission.AdmissionInput["mode"],
+    claims: KeycloakClient.IdTokenClaims,
+    tokens: KeycloakClient.TokenSet,
+    clientIp: string | undefined,
+  ) {
+    const found = yield* identities
+      .findBySubject(flow.issuer, claims.sub)
+      .pipe(Effect.mapError(storage("find identity")));
+    let identity: KeycloakAdmission.IdentityState = { kind: "unknown" };
+    if (Option.isSome(found)) {
+      const { userId } = found.value;
+      const inactive = yield* userDirectory
+        .inactiveReason(userId)
+        .pipe(Effect.mapError(storage("inactive reason")));
+      identity =
+        inactive === undefined
+          ? { kind: "active", userId }
+          : { kind: "inactive", userId, removed: inactive.removed };
+    }
+    const invitation = yield* invitationNow(flow, clientIp);
+    const outcome = KeycloakAdmission.decide({
+      mode,
+      intent: flow.intent === "invitation" ? "invitation" : "sign-in",
+      identity,
+      invitation,
+      // Ticket 06 reads `acr`/`amr` against the Owner's lists; without them no login is strong.
+      loginStrong: false,
+    });
+    const token = flow.invitationToken === undefined ? "" : Redacted.value(flow.invitationToken);
+    switch (outcome.kind) {
+      case "refuse":
+        // Nothing about a refused new identity is kept; the Invitation is untouched.
+        return yield* refuse(outcome.reason, "admission");
+      case "enter": {
+        if (identity.kind !== "active") return yield* refuse("failed", "admission");
+        const session = yield* signIn(request, flow, identity.userId, claims, tokens);
+        return { session, redirectTo: flow.returnTo };
+      }
+      case "enter-and-join": {
+        if (identity.kind !== "active") return yield* refuse("failed", "admission");
+        // Signed in whatever the Invitation says: they are this Hub's User already.
+        const session = yield* signIn(request, flow, identity.userId, claims, tokens);
+        // A link found dead just now is the refusal `join` would give, counted once.
+        const joined =
+          invitation.kind === "invalid"
+            ? ("invitation-invalid" as const)
+            : yield* invitations.join(identity.userId, token, clientIp).pipe(
+                Effect.as(undefined),
+                Effect.catch((error) => Effect.succeed(joinRefusal(error))),
+              );
+        return {
+          session,
+          redirectTo: joined === undefined ? flow.returnTo : withResult(INVITE_PATH, joined),
+        };
+      }
+      case "create-user": {
+        const session = yield* register(request, flow, claims, tokens);
+        return { session, redirectTo: flow.returnTo };
+      }
+      case "create-user-and-join": {
+        // One transaction: the User, identity, login and session, then the conditional spend and
+        // the membership. Losing the race for the link rolls the new User back.
+        const { session, afterCommit } = yield* sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const created = yield* newUser(request, flow, claims, tokens);
+              const redeemed = yield* invitations
+                .redeemForNewUser({
+                  token,
+                  clientIp,
+                  userId: created.user.id,
+                  adminAllowed: false,
+                })
+                .pipe(
+                  Effect.catchTags({
+                    InvitationInvalidError: () =>
+                      Effect.fail(refuse("invitation-invalid", "invitation spent meanwhile")),
+                    InvitationRefusedError: (error) =>
+                      Effect.fail(refuse(joinRefusal(error), "invitation refused")),
+                    InvitationConflictError: (error) =>
+                      Effect.fail(refuse(joinRefusal(error), "invitation conflict")),
+                    SignInThrottledError: () =>
+                      Effect.fail(refuse("throttled", "invitation throttled")),
+                    InvitationStorageError: () =>
+                      Effect.fail(refuse("failed", "invitation storage")),
+                  }),
+                );
+              return { session: created.session, afterCommit: redeemed.afterCommit };
+            }),
+          )
+          .pipe(Effect.catchTags({ SqlError: () => Effect.fail(refuse("failed", "transaction")) }));
+        yield* afterCommit;
+        return { session, redirectTo: flow.returnTo };
+      }
+    }
   });
 
   const link = Effect.fn("KeycloakSignIn.link")(function* (
@@ -578,8 +805,8 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
               userId,
               issuer: flow.issuer,
               subject: claims.sub,
-              username: claims.preferred_username ?? null,
-              email: claims.email ?? null,
+              username: KeycloakAdmission.identityLabel(claims.preferred_username),
+              email: KeycloakAdmission.identityLabel(claims.email),
               now,
             })
             .pipe(Effect.mapError(storage("link")));
@@ -622,7 +849,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     // After the commit: the old sessions' sockets close, and their Admin rights are re-read.
     yield* done.afterCommit;
     yield* userDirectory.credentialsChanged(userId);
-    return done.session;
+    return { session: done.session, redirectTo: flow.returnTo };
   });
 
   const callback: KeycloakSignIn["Service"]["callback"] = Effect.fn("KeycloakSignIn.callback")(
@@ -703,12 +930,12 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
             nonce: flow.nonce,
           })
           .pipe(Effect.mapError((error) => refuse("failed", error.detail, true)));
-        const session =
+        const { session, redirectTo } =
           flow.link === undefined
-            ? yield* signIn(request, flow, claims, tokens)
+            ? yield* admit(request, flow, enabled.value.registrationMode, claims, tokens, clientIp)
             : yield* link(request, flow, flow.link, claims, tokens);
         return {
-          redirectTo: flow.returnTo,
+          redirectTo,
           session: { token: session.sessionToken, expiresAt: session.response.expiresAt },
           secure,
         } satisfies CallbackOutcome;
@@ -721,7 +948,12 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           failure: refusal.failure,
           check: refusal.detail,
         });
-        const landing = flow?.intent === "link" ? flow.returnTo : "/sign-in";
+        const landing =
+          flow?.intent === "link"
+            ? flow.returnTo
+            : flow?.intent === "invitation"
+              ? INVITE_PATH
+              : "/sign-in";
         return {
           redirectTo: withResult(landing, refusal.failure as KeycloakSignInFailure),
           session: undefined,

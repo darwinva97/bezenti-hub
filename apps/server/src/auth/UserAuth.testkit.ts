@@ -263,7 +263,7 @@ const makeLayerServices = (
         // Outside MCP clients: OAuth approval and the bearer check /mcp runs.
         Layer.mergeAll(
           // Sign-in and linking through Keycloak (ticket 02), over the realm the test gives.
-          KeycloakSignIn.layerWith(signIn?.flows),
+          KeycloakSignIn.layerWith(signIn?.flows).pipe(Layer.provide(InvitationService.layer)),
           InvitationService.layer,
           MembershipService.layer,
           InstallationUserService.layer,

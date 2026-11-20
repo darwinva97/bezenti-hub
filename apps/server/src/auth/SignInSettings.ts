@@ -75,6 +75,8 @@ export interface KeycloakConfig {
   readonly issuer: string;
   readonly clientId: string;
   readonly clientSecret: Redacted.Redacted<string>;
+  /** Who a new identity may become a User as (ticket 03), read with the client. */
+  readonly registrationMode: RegistrationMode;
   readonly groupsClaim: string;
   readonly strongAcr: ReadonlyArray<string>;
   readonly strongAmr: ReadonlyArray<string>;
@@ -434,6 +436,7 @@ const make = Effect.gen(function* () {
       issuer,
       clientId,
       clientSecret,
+      registrationMode: settings.registrationMode,
       groupsClaim: settings.groupsClaim,
       strongAcr: settings.strongAcr,
       strongAmr: settings.strongAmr,

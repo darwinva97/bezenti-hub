@@ -6,6 +6,7 @@
  */
 import {
   EnvironmentHttpApi,
+  EnvironmentHttpBadRequestError,
   EnvironmentHttpForbiddenError,
   EnvironmentRateLimitedError,
   EnvironmentServiceBusyError,
@@ -49,6 +50,8 @@ const failStart = (error: KeycloakSignIn.KeycloakStartRefusedError) => {
       return failEnvironmentInternal("keycloak_unavailable");
     case "off":
       return Effect.fail(new EnvironmentHttpForbiddenError({ message: error.message }));
+    case "invitation-invalid":
+      return Effect.fail(new EnvironmentHttpBadRequestError({ message: error.message }));
   }
 };
 
@@ -82,6 +85,7 @@ export const layerApi = HttpApiBuilder.group(
             UserDirectoryStorageError: (error) => failEnvironmentInternal("internal_error", error),
             SignInSettingsStorageError: (error) =>
               failEnvironmentInternal("sign_in_settings_failed", error),
+            InvitationStorageError: (error) => failEnvironmentInternal("invitations_failed", error),
           }),
         );
         const cookies = Cookies.set(Cookies.empty, started.cookie.name, started.cookie.value, {

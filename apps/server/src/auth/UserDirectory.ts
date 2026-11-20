@@ -501,6 +501,13 @@ export class UserDirectory extends Context.Service<
     readonly createInvitedUser: (
       pending: PendingInvitee,
     ) => Effect.Effect<AuthUser, LoginNameTakenError | UserDirectoryStorageError>;
+    /**
+     * Keycloak sign-in, ticket 03: a User whose only way in is a Keycloak identity: no sign-in
+     * name, passkey, password or TOTP. Run it in the transaction that links the identity.
+     */
+    readonly createIdentityUser: (
+      displayName: string,
+    ) => Effect.Effect<AuthUser, UserDirectoryStorageError>;
     /** Whether the User signs in with more than a password: a passkey or TOTP. */
     readonly hasStrongSignIn: (userId: UserId) => Effect.Effect<boolean, UserDirectoryStorageError>;
     /**
@@ -1641,6 +1648,25 @@ const make = Effect.gen(function* () {
     return { id: pending.userId, displayName: pending.displayName, isOwner: false };
   });
 
+  const createIdentityUser: UserDirectory["Service"]["createIdentityUser"] = Effect.fn(
+    "UserDirectory.createIdentityUser",
+  )(function* (displayName) {
+    const userId = UserId.make(yield* random.uuidV4());
+    const created = yield* users
+      .createUser({
+        userId,
+        displayName,
+        createdAt: yield* DateTime.now,
+        passkey: null,
+        password: null,
+        totp: null,
+      })
+      .pipe(storage);
+    // Without a sign-in name nothing can conflict; a false here is the database lying.
+    if (!created) return yield* new UserDirectoryStorageError({ cause: "user row not created" });
+    return { id: userId, displayName, isOwner: false };
+  });
+
   const hasStrongSignIn: UserDirectory["Service"]["hasStrongSignIn"] = Effect.fn(
     "UserDirectory.hasStrongSignIn",
   )(function* (userId) {
@@ -1664,6 +1690,7 @@ const make = Effect.gen(function* () {
     startInviteeTotpEnrollment,
     prepareInviteePassword,
     createInvitedUser,
+    createIdentityUser,
     hasStrongSignIn,
     issueResetLink,
     onPromotedToAdmin,

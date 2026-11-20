@@ -143,9 +143,10 @@ export const keycloakClientUrls = (base: string) => {
 /**
  * Why a Keycloak flow starts (Keycloak sign-in spec, «Intenciones del flujo»): `sign-in` from the
  * sign-in page, without a session; `link` from a User's account, with their browser session and a
- * fresh proof of their current credential. Tickets 03, 06 and the reset add the others.
+ * fresh proof of their current credential; `invitation` (ticket 03) from `/invite`, without a
+ * session, carrying the Invitation's token. Ticket 06 and the reset add the others.
  */
-export const KeycloakFlowIntent = Schema.Literals(["sign-in", "link"]);
+export const KeycloakFlowIntent = Schema.Literals(["sign-in", "link", "invitation"]);
 export type KeycloakFlowIntent = typeof KeycloakFlowIntent.Type;
 
 /** The longest path the browser may come back to. */
@@ -154,11 +155,16 @@ const MAX_RETURN_TO_LENGTH = 2048;
 /**
  * Starts a flow. `returnTo` is where the browser lands after the callback: a path on this Hub
  * (one leading `/`, no `//`, no `\`), or the start is refused. `reauth` is the `link` proof.
+ * `invitationToken` comes with `invitation` and only with it: the Hub checks it before the flow
+ * leaves for Keycloak and keeps it on its side, never in the address it answers.
  */
 export const KeycloakStartRequest = Schema.Struct({
   intent: KeycloakFlowIntent,
   returnTo: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_RETURN_TO_LENGTH))),
   reauth: Schema.optionalKey(AuthReauth),
+  invitationToken: Schema.optionalKey(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+  ),
 });
 export type KeycloakStartRequest = typeof KeycloakStartRequest.Type;
 
@@ -170,13 +176,19 @@ export type KeycloakStartResult = typeof KeycloakStartResult.Type;
 export const KEYCLOAK_RESULT_PARAM = "keycloak";
 
 /**
- * Why a callback did not sign in (`?keycloak=<code>`): an identity this Hub doesn't know (ticket 03
- * admits new people), a User the Owner disabled or removed, an identity linked to another User, the
- * person cancelled at Keycloak, too many failures from this client, Keycloak off or unreachable,
- * or any other check that failed (state, cookie, `iss`, code, token: never said which).
+ * Why a callback did not sign in (`?keycloak=<code>`): admission (ticket 03: invitation only,
+ * closed, a dead Invitation, or what `/api/invitations/join` refuses), a disabled, removed or
+ * taken account, a cancel, a back-off, Keycloak unreachable, or a failed check (never which one).
+ * None says whether some other account exists.
  */
 export const KeycloakSignInFailure = Schema.Literals([
   "unknown",
+  "invitation-only",
+  "registration-closed",
+  "invitation-invalid",
+  "already-member",
+  "owner",
+  "strong-factor-required",
   "disabled",
   "removed",
   "taken",

@@ -642,6 +642,8 @@ it.effect(
         "signIn.settings.update",
         // auth/KeycloakSignIn.test.ts (Keycloak sign-in, ticket 02)
         "user.identity.link",
+        // auth/KeycloakSignIn.test.ts (Keycloak sign-in, ticket 03): open registration.
+        "user.register",
         // No longer written (owned-resources 06: no Installation permission is left); old rows
         // stay readable.
         "installationPermission.grant",

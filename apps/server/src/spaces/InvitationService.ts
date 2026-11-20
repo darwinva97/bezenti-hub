@@ -45,7 +45,11 @@ const INVITATION_TTL = Duration.days(7);
 
 export class InvitationRefusedError extends Schema.TaggedError<InvitationRefusedError>()(
   "InvitationRefusedError",
-  { reason: Schema.String },
+  {
+    reason: Schema.String,
+    /** For a caller that answers in codes (Keycloak's callback): an Admin's Role, no strong sign-in. */
+    code: Schema.optionalKey(Schema.Literal("strong-factor-required")),
+  },
 ) {
   override get message(): string {
     return this.reason;
@@ -64,7 +68,11 @@ export class InvitationInvalidError extends Schema.TaggedError<InvitationInvalid
 
 export class InvitationConflictError extends Schema.TaggedError<InvitationConflictError>()(
   "InvitationConflictError",
-  { reason: Schema.String },
+  {
+    reason: Schema.String,
+    /** For a caller that answers in codes: the Owner, or someone already in the Organization. */
+    code: Schema.optionalKey(Schema.Literals(["owner", "already-member"])),
+  },
 ) {
   override get message(): string {
     return this.reason;
@@ -145,6 +153,29 @@ export class InvitationService extends Context.Service<
       token: string,
       clientIp: string | undefined,
     ) => Effect.Effect<JoinInvitationResult, RedeemError>;
+    /**
+     * Keycloak sign-in, ticket 03: whether a token is a live Invitation and its Role, spending
+     * nothing and saying no more than its preview. A dead or unknown link counts as a failure.
+     */
+    readonly inspect: (
+      token: string,
+      clientIp: string | undefined,
+    ) => Effect.Effect<
+      { readonly role: SpaceRole },
+      InvitationInvalidError | UserDirectory.SignInThrottledError | InvitationStorageError
+    >;
+    /**
+     * Keycloak sign-in, ticket 03: spends the Invitation for a User just created, in the caller's
+     * transaction (a refusal rolls it all back, the Invitation unspent): the conditional spend, the
+     * membership with the spent row's Role (an Admin's only if `adminAllowed`) and
+     * `invitation.accept`. Run `afterCommit` once the transaction committed.
+     */
+    readonly redeemForNewUser: (input: {
+      readonly token: string;
+      readonly clientIp: string | undefined;
+      readonly userId: UserId;
+      readonly adminAllowed: boolean;
+    }) => Effect.Effect<{ readonly afterCommit: Effect.Effect<void> }, RedeemError>;
   }
 >()("t3/spaces/InvitationService") {}
 
@@ -637,16 +668,19 @@ const make = Effect.gen(function* () {
     if (principal.isOwner) {
       return yield* new InvitationConflictError({
         reason: "You're the Owner, who already sees every Organization.",
+        code: "owner",
       });
     }
     if (principal.roles.has(invitation.spaceId)) {
       return yield* new InvitationConflictError({
         reason: `You're already in ${invitation.organizationName}.`,
+        code: "already-member",
       });
     }
     if (invitation.role === "admin" && !(yield* users.hasStrongSignIn(userId).pipe(storage))) {
       return yield* new InvitationRefusedError({
         reason: `${ADMIN_NEEDS_MORE} Add one in Settings, then open this link again.`,
+        code: "strong-factor-required",
       });
     }
     const spaceId = yield* sql
@@ -660,6 +694,7 @@ const make = Effect.gen(function* () {
           if (!added) {
             return yield* new InvitationConflictError({
               reason: `You're already in ${invitation.organizationName}.`,
+              code: "already-member",
             });
           }
           yield* audit
@@ -690,6 +725,47 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const inspect: InvitationService["Service"]["inspect"] = Effect.fn("InvitationService.inspect")(
+    function* (token, clientIp) {
+      const { invitation } = yield* requireLive(token, clientIp);
+      return { role: invitation.role };
+    },
+  );
+
+  const redeemForNewUser: InvitationService["Service"]["redeemForNewUser"] = Effect.fn(
+    "InvitationService.redeemForNewUser",
+  )(function* ({ token, clientIp, userId, adminAllowed }) {
+    const { tokenHash, invitation, keys } = yield* requireLive(token, clientIp);
+    yield* Effect.gen(function* () {
+      const spent = yield* spend({ tokenHash, now: yield* nowIso, userId }).pipe(storage);
+      // Another browser accepted it first, or it was revoked or expired meanwhile.
+      if (Option.isNone(spent)) return yield* new InvitationInvalidError({});
+      // The Role is the spent row's, never a copy read before the transaction.
+      if (spent.value.role === "admin" && !adminAllowed) {
+        return yield* new InvitationRefusedError({
+          reason: ADMIN_NEEDS_MORE,
+          code: "strong-factor-required",
+        });
+      }
+      yield* spaces
+        .addMembership({ spaceId: spent.value.spaceId, userId, role: spent.value.role })
+        .pipe(storage);
+      yield* audit
+        .record({
+          actor: AuditLog.userActor(userId),
+          action: "invitation.accept",
+          spaceId: spent.value.spaceId,
+          target: { kind: "invitation", id: invitation.invitationId },
+          detail: { role: spent.value.role, newUser: true },
+        })
+        .pipe(storage);
+    }).pipe(countRefusals(keys));
+    // After the commit, so a viewer that refreshes on the bump reads the new Membership.
+    return {
+      afterCommit: Effect.sync(() => throttle.reset(keys)).pipe(Effect.andThen(spaces.changed)),
+    };
+  });
+
   return InvitationService.of({
     create,
     list,
@@ -699,6 +775,8 @@ const make = Effect.gen(function* () {
     startTotpEnrollment,
     accept,
     join,
+    inspect,
+    redeemForNewUser,
   });
 });
 

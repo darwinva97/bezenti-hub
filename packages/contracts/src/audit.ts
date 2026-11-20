@@ -26,6 +26,8 @@ export const AuditAction = Schema.Literals([
   "signIn.settings.update",
   // Ticket 02: a User linked a Keycloak identity (by issuer and subject, never by email).
   "user.identity.link",
+  // Ticket 03: a User created by signing in through Keycloak without an Invitation.
+  "user.register",
   "organization.create",
   "organization.archive",
   "organization.restore",
@@ -159,6 +161,11 @@ export const AUDIT_DETAIL_KEYS = {
    * with the link (the Owner keeps theirs). Never the subject, the email or a token.
    */
   "user.identity.link": ["issuer", "credentialsRemoved"],
+  /**
+   * `via` what admitted them (`open` registration; ticket 05 adds `group`) and the realm their
+   * identity comes from. Never the subject, the email or a token.
+   */
+  "user.register": ["via", "issuer"],
   "organization.create": [],
   "organization.archive": [],
   "organization.restore": [],

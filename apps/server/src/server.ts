@@ -564,7 +564,10 @@ const layerAuth = Layer.mergeAll(
   SecretProviderScopes.layer.pipe(Layer.provide(layerProviderReads), Layer.provide(AuditLog.layer)),
   // The Owner's sign-in settings and the Keycloak realm they name (Keycloak sign-in, ticket 01):
   // its own fetch, which never follows a redirect. Sign-in and linking through it (ticket 02).
+  // Admission (ticket 03) accepts Invitations through InvitationService: the same instance,
+  // so a link's back-off is one.
   KeycloakSignIn.layer.pipe(
+    Layer.provide(InvitationService.layer),
     Layer.provideMerge(SignInSettings.layer.pipe(Layer.provide(AuditLog.layer))),
     Layer.provideMerge(KeycloakClient.layerLive),
     Layer.provide(AuditLog.layer),

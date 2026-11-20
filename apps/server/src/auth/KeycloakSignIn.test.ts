@@ -412,16 +412,18 @@ describe("Keycloak sign-in (ticket 02)", () => {
     }),
   );
 
-  it.effect("an identity the Hub doesn't know is refused and nothing about it is kept", () =>
-    Effect.gen(function* () {
-      const { server, realm } = yield* hub();
-      const refused = yield* roundTrip(server, realm, { sub: "kc-stranger" });
-      assert.equal(refused.status, 303);
-      assert.equal(refused.location, "/sign-in?keycloak=unknown");
-      assert.isUndefined(refused.cookie);
-      assert.deepEqual(yield* server.sql`SELECT * FROM user_identities`, []);
-      assert.deepEqual(yield* server.sql`SELECT * FROM identity_logins`, []);
-    }),
+  it.effect(
+    "an identity the Hub doesn't know is refused on an invitation-only Hub, and nothing is kept",
+    () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const refused = yield* roundTrip(server, realm, { sub: "kc-stranger" });
+        assert.equal(refused.status, 303);
+        assert.equal(refused.location, "/sign-in?keycloak=invitation-only");
+        assert.isUndefined(refused.cookie);
+        assert.deepEqual(yield* server.sql`SELECT * FROM user_identities`, []);
+        assert.deepEqual(yield* server.sql`SELECT * FROM identity_logins`, []);
+      }),
   );
 
   it.effect("a disabled User gets today's refusal", () =>
@@ -723,9 +725,9 @@ describe("Keycloak sign-in (ticket 02)", () => {
           ).pipe(Effect.map((answer) => resultOf(answer.location)));
         // Past 5 pending flows, the flooding client lost its own first one...
         assert.equal(yield* comeBack(flood[0]!, "198.51.100.31"), "failed");
-        assert.equal(yield* comeBack(flood[5]!, "198.51.100.31"), "unknown");
+        assert.equal(yield* comeBack(flood[5]!, "198.51.100.31"), "invitation-only");
         // ...and the other client's flow is still there.
-        assert.equal(yield* comeBack(other, "198.51.100.30"), "unknown");
+        assert.equal(yield* comeBack(other, "198.51.100.30"), "invitation-only");
       }),
     );
 
@@ -749,7 +751,7 @@ describe("Keycloak sign-in (ticket 02)", () => {
         const answer = yield* callback(server, back, joinCookies(first.flowCookie), {
           headers: remoteClient("198.51.100.40"),
         });
-        assert.equal(resultOf(answer.location), "unknown");
+        assert.equal(resultOf(answer.location), "invitation-only");
       }),
     );
 
@@ -816,7 +818,7 @@ describe("Keycloak sign-in (ticket 02)", () => {
 
       // Only the new password lets them in now; their Keycloak account is a stranger.
       const viaKeycloak = yield* roundTrip(server, realm, { sub: "kc-grace" });
-      assert.equal(viaKeycloak.location, "/sign-in?keycloak=unknown");
+      assert.equal(viaKeycloak.location, "/sign-in?keycloak=invitation-only");
       const viaPassword = yield* server.request("/api/auth/password/sign-in", {
         body: { loginName: "grace", password: PASSWORD },
       });
@@ -1007,5 +1009,562 @@ describe("what later tickets build on", () => {
   it("verifies only the spec's algorithms", () => {
     assert.deepEqual([...KeycloakClient.ID_TOKEN_ALGORITHMS], ["RS256", "PS256", "ES256", "EdDSA"]);
     assert.equal(KeycloakClient.usableKeys({ keys: [] }).length, 0);
+  });
+});
+
+/** An Organization of the Owner's and a link into it, as the Owner makes one. */
+const organizationInvite = Effect.fn(function* (
+  server: Server,
+  owner: string,
+  role: "admin" | "member" | "guest" = "member",
+  name = "Acme",
+) {
+  const organization = yield* server.request("/api/spaces/organizations", {
+    body: { name },
+    cookie: owner,
+  });
+  assert.equal(organization.status, 200, organization.text);
+  return yield* anotherInvite(server, owner, organization.body.id as string, role);
+});
+
+/** Another link into an Organization that exists. */
+const anotherInvite = Effect.fn(function* (
+  server: Server,
+  owner: string,
+  spaceId: string,
+  role: "admin" | "member" | "guest" = "member",
+) {
+  const created = yield* server.request(`/api/spaces/${spaceId}/invitations`, {
+    body: { role },
+    cookie: owner,
+  });
+  assert.equal(created.status, 200, created.text);
+  return {
+    spaceId,
+    token: created.body.token as string,
+    invitationId: (created.body.invitation as { id: string }).id,
+  };
+});
+
+const setMode = Effect.fn(function* (
+  server: Server,
+  owner: string,
+  registrationMode: "open" | "invitation-only" | "closed",
+) {
+  const saved = yield* server.request("/api/installation/sign-in-settings", {
+    cookie: owner,
+    body: { registrationMode },
+  });
+  assert.equal(saved.status, 200, saved.text);
+});
+
+const invitationStart = (token: string) => ({ intent: "invitation", invitationToken: token });
+
+const invitationRow = (server: Server, invitationId: string) =>
+  server.sql<{ acceptedBy: string | null; acceptedAt: string | null }>`
+      SELECT accepted_by AS "acceptedBy", accepted_at AS "acceptedAt" FROM space_invitations
+      WHERE invitation_id = ${invitationId}
+    `.pipe(Effect.map((rows) => rows[0]));
+
+const userCount = (server: Server) =>
+  server.sql<{ count: number }>`SELECT COUNT(*) AS count FROM users`.pipe(
+    Effect.map((rows) => rows[0]?.count ?? 0),
+  );
+
+const membershipsOf = (server: Server, userId: string) =>
+  server.sql<{ spaceId: string; role: string }>`
+    SELECT space_id AS "spaceId", role FROM space_memberships WHERE user_id = ${userId}
+  `;
+
+interface AuditRow {
+  readonly actor: { readonly userId: string | null };
+  readonly target: { readonly kind: string; readonly id: string; readonly name: string | null };
+  readonly detail: Record<string, unknown>;
+}
+
+const auditOf = (server: Server, owner: string, action: string) =>
+  server
+    .request(`/api/installation/audit?action=${action}`, { cookie: owner })
+    .pipe(Effect.map((answer) => answer.body.entries as ReadonlyArray<AuditRow>));
+
+/** A Member whose sign-in is a Keycloak identity (`sub`), linked through ticket 02's flow. */
+const linkedMember = Effect.fn(function* (
+  server: Server,
+  realm: FakeKeycloak,
+  sub: string,
+  email?: string,
+) {
+  const member = yield* memberWithPassword(server);
+  const linked = yield* roundTrip(
+    server,
+    realm,
+    { sub, ...(email === undefined ? {} : { email }) },
+    { intent: "link", reauth: { method: "password", password: PASSWORD } },
+    member.cookie,
+  );
+  assert.equal(linked.status, 303);
+  return { id: member.id, cookie: linked.cookie ?? "" };
+});
+
+describe("Keycloak admission (ticket 03)", () => {
+  describe("a new identity without an Invitation", () => {
+    it.effect("open: gets a User of its own, without Organizations, audited `user.register`", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner, ownerId } = yield* hub();
+        yield* setMode(server, owner, "open");
+        const signedIn = yield* roundTrip(server, realm, {
+          sub: "kc-lin",
+          username: "lin",
+          email: "lin@example.test",
+          claims: { name: "  Lin‮ \u0007Lee " },
+        });
+        assert.equal(signedIn.status, 303);
+        assert.equal(signedIn.location, "/");
+        const userId = (yield* userOf(server, signedIn.cookie)) ?? "";
+        assert.notEqual(userId, "");
+        assert.notEqual(userId, ownerId);
+
+        const users = yield* server.sql<{ displayName: string; loginName: string | null }>`
+          SELECT display_name AS "displayName", login_name AS "loginName" FROM users
+          WHERE user_id = ${userId}
+        `;
+        assert.deepEqual(users, [{ displayName: "Lin Lee", loginName: null }]);
+        assert.deepEqual(yield* membershipsOf(server, userId), []);
+        const identity = yield* server.sql<{ subject: string; username: string | null }>`
+          SELECT subject, username FROM user_identities WHERE user_id = ${userId}
+        `;
+        assert.deepEqual(identity, [{ subject: "kc-lin", username: "lin" }]);
+        const sessions = yield* server.sql<{ identityLoginId: string | null }>`
+          SELECT identity_login_id AS "identityLoginId" FROM auth_sessions
+          WHERE user_id = ${userId} AND revoked_at IS NULL
+        `;
+        assert.equal(sessions.length, 1);
+        assert.isString(sessions[0]?.identityLoginId);
+
+        const registered = yield* auditOf(server, owner, "user.register");
+        assert.equal(registered.length, 1);
+        assert.equal(registered[0]?.actor.userId, userId);
+        assert.deepInclude(registered[0]?.target, { kind: "user", id: userId });
+        assert.deepEqual(registered[0]?.detail, { via: "open", issuer: realm.issuer });
+
+        // The next time, the same identity simply signs in.
+        const again = yield* roundTrip(server, realm, { sub: "kc-lin" });
+        assert.equal(yield* userOf(server, again.cookie), userId);
+        assert.equal((yield* auditOf(server, owner, "user.register")).length, 1);
+      }),
+    );
+
+    it.effect("a label refreshed at sign-in is cleaned as a new name is", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const member = yield* linkedMember(server, realm, "kc-grace");
+        const again = yield* roundTrip(server, realm, {
+          sub: "kc-grace",
+          username: "gra‮ce\u0000",
+        });
+        assert.equal(yield* userOf(server, again.cookie), member.id);
+        assert.equal((yield* account(server, again.cookie ?? "")).identity?.username, "grace");
+      }),
+    );
+
+    it.effect.each([
+      { mode: "invitation-only", reason: "invitation-only" },
+      { mode: "closed", reason: "registration-closed" },
+    ] as const)("$mode: is refused with «$reason», and nothing is kept", ({ mode, reason }) =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        yield* setMode(server, owner, mode);
+        const before = yield* userCount(server);
+        const refused = yield* roundTrip(server, realm, { sub: "kc-lin" });
+        assert.equal(refused.location, `/sign-in?keycloak=${reason}`);
+        assert.isUndefined(refused.cookie);
+        assert.equal(yield* userCount(server), before);
+        assert.deepEqual(yield* server.sql`SELECT * FROM user_identities`, []);
+        assert.deepEqual(yield* server.sql`SELECT * FROM identity_logins`, []);
+      }),
+    );
+  });
+
+  describe("a new identity with an Organization Invitation", () => {
+    it.effect.each([{ mode: "open" }, { mode: "invitation-only" }] as const)(
+      "$mode: becomes a User and a Member in one go, spending the Invitation",
+      ({ mode }) =>
+        Effect.gen(function* () {
+          const { server, realm, owner } = yield* hub();
+          yield* setMode(server, owner, mode);
+          const invitation = yield* organizationInvite(server, owner, "guest");
+          const accepted = yield* roundTrip(
+            server,
+            realm,
+            { sub: "kc-lin", username: "lin" },
+            invitationStart(invitation.token),
+          );
+          assert.equal(accepted.status, 303);
+          assert.equal(accepted.location, "/");
+          const userId = (yield* userOf(server, accepted.cookie)) ?? "";
+          assert.notEqual(userId, "");
+          // The Role comes from the Invitation, never from a claim.
+          assert.deepEqual(yield* membershipsOf(server, userId), [
+            { spaceId: invitation.spaceId, role: "guest" },
+          ]);
+          assert.equal((yield* invitationRow(server, invitation.invitationId))?.acceptedBy, userId);
+          const users = yield* server.sql<{ displayName: string; loginName: string | null }>`
+            SELECT display_name AS "displayName", login_name AS "loginName" FROM users
+            WHERE user_id = ${userId}
+          `;
+          assert.deepEqual(users, [{ displayName: "lin", loginName: null }]);
+
+          const acceptance = yield* auditOf(server, owner, "invitation.accept");
+          assert.equal(acceptance.length, 1);
+          assert.equal(acceptance[0]?.actor.userId, userId);
+          assert.deepEqual(acceptance[0]?.detail, { role: "guest", newUser: true });
+          // Created through an Invitation: not a registration.
+          assert.deepEqual(yield* auditOf(server, owner, "user.register"), []);
+        }),
+    );
+
+    it.effect("closed: is refused, the Invitation stays unspent and nothing is created", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        yield* setMode(server, owner, "closed");
+        const invitation = yield* organizationInvite(server, owner);
+        const before = yield* userCount(server);
+        const refused = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-lin" },
+          invitationStart(invitation.token),
+        );
+        assert.equal(refused.location, "/invite?keycloak=registration-closed");
+        assert.isUndefined(refused.cookie);
+        assert.equal(yield* userCount(server), before);
+        assert.isNull((yield* invitationRow(server, invitation.invitationId))?.acceptedAt);
+        assert.deepEqual(yield* server.sql`SELECT * FROM user_identities`, []);
+      }),
+    );
+
+    it.effect("an Admin Invitation needs a strong sign-in: refused, unspent", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const invitation = yield* organizationInvite(server, owner, "admin");
+        const before = yield* userCount(server);
+        const refused = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-lin" },
+          invitationStart(invitation.token),
+        );
+        assert.equal(refused.location, "/invite?keycloak=strong-factor-required");
+        assert.equal(yield* userCount(server), before);
+        assert.isNull((yield* invitationRow(server, invitation.invitationId))?.acceptedAt);
+      }),
+    );
+
+    it.effect("an Invitation that expires while the person is at Keycloak is refused", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const invitation = yield* organizationInvite(server, owner);
+        yield* TestClock.adjust("6 days");
+        yield* TestClock.adjust("23 hours");
+        yield* TestClock.adjust("55 minutes");
+        const started = yield* start(server, invitationStart(invitation.token));
+        assert.equal(started.status, 200, started.text);
+        const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-lin" });
+        // Seven days have passed; the flow itself (10 minutes) is still alive.
+        yield* TestClock.adjust("6 minutes");
+        const before = yield* userCount(server);
+        const refused = yield* callback(server, back, joinCookies(started.flowCookie));
+        assert.equal(refused.location, "/invite?keycloak=invitation-invalid");
+        assert.isUndefined(refused.cookie);
+        assert.equal(yield* userCount(server), before);
+      }),
+    );
+
+    it.effect("an Invitation revoked while the person is at Keycloak is refused", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        yield* setMode(server, owner, "open");
+        const invitation = yield* organizationInvite(server, owner);
+        const started = yield* start(server, invitationStart(invitation.token));
+        assert.equal(started.status, 200, started.text);
+        const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-lin" });
+        const revoked = yield* server.request("/api/invitations/revoke", {
+          body: { invitationId: invitation.invitationId },
+          cookie: owner,
+        });
+        assert.equal(revoked.status, 200, revoked.text);
+        const before = yield* userCount(server);
+        const refused = yield* callback(server, back, joinCookies(started.flowCookie));
+        // Even with registration open: who came to accept an Invitation gets no empty User.
+        assert.equal(refused.location, "/invite?keycloak=invitation-invalid");
+        assert.isUndefined(refused.cookie);
+        assert.equal(yield* userCount(server), before);
+      }),
+    );
+
+    it.effect("two people racing for one Invitation: exactly one gets it", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const invitation = yield* organizationInvite(server, owner);
+        const racers = yield* Effect.forEach(["kc-lin", "kc-max"], (sub, index) =>
+          Effect.gen(function* () {
+            const address = `198.51.100.${60 + index}`;
+            const started = yield* start(server, invitationStart(invitation.token), {
+              headers: remoteStart(address),
+            });
+            assert.equal(started.status, 200, started.text);
+            const back = yield* realm.signIn(started.authorizationUrl, { sub });
+            return { back, started, address };
+          }),
+        );
+        const before = yield* userCount(server);
+        const answers = yield* Effect.forEach(
+          racers,
+          ({ back, started, address }) =>
+            callback(server, back, joinCookies(started.flowCookie), {
+              headers: remoteClient(address),
+            }),
+          { concurrency: "unbounded" },
+        );
+        assert.equal(answers.filter((answer) => answer.cookie !== undefined).length, 1);
+        assert.deepEqual(
+          answers.filter((answer) => answer.cookie === undefined).map((answer) => answer.location),
+          ["/invite?keycloak=invitation-invalid"],
+        );
+        assert.equal(yield* userCount(server), before + 1);
+        const members = yield* server.sql`
+          SELECT user_id FROM space_memberships WHERE space_id = ${invitation.spaceId}
+        `;
+        assert.equal(members.length, 1);
+        assert.equal((yield* server.sql`SELECT * FROM user_identities`).length, 1);
+        assert.equal((yield* auditOf(server, owner, "invitation.accept")).length, 1);
+      }),
+    );
+  });
+
+  describe("an Invitation token at `start`", () => {
+    it.effect("is checked before leaving for Keycloak, and only `invitation` takes one", () =>
+      Effect.gen(function* () {
+        const { server, owner } = yield* hub();
+        const invitation = yield* organizationInvite(server, owner);
+        const bad = yield* start(server, invitationStart("not-a-token"));
+        assert.equal(bad.status, 400);
+        assert.isUndefined(bad.flowCookie);
+        assert.isUndefined(bad.authorizationUrl);
+        // Today's preview says no more: one message for unknown, used, expired or revoked.
+        assert.include(bad.text, "no longer valid");
+        assert.equal((yield* start(server, { intent: "invitation" })).status, 400);
+        assert.equal(
+          (yield* start(server, { intent: "sign-in", invitationToken: invitation.token })).status,
+          400,
+        );
+        // Checking it spends nothing.
+        const ok = yield* start(server, invitationStart(invitation.token));
+        assert.equal(ok.status, 200);
+        assert.isNull((yield* invitationRow(server, invitation.invitationId))?.acceptedAt);
+      }),
+    );
+  });
+
+  describe("an existing User accepting through Keycloak", () => {
+    it.effect("joins the Organization as `/api/invitations/join` does, even when closed", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        yield* setMode(server, owner, "closed");
+        const member = yield* linkedMember(server, realm, "kc-grace");
+        const invitation = yield* organizationInvite(server, owner);
+        const joined = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-grace" },
+          invitationStart(invitation.token),
+        );
+        assert.equal(joined.status, 303);
+        assert.equal(joined.location, "/");
+        assert.equal(yield* userOf(server, joined.cookie), member.id);
+        assert.deepEqual(yield* membershipsOf(server, member.id), [
+          { spaceId: invitation.spaceId, role: "member" },
+        ]);
+        const acceptance = yield* auditOf(server, owner, "invitation.accept");
+        assert.deepEqual(acceptance[0]?.detail, { role: "member", newUser: false });
+      }),
+    );
+
+    it.effect("gets join's refusals, signed in, and the Invitation stays unspent", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner, authenticator } = yield* hub();
+        const member = yield* linkedMember(server, realm, "kc-grace");
+        const first = yield* organizationInvite(server, owner);
+        const joined = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-grace" },
+          invitationStart(first.token),
+        );
+        assert.equal(joined.location, "/");
+        const acceptWith = (token: string, sub = "kc-grace") =>
+          roundTrip(server, realm, { sub }, invitationStart(token));
+
+        // Already in it.
+        const again = yield* anotherInvite(server, owner, first.spaceId);
+        const already = yield* acceptWith(again.token);
+        assert.equal(already.location, "/invite?keycloak=already-member");
+        assert.equal(yield* userOf(server, already.cookie), member.id);
+        assert.isNull((yield* invitationRow(server, again.invitationId))?.acceptedAt);
+
+        // An Admin's Role needs a strong sign-in, which a Keycloak login is not yet.
+        const admin = yield* organizationInvite(server, owner, "admin", "Beta");
+        const weak = yield* acceptWith(admin.token);
+        assert.equal(weak.location, "/invite?keycloak=strong-factor-required");
+        assert.isNull((yield* invitationRow(server, admin.invitationId))?.acceptedAt);
+
+        // Revoked while at Keycloak: still signed in, told the link is no longer valid.
+        const doomed = yield* organizationInvite(server, owner, "member", "Gamma");
+        const started = yield* start(server, invitationStart(doomed.token));
+        const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-grace" });
+        yield* server.request("/api/invitations/revoke", {
+          body: { invitationId: doomed.invitationId },
+          cookie: owner,
+        });
+        const dead = yield* callback(server, back, joinCookies(started.flowCookie));
+        assert.equal(dead.location, "/invite?keycloak=invitation-invalid");
+        assert.equal(yield* userOf(server, dead.cookie), member.id);
+
+        // The Owner sees every Organization already.
+        const reauth = yield* passkeyReauth(server, authenticator);
+        const ownerLinked = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-ada" },
+          { intent: "link", reauth },
+          owner,
+        );
+        assert.equal(ownerLinked.status, 303);
+        const forOwner = yield* anotherInvite(server, ownerLinked.cookie ?? "", first.spaceId);
+        const ownerAnswer = yield* acceptWith(forOwner.token, "kc-ada");
+        assert.equal(ownerAnswer.location, "/invite?keycloak=owner");
+        assert.isNull((yield* invitationRow(server, forOwner.invitationId))?.acceptedAt);
+      }),
+    );
+  });
+
+  describe("an identity is its issuer and subject, never its email", () => {
+    it.effect("a stranger with a User's email gets a new User when open, never that one", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        yield* setMode(server, owner, "open");
+        const member = yield* linkedMember(server, realm, "kc-grace", "grace@example.test");
+        const stranger = yield* roundTrip(server, realm, {
+          sub: "kc-impostor",
+          email: "grace@example.test",
+          username: "grace",
+        });
+        const strangerId = (yield* userOf(server, stranger.cookie)) ?? "";
+        assert.notEqual(strangerId, "");
+        assert.notEqual(strangerId, member.id);
+        const identities = yield* server.sql<{ userId: string; subject: string }>`
+          SELECT user_id AS "userId", subject FROM user_identities ORDER BY subject
+        `;
+        assert.deepEqual(identities, [
+          { userId: member.id, subject: "kc-grace" },
+          { userId: strangerId, subject: "kc-impostor" },
+        ]);
+      }),
+    );
+
+    it.effect("and is refused when invitation only, saying nothing about that account", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        yield* linkedMember(server, realm, "kc-grace", "grace@example.test");
+        const before = yield* userCount(server);
+        const stranger = yield* roundTrip(server, realm, {
+          sub: "kc-impostor",
+          email: "grace@example.test",
+        });
+        assert.equal(stranger.location, "/sign-in?keycloak=invitation-only");
+        assert.isUndefined(stranger.cookie);
+        assert.equal(yield* userCount(server), before);
+        assert.equal((yield* server.sql`SELECT * FROM user_identities`).length, 1);
+      }),
+    );
+  });
+
+  it.effect("the Invitation token never leaves the Hub's side of the flow", () => {
+    const recorded: Array<string> = [];
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        const end = span.end.bind(span);
+        span.end = (endTime, exit) => {
+          recorded.push(
+            span.name,
+            ...Array.from(span.attributes.values(), (value) => String(value)),
+            ...span.events.map((event) =>
+              JSON.stringify(event, (_key, value) =>
+                typeof value === "bigint" ? String(value) : value,
+              ),
+            ),
+            String(exit),
+          );
+          end(endTime, exit);
+        };
+        return span;
+      },
+    });
+    const logger = Logger.make((options) => {
+      recorded.push(
+        String(options.message),
+        String(options.cause),
+        JSON.stringify(options.fiber.getRef(References.CurrentLogAnnotations)),
+      );
+    });
+    return Effect.gen(function* () {
+      const { server, realm, owner } = yield* hub();
+      const accepted = yield* organizationInvite(server, owner);
+      const refused = yield* organizationInvite(server, owner, "admin", "Beta");
+      // Making a link answers its token to the Owner; from here on it is the invitee's flow.
+      recorded.length = 0;
+      const started = yield* start(server, invitationStart(accepted.token));
+      const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-lin" });
+      const answer = yield* callback(server, back, joinCookies(started.flowCookie));
+      assert.equal(answer.location, "/");
+      const refusedAnswer = yield* roundTrip(
+        server,
+        realm,
+        { sub: "kc-max" },
+        invitationStart(refused.token),
+      );
+      const rows = [
+        ...(yield* server.sql`SELECT * FROM audit_log`),
+        ...(yield* server.sql`SELECT * FROM identity_logins`),
+        ...(yield* server.sql`SELECT * FROM user_identities`),
+        ...(yield* server.sql`SELECT * FROM auth_sessions`),
+      ];
+      const seen = [
+        started.authorizationUrl,
+        started.text,
+        ...started.setCookies,
+        back,
+        ...realm.tokenRequests.map((request) => request.body),
+        answer.location ?? "",
+        refusedAnswer.location ?? "",
+        ...rows.map((row) => JSON.stringify(row)),
+        ...recorded,
+      ];
+      assert.isAbove(recorded.length, 10, "the logger and tracer recorded the requests");
+      for (const token of [accepted.token, refused.token]) {
+        assert.deepEqual(
+          seen.filter((text) => text.includes(token)).map((text) => text.slice(0, 400)),
+          [],
+          "an Invitation token came back out",
+        );
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.withTracer(tracer),
+      Effect.provideService(HttpMiddleware.TracerDisabledWhen, isUntracedRequest),
+      Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+      Effect.provideService(References.MinimumLogLevel, "All"),
+    );
   });
 });

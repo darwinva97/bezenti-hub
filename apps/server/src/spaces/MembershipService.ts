@@ -162,7 +162,12 @@ const make = Effect.gen(function* () {
             nextRole: role,
           })
           .pipe(Effect.mapError(refusal));
-        const unchanged = { changed: false, pendingAdmin: false, signedOut: false };
+        const unchanged = {
+          changed: false,
+          pendingAdmin: false,
+          signedOut: false,
+          afterCommit: Effect.void,
+        };
         if (current === role) return unchanged;
         yield* spaces.setRole({ spaceId, userId, role });
         yield* recordIn(spaceId, {
@@ -172,14 +177,22 @@ const make = Effect.gen(function* () {
           detail: { from: current, to: role },
         });
         // Admin rights need a passkey or an authenticator app; until then they act as a Member.
+        // A Keycloak User's sign-ins without a strong factor end (ticket 06).
         const promotion =
           role === "admin"
             ? yield* users.onPromotedToAdmin(userId).pipe(Effect.mapError(storageError))
-            : { pending: false, signedOut: false };
-        return { changed: true, pendingAdmin: promotion.pending, signedOut: promotion.signedOut };
+            : { pending: false, signedOut: false, afterCommit: Effect.void };
+        return {
+          changed: true,
+          pendingAdmin: promotion.pending,
+          signedOut: promotion.signedOut,
+          afterCommit: promotion.afterCommit,
+        };
       }),
       (result) => result.changed,
     );
+    // Their ended sessions' sockets close once the change is committed.
+    yield* outcome.afterCommit;
     return {
       member: yield* memberOrFail(actor, spaceId, userId),
       pendingAdmin: outcome.pendingAdmin,

@@ -49,6 +49,7 @@ const failStart = (error: KeycloakSignIn.KeycloakStartRefusedError) => {
     case "unavailable":
       return failEnvironmentInternal("keycloak_unavailable");
     case "off":
+    case "no-identity":
       return Effect.fail(new EnvironmentHttpForbiddenError({ message: error.message }));
     case "invitation-invalid":
       return Effect.fail(new EnvironmentHttpBadRequestError({ message: error.message }));

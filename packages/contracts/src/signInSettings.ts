@@ -19,8 +19,10 @@ export type RegistrationMode = typeof RegistrationMode.Type;
 const MAX_ISSUER_LENGTH = 2048;
 const MAX_CLIENT_ID_LENGTH = 255;
 const MAX_CLIENT_SECRET_LENGTH = 1024;
-const MAX_CLAIM_LENGTH = 100;
-const MAX_STRONG_VALUES = 20;
+/** The longest claim name or strong-factor value; a longer `acr` or `amr` can never match. */
+export const MAX_CLAIM_LENGTH = 100;
+/** The most values in each strong-factor list. */
+export const MAX_STRONG_VALUES = 20;
 
 const StrongValues = Schema.Array(
   Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_CLAIM_LENGTH)),
@@ -37,7 +39,11 @@ export const KeycloakSettings = Schema.Struct({
   clientSecretUpdatedAt: Schema.NullOr(IsoDateTime),
   /** The ID token claim with the person's groups (ticket 05). */
   groupsClaim: Schema.String,
-  /** `acr` and `amr` values that count as a strong factor (ticket 06). */
+  /**
+   * `acr` and `amr` values that count as a strong factor (ticket 06): a Keycloak sign-in is strong
+   * when its `acr` is one of the first or any of its `amr` one of the second, exactly. Empty, no
+   * Keycloak sign-in is strong. E.g. `critica`, a realm's level of authentication for MFA.
+   */
   strongAcr: Schema.Array(Schema.String),
   strongAmr: Schema.Array(Schema.String),
 });
@@ -71,6 +77,12 @@ export const UpdateSignInSettingsRequest = Schema.Struct({
   groupsClaim: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_CLAIM_LENGTH))),
   strongAcr: Schema.optionalKey(StrongValues),
   strongAmr: Schema.optionalKey(StrongValues),
+  /**
+   * A change to the strong-factor lists ends the Keycloak sign-ins of the Owner and Admins that
+   * stop being strong (ticket 06). Without this, a change that would end any is refused (409) with
+   * how many, so the Owner confirms first.
+   */
+  endLoginsConfirmed: Schema.optionalKey(Schema.Boolean),
 });
 export type UpdateSignInSettingsRequest = typeof UpdateSignInSettingsRequest.Type;
 
@@ -141,12 +153,11 @@ export const keycloakClientUrls = (base: string) => {
 };
 
 /**
- * Why a Keycloak flow starts (Keycloak sign-in spec, «Intenciones del flujo»): `sign-in` from the
- * sign-in page, without a session; `link` from a User's account, with their browser session and a
- * fresh proof of their current credential; `invitation` (ticket 03) from `/invite`, without a
- * session, carrying the Invitation's token. Ticket 06 and the reset add the others.
+ * Why a Keycloak flow starts (spec, «Intenciones del flujo»): `sign-in` and `invitation` (with its
+ * token) without a session; `link` and `step-up` with the browser's own. `step-up` signs nobody
+ * in: it comes back with a single-use proof in the fragment (`KEYCLOAK_PROOF_FRAGMENT_PARAM`).
  */
-export const KeycloakFlowIntent = Schema.Literals(["sign-in", "link", "invitation"]);
+export const KeycloakFlowIntent = Schema.Literals(["sign-in", "link", "invitation", "step-up"]);
 export type KeycloakFlowIntent = typeof KeycloakFlowIntent.Type;
 
 /** The longest path the browser may come back to. */
@@ -165,6 +176,13 @@ export const KeycloakStartRequest = Schema.Struct({
   invitationToken: Schema.optionalKey(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
   ),
+  /**
+   * Ask Keycloak for a strong factor (ticket 06): the realm is sent `acr_values` (the Owner's
+   * strong `acr` list) and `prompt=login`. «Retry with second factor», and a `step-up` for an
+   * action that needs a strong one. It only shapes the request: whether the sign-in was strong is
+   * read from the verified ID token, never from this.
+   */
+  strongFactor: Schema.optionalKey(Schema.Boolean),
 });
 export type KeycloakStartRequest = typeof KeycloakStartRequest.Type;
 
@@ -192,6 +210,8 @@ export const KeycloakSignInFailure = Schema.Literals([
   "disabled",
   "removed",
   "taken",
+  // Ticket 06: a `step-up` signed in at Keycloak as someone else than the session's User.
+  "identity-mismatch",
   "cancelled",
   "throttled",
   "unavailable",

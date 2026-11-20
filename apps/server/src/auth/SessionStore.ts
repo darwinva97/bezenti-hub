@@ -450,6 +450,13 @@ export class SessionStore extends Context.Service<
       userId: UserId,
       options?: { readonly except?: AuthSessionId },
     ) => Effect.Effect<Effect.Effect<number>, SessionCredentialInternalError>;
+    /**
+     * Revokes the sessions born of these Keycloak sign-ins (ticket 06: a sign-in that ended) in
+     * the caller's transaction; run the returned effect once it commits, so their sockets close.
+     */
+    readonly revokeForIdentityLoginsDeferred: (
+      loginIds: ReadonlyArray<string>,
+    ) => Effect.Effect<Effect.Effect<number>, SessionCredentialInternalError>;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
   }
@@ -1127,6 +1134,19 @@ const make = Effect.gen(function* () {
     return revokedSessionIds.length;
   });
 
+  /** After the revocation commits: the sessions' open sockets close. */
+  const closeRevoked = Effect.fn("SessionStore.closeRevoked")(function* (
+    sessionIds: ReadonlyArray<AuthSessionId>,
+  ) {
+    yield* Ref.update(connectedSessionsRef, (current) => {
+      const next = new Map(current);
+      for (const sessionId of sessionIds) next.delete(sessionId);
+      return next;
+    });
+    yield* Effect.forEach(sessionIds, emitRemoved, { discard: true });
+    return sessionIds.length;
+  });
+
   const revokeAllForUserDeferred: SessionStore["Service"]["revokeAllForUserDeferred"] = Effect.fn(
     "SessionStore.revokeAllForUserDeferred",
   )(function* (userId, options) {
@@ -1137,16 +1157,16 @@ const make = Effect.gen(function* () {
         exceptSessionId: options?.except ?? null,
       })
       .pipe(Effect.mapError((cause) => new ActiveSessionsListError({ cause })));
-    return Effect.gen(function* () {
-      yield* Ref.update(connectedSessionsRef, (current) => {
-        const next = new Map(current);
-        for (const sessionId of sessionIds) next.delete(sessionId);
-        return next;
-      });
-      yield* Effect.forEach(sessionIds, emitRemoved, { discard: true });
-      return sessionIds.length;
-    });
+    return closeRevoked(sessionIds);
   });
+
+  const revokeForIdentityLoginsDeferred: SessionStore["Service"]["revokeForIdentityLoginsDeferred"] =
+    Effect.fn("SessionStore.revokeForIdentityLoginsDeferred")(function* (loginIds) {
+      const sessionIds = yield* authSessions
+        .revokeForIdentityLogins({ loginIds, revokedAt: yield* DateTime.now })
+        .pipe(Effect.mapError((cause) => new ActiveSessionsListError({ cause })));
+      return closeRevoked(sessionIds);
+    });
 
   const revokeAllForUser: SessionStore["Service"]["revokeAllForUser"] = Effect.fn(
     "SessionStore.revokeAllForUser",
@@ -1256,6 +1276,7 @@ const make = Effect.gen(function* () {
     revokeAllExcept,
     revokeAllForUser,
     revokeAllForUserDeferred,
+    revokeForIdentityLoginsDeferred,
     markConnected,
     markDisconnected,
   });

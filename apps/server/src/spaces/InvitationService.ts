@@ -683,7 +683,7 @@ const make = Effect.gen(function* () {
         code: "strong-factor-required",
       });
     }
-    const spaceId = yield* sql
+    const { spaceId, afterCommit } = yield* sql
       .withTransaction(
         Effect.gen(function* () {
           const spent = yield* spend({ tokenHash, now: yield* nowIso, userId }).pipe(storage);
@@ -706,7 +706,13 @@ const make = Effect.gen(function* () {
               detail: { role: spent.value.role, newUser: false },
             })
             .pipe(storage);
-          return spent.value.spaceId;
+          // Becoming an Admin ends a Keycloak User's sign-ins without a strong factor (ticket 06),
+          // as a promotion in the Hub does: every live session of a Keycloak Admin is strong.
+          const promoted =
+            spent.value.role === "admin"
+              ? yield* users.endWeakKeycloakLogins(userId).pipe(storage)
+              : { afterCommit: Effect.void };
+          return { spaceId: spent.value.spaceId, afterCommit: promoted.afterCommit };
         }),
       )
       // After the commit, so a viewer that refreshes on the bump reads the new Membership.
@@ -714,6 +720,7 @@ const make = Effect.gen(function* () {
         Effect.catchTags({ SqlError: (cause) => Effect.fail(storageError(cause)) }),
         Effect.ensuring(spaces.changed),
       );
+    yield* afterCommit;
     throttle.reset(keys);
     return { userId, spaceId };
   });

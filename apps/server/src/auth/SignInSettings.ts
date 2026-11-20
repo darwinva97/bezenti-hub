@@ -1,8 +1,7 @@
 /**
- * The Platform's sign-in settings (Keycloak sign-in spec, ticket 01): the Owner's alone
- * (`signInSettings.manage`), each change audited in its transaction. The client secret is
- * write-only: sealed in the store as `keycloak-client-secret`, Redacted from the request on, read
- * back only by `keycloakConfig` (ticket 02), which no door returns.
+ * The Platform's sign-in settings (Keycloak sign-in spec, ticket 01): the Owner's alone, audited.
+ * The client secret is write-only (`keycloak-client-secret`, read back only by `keycloakConfig`).
+ * A strong-list change (ticket 06) ends the Owner's and Admins' sign-ins it makes weak, confirmed.
  */
 import type {
   KeycloakCheckResult,
@@ -23,10 +22,13 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as ServerConfig from "../config.ts";
+import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as AccessPolicy from "./AccessPolicy.ts";
+import * as KeycloakAdmission from "./KeycloakAdmission.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
+import * as SessionStore from "./SessionStore.ts";
 
 /** The client secret's name in the Hub's encrypted store. */
 export const CLIENT_SECRET_NAME = "keycloak-client-secret";
@@ -70,6 +72,21 @@ export class SignInSecretNotStoredError extends Schema.TaggedError<SignInSecretN
   }
 }
 
+/**
+ * A change to the strong-factor lists would end Keycloak sign-ins of the Owner and Admins
+ * (ticket 06), and the request did not confirm it: nothing was saved. `loginsToEnd` says how many.
+ */
+export class SignInSettingsConfirmError extends Schema.TaggedError<SignInSettingsConfirmError>()(
+  "SignInSettingsConfirmError",
+  { loginsToEnd: Schema.Number },
+) {
+  override get message(): string {
+    const signIns =
+      this.loginsToEnd === 1 ? "1 Keycloak sign-in" : `${this.loginsToEnd} Keycloak sign-ins`;
+    return `This change ends ${signIns} of the Owner or Admins that would no longer count as strong (yours too, if yours is one; your passkey still signs you in). Save again to confirm.`;
+  }
+}
+
 /** What ticket 02 signs in with: the enabled realm's client, its secret Redacted. */
 export interface KeycloakConfig {
   readonly issuer: string;
@@ -89,8 +106,9 @@ export class SignInSettings extends Context.Service<
       actor: UserId,
     ) => Effect.Effect<SignInSettingsView, SignInSettingsDeniedError | SignInSettingsStorageError>;
     /**
-     * Merges the change onto the saved settings. Turning Keycloak on (or changing its issuer
-     * while on) runs «Check» first: if it fails nothing is saved.
+     * Merges the change onto the saved settings; turning Keycloak on runs «Check» first. A
+     * strong-list change re-marks live Keycloak sign-ins and ends the Owner's and Admins' now weak;
+     * unconfirmed (`endLoginsConfirmed`), one that would end any saves nothing and says how many.
      */
     readonly update: (
       actor: UserId,
@@ -101,6 +119,7 @@ export class SignInSettings extends Context.Service<
       | SignInSettingsInvalidError
       | SignInSettingsStorageError
       | SignInSecretNotStoredError
+      | SignInSettingsConfirmError
     >;
     /** «Check» the saved issuer: discovery and key set. Never another address. */
     readonly check: (
@@ -195,6 +214,8 @@ const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const keycloak = yield* KeycloakClient.KeycloakClient;
   const config = yield* ServerConfig.ServerConfig;
+  const identities = yield* UserIdentities.UserIdentities;
+  const sessions = yield* SessionStore.SessionStore;
   // One change at a time: two tabs of the Owner's never interleave a row and a secret.
   const changing = yield* Semaphore.make(1);
 
@@ -257,6 +278,26 @@ const make = Effect.gen(function* () {
       publicOrigin: config.publicUrl?.origin ?? null,
       updatedAt: row.updatedAt,
     } satisfies SignInSettingsView;
+  });
+
+  /**
+   * What the lists `next` make of the live Keycloak sign-ins: which turn strong, which turn weak,
+   * and which of those end (the Owner's and Admins', who need a strong one).
+   */
+  const strengthPlan = Effect.fn("SignInSettings.strengthPlan")(function* (
+    next: KeycloakAdmission.StrongLists,
+  ) {
+    const live = yield* identities.liveLogins().pipe(Effect.mapError(storage));
+    const toStrong: Array<string> = [];
+    const toWeak: Array<string> = [];
+    const toEnd: Array<string> = [];
+    for (const login of live) {
+      const strong = KeycloakAdmission.loginIsStrong(login, next);
+      if (strong && !login.strong) toStrong.push(login.loginId);
+      if (!strong && login.strong) toWeak.push(login.loginId);
+      if (!strong && login.requiresStrong) toEnd.push(login.loginId);
+    }
+    return { toStrong, toWeak, toEnd };
   });
 
   const read: SignInSettings["Service"]["read"] = Effect.fn("SignInSettings.read")(
@@ -352,8 +393,17 @@ const make = Effect.gen(function* () {
           ];
           if (changed.length === 0) return yield* viewOf(row);
 
+          const listsChanged = changed.includes("strongAcr") || changed.includes("strongAmr");
+          // A dry run first: the Owner sees how many sign-ins the change ends before it does.
+          if (listsChanged && request.endLoginsConfirmed !== true) {
+            const planned = yield* strengthPlan(next);
+            if (planned.toEnd.length > 0) {
+              return yield* new SignInSettingsConfirmError({ loginsToEnd: planned.toEnd.length });
+            }
+          }
+
           const now = DateTime.formatIso(yield* DateTime.now);
-          yield* sql
+          const closeSockets = yield* sql
             .withTransaction(
               Effect.gen(function* () {
                 yield* sql`
@@ -373,6 +423,18 @@ const make = Effect.gen(function* () {
                     updated_by = ${actor}
                   WHERE id = 1
                 `;
+                // Read again inside the transaction: a sign-in that arrived since the dry run is
+                // weighed too. A Member's sign-in is only re-marked: it matters if they become
+                // an Admin, which ends it then if it is weak.
+                let ended: ReadonlyArray<string> = [];
+                let close: Effect.Effect<unknown> = Effect.void;
+                if (listsChanged) {
+                  const plan = yield* strengthPlan(next);
+                  yield* identities.setStrength(plan.toStrong, true);
+                  yield* identities.setStrength(plan.toWeak, false);
+                  ended = yield* identities.endLogins(plan.toEnd, now);
+                  close = yield* sessions.revokeForIdentityLoginsDeferred(ended);
+                }
                 yield* audit.record({
                   actor: AuditLog.userActor(actor),
                   action: "signIn.settings.update",
@@ -384,11 +446,21 @@ const make = Effect.gen(function* () {
                     localSignInForMembers: next.localSignInForMembers,
                     issuer: next.issuer,
                     secretReplaced: secret !== undefined,
+                    ...(listsChanged
+                      ? {
+                          strongAcr: next.strongAcr.join(" "),
+                          strongAmr: next.strongAmr.join(" "),
+                          loginsEnded: ended.length,
+                        }
+                      : {}),
                   },
                 });
+                return close;
               }),
             )
             .pipe(Effect.mapError(storage));
+          // Once committed: the ended sign-ins' sessions lose their sockets.
+          yield* closeSockets;
 
           // After the commit, never before: a secret the audit log never recorded is the worse
           // mismatch. If this write fails the row says «replaced» but the store keeps the old one

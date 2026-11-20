@@ -565,15 +565,19 @@ leaving delete only the Membership row; Projects and Threads keep their Space an
 creator. Members of an Organization see its member list; anyone else gets the
 same answer as for a missing Organization.
 
-An Admin Membership counts only for a User with a passkey or TOTP: until then
-`SpaceDirectory` gives them a Member's Role (`pendingAdmin` in the directory and
-member list), and the credentials row's `isAdmin`, which feeds
-`passwordRequiresTotp`, is false. A phished password therefore never yields Admin
-rights, and nothing enrolls TOTP from the sign-in form: a pending Admin adds it
+An Admin Membership counts only for a User with a passkey, TOTP or a Keycloak
+identity: until then `SpaceDirectory` gives them a Member's Role (`pendingAdmin`
+in the directory and member list), and the credentials row's `isAdmin`, which
+feeds `requiresStrongSignIn`, is false. A phished password therefore never yields
+Admin rights, and nothing enrolls TOTP from the sign-in form: a pending Admin adds it
 under Settings → Access with a step-up. Promoting a User who has a passkey and a
 password but no TOTP revokes their sessions in the same transaction, since any of
 them may have come from the password; their password then answers
-`SecondFactorMissingError`. Credential changes that start or end Admin rights call
+`SecondFactorMissingError`. Promoting a User who signs in with Keycloak (in the
+Hub, or by accepting an Admin Invitation with a session) ends their Keycloak
+sign-ins that were not strong, with their sessions and sockets, so every live
+session of a Keycloak Admin is strong; that is why a Keycloak identity counts as
+a strong sign-in above. Credential changes that start or end Admin rights call
 `AccessChanges` (provided by SpaceDirectory, so account code need not depend on
 Spaces) after they commit.
 
@@ -646,14 +650,25 @@ they filter by.
 
 ### Sign-in rules
 
-Which accounts may use a password without a second factor is one function,
-`passwordRequiresTotp` in UserDirectory: true for the Owner and for an Admin of
-any Organization. Extend that function rather than checking roles at call sites.
-It applies three times: setting a password needs TOTP enrolled first, removing
+Which accounts need a strong sign-in is one function, `requiresStrongSignIn` in
+UserDirectory: true for the Owner and for an Admin of any Organization. Extend
+that function rather than checking roles at call sites. Locally it applies three
+times: setting a password needs TOTP enrolled first, removing
 TOTP needs the password gone first, and password sign-in refuses an account the
 rule covers when it has no TOTP. The last check catches an account whose rule
 changed after it set a password. An Admin Invitation therefore takes a passkey,
 or a password together with a TOTP enrollment confirmed in the same accept.
+
+Through Keycloak the same rule reads the sign-in itself: it is strong when the
+verified ID token's `acr` is in the Owner's `strong_acr` list or one of its `amr`
+values is in `strong_amr`, whole values only, and never from anything the
+browser sent (asking the realm for `acr_values` only shapes the request). Empty
+lists make no Keycloak sign-in strong. A weak Keycloak sign-in of an account the
+rule covers (or of anyone an Admin Invitation would make one) is refused with
+«Retry with second factor»; the Owner's passkey and recovery codes still sign
+them in locally. Each login keeps its `acr`/`amr`, so a change to the lists
+re-marks the live ones and ends the Owner's and Admins' that stop being strong,
+once the Owner confirms how many.
 
 Any account with TOTP gets the code step: the password step answers
 `secondFactor: "totp"` with a short-lived challenge id, and the code goes to
@@ -669,7 +684,15 @@ A stolen session must not be able to install a lasting way in. Setting,
 changing or removing a password and confirming or removing TOTP therefore need
 a step-up proof in the same request: a fresh passkey assertion, or the current
 password plus a code when TOTP is enrolled. Only an account with no credential
-yet is exempt. Each such change revokes the User's other sessions, and a removal
+yet is exempt. A User who signs in with Keycloak has no local credential, so
+they always need a Keycloak `step-up` proof: a flow with `prompt=login` and
+`max_age=0` whose ID token is the session User's own identity, authenticated
+after the flow started (30 s skew). It leaves a single-use proof, 5 minutes,
+for that browser session and User only, handed back in the URL fragment (never
+the query, so no log or `Referer` sees it). A proof presented by another session
+is burned. The Owner and Admins need it strong, as at sign-in; a Member's weak
+one passes, as a local Member's password does. `confirmStrongFactor` (approving a
+machine, lending a Vault group, the master key) always needs a strong one. Each such change revokes the User's other sessions, and a removal
 that would leave no way to sign in is refused.
 
 Passwords are argon2id (19 MiB, two passes) via `hash-wasm`, which is

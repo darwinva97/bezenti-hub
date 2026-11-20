@@ -13,15 +13,17 @@ import {
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Fiber from "effect/Fiber";
 import * as HttpMiddleware from "effect/http/HttpMiddleware";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
+import * as Result from "effect/Result";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
 
-import { joinMachine, memberWithPasskey } from "../environments/environments.testkit.ts";
+import { joinMachine, memberWithPasskey, startJoin } from "../environments/environments.testkit.ts";
 import { isUntracedRequest } from "../http.ts";
 import * as AccountCredentials from "./AccountCredentials.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
@@ -48,6 +50,9 @@ import {
 
 const START = "/api/auth/keycloak/start";
 const PASSWORD = "correct horse battery staple";
+/** The `amr` value the test Hub's Owner lists as strong (ticket 06), and a sign-in with it. */
+const STRONG_AMR = "otp";
+const STRONG = { amr: ["pwd", STRONG_AMR] };
 
 /** The Owner's Hub with Keycloak on over the fake realm. */
 const hub = (options: { readonly flows?: TestSignInOptions["flows"] } = {}) =>
@@ -69,6 +74,8 @@ const hub = (options: { readonly flows?: TestSignInOptions["flows"] } = {}) =>
         issuer: realm.issuer,
         clientId: realm.clientId,
         clientSecret: realm.clientSecret,
+        strongAcr: ["critica"],
+        strongAmr: [STRONG_AMR],
       },
     });
     assert.equal(on.status, 200);
@@ -283,7 +290,7 @@ describe("Keycloak sign-in (ticket 02)", () => {
       const linked = yield* roundTrip(
         server,
         realm,
-        { sub: "kc-ada" },
+        { sub: "kc-ada", claims: STRONG },
         { intent: "link", reauth },
         owner,
       );
@@ -340,18 +347,36 @@ describe("Keycloak sign-in (ticket 02)", () => {
     }),
   );
 
-  it.effect("an Admin other than the Owner can't link yet, and is told why", () =>
+  it.effect("an Admin links only with a strong sign-in at Keycloak (ticket 06)", () =>
     Effect.gen(function* () {
-      const { server, owner } = yield* hub();
+      const { server, realm, owner } = yield* hub();
       const admin = yield* memberWithPasskey(server, owner, { displayName: "Ada", role: "admin" });
-      assert.equal((yield* account(server, admin.cookie)).keycloakLink, "admins-later");
-      const refused = yield* start(
-        server,
-        { intent: "link", reauth: yield* passkeyReauth(server, admin.authenticator) },
-        { cookie: admin.cookie },
-      );
-      assert.equal(refused.status, 403);
-      assert.include(String(refused.body.message), "Admins");
+      assert.equal((yield* account(server, admin.cookie)).keycloakLink, "allowed");
+      const linkWith = (as: FakeSignIn) =>
+        Effect.gen(function* () {
+          const started = yield* start(
+            server,
+            { intent: "link", reauth: yield* passkeyReauth(server, admin.authenticator) },
+            { cookie: admin.cookie },
+          );
+          assert.equal(started.status, 200, started.text);
+          // Their Role needs a second factor, so the realm is asked for one.
+          const url = new URL(started.authorizationUrl);
+          assert.equal(url.searchParams.get("acr_values"), "critica");
+          assert.equal(url.searchParams.get("prompt"), "login");
+          const back = yield* realm.signIn(started.authorizationUrl, as);
+          return yield* callback(server, back, joinCookies(started.flowCookie, admin.cookie));
+        });
+
+      const weak = yield* linkWith({ sub: "kc-ada-admin" });
+      assert.equal(resultOf(weak.location), "strong-factor-required");
+      assert.isUndefined(weak.cookie);
+      assert.isUndefined((yield* account(server, admin.cookie)).identity);
+      assert.isTrue(yield* isSignedIn(server, admin.cookie));
+
+      const strong = yield* linkWith({ sub: "kc-ada-admin", claims: { acr: "critica" } });
+      assert.equal(strong.location, KeycloakSignIn.ACCOUNT_PATH);
+      assert.isDefined((yield* account(server, strong.cookie ?? "")).identity);
     }),
   );
 
@@ -361,7 +386,7 @@ describe("Keycloak sign-in (ticket 02)", () => {
       const owned = yield* roundTrip(
         server,
         realm,
-        { sub: "kc-shared" },
+        { sub: "kc-shared", claims: STRONG },
         { intent: "link", reauth: yield* passkeyReauth(server, authenticator) },
         owner,
       );
@@ -370,7 +395,7 @@ describe("Keycloak sign-in (ticket 02)", () => {
       const taken = yield* roundTrip(
         server,
         realm,
-        { sub: "kc-shared" },
+        { sub: "kc-shared", claims: STRONG },
         { intent: "link", reauth: { method: "password", password: PASSWORD } },
         member.cookie,
       );
@@ -517,7 +542,7 @@ describe("Keycloak sign-in (ticket 02)", () => {
         // The realm binds the code to another challenge: the Hub's verifier no longer matches.
         const bent = new URL(started.authorizationUrl);
         bent.searchParams.set("code_challenge", "A".repeat(43));
-        const back = yield* realm.signIn(bent.href, { sub: "kc-ada" });
+        const back = yield* realm.signIn(bent.href, { sub: "kc-ada", claims: STRONG });
         const answer = yield* callback(server, back, joinCookies(started.flowCookie));
         assert.equal(answer.location, "/sign-in?keycloak=failed");
         assert.isUndefined(answer.cookie);
@@ -540,11 +565,14 @@ describe("Keycloak sign-in (ticket 02)", () => {
           assert.equal(resultOf(answer.location), "failed");
         }
         // Even a good answer waits now; another client does not.
-        const good = yield* roundTrip(server, realm, { sub: "kc-ada" });
+        const good = yield* roundTrip(server, realm, { sub: "kc-ada", claims: STRONG });
         assert.equal(resultOf(good.location), "throttled");
         const headers = { ...remoteClient("198.51.100.7"), origin: "https://127.0.0.1" };
         const started = yield* start(server, { intent: "sign-in" }, { headers });
-        const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-ada" });
+        const back = yield* realm.signIn(started.authorizationUrl, {
+          sub: "kc-ada",
+          claims: STRONG,
+        });
         const elsewhere = yield* callback(server, back, joinCookies(started.flowCookie), {
           headers: remoteClient("198.51.100.7"),
         });
@@ -562,7 +590,10 @@ describe("Keycloak sign-in (ticket 02)", () => {
         `;
         const started = yield* start(server, { intent: "sign-in" });
         yield* TestClock.adjust("11 minutes");
-        const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-ada" });
+        const back = yield* realm.signIn(started.authorizationUrl, {
+          sub: "kc-ada",
+          claims: STRONG,
+        });
         const answer = yield* callback(server, back, joinCookies(started.flowCookie));
         assert.equal(resultOf(answer.location), "failed");
       }),
@@ -595,7 +626,7 @@ describe("Keycloak sign-in (ticket 02)", () => {
         const back = yield* roundTrip(
           server,
           realm,
-          { sub: "kc-ada" },
+          { sub: "kc-ada", claims: STRONG },
           {
             intent: "sign-in",
             returnTo: "/app-sign-in?redirect_uri=x&state=y",
@@ -784,7 +815,7 @@ describe("Keycloak sign-in (ticket 02)", () => {
       assert.match(started.flowCookie ?? "", /^__Host-t3_keycloak_flow=/);
       // The same value under the bare name, as a sibling host could toss it: refused.
       const tossed = `t3_keycloak_flow=${started.flowCookie?.split("=")[1] ?? ""}`;
-      const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-ada" });
+      const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-ada", claims: STRONG });
       const answer = yield* callback(server, back, tossed, {
         headers: remoteClient("198.51.100.50"),
       });
@@ -887,11 +918,11 @@ describe("Keycloak sign-in (ticket 02)", () => {
         { cookie: owner },
       );
       answers.push(started);
-      const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-ada" });
+      const back = yield* realm.signIn(started.authorizationUrl, { sub: "kc-ada", claims: STRONG });
       const code = new URL(back).searchParams.get("code") ?? "";
       const linked = yield* callback(server, back, joinCookies(started.flowCookie, owner));
       answers.push(linked);
-      const again = yield* roundTrip(server, realm, { sub: "kc-ada" });
+      const again = yield* roundTrip(server, realm, { sub: "kc-ada", claims: STRONG });
       answers.push(again);
       answers.push(yield* roundTrip(server, realm, { sub: "kc-stranger" }));
       answers.push(yield* roundTrip(server, realm, { sub: "kc-ada", claims: { nonce: "x" } }));
@@ -1403,7 +1434,12 @@ describe("Keycloak admission (ticket 03)", () => {
         );
         assert.equal(joined.location, "/");
         const acceptWith = (token: string, sub = "kc-grace") =>
-          roundTrip(server, realm, { sub }, invitationStart(token));
+          roundTrip(
+            server,
+            realm,
+            { sub, ...(sub === "kc-ada" ? { claims: STRONG } : {}) },
+            invitationStart(token),
+          );
 
         // Already in it.
         const again = yield* anotherInvite(server, owner, first.spaceId);
@@ -1412,7 +1448,7 @@ describe("Keycloak admission (ticket 03)", () => {
         assert.equal(yield* userOf(server, already.cookie), member.id);
         assert.isNull((yield* invitationRow(server, again.invitationId))?.acceptedAt);
 
-        // An Admin's Role needs a strong sign-in, which a Keycloak login is not yet.
+        // An Admin's Role needs a strong sign-in (ticket 06); this one is not.
         const admin = yield* organizationInvite(server, owner, "admin", "Beta");
         const weak = yield* acceptWith(admin.token);
         assert.equal(weak.location, "/invite?keycloak=strong-factor-required");
@@ -1435,7 +1471,7 @@ describe("Keycloak admission (ticket 03)", () => {
         const ownerLinked = yield* roundTrip(
           server,
           realm,
-          { sub: "kc-ada" },
+          { sub: "kc-ada", claims: STRONG },
           { intent: "link", reauth },
           owner,
         );
@@ -1565,6 +1601,583 @@ describe("Keycloak admission (ticket 03)", () => {
       Effect.provideService(HttpMiddleware.TracerDisabledWhen, isUntracedRequest),
       Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
       Effect.provideService(References.MinimumLogLevel, "All"),
+    );
+  });
+});
+
+/** A User's live sessions, and the Keycloak sign-ins that have not ended. */
+const liveLoginsOf = (server: Server, userId: string) =>
+  server.sql<{ loginId: string; strong: number; acr: string | null; amrJson: string }>`
+    SELECT login_id AS "loginId", strong, acr, amr_json AS "amrJson" FROM identity_logins
+    WHERE user_id = ${userId} AND ended_at IS NULL
+  `;
+
+/** The session behind a cookie, and a socket that waits on it until it is revoked. */
+const watchSocket = Effect.fn(function* (server: Server, cookie: string) {
+  const session = yield* server.sessions.verify(cookie.split("=")[1] ?? "");
+  const socket = yield* server.sessions
+    .awaitInvalidation(session.sessionId)
+    .pipe(Effect.forkScoped({ startImmediately: true }));
+  return { session, socket };
+});
+
+/** A Member who signs in only with Keycloak as `sub`: linked, signed in again as `claims` say. */
+const keycloakMember = Effect.fn(function* (
+  server: Server,
+  realm: FakeKeycloak,
+  sub: string,
+  claims?: Record<string, unknown>,
+) {
+  const local = yield* memberWithPassword(server, `member-${sub}`);
+  const linked = yield* roundTrip(
+    server,
+    realm,
+    { sub },
+    { intent: "link", reauth: { method: "password", password: PASSWORD } },
+    local.cookie,
+  );
+  assert.equal(linked.status, 303);
+  const member = { id: local.id, cookie: linked.cookie ?? "" };
+  if (claims === undefined) return member;
+  const again = yield* roundTrip(server, realm, { sub, claims });
+  assert.equal(again.status, 303);
+  return { id: member.id, cookie: again.cookie ?? "" };
+});
+
+/** The Organization the Owner made for a test, and its first Member invited by hand. */
+const organizationOf = Effect.fn(function* (server: Server, owner: string, userId: string) {
+  const invite = yield* organizationInvite(server, owner, "member", `Org ${userId}`);
+  yield* server.sql`
+    INSERT INTO space_memberships (space_id, user_id, role, created_at)
+    VALUES (${invite.spaceId}, ${userId}, 'member', '2026-01-01T00:00:00.000Z')
+  `;
+  return invite.spaceId;
+});
+
+const PROOF = "keycloakProof";
+const proofOf = (location: string | undefined) => {
+  const url = new URL(location ?? "/", "http://hub.invalid");
+  assert.isNull(url.searchParams.get(PROOF), "a proof never travels in the query");
+  return new URLSearchParams(url.hash.slice(1)).get(PROOF) ?? undefined;
+};
+
+/** A `step-up` from `cookie`'s session, signed in at the realm as `as`; where it comes back. */
+const stepUp = Effect.fn(function* (
+  server: Server,
+  realm: FakeKeycloak,
+  cookie: string,
+  as: FakeSignIn,
+  body: Record<string, unknown> = {},
+) {
+  const started = yield* start(
+    server,
+    { intent: "step-up", returnTo: "/register-environment?request=abc", ...body },
+    { cookie },
+  );
+  assert.equal(started.status, 200, started.text);
+  const back = yield* realm.signIn(started.authorizationUrl, as);
+  const answer = yield* callback(server, back, joinCookies(started.flowCookie, cookie));
+  return { started, answer, proofId: proofOf(answer.location) };
+});
+
+/** What the account's own doors say to a confirmation with this proof. */
+const directory = (server: Server) => Context.get(server.services, UserDirectory.UserDirectory);
+const actorOf = Effect.fn(function* (server: Server, cookie: string) {
+  const session = yield* server.sessions.verify(cookie.split("=")[1] ?? "");
+  return {
+    userId: UserId.make(session.userId ?? ""),
+    sessionId: session.sessionId,
+    origin: "http://127.0.0.1",
+  };
+});
+const confirmStrong = (server: Server, cookie: string, proofId: string | undefined) =>
+  Effect.gen(function* () {
+    const actor = yield* actorOf(server, cookie);
+    return yield* directory(server)
+      .confirmStrongFactor(actor, { method: "keycloak", proofId: proofId ?? "" })
+      .pipe(Effect.result);
+  });
+
+describe("strong factor from Keycloak (ticket 06)", () => {
+  describe("signing in", () => {
+    it.effect("an Admin without MFA is refused, with MFA gets in", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const spaceId = yield* organizationOf(server, owner, member.id);
+        yield* server.sql`
+          UPDATE space_memberships SET role = 'admin'
+          WHERE space_id = ${spaceId} AND user_id = ${member.id}
+        `;
+
+        const weak = yield* roundTrip(server, realm, { sub: "kc-ana", claims: { amr: ["pwd"] } });
+        assert.equal(weak.location, "/sign-in?keycloak=strong-factor-required");
+        assert.isUndefined(weak.cookie);
+
+        // «Retry with second factor»: the realm is asked for it, and the token says it happened.
+        const retry = yield* start(server, { intent: "sign-in", strongFactor: true });
+        const url = new URL(retry.authorizationUrl);
+        assert.equal(url.searchParams.get("acr_values"), "critica");
+        assert.equal(url.searchParams.get("prompt"), "login");
+        const back = yield* realm.signIn(retry.authorizationUrl, {
+          sub: "kc-ana",
+          claims: { acr: "critica" },
+        });
+        const strong = yield* callback(server, back, joinCookies(retry.flowCookie));
+        assert.equal(strong.location, "/");
+        assert.equal(yield* userOf(server, strong.cookie), member.id);
+        const logins = yield* liveLoginsOf(server, member.id);
+        assert.deepInclude(
+          logins.map((login) => ({ strong: login.strong, acr: login.acr })),
+          { strong: 1, acr: "critica" },
+        );
+      }),
+    );
+
+    it.effect("asking for a second factor proves nothing: only the token's acr/amr count", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const spaceId = yield* organizationOf(server, owner, member.id);
+        yield* server.sql`
+          UPDATE space_memberships SET role = 'admin'
+          WHERE space_id = ${spaceId} AND user_id = ${member.id}
+        `;
+        // The request asked for `critica`, the realm answered something close but not it.
+        for (const claims of [{ acr: "critica2" }, { acr: "Critica" }, { amr: "otp" }]) {
+          const answer = yield* roundTrip(
+            server,
+            realm,
+            { sub: "kc-ana", claims },
+            { intent: "sign-in", strongFactor: true },
+          );
+          assert.equal(answer.location, "/sign-in?keycloak=strong-factor-required");
+        }
+      }),
+    );
+
+    it.effect("the Owner via Keycloak without MFA is refused; local sign-in still works", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner, authenticator, recoveryCodes } = yield* hub();
+        const linked = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-ada", claims: STRONG },
+          { intent: "link", reauth: yield* passkeyReauth(server, authenticator) },
+          owner,
+        );
+        assert.equal(linked.status, 303);
+
+        const weak = yield* roundTrip(server, realm, { sub: "kc-ada" });
+        assert.equal(weak.location, "/sign-in?keycloak=strong-factor-required");
+        assert.isUndefined(weak.cookie);
+
+        // The break-glass: the Owner's passkey and recovery codes.
+        const assertion = yield* passkeyReauth(server, authenticator);
+        const passkey = yield* server.request("/api/auth/passkey/sign-in", {
+          body: { ceremonyId: assertion.ceremonyId, response: assertion.response },
+        });
+        assert.equal(passkey.status, 200, passkey.text);
+        const recovered = yield* server.request("/api/auth/recovery-code/sign-in", {
+          body: { code: recoveryCodes[1] },
+        });
+        assert.equal(recovered.status, 200);
+      }),
+    );
+
+    it.effect("a new User through an Admin Invitation gets in with a strong sign-in", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const invitation = yield* organizationInvite(server, owner, "admin");
+        const joined = yield* roundTrip(
+          server,
+          realm,
+          { sub: "kc-lin", claims: STRONG },
+          invitationStart(invitation.token),
+        );
+        assert.equal(joined.location, "/");
+        const userId = (yield* userOf(server, joined.cookie)) ?? "";
+        assert.deepEqual(yield* membershipsOf(server, userId), [
+          { spaceId: invitation.spaceId, role: "admin" },
+        ]);
+        // And not pending: their Keycloak identity is their strong sign-in.
+        const members = yield* server.request(`/api/spaces/${invitation.spaceId}/members`, {
+          cookie: owner,
+        });
+        const listed = members.body.members as ReadonlyArray<{
+          userId: string;
+          pendingAdmin: boolean;
+        }>;
+        assert.isFalse(listed.find((member) => member.userId === userId)?.pendingAdmin);
+      }),
+    );
+
+    it.effect("a Member made Admin who then signs in weakly is refused", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const spaceId = yield* organizationOf(server, owner, member.id);
+        const promoted = yield* server.request(`/api/spaces/${spaceId}/members/role`, {
+          cookie: owner,
+          body: { userId: member.id, role: "admin" },
+        });
+        assert.equal(promoted.status, 200, promoted.text);
+        // The rule holds at every sign-in, not only through the promotion's ending of logins.
+        const weak = yield* roundTrip(server, realm, { sub: "kc-ana" });
+        assert.equal(weak.location, "/sign-in?keycloak=strong-factor-required");
+        assert.isUndefined(weak.cookie);
+        const strong = yield* roundTrip(server, realm, { sub: "kc-ana", claims: STRONG });
+        assert.equal(yield* userOf(server, strong.cookie), member.id);
+      }),
+    );
+  });
+
+  describe("becoming an Admin", () => {
+    it.effect("ends the User's weak Keycloak sign-ins and closes their sockets", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const strong = yield* roundTrip(server, realm, { sub: "kc-ana", claims: STRONG });
+        const spaceId = yield* organizationOf(server, owner, member.id);
+        const weakSocket = yield* watchSocket(server, member.cookie);
+
+        const promoted = yield* server.request(`/api/spaces/${spaceId}/members/role`, {
+          cookie: owner,
+          body: { userId: member.id, role: "admin" },
+        });
+        assert.equal(promoted.status, 200, promoted.text);
+        assert.deepInclude(promoted.body, { pendingAdmin: false, signedOut: true });
+
+        yield* Fiber.join(weakSocket.socket);
+        assert.isFalse(yield* isSignedIn(server, member.cookie));
+        // The strong sign-in stays, with its session.
+        assert.isTrue(yield* isSignedIn(server, strong.cookie ?? ""));
+        const live = yield* liveLoginsOf(server, member.id);
+        assert.deepEqual(
+          live.map((login) => login.strong),
+          [1],
+        );
+      }).pipe(Effect.scoped),
+    );
+
+    it.effect("through an Admin Invitation joined with a session, ends the weak ones too", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const strong = yield* roundTrip(server, realm, { sub: "kc-ana", claims: STRONG });
+        const invitation = yield* organizationInvite(server, owner, "admin");
+        const weakSocket = yield* watchSocket(server, member.cookie);
+        const joined = yield* server.request("/api/invitations/join", {
+          cookie: strong.cookie ?? "",
+          body: { token: invitation.token },
+        });
+        assert.equal(joined.status, 200, joined.text);
+        yield* Fiber.join(weakSocket.socket);
+        assert.isFalse(yield* isSignedIn(server, member.cookie));
+        assert.isTrue(yield* isSignedIn(server, strong.cookie ?? ""));
+      }).pipe(Effect.scoped),
+    );
+  });
+
+  describe("step-up", () => {
+    it.effect("asks for a fresh authentication and comes back with a proof in the fragment", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const { started, answer, proofId } = yield* stepUp(server, realm, member.cookie, {
+          sub: "kc-ana",
+          claims: STRONG,
+        });
+        const url = new URL(started.authorizationUrl);
+        assert.equal(url.searchParams.get("prompt"), "login");
+        assert.equal(url.searchParams.get("max_age"), "0");
+        // A Member's step-up asks for no particular factor unless the page needs one.
+        assert.isNull(url.searchParams.get("acr_values"));
+        const strongStart = yield* start(
+          server,
+          { intent: "step-up", strongFactor: true },
+          { cookie: member.cookie },
+        );
+        assert.equal(
+          new URL(strongStart.authorizationUrl).searchParams.get("acr_values"),
+          "critica",
+        );
+
+        assert.match(answer.location ?? "", /^\/register-environment\?request=abc#keycloakProof=/);
+        assert.isString(proofId);
+        // Nobody is signed in by it, and no sign-in is kept.
+        assert.isUndefined(answer.cookie);
+        assert.equal((yield* liveLoginsOf(server, member.id)).length, 1);
+
+        assert.isTrue(Result.isSuccess(yield* confirmStrong(server, member.cookie, proofId)));
+      }),
+    );
+
+    it.effect("a proof serves once, and only within 5 minutes", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const first = yield* stepUp(server, realm, member.cookie, {
+          sub: "kc-ana",
+          claims: STRONG,
+        });
+        assert.isTrue(Result.isSuccess(yield* confirmStrong(server, member.cookie, first.proofId)));
+        assert.isTrue(Result.isFailure(yield* confirmStrong(server, member.cookie, first.proofId)));
+
+        const late = yield* stepUp(server, realm, member.cookie, { sub: "kc-ana", claims: STRONG });
+        yield* TestClock.adjust("5 minutes");
+        assert.isTrue(Result.isFailure(yield* confirmStrong(server, member.cookie, late.proofId)));
+      }),
+    );
+
+    it.effect("a proof serves only the session and User that started it", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const otherSession = yield* roundTrip(server, realm, { sub: "kc-ana", claims: STRONG });
+        const other = yield* keycloakMember(server, realm, "kc-bo");
+
+        const forOtherSession = yield* stepUp(server, realm, member.cookie, {
+          sub: "kc-ana",
+          claims: STRONG,
+        });
+        const fromOtherSession = yield* confirmStrong(
+          server,
+          otherSession.cookie ?? "",
+          forOtherSession.proofId,
+        );
+        assert.isTrue(Result.isFailure(fromOtherSession));
+        // Presented elsewhere, it leaked: it is gone for its own session too.
+        assert.isTrue(
+          Result.isFailure(yield* confirmStrong(server, member.cookie, forOtherSession.proofId)),
+        );
+
+        const forOtherUser = yield* stepUp(server, realm, member.cookie, {
+          sub: "kc-ana",
+          claims: STRONG,
+        });
+        assert.isTrue(
+          Result.isFailure(yield* confirmStrong(server, other.cookie, forOtherUser.proofId)),
+        );
+      }),
+    );
+
+    it.effect("an authentication older than the flow is refused", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        yield* TestClock.adjust("1 hour");
+        const nowSeconds = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+        // The realm kept its SSO session and answered with the old authentication.
+        const stale = yield* stepUp(server, realm, member.cookie, {
+          sub: "kc-ana",
+          claims: { ...STRONG, auth_time: nowSeconds - 120 },
+        });
+        assert.equal(resultOf(stale.answer.location), "failed");
+        assert.isUndefined(stale.proofId);
+        const missing = yield* stepUp(server, realm, member.cookie, {
+          sub: "kc-ana",
+          claims: { ...STRONG, auth_time: undefined },
+        });
+        assert.equal(resultOf(missing.answer.location), "failed");
+        // A small skew between the clocks is fine.
+        const skewed = yield* stepUp(server, realm, member.cookie, {
+          sub: "kc-ana",
+          claims: { ...STRONG, auth_time: nowSeconds - 10 },
+        });
+        assert.isString(skewed.proofId);
+      }),
+    );
+
+    it.effect("signing in at Keycloak as someone else proves nothing", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        yield* keycloakMember(server, realm, "kc-bo");
+        const mismatch = yield* stepUp(server, realm, member.cookie, {
+          sub: "kc-bo",
+          claims: STRONG,
+        });
+        assert.equal(resultOf(mismatch.answer.location), "identity-mismatch");
+        assert.isUndefined(mismatch.proofId);
+      }),
+    );
+
+    it.effect("only a signed-in User with a Keycloak identity starts one", () =>
+      Effect.gen(function* () {
+        const { server } = yield* hub();
+        const signedOut = yield* start(server, { intent: "step-up" });
+        assert.equal(signedOut.status, 401);
+        const local = yield* memberWithPassword(server);
+        const refused = yield* start(server, { intent: "step-up" }, { cookie: local.cookie });
+        assert.equal(refused.status, 403);
+      }),
+    );
+
+    it.effect("a Member's weak proof passes requireStepUp but not confirmStrongFactor", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const weak = yield* stepUp(server, realm, member.cookie, { sub: "kc-ana" });
+        assert.isString(weak.proofId);
+        assert.isTrue(Result.isFailure(yield* confirmStrong(server, member.cookie, weak.proofId)));
+
+        // `requireStepUp` (a fresh confirmation, as a local Member gives with a password alone)
+        // runs first in every credential change; a Keycloak User has nothing local to remove, so
+        // the change itself is refused, but only after the proof passed.
+        const again = yield* stepUp(server, realm, member.cookie, { sub: "kc-ana" });
+        const actor = yield* actorOf(server, member.cookie);
+        const stepUpResult = yield* directory(server)
+          .removeTotp(actor, { method: "keycloak", proofId: again.proofId ?? "" })
+          .pipe(Effect.result);
+        // Past the proof: refused only because there is no app to remove.
+        assert.isTrue(Result.isFailure(stepUpResult));
+        assert.notInclude(
+          Result.isFailure(stepUpResult) ? stepUpResult.failure.message : "",
+          "Confirming",
+        );
+        assert.notInclude(
+          Result.isFailure(stepUpResult) ? stepUpResult.failure.message : "",
+          "second factor",
+        );
+      }),
+    );
+
+    it.effect("an Admin's weak proof passes neither", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana", STRONG);
+        const spaceId = yield* organizationOf(server, owner, member.id);
+        yield* server.sql`
+          UPDATE space_memberships SET role = 'admin'
+          WHERE space_id = ${spaceId} AND user_id = ${member.id}
+        `;
+        // The Admin's own step-up asks the realm for the strong factor.
+        const weak = yield* stepUp(server, realm, member.cookie, { sub: "kc-ana" });
+        assert.equal(
+          new URL(weak.started.authorizationUrl).searchParams.get("acr_values"),
+          "critica",
+        );
+        assert.isTrue(Result.isFailure(yield* confirmStrong(server, member.cookie, weak.proofId)));
+        const again = yield* stepUp(server, realm, member.cookie, { sub: "kc-ana" });
+        const actor = yield* actorOf(server, member.cookie);
+        const result = yield* directory(server)
+          .removeTotp(actor, { method: "keycloak", proofId: again.proofId ?? "" })
+          .pipe(Effect.result);
+        assert.include(Result.isFailure(result) ? result.failure.message : "", "second factor");
+      }),
+    );
+
+    it.effect("approving a machine takes a strong Keycloak proof, for that session only", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana", STRONG);
+        // Any User approves their own machine, with a strong factor in the same request.
+        const { requestId } = yield* startJoin(server);
+        const approve = (cookie: string, proofId: string | undefined) =>
+          server.request("/api/environments/join/approve", {
+            cookie,
+            body: {
+              requestId,
+              name: "laptop",
+              reauth: { method: "keycloak", proofId: proofId ?? "" },
+            },
+          });
+        const proof = yield* stepUp(server, realm, member.cookie, {
+          sub: "kc-ana",
+          claims: STRONG,
+        });
+        const elsewhere = yield* roundTrip(server, realm, { sub: "kc-ana", claims: STRONG });
+        // Another session, even the same User's, can't spend it.
+        const refused = yield* approve(elsewhere.cookie ?? "", proof.proofId);
+        assert.notEqual(refused.status, 200);
+        assert.notProperty(refused.body, "redirectTo");
+        const fresh = yield* stepUp(server, realm, member.cookie, {
+          sub: "kc-ana",
+          claims: STRONG,
+        });
+        const approved = yield* approve(member.cookie, fresh.proofId);
+        assert.equal(approved.status, 200, approved.text);
+      }),
+    );
+  });
+
+  describe("the strong-factor lists", () => {
+    it.effect("only the Owner edits them", () =>
+      Effect.gen(function* () {
+        const { server, owner } = yield* hub();
+        const admin = yield* memberWithPasskey(server, owner, {
+          displayName: "Ada",
+          role: "admin",
+        });
+        const member = yield* memberWithPassword(server);
+        for (const cookie of [admin.cookie, member.cookie]) {
+          const refused = yield* server.request("/api/installation/sign-in-settings", {
+            cookie,
+            body: { strongAcr: [], strongAmr: ["pwd"] },
+          });
+          assert.equal(refused.status, 403);
+        }
+        const settings = yield* server.request("/api/installation/sign-in-settings", {
+          cookie: owner,
+        });
+        assert.deepInclude(settings.body.keycloak as object, {
+          strongAcr: ["critica"],
+          strongAmr: [STRONG_AMR],
+        });
+      }),
+    );
+
+    it.effect("a change ends the Admins' sign-ins no longer strong, once confirmed, audited", () =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const admin = yield* keycloakMember(server, realm, "kc-ana", STRONG);
+        const spaceId = yield* organizationOf(server, owner, admin.id);
+        // Made Admin in the Hub: the weak sign-in that linked them ends; the `otp` one stays.
+        const promoted = yield* server.request(`/api/spaces/${spaceId}/members/role`, {
+          cookie: owner,
+          body: { userId: admin.id, role: "admin" },
+        });
+        assert.equal(promoted.status, 200, promoted.text);
+        const viaAcr = yield* roundTrip(server, realm, {
+          sub: "kc-ana",
+          claims: { acr: "critica" },
+        });
+        const member = yield* keycloakMember(server, realm, "kc-bo", STRONG);
+        const socket = yield* watchSocket(server, admin.cookie);
+
+        // `otp` no longer counts: the Admin's `otp` sign-in would end. Asked first, nothing saved.
+        const change = { strongAcr: ["critica"], strongAmr: [] };
+        const unconfirmed = yield* server.request("/api/installation/sign-in-settings", {
+          cookie: owner,
+          body: change,
+        });
+        assert.equal(unconfirmed.status, 409);
+        assert.include(String(unconfirmed.body.message), "1 Keycloak sign-in");
+        assert.isTrue(yield* isSignedIn(server, admin.cookie));
+
+        const confirmed = yield* server.request("/api/installation/sign-in-settings", {
+          cookie: owner,
+          body: { ...change, endLoginsConfirmed: true },
+        });
+        assert.equal(confirmed.status, 200, confirmed.text);
+        yield* Fiber.join(socket.socket);
+        assert.isFalse(yield* isSignedIn(server, admin.cookie));
+        // Its `acr` sign-in is still strong; the Member's is only re-marked, not ended.
+        assert.isTrue(yield* isSignedIn(server, viaAcr.cookie ?? ""));
+        assert.isTrue(yield* isSignedIn(server, member.cookie));
+        const memberLogins = yield* liveLoginsOf(server, member.id);
+        assert.isTrue(memberLogins.length > 0);
+        assert.isTrue(memberLogins.every((login) => login.strong === 0));
+
+        const entries = yield* auditOf(server, owner, "signIn.settings.update");
+        assert.deepInclude(entries[0]?.detail, {
+          changed: "strongAmr",
+          strongAcr: "critica",
+          strongAmr: "",
+          loginsEnded: 1,
+        });
+      }).pipe(Effect.scoped),
     );
   });
 });

@@ -146,7 +146,9 @@ export const AUDIT_DETAIL_KEYS = {
   "user.remove": ["from"],
   /**
    * The fields that changed, by name, and the new Registration mode, switches and issuer. Never
-   * the client secret: `secretReplaced` says only that a new one was saved.
+   * the client secret: `secretReplaced` says only that a new one was saved. The strong-factor
+   * lists (ticket 06), and how many Keycloak sign-ins of the Owner and Admins a change to them
+   * ended (`loginsEnded`).
    */
   "signIn.settings.update": [
     "changed",
@@ -155,6 +157,9 @@ export const AUDIT_DETAIL_KEYS = {
     "localSignInForMembers",
     "issuer",
     "secretReplaced",
+    "strongAcr",
+    "strongAmr",
+    "loginsEnded",
   ],
   /**
    * The realm the identity comes from and whether the User's own passkeys, password and TOTP went

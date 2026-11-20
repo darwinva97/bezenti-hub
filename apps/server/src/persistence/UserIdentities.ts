@@ -8,6 +8,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type * as SqlError from "effect/sql/SqlError";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -29,7 +30,22 @@ export interface NewIdentityLogin {
   /** The refresh token, sealed with the login's id as associated data; null when none came. */
   readonly refreshTokenSealed: string | null;
   readonly offline: boolean;
+  /** Whether it counts as a strong factor (ticket 06), and the `acr`/`amr` that said so. */
+  readonly strong: boolean;
+  readonly acr: string | null;
+  readonly amr: ReadonlyArray<string>;
   readonly now: string;
+}
+
+/** A Keycloak sign-in that has not ended, with what its ID token said about the factor. */
+export interface LiveLogin {
+  readonly loginId: string;
+  readonly userId: UserId;
+  readonly strong: boolean;
+  readonly acr: string | null;
+  readonly amr: ReadonlyArray<string>;
+  /** The User is the Owner or an Admin of some Organization: they need a strong sign-in. */
+  readonly requiresStrong: boolean;
 }
 
 export class UserIdentities extends Context.Service<
@@ -59,6 +75,26 @@ export class UserIdentities extends Context.Service<
       readonly now: string;
     }) => Effect.Effect<void, SqlError.SqlError>;
     readonly insertLogin: (input: NewIdentityLogin) => Effect.Effect<void, SqlError.SqlError>;
+    /** Every Keycloak sign-in that has not ended (ticket 06: the lists changed). */
+    readonly liveLogins: () => Effect.Effect<ReadonlyArray<LiveLogin>, SqlError.SqlError>;
+    /** Marks live sign-ins strong or not, as the Owner's lists now say. */
+    readonly setStrength: (
+      loginIds: ReadonlyArray<string>,
+      strong: boolean,
+    ) => Effect.Effect<void, SqlError.SqlError>;
+    /**
+     * Ends a User's live sign-ins that are not strong (ticket 06: they became an Admin); their
+     * ids, for the sessions born of them. Run it in the promotion's transaction.
+     */
+    readonly endWeakLogins: (
+      userId: UserId,
+      now: string,
+    ) => Effect.Effect<ReadonlyArray<string>, SqlError.SqlError>;
+    /** Ends these live sign-ins; the ones it ended. */
+    readonly endLogins: (
+      loginIds: ReadonlyArray<string>,
+      now: string,
+    ) => Effect.Effect<ReadonlyArray<string>, SqlError.SqlError>;
     /**
      * Ends a User's link (a reset link replaces every way in): the identity goes, and their
      * Keycloak sign-ins end. True when there was one.
@@ -74,6 +110,12 @@ interface Row {
   readonly username: string | null;
   readonly email: string | null;
 }
+
+const AmrJson = Schema.fromJsonString(Schema.Array(Schema.String));
+const encodeAmr = Schema.encodeSync(AmrJson);
+const decodeAmr = Schema.decodeUnknownOption(AmrJson);
+/** A stored `amr` list; anything but an array of strings reads as empty (never strong). */
+const amrOf = (json: string): ReadonlyArray<string> => Option.getOrElse(decodeAmr(json), () => []);
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -135,15 +177,80 @@ const make = Effect.gen(function* () {
     yield* sql`
       INSERT INTO identity_logins (
         login_id, user_id, issuer, subject, keycloak_sid, refresh_token_sealed, strong, offline,
-        created_at, checked_at
+        acr, amr_json, created_at, checked_at
       )
       VALUES (
         ${input.loginId}, ${input.userId}, ${input.issuer}, ${input.subject},
-        ${input.keycloakSid}, ${input.refreshTokenSealed}, 0, ${input.offline ? 1 : 0},
+        ${input.keycloakSid}, ${input.refreshTokenSealed}, ${input.strong ? 1 : 0},
+        ${input.offline ? 1 : 0}, ${input.acr}, ${encodeAmr(input.amr)},
         ${input.now}, ${input.now}
       )
     `;
   });
+
+  const liveLogins: UserIdentities["Service"]["liveLogins"] = Effect.fn(
+    "UserIdentities.liveLogins",
+  )(function* () {
+    const rows = yield* sql<{
+      readonly loginId: string;
+      readonly userId: UserId;
+      readonly strong: number;
+      readonly acr: string | null;
+      readonly amrJson: string;
+      readonly requiresStrong: number;
+    }>`
+      SELECT l.login_id AS "loginId", l.user_id AS "userId", l.strong AS strong, l.acr AS acr,
+        l.amr_json AS "amrJson",
+        (u.is_owner = 1 OR EXISTS (
+          SELECT 1 FROM space_memberships AS m
+          WHERE m.user_id = l.user_id AND m.role = 'admin'
+        )) AS "requiresStrong"
+      FROM identity_logins AS l JOIN users AS u ON u.user_id = l.user_id
+      WHERE l.ended_at IS NULL
+      ORDER BY l.created_at, l.login_id
+    `;
+    return rows.map((row) => ({
+      loginId: row.loginId,
+      userId: row.userId,
+      strong: row.strong === 1,
+      acr: row.acr,
+      amr: amrOf(row.amrJson),
+      requiresStrong: row.requiresStrong === 1,
+    }));
+  });
+
+  const setStrength: UserIdentities["Service"]["setStrength"] = Effect.fn(
+    "UserIdentities.setStrength",
+  )(function* (loginIds, strong) {
+    if (loginIds.length === 0) return;
+    yield* sql`
+      UPDATE identity_logins SET strong = ${strong ? 1 : 0}
+      WHERE ended_at IS NULL AND ${sql.in("login_id", loginIds)}
+    `;
+  });
+
+  const endWeakLogins: UserIdentities["Service"]["endWeakLogins"] = Effect.fn(
+    "UserIdentities.endWeakLogins",
+  )(function* (userId, now) {
+    const rows = yield* sql<{ readonly loginId: string }>`
+      UPDATE identity_logins SET ended_at = ${now}
+      WHERE user_id = ${userId} AND ended_at IS NULL AND strong = 0
+      RETURNING login_id AS "loginId"
+    `;
+    return rows.map((row) => row.loginId);
+  });
+
+  const endLogins: UserIdentities["Service"]["endLogins"] = Effect.fn("UserIdentities.endLogins")(
+    function* (loginIds, now) {
+      if (loginIds.length === 0) return [];
+      const rows = yield* sql<{ readonly loginId: string }>`
+        UPDATE identity_logins SET ended_at = ${now}
+        WHERE ended_at IS NULL AND ${sql.in("login_id", loginIds)}
+        RETURNING login_id AS "loginId"
+      `;
+      return rows.map((row) => row.loginId);
+    },
+  );
 
   const unlink: UserIdentities["Service"]["unlink"] = Effect.fn("UserIdentities.unlink")(
     function* (userId, now) {
@@ -164,6 +271,10 @@ const make = Effect.gen(function* () {
     link,
     updateLabels,
     insertLogin,
+    liveLogins,
+    setStrength,
+    endWeakLogins,
+    endLogins,
     unlink,
   });
 });

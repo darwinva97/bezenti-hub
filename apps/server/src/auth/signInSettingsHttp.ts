@@ -10,6 +10,7 @@ import {
   EnvironmentAuthenticatedPrincipal,
   EnvironmentHttpApi,
   EnvironmentHttpBadRequestError,
+  EnvironmentHttpConflictError,
   EnvironmentHttpForbiddenError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -86,6 +87,9 @@ export const layer = HttpApiBuilder.group(
               SignInSettingsStorageError: failStorage,
               SignInSecretNotStoredError: (error) =>
                 failEnvironmentInternal("sign_in_secret_not_stored", error),
+              // Ticket 06: the change would end sign-ins; the Owner confirms how many first.
+              SignInSettingsConfirmError: (error) =>
+                Effect.fail(new EnvironmentHttpConflictError({ message: error.message })),
             }),
           );
         }),

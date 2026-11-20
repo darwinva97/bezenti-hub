@@ -720,7 +720,9 @@ const make = Effect.gen(function* () {
       ORDER BY created_at ASC, space_id ASC
     `,
   });
-  // The User row and their memberships in one read.
+  // The User row and their memberships in one read. A strong sign-in is a passkey, TOTP, or a
+  // Keycloak identity (Keycloak sign-in, ticket 06): a Keycloak Admin's weak sign-ins are refused
+  // and end when they become one, so `pendingAdmin` is for local Users only.
   const findPrincipalRows = SqlSchema.findAll({
     Request: UserId,
     Result: Schema.Struct({
@@ -734,7 +736,8 @@ const make = Effect.gen(function* () {
       SELECT users.is_owner AS "isOwner", m.space_id AS "spaceId", m.role AS role,
         (users.disabled_at IS NOT NULL OR users.removed_at IS NOT NULL) AS "inactive",
         (EXISTS (SELECT 1 FROM user_passkeys WHERE user_id = users.user_id)
-        OR EXISTS (SELECT 1 FROM user_totp WHERE user_id = users.user_id)) AS "strongSignIn"
+        OR EXISTS (SELECT 1 FROM user_totp WHERE user_id = users.user_id)
+        OR EXISTS (SELECT 1 FROM user_identities WHERE user_id = users.user_id)) AS "strongSignIn"
       FROM users LEFT JOIN space_memberships AS m ON m.user_id = users.user_id
       WHERE users.user_id = ${userId}
     `,
@@ -1289,7 +1292,8 @@ const make = Effect.gen(function* () {
     execute: (spaceId) => sql`
       SELECT m.user_id AS "userId", u.display_name AS "displayName", m.role AS role,
         (EXISTS (SELECT 1 FROM user_passkeys WHERE user_id = m.user_id)
-        OR EXISTS (SELECT 1 FROM user_totp WHERE user_id = m.user_id)) AS "strongSignIn"
+        OR EXISTS (SELECT 1 FROM user_totp WHERE user_id = m.user_id)
+        OR EXISTS (SELECT 1 FROM user_identities WHERE user_id = m.user_id)) AS "strongSignIn"
       FROM space_memberships AS m JOIN users AS u ON u.user_id = m.user_id
       WHERE m.space_id = ${spaceId} AND u.removed_at IS NULL
       ORDER BY CASE m.role WHEN 'admin' THEN 0 WHEN 'member' THEN 1 ELSE 2 END,

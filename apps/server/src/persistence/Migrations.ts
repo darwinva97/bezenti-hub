@@ -141,6 +141,7 @@ import Migration0149 from "./Migrations/149_VaultAllowancesToGrants.ts";
 import Migration0150 from "./Migrations/150_VaultGrantUsage.ts";
 import Migration0151 from "./Migrations/151_SignInSettings.ts";
 import Migration0152 from "./Migrations/152_KeycloakIdentities.ts";
+import Migration0153 from "./Migrations/153_IdentityLoginStrength.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -284,6 +285,7 @@ const migrationEntries = [
   [150, "VaultGrantUsage", Migration0150],
   [151, "SignInSettings", Migration0151],
   [152, "KeycloakIdentities", Migration0152],
+  [153, "IdentityLoginStrength", Migration0153],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

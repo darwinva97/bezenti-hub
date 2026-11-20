@@ -101,6 +101,12 @@ export const RevokeUserAuthSessionsInput = Schema.Struct({
 });
 export type RevokeUserAuthSessionsInput = typeof RevokeUserAuthSessionsInput.Type;
 
+export const RevokeIdentityLoginSessionsInput = Schema.Struct({
+  loginIds: Schema.Array(Schema.String),
+  revokedAt: Schema.DateTimeUtcFromString,
+});
+export type RevokeIdentityLoginSessionsInput = typeof RevokeIdentityLoginSessionsInput.Type;
+
 export const RenewAuthSessionInput = Schema.Struct({
   sessionId: AuthSessionId,
   expiresAt: Schema.DateTimeUtcFromString,
@@ -141,6 +147,10 @@ export class AuthSessionRepository extends Context.Service<
     /** Revokes every live session of one User in a single write; returns their ids. */
     readonly revokeAllForUser: (
       input: RevokeUserAuthSessionsInput,
+    ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
+    /** Revokes the live sessions born of these Keycloak sign-ins (Keycloak sign-in, ticket 06). */
+    readonly revokeForIdentityLogins: (
+      input: RevokeIdentityLoginSessionsInput,
     ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
     readonly setLastConnectedAt: (
       input: SetAuthSessionLastConnectedAtInput,
@@ -439,6 +449,33 @@ export const make = Effect.gen(function* () {
       Effect.map((rows) => rows.map((row) => row.sessionId)),
     );
 
+  const revokeIdentityLoginSessionRows = SqlSchema.findAll({
+    Request: RevokeIdentityLoginSessionsInput,
+    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    execute: ({ loginIds, revokedAt }) =>
+      sql`
+        UPDATE auth_sessions
+        SET revoked_at = ${revokedAt}
+        WHERE revoked_at IS NULL AND ${sql.in("identity_login_id", loginIds)}
+        RETURNING session_id AS "sessionId"
+      `,
+  });
+
+  const revokeForIdentityLogins: AuthSessionRepository["Service"]["revokeForIdentityLogins"] = (
+    input,
+  ) =>
+    input.loginIds.length === 0
+      ? Effect.succeed([])
+      : revokeIdentityLoginSessionRows(input).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "AuthSessionRepository.revokeForIdentityLogins:query",
+              "AuthSessionRepository.revokeForIdentityLogins:decodeRows",
+            ),
+          ),
+          Effect.map((rows) => rows.map((row) => row.sessionId)),
+        );
+
   const create: AuthSessionRepository["Service"]["create"] = (input) =>
     createSessionRow(input).pipe(
       Effect.mapError(
@@ -594,6 +631,7 @@ export const make = Effect.gen(function* () {
     revoke,
     revokeAllExcept,
     revokeAllForUser,
+    revokeForIdentityLogins,
     setLastConnectedAt,
   } satisfies AuthSessionRepository["Service"];
 });

@@ -868,8 +868,8 @@ class EnvironmentAppSignInHttpApi extends HttpApiGroup.make("appSignIn")
   ) {}
 
 // Keycloak sign-in: a flow starts here and comes back to `/oauth/keycloak/callback`. `sign-in`
-// and `invitation` (with its token; a dead one is a 400) need no session; `link` needs the
-// browser's own session and a fresh proof of the credential. Forbidden: Keycloak is off, or the
+// and `invitation` (a dead token is a 400) need no session; `link` the browser's own session and
+// a fresh proof of the credential; `step-up` that of a User who signs in with Keycloak. Forbidden: Keycloak is off, or the
 // account may not link (`message` says why).
 class EnvironmentKeycloakSignInHttpApi extends HttpApiGroup.make("keycloakSignIn").add(
   HttpApiEndpoint.post("start", "/api/auth/keycloak/start", {
@@ -1138,10 +1138,9 @@ class EnvironmentAuditHttpApi extends HttpApiGroup.make("audit").add(
   }).middleware(EnvironmentAuthenticatedAuth),
 ) {}
 
-// The Owner's sign-in settings (Keycloak sign-in spec, ticket 01): the Registration mode, local
-// sign-in for Members, and the Keycloak client, whose secret is write-only. Anyone but the Owner
-// gets the same 403; a session of the Owner's also needs the access scope. Bad request: a value
-// it refuses, or «Check» failing while turning Keycloak on; `message` says which, in plain words.
+// The Owner's sign-in settings (Keycloak sign-in spec, ticket 01); anyone else gets the same 403.
+// Bad request: a value it refuses, or «Check» failing while turning Keycloak on. Conflict: a
+// strong-list change that would end Keycloak sign-ins, unconfirmed. `message` says why.
 class EnvironmentSignInSettingsHttpApi extends HttpApiGroup.make("signInSettings")
   .add(
     HttpApiEndpoint.get("get", "/api/installation/sign-in-settings", {
@@ -1155,7 +1154,11 @@ class EnvironmentSignInSettingsHttpApi extends HttpApiGroup.make("signInSettings
       headers: OptionalBearerHeaders,
       payload: UpdateSignInSettingsRequest,
       success: SignInSettings,
-      error: [...EnvironmentInstallationUserErrors, EnvironmentHttpBadRequestError],
+      error: [
+        ...EnvironmentInstallationUserErrors,
+        EnvironmentHttpBadRequestError,
+        EnvironmentHttpConflictError,
+      ],
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(

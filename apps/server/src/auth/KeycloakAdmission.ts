@@ -1,9 +1,15 @@
 /**
- * Who a verified Keycloak identity becomes (Keycloak sign-in spec, «Admisión»): pure, no I/O.
- * The spec's table, one row per rule, first match wins; a new rule (Platform invitations, mapped
- * groups, a real strong factor) is a new row.
+ * Who a verified Keycloak identity becomes (Keycloak sign-in spec, «Admisión»), and whether its
+ * sign-in is strong («Factor fuerte», ticket 06): pure, no I/O. The spec's table, one row per
+ * rule, first match wins; a new rule (Platform invitations, mapped groups) is a new row.
  */
-import type { RegistrationMode, SpaceRole, UserId } from "@t3tools/contracts";
+import {
+  MAX_CLAIM_LENGTH,
+  MAX_STRONG_VALUES,
+  type RegistrationMode,
+  type SpaceRole,
+  type UserId,
+} from "@t3tools/contracts";
 
 /** The identity (issuer + `sub`, never an email) as the Hub knows it. */
 export type IdentityState =
@@ -25,7 +31,12 @@ export interface AdmissionInput {
   readonly intent: AdmissionIntent;
   readonly identity: IdentityState;
   readonly invitation: InvitationState;
-  /** Whether this login counts as a strong factor (ticket 06; never, until then). */
+  /**
+   * Whether the result needs a strong factor: the identity's User is the Owner or an Admin (after
+   * the group mapping, ticket 05), or the Invitation makes them one.
+   */
+  readonly requiresStrong: boolean;
+  /** Whether this login counts as a strong factor (`loginIsStrong`). */
   readonly loginStrong: boolean;
 }
 
@@ -68,17 +79,6 @@ export const RULES: ReadonlyArray<AdmissionRule> = [
       refuse(input.identity.kind === "inactive" && input.identity.removed ? "removed" : "disabled"),
   },
   {
-    name: "active user signs in",
-    when: (input) => input.identity.kind === "active" && input.intent === "sign-in",
-    outcome: () => ({ kind: "enter" }),
-  },
-  {
-    // Whether the Invitation still holds is `join`'s to say, with today's refusals.
-    name: "active user accepts an invitation",
-    when: (input) => input.identity.kind === "active" && input.intent === "invitation",
-    outcome: () => ({ kind: "enter-and-join" }),
-  },
-  {
     // Even when registration is open: who came to accept an Invitation gets no empty User.
     name: "new identity, invitation no longer valid",
     when: (input) => isNew(input) && input.invitation.kind === "invalid",
@@ -91,14 +91,33 @@ export const RULES: ReadonlyArray<AdmissionRule> = [
     outcome: () => refuse("registration-closed"),
   },
   {
-    // An Admin needs a strong factor; a Keycloak login is strong only from ticket 06.
-    name: "new identity, admin invitation, weak login",
+    name: "new identity, invitation only",
     when: (input) =>
-      isNew(input) &&
-      input.invitation.kind === "organization" &&
-      input.invitation.role === "admin" &&
-      !input.loginStrong,
+      isNew(input) && input.invitation.kind === "none" && input.mode === "invitation-only",
+    outcome: () => refuse("invitation-only"),
+  },
+  {
+    name: "new identity, registration closed",
+    when: (input) => isNew(input) && input.invitation.kind === "none" && input.mode === "closed",
+    outcome: () => refuse("registration-closed"),
+  },
+  {
+    // The Owner and Admins (or who an Invitation makes one) need a strong factor, as locally
+    // they need a passkey or a password with a code. The Owner's local sign-in is untouched.
+    name: "strong factor required, weak login",
+    when: (input) => input.requiresStrong && !input.loginStrong,
     outcome: () => refuse("strong-factor-required"),
+  },
+  {
+    name: "active user signs in",
+    when: (input) => input.identity.kind === "active" && input.intent === "sign-in",
+    outcome: () => ({ kind: "enter" }),
+  },
+  {
+    // Whether the Invitation still holds is `join`'s to say, with today's refusals.
+    name: "active user accepts an invitation",
+    when: (input) => input.identity.kind === "active" && input.intent === "invitation",
+    outcome: () => ({ kind: "enter-and-join" }),
   },
   {
     name: "new identity, organization invitation",
@@ -110,17 +129,6 @@ export const RULES: ReadonlyArray<AdmissionRule> = [
     when: (input) => isNew(input) && input.invitation.kind === "none" && input.mode === "open",
     outcome: () => ({ kind: "create-user" }),
   },
-  {
-    name: "new identity, invitation only",
-    when: (input) =>
-      isNew(input) && input.invitation.kind === "none" && input.mode === "invitation-only",
-    outcome: () => refuse("invitation-only"),
-  },
-  {
-    name: "new identity, registration closed",
-    when: (input) => isNew(input) && input.invitation.kind === "none" && input.mode === "closed",
-    outcome: () => refuse("registration-closed"),
-  },
 ];
 
 /** The first row that matches; the table covers every input, so the fallback never runs. */
@@ -129,6 +137,61 @@ export const ruleFor = (input: AdmissionInput): AdmissionRule | undefined =>
 
 export const decide = (input: AdmissionInput): AdmissionOutcome =>
   ruleFor(input)?.outcome(input) ?? refuse("registration-closed");
+
+/** What a verified ID token says about how the person authenticated, bounded and cleaned. */
+export interface LoginEvidence {
+  readonly acr: string | null;
+  readonly amr: ReadonlyArray<string>;
+}
+
+/** The Owner's lists (`strong_acr`, `strong_amr`). */
+export interface StrongLists {
+  readonly strongAcr: ReadonlyArray<string>;
+  readonly strongAmr: ReadonlyArray<string>;
+}
+
+const claimValue = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 && value.length <= MAX_CLAIM_LENGTH
+    ? value
+    : undefined;
+
+/**
+ * `acr` and `amr` from the verified ID token: `acr` only as a string, `amr` only as an array of
+ * strings (anything else in it is skipped). A value longer than a list entry may be could never
+ * match one, so it is not kept.
+ */
+export const loginEvidence = (claims: {
+  readonly acr?: unknown;
+  readonly amr?: unknown;
+}): LoginEvidence => ({
+  acr: claimValue(claims.acr) ?? null,
+  amr: Array.isArray(claims.amr)
+    ? [
+        ...new Set(
+          claims.amr.flatMap((value: unknown) => {
+            const kept = claimValue(value);
+            return kept === undefined ? [] : [kept];
+          }),
+        ),
+      ].slice(0, MAX_STRONG_VALUES)
+    : [],
+});
+
+/**
+ * A Keycloak sign-in is strong when its `acr` is in `strongAcr` or one of its `amr` values is in
+ * `strongAmr`: whole values, case and all, never a prefix or a part. Empty lists: never strong.
+ */
+export const loginIsStrong = (evidence: LoginEvidence, lists: StrongLists): boolean =>
+  (evidence.acr !== null && lists.strongAcr.includes(evidence.acr)) ||
+  evidence.amr.some((value) => lists.strongAmr.includes(value));
+
+/** `auth_time` as epoch seconds, or undefined when absent or not a sane number. */
+export const authTimeOf = (claims: { readonly auth_time?: unknown }): number | undefined =>
+  typeof claims.auth_time === "number" &&
+  Number.isSafeInteger(claims.auth_time) &&
+  claims.auth_time >= 0
+    ? claims.auth_time
+    : undefined;
 
 /** The longest display name a new User gets, as an invitee types one. */
 export const DISPLAY_NAME_MAX = 80;

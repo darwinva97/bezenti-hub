@@ -71,6 +71,7 @@ import * as KeycloakTestkit from "./Keycloak.testkit.ts";
 import * as SignInSettings from "./SignInSettings.ts";
 import * as SignInSettingsHttp from "./signInSettingsHttp.ts";
 import * as SessionStore from "./SessionStore.ts";
+import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as AuthHttp from "./http.ts";
 import * as AppSignInHttp from "./appSignInHttp.ts";
 import * as McpOAuth from "./McpOAuth.ts";
@@ -242,6 +243,9 @@ const layerSignInSettings = (options: TestSignInOptions = {}) =>
             Effect.map(ServerSecretStore.ServerSecretStore, options.secretStore),
           ),
     ),
+    // A change to the strong-factor lists ends sign-ins (ticket 06): the Hub's one session store
+    // (the same layer as EnvironmentAuth's, so one instance), whose sockets then close.
+    Layer.provide(Layer.mergeAll(SessionStore.layer, UserIdentities.layer)),
   );
 
 const makeLayerServices = (

@@ -159,18 +159,25 @@ export const AuthAccount = Schema.Struct({
   /** The Keycloak account this User signs in with (Keycloak sign-in spec, ticket 02). */
   identity: Schema.optionalKey(AuthLinkedIdentity),
   /**
-   * Without an identity, whether «Connect Keycloak» is open to this account: `allowed`; `admins-later`
-   * for an Admin other than the Owner (their strong factor from Keycloak comes with ticket 06);
+   * Without an identity, whether «Connect Keycloak» is open to this account: `allowed`, or
    * `needs-reset` for an account with no passkey or password to confirm with.
    */
-  keycloakLink: Schema.optionalKey(Schema.Literals(["allowed", "admins-later", "needs-reset"])),
+  keycloakLink: Schema.optionalKey(Schema.Literals(["allowed", "needs-reset"])),
 });
 export type AuthAccount = typeof AuthAccount.Type;
 
 /**
+ * Where a confirmation through Keycloak (Keycloak sign-in spec, ticket 06: the `step-up` flow)
+ * comes back: the page it started from, with the proof's id in this fragment parameter. Never the
+ * query: a fragment reaches no server log and no `Referer`.
+ */
+export const KEYCLOAK_PROOF_FRAGMENT_PARAM = "keycloakProof";
+
+/**
  * Proof, in the same request, that the person changing credentials can sign in now: the current
- * password (and TOTP code when enrolled), or a fresh assertion from one of the account's passkeys
- * (its challenge comes from `/api/auth/passkey/challenge`).
+ * password (and TOTP code when enrolled), a fresh assertion from one of the account's passkeys
+ * (its challenge comes from `/api/auth/passkey/challenge`), or, for a User who signs in with
+ * Keycloak, a `step-up` proof (single-use, 5 minutes, only for the session that started it).
  */
 export const AuthReauth = Schema.Union([
   Schema.Struct({
@@ -182,6 +189,10 @@ export const AuthReauth = Schema.Union([
     method: Schema.Literal("passkey"),
     ceremonyId: TrimmedNonEmptyString,
     response: AuthPasskeyAuthenticationResponse,
+  }),
+  Schema.Struct({
+    method: Schema.Literal("keycloak"),
+    proofId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
   }),
 ]);
 export type AuthReauth = typeof AuthReauth.Type;

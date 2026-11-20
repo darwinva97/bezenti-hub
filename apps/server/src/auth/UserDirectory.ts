@@ -34,6 +34,7 @@ import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as Users from "../persistence/Users.ts";
 import * as AccessChanges from "./AccessChanges.ts";
 import * as AccountCredentials from "./AccountCredentials.ts";
+import * as KeycloakStepUpProofs from "./KeycloakStepUpProofs.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as SessionStore from "./SessionStore.ts";
@@ -204,10 +205,11 @@ export interface AccountActor {
 }
 
 /**
- * Accounts that may use a password only together with TOTP: the Owner and every Admin (see the
- * sign-in rules in docs/internals/environment-auth.md).
+ * Accounts that need a strong sign-in: the Owner and every Admin (see the sign-in rules in
+ * docs/internals/environment-auth.md). Locally, a passkey or a password only together with TOTP;
+ * through Keycloak, a sign-in whose `acr`/`amr` the Owner listed as strong (ticket 06).
  */
-const passwordRequiresTotp = (
+const requiresStrongSignIn = (
   user: Pick<Users.UserRecord, "isOwner">,
   credentials: Pick<Users.UserCredentials, "isAdmin">,
 ): boolean => user.isOwner || credentials.isAdmin;
@@ -359,8 +361,7 @@ export class UserDirectory extends Context.Service<
     /**
      * «Connect Keycloak» (Keycloak sign-in spec, ticket 02): a proof in this request of the
      * account's current passkey or password (and code), always; refused for an account already
-     * linked, one with nothing to confirm with (the Owner's reset link is its way), and an Admin
-     * other than the Owner until Keycloak can give them a strong factor (ticket 06).
+     * linked, and one with nothing to confirm with (the Owner's reset link is its way).
      */
     readonly confirmLinkStepUp: (
       actor: AccountActor,
@@ -394,8 +395,9 @@ export class UserDirectory extends Context.Service<
     ) => Effect.Effect<AuthAccount, AccountChangeError>;
     /**
      * Proof in this request of a strong sign-in, for actions a stolen session must not take: a
-     * fresh passkey assertion, or the password together with a TOTP code. A password alone never
-     * passes, whatever the account's rules allow at sign-in.
+     * fresh passkey assertion, the password together with a TOTP code, or a `step-up` proof from a
+     * strong Keycloak sign-in (ticket 06). A password alone, or a Keycloak sign-in without a strong
+     * factor, never passes, whatever the account's rules allow at sign-in.
      */
     readonly confirmStrongFactor: (
       actor: AccountActor,
@@ -439,17 +441,33 @@ export class UserDirectory extends Context.Service<
       UserDirectoryStorageError
     >;
     /**
-     * Where a User just made Admin stands. Without a passkey or authenticator app they are
-     * `pending` and keep a Member's rights until they add an app from a signed-in session. With a
-     * passkey but a password that needs no code, their sessions end (`signedOut`): any of them may
-     * have come from the password alone. Run it in the promotion's transaction.
+     * Where a User just made Admin stands: `pending` without a passkey, app or Keycloak identity;
+     * `signedOut` when a password alone, or a weak Keycloak sign-in (ticket 06), may have made a
+     * session. Run it in the promotion's transaction, and `afterCommit` once it commits.
      */
-    readonly onPromotedToAdmin: (
-      userId: UserId,
-    ) => Effect.Effect<
-      { readonly pending: boolean; readonly signedOut: boolean },
+    readonly onPromotedToAdmin: (userId: UserId) => Effect.Effect<
+      {
+        readonly pending: boolean;
+        readonly signedOut: boolean;
+        readonly afterCommit: Effect.Effect<void>;
+      },
       UserDirectoryStorageError
     >;
+    /**
+     * Ends a User's Keycloak sign-ins without a strong factor and the sessions born of them
+     * (ticket 06: they now need one). Run it in the transaction that made them an Admin, and
+     * `afterCommit` once it commits, so their sockets close; `ended` is how many sign-ins ended.
+     */
+    readonly endWeakKeycloakLogins: (
+      userId: UserId,
+    ) => Effect.Effect<
+      { readonly ended: number; readonly afterCommit: Effect.Effect<void> },
+      UserDirectoryStorageError
+    >;
+    /** Whether the User needs a strong sign-in: the Owner, or an Admin of some Organization. */
+    readonly requiresStrongSignIn: (
+      userId: UserId,
+    ) => Effect.Effect<boolean, UserDirectoryStorageError>;
     /**
      * After a change to a User's credentials commits: their Admin rights may have started or
      * ended, so cached principals are dropped and their connections close.
@@ -508,7 +526,11 @@ export class UserDirectory extends Context.Service<
     readonly createIdentityUser: (
       displayName: string,
     ) => Effect.Effect<AuthUser, UserDirectoryStorageError>;
-    /** Whether the User signs in with more than a password: a passkey or TOTP. */
+    /**
+     * Whether the User signs in with more than a password: a passkey, TOTP, or a Keycloak identity
+     * (ticket 06: every live session of a Keycloak Admin is strong, since a weak Keycloak sign-in
+     * of theirs is refused and becoming Admin ends the weak ones).
+     */
     readonly hasStrongSignIn: (userId: UserId) => Effect.Effect<boolean, UserDirectoryStorageError>;
     /**
      * Spends the link, replaces every passkey with the new one and ends the User's sessions; run
@@ -619,6 +641,7 @@ const make = Effect.gen(function* () {
     readonly expiresAt: DateTime.DateTime;
   }>(MAX_PENDING_TOTP);
   const throttle = makeSignInThrottle();
+  const stepUpProofs = yield* KeycloakStepUpProofs.KeycloakStepUpProofs;
   const sessions = yield* SessionStore.SessionStore;
   const pairingLinks = yield* PairingGrantStore.PairingGrantStore;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -928,14 +951,9 @@ const make = Effect.gen(function* () {
 
   /** Whether «Connect Keycloak» is open to an account without an identity, and if not, why. */
   const keycloakLinkOf = (
-    user: Users.UserRecord,
     credentials: Users.UserCredentials,
   ): NonNullable<AuthAccount["keycloakLink"]> =>
-    !credentials.hasPasskey && credentials.passwordHash === null
-      ? "needs-reset"
-      : !user.isOwner && credentials.isAdmin
-        ? "admins-later"
-        : "allowed";
+    !credentials.hasPasskey && credentials.passwordHash === null ? "needs-reset" : "allowed";
 
   const accountOf = Effect.fn("UserDirectory.accountOf")(function* (user: Users.UserRecord) {
     const credentials = yield* users.getCredentials(user.userId).pipe(storage);
@@ -946,9 +964,9 @@ const make = Effect.gen(function* () {
       hasPasskey: credentials.hasPasskey,
       hasPassword: credentials.passwordHash !== null,
       totpEnrolled: credentials.totpSecretCiphertext !== null,
-      passwordRequiresTotp: passwordRequiresTotp(user, credentials),
+      passwordRequiresTotp: requiresStrongSignIn(user, credentials),
       ...(identity === undefined
-        ? { keycloakLink: keycloakLinkOf(user, credentials) }
+        ? { keycloakLink: keycloakLinkOf(credentials) }
         : {
             identity: {
               username: identity.username,
@@ -1006,27 +1024,52 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Credential changes need proof in the same request that the person can sign in now, so a
-   * stolen session cannot install its own password or authenticator. An account with no way to
-   * sign in yet has nothing to prove.
+   * Proof in the same request that the person can sign in now, so a stolen session cannot install
+   * its own way in; an account with no way to sign in yet has nothing to prove. A Keycloak User
+   * proves it with a `step-up` proof for this session, strong for the Owner, Admins and `strong`.
    */
   const requireStepUp = Effect.fn("UserDirectory.requireStepUp")(function* (
     actor: AccountActor,
     user: Users.UserRecord,
     reauth: AuthReauth | undefined,
+    options: { readonly strong?: boolean } = {},
   ) {
     const credentials = yield* users.getCredentials(user.userId).pipe(storage);
+    const identity = yield* identityOf(user.userId);
+    const keys = [accountKey(user.userId)];
+    if (reauth?.method === "keycloak") {
+      yield* requireNotThrottled(keys);
+      // Spent whatever comes next; only a User with an identity ever gets one.
+      const proof =
+        identity === undefined
+          ? undefined
+          : yield* stepUpProofs.consume({
+              proofId: reauth.proofId,
+              userId: user.userId,
+              sessionId: actor.sessionId,
+            });
+      if (proof === undefined) {
+        yield* recordFailure(keys);
+        return yield* stepUpRefused;
+      }
+      if (!proof.strong && (options.strong === true || requiresStrongSignIn(user, credentials))) {
+        return yield* new AccountChangeRefusedError({
+          reason: "This needs a second factor in Keycloak. Confirm again with it.",
+        });
+      }
+      throttle.reset(keys);
+      return;
+    }
     if (!credentials.hasPasskey && credentials.passwordHash === null) {
       // Signing in with Keycloak is a way to sign in: an account with an identity always has
-      // something to prove, and until Keycloak can confirm it (ticket 06) nothing here does.
-      if ((yield* identityOf(user.userId)) !== undefined) {
+      // something to prove, and only Keycloak can confirm it.
+      if (identity !== undefined) {
         return yield* new AccountChangeRefusedError({
-          reason: "Confirming it's you through Keycloak is not available yet for this action.",
+          reason: "Confirm it is you with Keycloak.",
         });
       }
       return;
     }
-    const keys = [accountKey(user.userId)];
     yield* requireNotThrottled(keys);
     const verified =
       reauth === undefined
@@ -1069,17 +1112,10 @@ const make = Effect.gen(function* () {
       });
     }
     const credentials = yield* users.getCredentials(user.userId).pipe(storage);
-    switch (keycloakLinkOf(user, credentials)) {
-      case "needs-reset":
-        return yield* new AccountChangeRefusedError({
-          reason: "Ask the Owner for a reset link to connect Keycloak to this account.",
-        });
-      case "admins-later":
-        return yield* new AccountChangeRefusedError({
-          reason: "Connecting Keycloak is available soon for Admins.",
-        });
-      case "allowed":
-        break;
+    if (keycloakLinkOf(credentials) === "needs-reset") {
+      return yield* new AccountChangeRefusedError({
+        reason: "Ask the Owner for a reset link to connect Keycloak to this account.",
+      });
     }
     // The account has a passkey or password, so a missing or wrong proof is refused (and counted).
     yield* requireStepUp(actor, user, reauth);
@@ -1093,17 +1129,22 @@ const make = Effect.gen(function* () {
     const credentials = yield* users.getCredentials(actor.userId).pipe(storage);
     const strong =
       reauth !== undefined &&
-      (reauth.method === "passkey"
-        ? credentials.hasPasskey
-        : credentials.passwordHash !== null &&
-          credentials.totpSecretCiphertext !== null &&
-          reauth.totpCode !== undefined);
+      (reauth.method === "keycloak"
+        ? // Whether that sign-in was strong is the proof's to say, in `requireStepUp`.
+          true
+        : reauth.method === "passkey"
+          ? credentials.hasPasskey
+          : credentials.passwordHash !== null &&
+            credentials.totpSecretCiphertext !== null &&
+            reauth.totpCode !== undefined);
     if (!strong) {
+      // The pages read this sentence (hubEnvironments.ts, masterKey.ts); a Keycloak User's page
+      // offers «Confirm with Keycloak» instead.
       return yield* new AccountChangeRefusedError({
         reason: "Confirm with your passkey, or with your password and a code from your app.",
       });
     }
-    yield* requireStepUp(actor, user, reauth);
+    yield* requireStepUp(actor, user, reauth, { strong: true });
   });
 
   // A credential change ends every other session and unspent link, which may belong to whoever
@@ -1119,7 +1160,7 @@ const make = Effect.gen(function* () {
     const user = yield* requireAccount(actor.userId);
     yield* refuseLocalCredentialsForIdentity(user);
     const credentials = yield* users.getCredentials(actor.userId).pipe(storage);
-    if (passwordRequiresTotp(user, credentials) && credentials.totpSecretCiphertext === null) {
+    if (requiresStrongSignIn(user, credentials) && credentials.totpSecretCiphertext === null) {
       return yield* new AccountChangeRefusedError({
         reason: "Set up an authenticator app first: this account needs a code with its password.",
       });
@@ -1162,7 +1203,7 @@ const make = Effect.gen(function* () {
       const user = yield* requireAccount(actor.userId);
       yield* requireStepUp(actor, user, reauth);
       const credentials = yield* users.getCredentials(actor.userId).pipe(storage);
-      if (passwordRequiresTotp(user, credentials) && credentials.passwordHash !== null) {
+      if (requiresStrongSignIn(user, credentials) && credentials.passwordHash !== null) {
         return yield* new AccountChangeRefusedError({
           reason: "Remove your password first: this account cannot use a password without a code.",
         });
@@ -1282,7 +1323,7 @@ const make = Effect.gen(function* () {
     }
     // A rule change (gaining a passkey as an Admin) can leave a password that now needs TOTP.
     // The password was right, so say why instead of counting a guess.
-    if (passwordRequiresTotp(user, credentials)) {
+    if (requiresStrongSignIn(user, credentials)) {
       return yield* new SecondFactorMissingError({});
     }
     throttle.reset(keys);
@@ -1382,13 +1423,41 @@ const make = Effect.gen(function* () {
   const onPromotedToAdmin: UserDirectory["Service"]["onPromotedToAdmin"] = Effect.fn(
     "UserDirectory.onPromotedToAdmin",
   )(function* (userId) {
+    if ((yield* identityOf(userId)) !== undefined) {
+      // A Keycloak sign-in's strength is its own: the weak ones end, and they sign in again
+      // with a second factor (an Admin's weak sign-in is refused from now on).
+      const { ended, afterCommit } = yield* endWeakKeycloakLogins(userId);
+      return { pending: false, signedOut: ended > 0, afterCommit };
+    }
     const credentials = yield* users.getCredentials(userId).pipe(storage);
     const hasApp = credentials.totpSecretCiphertext !== null;
-    if (!credentials.hasPasskey && !hasApp) return { pending: true, signedOut: false };
-    if (hasApp || credentials.passwordHash === null) return { pending: false, signedOut: false };
+    if (!credentials.hasPasskey && !hasApp) {
+      return { pending: true, signedOut: false, afterCommit: Effect.void };
+    }
+    if (hasApp || credentials.passwordHash === null) {
+      return { pending: false, signedOut: false, afterCommit: Effect.void };
+    }
     yield* sessions.revokeAllForUser(userId).pipe(storage);
     yield* pairingLinks.revokeAllForUser(userId).pipe(storage);
-    return { pending: false, signedOut: true };
+    return { pending: false, signedOut: true, afterCommit: Effect.void };
+  });
+
+  const endWeakKeycloakLogins: UserDirectory["Service"]["endWeakKeycloakLogins"] = Effect.fn(
+    "UserDirectory.endWeakKeycloakLogins",
+  )(function* (userId) {
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const loginIds = yield* identities.endWeakLogins(userId, now).pipe(storage);
+    const closeSockets = yield* sessions.revokeForIdentityLoginsDeferred(loginIds).pipe(storage);
+    return { ended: loginIds.length, afterCommit: Effect.asVoid(closeSockets) };
+  });
+
+  const requiresStrongSignInOf: UserDirectory["Service"]["requiresStrongSignIn"] = Effect.fn(
+    "UserDirectory.requiresStrongSignIn",
+  )(function* (userId) {
+    const user = yield* users.getById(userId).pipe(storage);
+    if (Option.isNone(user)) return false;
+    const credentials = yield* users.getCredentials(userId).pipe(storage);
+    return requiresStrongSignIn(user.value, credentials);
   });
 
   const accessChanges = yield* Effect.serviceOption(AccessChanges.AccessChanges);
@@ -1671,7 +1740,11 @@ const make = Effect.gen(function* () {
     "UserDirectory.hasStrongSignIn",
   )(function* (userId) {
     const credentials = yield* users.getCredentials(userId).pipe(storage);
-    return credentials.hasPasskey || credentials.totpSecretCiphertext !== null;
+    return (
+      credentials.hasPasskey ||
+      credentials.totpSecretCiphertext !== null ||
+      (yield* identityOf(userId)) !== undefined
+    );
   });
 
   const requireClientNotThrottled: UserDirectory["Service"]["requireClientNotThrottled"] = (
@@ -1692,6 +1765,8 @@ const make = Effect.gen(function* () {
     createInvitedUser,
     createIdentityUser,
     hasStrongSignIn,
+    endWeakKeycloakLogins,
+    requiresStrongSignIn: requiresStrongSignInOf,
     issueResetLink,
     onPromotedToAdmin,
     credentialsChanged,
@@ -1756,4 +1831,6 @@ const make = Effect.gen(function* () {
 export const layer = Layer.effect(UserDirectory, make).pipe(
   Layer.provideMerge(Users.layer),
   Layer.provideMerge(UserIdentities.layer),
+  // Issued by KeycloakSignIn's `step-up` callback, spent here: one instance for both.
+  Layer.provideMerge(KeycloakStepUpProofs.layer),
 );

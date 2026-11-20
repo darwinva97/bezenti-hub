@@ -189,8 +189,12 @@ export interface AuthorizationRequest {
   readonly nonce: string;
   /** `BASE64URL(SHA-256(verifier))`: the method is always S256. */
   readonly codeChallenge: string;
-  /** `login` makes Keycloak ask again even with a live SSO session (`link`). */
+  /** `login` makes Keycloak ask again even with a live SSO session (`link`, `step-up`). */
   readonly prompt?: "login";
+  /** `0` asks for an authentication made now, whatever the SSO session (`step-up`, ticket 06). */
+  readonly maxAge?: 0;
+  /** The `acr` values to ask for (the Owner's strong list), most wanted first (ticket 06). */
+  readonly acrValues?: ReadonlyArray<string>;
 }
 
 /** The realm's sign-in page for this flow (OIDC authorization code with PKCE S256). */
@@ -208,6 +212,10 @@ export const authorizationUrl = (
   url.searchParams.set("code_challenge", request.codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
   if (request.prompt !== undefined) url.searchParams.set("prompt", request.prompt);
+  if (request.maxAge !== undefined) url.searchParams.set("max_age", String(request.maxAge));
+  if (request.acrValues !== undefined && request.acrValues.length > 0) {
+    url.searchParams.set("acr_values", request.acrValues.join(" "));
+  }
   return url.href;
 };
 
@@ -237,6 +245,13 @@ export const IdTokenClaims = Schema.Struct({
   preferred_username: Schema.optionalKey(Schema.String),
   email: Schema.optionalKey(Schema.String),
   name: Schema.optionalKey(Schema.String),
+  /**
+   * How the person authenticated (ticket 06): read leniently, so an odd value counts as absent
+   * (never strong) instead of failing the whole sign-in. See `KeycloakAdmission.loginEvidence`.
+   */
+  acr: Schema.optionalKey(Schema.Unknown),
+  amr: Schema.optionalKey(Schema.Unknown),
+  auth_time: Schema.optionalKey(Schema.Unknown),
 });
 export type IdTokenClaims = typeof IdTokenClaims.Type;
 

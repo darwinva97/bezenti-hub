@@ -1,12 +1,13 @@
 /**
- * Sign-in and linking through Keycloak (Keycloak sign-in spec, ticket 02): authorization code with
- * PKCE S256, `state` bound to the browser by a `__Host-` cookie, `nonce` and the RFC 9207 `iss`.
- * Flows live 10 minutes in memory and are spent the first time the browser comes back.
+ * Sign-in, linking and `step-up` through Keycloak (spec, tickets 02 and 06): code flow with PKCE
+ * S256, `state` bound to the browser by a `__Host-` cookie, `nonce` and RFC 9207 `iss`. Flows live
+ * 10 minutes in memory, spent the first time the browser comes back.
  */
 import {
   type AuthReauth,
   type AuthUser,
   KEYCLOAK_CALLBACK_PATH,
+  KEYCLOAK_PROOF_FRAGMENT_PARAM,
   KEYCLOAK_RESULT_PARAM,
   type KeycloakFlowIntent,
   type KeycloakSignInFailure,
@@ -43,6 +44,7 @@ import { clientBucketOf, isLoopbackClientAddress } from "./clientConnection.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as KeycloakAdmission from "./KeycloakAdmission.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
+import * as KeycloakStepUpProofs from "./KeycloakStepUpProofs.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import { makeGrantStore } from "./pkceGrants.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
@@ -62,6 +64,11 @@ const STARTS_PER_MINUTE = 20;
 const MAX_TRACKED_CLIENTS = 10_000;
 /** How long a realm's discovery document and key set are kept before being read again. */
 const REALM_TTL = Duration.minutes(10);
+/**
+ * A `step-up`'s `auth_time` may be this much before the flow started: the realm's clock and the
+ * Hub's differ a little. Anything older is an authentication from before this confirmation.
+ */
+const AUTH_TIME_SKEW = Duration.seconds(30);
 
 /** The flow cookie: `__Host-` over HTTPS (Path=/, no Domain), the bare name on loopback HTTP. */
 export const FLOW_COOKIE_NAME = "t3_keycloak_flow";
@@ -88,6 +95,10 @@ interface PendingFlow {
   readonly clientId: string;
   /** For `link`: the User and the browser session that proved their credential at `start`. */
   readonly link: { readonly userId: UserId; readonly sessionId: AuthSessionId } | undefined;
+  /** For `step-up` (ticket 06): the User and the browser session the proof will serve. */
+  readonly stepUp: { readonly userId: UserId; readonly sessionId: AuthSessionId } | undefined;
+  /** When `start` ran: a `step-up`'s authentication must come after it. */
+  readonly startedAtMs: number;
   /** For `invitation`: the token, checked at `start` and again at the callback; never sent out. */
   readonly invitationToken: Redacted.Redacted<string> | undefined;
   readonly expiresAtMs: number;
@@ -103,8 +114,10 @@ export class KeycloakStartRefusedError extends Schema.TaggedError<KeycloakStartR
       "invalid-return-to",
       // No `Origin`, or one the Hub does not take as its own; or a preview's page.
       "invalid-origin",
-      // `link` without this browser's own session.
+      // `link` or `step-up` without this browser's own session.
       "not-signed-in",
+      // `step-up` by a User who does not sign in with Keycloak (ticket 06).
+      "no-identity",
       // Too many starts from this client in a minute.
       "rate-limited",
       // Too many flows under way on the whole Hub.
@@ -129,6 +142,8 @@ export class KeycloakStartRefusedError extends Schema.TaggedError<KeycloakStartR
       case "invitation-invalid":
         // As the Invitation's preview says it: unknown, used, expired or revoked alike.
         return new InvitationService.InvitationInvalidError({}).message;
+      case "no-identity":
+        return "Only an account that signs in with Keycloak confirms through it.";
       default:
         return "This sign-in cannot start from here.";
     }
@@ -159,6 +174,7 @@ export class KeycloakSignIn extends Context.Service<
         readonly returnTo?: string | undefined;
         readonly reauth?: AuthReauth | undefined;
         readonly invitationToken?: string | undefined;
+        readonly strongFactor?: boolean | undefined;
       },
     ) => Effect.Effect<
       { readonly authorizationUrl: string; readonly cookie: FlowCookie },
@@ -199,6 +215,23 @@ const withResult = (path: string, failure: KeycloakSignInFailure) => {
   return `${url.pathname}${url.search}${url.hash}`;
 };
 
+/** A `step-up`'s way back: the page, with the proof's id in the fragment, never the query. */
+const withProof = (path: string, proofId: string) => {
+  const url = new URL(path, "https://hub.invalid");
+  url.hash = new URLSearchParams({ [KEYCLOAK_PROOF_FRAGMENT_PARAM]: proofId }).toString();
+  return `${url.pathname}${url.search}${url.hash}`;
+};
+
+/**
+ * Ticket 05's seam: the group mapping (`planGroupSync`) runs here, before who needs a strong
+ * factor is read, and commits on its own, so a refusal for a weak sign-in keeps the memberships it
+ * changed (they reflect what Keycloak says). Until ticket 05 there are no mappings to apply.
+ */
+const syncGroupsBeforeAdmission = (
+  _identity: KeycloakAdmission.IdentityState,
+  _claims: KeycloakClient.IdTokenClaims,
+): Effect.Effect<void, CallbackRefusal> => Effect.void;
+
 /** Internal: a refusal and whether it counts toward the client's sign-in back-off. */
 class CallbackRefusal extends Schema.TaggedError<CallbackRefusal>()("CallbackRefusal", {
   failure: Schema.String,
@@ -224,6 +257,12 @@ export interface FlowBounds {
   readonly flowsPerClient?: number;
 }
 
+/** A sign-in's strength (ticket 06): what its token said, and what that is under the lists. */
+interface Strength {
+  readonly evidence: KeycloakAdmission.LoginEvidence;
+  readonly strong: boolean;
+}
+
 const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBounds) {
   const config = yield* ServerConfig.ServerConfig;
   const settings = yield* SignInSettings.SignInSettings;
@@ -237,6 +276,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const audit = yield* AuditLog.AuditLog;
   const invitations = yield* InvitationService.InvitationService;
+  const stepUpProofs = yield* KeycloakStepUpProofs.KeycloakStepUpProofs;
   const sql = yield* SqlClient.SqlClient;
   const random = yield* SecureRandom.SecureRandom;
   const digester = yield* Digest.Digest;
@@ -393,16 +433,32 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         invitationToken = Redacted.make(input.invitationToken);
       }
 
+      /** The browser's own User session, for `link` and `step-up`: never a token an app holds. */
+      const browserSession = environmentAuth.authenticateBrowserSession(request).pipe(
+        Effect.mapError(() => new KeycloakStartRefusedError({ reason: "not-signed-in" })),
+        Effect.flatMap((session) =>
+          session.userId === undefined
+            ? Effect.fail(new KeycloakStartRefusedError({ reason: "not-signed-in" }))
+            : Effect.succeed({ userId: session.userId, sessionId: session.sessionId }),
+        ),
+      );
+
+      let stepUpFor: PendingFlow["stepUp"];
+      if (input.intent === "step-up") {
+        stepUpFor = yield* browserSession;
+        const identity = yield* identities
+          .findByUser(stepUpFor.userId)
+          .pipe(Effect.mapError((cause) => new UserDirectory.UserDirectoryStorageError({ cause })));
+        if (Option.isNone(identity)) {
+          return yield* new KeycloakStartRefusedError({ reason: "no-identity" });
+        }
+      }
+
       let link: PendingFlow["link"];
       if (input.intent === "link") {
         // The browser's own session, never a token an app holds, and a fresh proof of the
         // User's current credential: a stolen session alone cannot attach another account.
-        const session = yield* environmentAuth
-          .authenticateBrowserSession(request)
-          .pipe(Effect.mapError(() => new KeycloakStartRefusedError({ reason: "not-signed-in" })));
-        if (session.userId === undefined) {
-          return yield* new KeycloakStartRefusedError({ reason: "not-signed-in" });
-        }
+        const session = yield* browserSession;
         yield* userDirectory.confirmLinkStepUp(
           {
             userId: session.userId,
@@ -413,6 +469,15 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         );
         link = { userId: session.userId, sessionId: session.sessionId };
       }
+
+      // Ask the realm for a strong factor (`acr_values`, the Owner's strong `acr` list) when the
+      // page asks for one (a retry, or an action that needs it) or the User's Role needs it. It
+      // only shapes the request: the callback reads strength from the verified token alone.
+      const boundUser = link?.userId ?? stepUpFor?.userId;
+      const askStrong =
+        input.strongFactor === true ||
+        (boundUser !== undefined && (yield* userDirectory.requiresStrongSignIn(boundUser)));
+      const acrValues = askStrong ? enabled.value.strongAcr : [];
 
       const realmNow = yield* realmFor(issuer).pipe(
         Effect.mapError(() => new KeycloakStartRefusedError({ reason: "unavailable" })),
@@ -445,6 +510,8 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           issuer,
           clientId,
           link,
+          stepUp: stepUpFor,
+          startedAtMs: nowMs,
           invitationToken,
           expiresAtMs: nowMs + Duration.toMillis(FLOW_TTL),
         },
@@ -466,7 +533,13 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           state,
           nonce,
           codeChallenge: yield* sha256(verifier),
-          ...(input.intent === "link" ? { prompt: "login" as const } : {}),
+          // `link` and `step-up` ask the person to authenticate again, whatever the SSO session;
+          // `step-up` also asks for an authentication made now.
+          ...(input.intent === "link" || input.intent === "step-up" || askStrong
+            ? { prompt: "login" as const }
+            : {}),
+          ...(input.intent === "step-up" ? { maxAge: 0 as const } : {}),
+          ...(acrValues.length > 0 ? { acrValues } : {}),
         }),
         cookie: {
           name: secure ? `__Host-${FLOW_COOKIE_NAME}` : FLOW_COOKIE_NAME,
@@ -529,6 +602,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     claims: KeycloakClient.IdTokenClaims,
     tokens: KeycloakClient.TokenSet,
     now: string,
+    strength: Strength,
   ) {
     const loginId = yield* random.uuidV4();
     yield* identities
@@ -540,6 +614,9 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         keycloakSid: claims.sid ?? null,
         refreshTokenSealed: yield* sealRefreshToken(loginId, tokens.refreshToken),
         offline: tokens.refreshToken !== undefined && tokens.scopes.includes("offline_access"),
+        strong: strength.strong,
+        acr: strength.evidence.acr,
+        amr: strength.evidence.amr,
         now,
       })
       .pipe(Effect.mapError(storage("insert login")));
@@ -553,6 +630,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     userId: UserId,
     claims: KeycloakClient.IdTokenClaims,
     tokens: KeycloakClient.TokenSet,
+    strength: Strength,
   ) {
     const record = yield* users.getById(userId).pipe(Effect.mapError(storage("read user")));
     if (Option.isNone(record)) return yield* refuse("unknown", "identity without user");
@@ -573,7 +651,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
               now,
             })
             .pipe(Effect.mapError(storage("update labels")));
-          const loginId = yield* newLogin(userId, flow, claims, tokens, now);
+          const loginId = yield* newLogin(userId, flow, claims, tokens, now, strength);
           return yield* issueSession(request, user, loginId);
         }),
       )
@@ -590,6 +668,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     flow: PendingFlow,
     claims: KeycloakClient.IdTokenClaims,
     tokens: KeycloakClient.TokenSet,
+    strength: Strength,
   ) {
     const now = DateTime.formatIso(yield* DateTime.now);
     const user = yield* userDirectory
@@ -607,7 +686,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
       .pipe(Effect.mapError(storage("link new identity")));
     // The same identity's other callback got there first; trying again signs in.
     if (!linked) return yield* refuse("failed", "identity created meanwhile");
-    const loginId = yield* newLogin(user.id, flow, claims, tokens, now);
+    const loginId = yield* newLogin(user.id, flow, claims, tokens, now, strength);
     const session = yield* issueSession(request, user, loginId);
     return { user, session };
   });
@@ -618,11 +697,12 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     flow: PendingFlow,
     claims: KeycloakClient.IdTokenClaims,
     tokens: KeycloakClient.TokenSet,
+    strength: Strength,
   ) =>
     sql
       .withTransaction(
         Effect.gen(function* () {
-          const { user, session } = yield* newUser(request, flow, claims, tokens);
+          const { user, session } = yield* newUser(request, flow, claims, tokens, strength);
           yield* audit
             .record({
               actor: AuditLog.userActor(user.id),
@@ -686,6 +766,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     claims: KeycloakClient.IdTokenClaims,
     tokens: KeycloakClient.TokenSet,
     clientIp: string | undefined,
+    strength: Strength,
   ) {
     const found = yield* identities
       .findBySubject(flow.issuer, claims.sub)
@@ -702,13 +783,21 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           : { kind: "inactive", userId, removed: inactive.removed };
     }
     const invitation = yield* invitationNow(flow, clientIp);
+    yield* syncGroupsBeforeAdmission(identity, claims);
+    // Read after the mapping: an Owner or Admin now, or one this Invitation would make.
+    const requiresStrong =
+      (identity.kind === "active" &&
+        (yield* userDirectory
+          .requiresStrongSignIn(identity.userId)
+          .pipe(Effect.mapError(storage("requires strong"))))) ||
+      (invitation.kind === "organization" && invitation.role === "admin");
     const outcome = KeycloakAdmission.decide({
       mode,
       intent: flow.intent === "invitation" ? "invitation" : "sign-in",
       identity,
       invitation,
-      // Ticket 06 reads `acr`/`amr` against the Owner's lists; without them no login is strong.
-      loginStrong: false,
+      requiresStrong,
+      loginStrong: strength.strong,
     });
     const token = flow.invitationToken === undefined ? "" : Redacted.value(flow.invitationToken);
     switch (outcome.kind) {
@@ -717,13 +806,13 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         return yield* refuse(outcome.reason, "admission");
       case "enter": {
         if (identity.kind !== "active") return yield* refuse("failed", "admission");
-        const session = yield* signIn(request, flow, identity.userId, claims, tokens);
+        const session = yield* signIn(request, flow, identity.userId, claims, tokens, strength);
         return { session, redirectTo: flow.returnTo };
       }
       case "enter-and-join": {
         if (identity.kind !== "active") return yield* refuse("failed", "admission");
         // Signed in whatever the Invitation says: they are this Hub's User already.
-        const session = yield* signIn(request, flow, identity.userId, claims, tokens);
+        const session = yield* signIn(request, flow, identity.userId, claims, tokens, strength);
         // A link found dead just now is the refusal `join` would give, counted once.
         const joined =
           invitation.kind === "invalid"
@@ -738,7 +827,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         };
       }
       case "create-user": {
-        const session = yield* register(request, flow, claims, tokens);
+        const session = yield* register(request, flow, claims, tokens, strength);
         return { session, redirectTo: flow.returnTo };
       }
       case "create-user-and-join": {
@@ -747,13 +836,14 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         const { session, afterCommit } = yield* sql
           .withTransaction(
             Effect.gen(function* () {
-              const created = yield* newUser(request, flow, claims, tokens);
+              const created = yield* newUser(request, flow, claims, tokens, strength);
               const redeemed = yield* invitations
                 .redeemForNewUser({
                   token,
                   clientIp,
                   userId: created.user.id,
-                  adminAllowed: false,
+                  // The Role is the spent row's: an Admin's needs this sign-in to be strong.
+                  adminAllowed: strength.strong,
                 })
                 .pipe(
                   Effect.catchTags({
@@ -785,8 +875,18 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     linkTo: NonNullable<PendingFlow["link"]>,
     claims: KeycloakClient.IdTokenClaims,
     tokens: KeycloakClient.TokenSet,
+    strength: Strength,
   ) {
     const { userId } = linkTo;
+    // The Owner and Admins sign in with a strong factor from now on: a weak one links nothing.
+    if (
+      !strength.strong &&
+      (yield* userDirectory
+        .requiresStrongSignIn(userId)
+        .pipe(Effect.mapError(storage("requires strong"))))
+    ) {
+      return yield* refuse("strong-factor-required", "link without strong factor");
+    }
     const now = DateTime.formatIso(yield* DateTime.now);
     const done = yield* sql
       .withTransaction(
@@ -828,7 +928,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           const closeSockets = yield* sessions
             .revokeAllForUserDeferred(userId)
             .pipe(Effect.mapError(storage("revoke sessions")));
-          const loginId = yield* newLogin(userId, flow, claims, tokens, now);
+          const loginId = yield* newLogin(userId, flow, claims, tokens, now, strength);
           const session = yield* issueSession(
             request,
             { id: userId, displayName: record.value.displayName, isOwner },
@@ -850,6 +950,46 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
     yield* done.afterCommit;
     yield* userDirectory.credentialsChanged(userId);
     return { session: done.session, redirectTo: flow.returnTo };
+  });
+
+  /**
+   * `step-up` (ticket 06): the person authenticated again just now, as the identity the session's
+   * User signs in with. Nothing is signed in or kept but a proof for that session; whether the
+   * sign-in was strong is recorded in it, for `requireStepUp` and `confirmStrongFactor` to weigh.
+   */
+  const stepUp = Effect.fn("KeycloakSignIn.stepUp")(function* (
+    flow: PendingFlow,
+    bound: NonNullable<PendingFlow["stepUp"]>,
+    claims: KeycloakClient.IdTokenClaims,
+    strength: Strength,
+  ) {
+    yield* inactiveRefusal(bound.userId);
+    const identity = yield* identities
+      .findByUser(bound.userId)
+      .pipe(Effect.mapError(storage("find identity")));
+    if (
+      Option.isNone(identity) ||
+      identity.value.issuer !== flow.issuer ||
+      identity.value.subject !== claims.sub
+    ) {
+      return yield* refuse("identity-mismatch", "step-up as another identity", true);
+    }
+    // An authentication from before this confirmation started (the realm reused its SSO session
+    // despite `max_age=0`) proves nothing about who holds the session now.
+    const authTime = KeycloakAdmission.authTimeOf(claims);
+    if (
+      authTime === undefined ||
+      authTime * 1000 < flow.startedAtMs - Duration.toMillis(AUTH_TIME_SKEW)
+    ) {
+      return yield* refuse("failed", "step-up auth_time", true);
+    }
+    const proofId = yield* stepUpProofs.issue({
+      userId: bound.userId,
+      sessionId: bound.sessionId,
+      strong: strength.strong,
+      authTime,
+    });
+    return withProof(flow.returnTo, proofId);
   });
 
   const callback: KeycloakSignIn["Service"]["callback"] = Effect.fn("KeycloakSignIn.callback")(
@@ -895,13 +1035,14 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           return yield* refuse("failed", "iss", true);
         }
         if (params.has("error")) return yield* refuse("cancelled", "error response");
-        if (flow.link !== undefined) {
-          // A `link` comes back to the very session that proved the credential.
+        const bound = flow.link ?? flow.stepUp;
+        if (bound !== undefined) {
+          // A `link` or `step-up` comes back to the very session that started it.
           const session = yield* environmentAuth
             .authenticateBrowserSession(request)
-            .pipe(Effect.mapError(() => refuse("failed", "link without session", true)));
-          if (session.sessionId !== flow.link.sessionId || session.userId !== flow.link.userId) {
-            return yield* refuse("failed", "link from another session", true);
+            .pipe(Effect.mapError(() => refuse("failed", "bound flow without session", true)));
+          if (session.sessionId !== bound.sessionId || session.userId !== bound.userId) {
+            return yield* refuse("failed", "bound flow from another session", true);
           }
         }
         const code = params.get("code");
@@ -930,10 +1071,31 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
             nonce: flow.nonce,
           })
           .pipe(Effect.mapError((error) => refuse("failed", error.detail, true)));
+        // Strong only by the verified token and the Owner's lists as they are now.
+        const evidence = KeycloakAdmission.loginEvidence(claims);
+        const strength: Strength = {
+          evidence,
+          strong: KeycloakAdmission.loginIsStrong(evidence, enabled.value),
+        };
+        if (flow.stepUp !== undefined) {
+          return {
+            redirectTo: yield* stepUp(flow, flow.stepUp, claims, strength),
+            session: undefined,
+            secure,
+          } satisfies CallbackOutcome;
+        }
         const { session, redirectTo } =
           flow.link === undefined
-            ? yield* admit(request, flow, enabled.value.registrationMode, claims, tokens, clientIp)
-            : yield* link(request, flow, flow.link, claims, tokens);
+            ? yield* admit(
+                request,
+                flow,
+                enabled.value.registrationMode,
+                claims,
+                tokens,
+                clientIp,
+                strength,
+              )
+            : yield* link(request, flow, flow.link, claims, tokens, strength);
         return {
           redirectTo,
           session: { token: session.sessionToken, expiresAt: session.response.expiresAt },
@@ -949,7 +1111,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
           check: refusal.detail,
         });
         const landing =
-          flow?.intent === "link"
+          flow?.intent === "link" || flow?.intent === "step-up"
             ? flow.returnTo
             : flow?.intent === "invitation"
               ? INVITE_PATH

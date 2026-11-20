@@ -10,6 +10,7 @@ import {
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
+import { KEYCLOAK_CALLBACK_PATH } from "@t3tools/contracts";
 import * as ByteSize from "effect/ByteSize";
 import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import * as Data from "effect/Data";
@@ -339,10 +340,14 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
   ),
 );
 
-const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
+// Keycloak's callback carries the authorization code and `state` in its query.
+const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([
+  OTLP_TRACES_PROXY_PATH,
+  KEYCLOAK_CALLBACK_PATH,
+]);
 
-// HttpRouter.serve builds routes privately; provide the server-wide TracerDisabledWhen to the served layer.
-const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((request) => {
+/** Requests whose address holds a credential, so no trace keeps it. */
+export const isUntracedRequest = (request: { readonly url: string }) => {
   const queryIndex = request.url.indexOf("?");
   const path = queryIndex === -1 ? request.url : request.url.slice(0, queryIndex);
   // Signed URLs carry bearer tokens in the path, so they never reach a trace.
@@ -355,7 +360,10 @@ const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((
     // the address, which this span would keep.
     path.startsWith(`${AI_GATEWAY_ROUTE_PREFIX}/`)
   );
-});
+};
+
+// HttpRouter.serve builds routes privately; provide the server-wide TracerDisabledWhen to the served layer.
+const layerUntracedRequests = Layer.succeed(HttpMiddleware.TracerDisabledWhen)(isUntracedRequest);
 
 export const withUntracedRequests = Layer.provide(layerUntracedRequests);
 

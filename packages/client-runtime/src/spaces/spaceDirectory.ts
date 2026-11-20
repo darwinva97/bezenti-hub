@@ -124,6 +124,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "user.enable": "Turned a User back on",
   "user.remove": "Removed a User",
   "signIn.settings.update": "Changed the sign-in settings",
+  "user.identity.link": "Connected a Keycloak account",
   "organization.create": "Created an Organization",
   "organization.archive": "Archived an Organization",
   "organization.restore": "Restored an Organization",

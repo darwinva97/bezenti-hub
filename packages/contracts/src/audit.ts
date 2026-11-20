@@ -24,6 +24,8 @@ export const AuditAction = Schema.Literals([
   "user.remove",
   // Keycloak sign-in spec, ticket 01: the Owner's sign-in settings.
   "signIn.settings.update",
+  // Ticket 02: a User linked a Keycloak identity (by issuer and subject, never by email).
+  "user.identity.link",
   "organization.create",
   "organization.archive",
   "organization.restore",
@@ -151,6 +153,11 @@ export const AUDIT_DETAIL_KEYS = {
     "issuer",
     "secretReplaced",
   ],
+  /**
+   * The realm the identity comes from and whether the User's own passkeys, password and TOTP went
+   * with the link (the Owner keeps theirs). Never the subject, the email or a token.
+   */
+  "user.identity.link": ["issuer", "credentialsRemoved"],
   "organization.create": [],
   "organization.archive": [],
   "organization.restore": [],

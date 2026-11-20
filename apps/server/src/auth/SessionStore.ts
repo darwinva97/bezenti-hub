@@ -391,6 +391,8 @@ export class SessionStore extends Context.Service<
       readonly runtimeModeCeiling?: RuntimeMode;
       readonly replaceActiveForSubjectAndMethod?: boolean;
       readonly replaceSessionId?: AuthSessionId;
+      /** The Keycloak sign-in (`identity_logins`) a browser session comes from. */
+      readonly identityLoginId?: string;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
     readonly verify: (token: string) => Effect.Effect<VerifiedSession, SessionCredentialError>;
     readonly issueWebSocketToken: (
@@ -757,6 +759,7 @@ const make = Effect.gen(function* () {
         expiresAt,
         // A person signs in again; tokens held by agents and scripts keep a fixed lifetime.
         sliding: input?.ttl === undefined && claims.method === "browser-session-cookie",
+        ...(input?.identityLoginId === undefined ? {} : { identityLoginId: input.identityLoginId }),
       } satisfies AuthSessions.CreateAuthSessionInput;
       const replacedSessionIds = yield* (
         input?.replaceSessionId !== undefined || input?.replaceActiveForSubjectAndMethod

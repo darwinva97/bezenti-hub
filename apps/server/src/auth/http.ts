@@ -26,6 +26,7 @@ import { parseOAuthScope } from "@t3tools/shared/oauthScope";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
@@ -37,6 +38,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as CurrentPrincipal from "./CurrentPrincipal.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as SessionStore from "./SessionStore.ts";
+import * as SignInSettings from "./SignInSettings.ts";
 import * as UserDirectory from "./UserDirectory.ts";
 import { deriveAuthClientMetadata, sessionCookieNameFor } from "./utils.ts";
 import { checkRequestDpopProof } from "./dpop.ts";
@@ -408,6 +410,8 @@ export const layer = HttpApiBuilder.group(
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const sessions = yield* SessionStore.SessionStore;
     const userDirectory = yield* UserDirectory.UserDirectory;
+    // Absent only where a test serves these routes without the sign-in settings.
+    const signInSettings = yield* Effect.serviceOption(SignInSettings.SignInSettings);
 
     return handlers
       .handle(
@@ -591,7 +595,17 @@ export const layer = HttpApiBuilder.group(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const request = yield* HttpServerRequest.HttpServerRequest;
-            const result = yield* serverAuth.getSessionState(request);
+            const state = yield* serverAuth.getSessionState(request);
+            const result = Option.isNone(signInSettings)
+              ? state
+              : {
+                  ...state,
+                  signInOptions: {
+                    keycloak: yield* signInSettings.value.keycloakOffered.pipe(
+                      Effect.catch((error) => failEnvironmentInternal("internal_error", error)),
+                    ),
+                  },
+                };
             const credential = EnvironmentAuth.selectRequestCredential(request, sessions);
             // Re-sent on every check so a sliding session keeps its cookie as long as its row.
             if (

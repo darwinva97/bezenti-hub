@@ -109,6 +109,12 @@ export class SignInSettings extends Context.Service<
       Option.Option<KeycloakConfig>,
       SignInSettingsStorageError
     >;
+    /**
+     * Whether the sign-in page offers «Sign in with Keycloak» (ticket 02): on, with an issuer and
+     * a client id. Read from the row alone, for every `/api/auth/session`; a missing secret shows
+     * when the flow starts.
+     */
+    readonly keycloakOffered: Effect.Effect<boolean, SignInSettingsStorageError>;
   }
 >()("t3/auth/SignInSettings") {}
 
@@ -434,7 +440,12 @@ const make = Effect.gen(function* () {
     }));
   }).pipe(Effect.withSpan("SignInSettings.keycloakConfig"));
 
-  return SignInSettings.of({ read, update, check, keycloakConfig });
+  const keycloakOffered: SignInSettings["Service"]["keycloakOffered"] = readRow.pipe(
+    Effect.map((row) => row.keycloakEnabled === 1 && row.issuer !== null && row.clientId !== null),
+    Effect.withSpan("SignInSettings.keycloakOffered"),
+  );
+
+  return SignInSettings.of({ read, update, check, keycloakConfig, keycloakOffered });
 });
 
 export const layer = Layer.effect(SignInSettings, make);

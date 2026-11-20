@@ -731,12 +731,14 @@ export class EnvironmentAuth extends Context.Service<
     ) => Effect.Effect<string, ServerAuthInvalidOriginError>;
     /**
      * Signs this browser in as a User whose identity the caller already proved (an Invitation
-     * that just created them); runs inside the caller's transaction.
+     * that just created them, a Keycloak sign-in with `identityLoginId`); runs inside the
+     * caller's transaction.
      */
     readonly startUserBrowserSession: (
       request: HttpServerRequest.HttpServerRequest,
       user: AuthUser,
       requestMetadata: AuthRequestMetadata,
+      options?: { readonly identityLoginId?: string },
     ) => Effect.Effect<
       UserBrowserSession,
       ServerAuthInvalidCredentialError | ServerAuthInsecureTransportError | ServerAuthInternalError
@@ -1915,6 +1917,7 @@ export const make = Effect.gen(function* () {
     request: HttpServerRequest.HttpServerRequest,
     user: AuthUser,
     requestMetadata: AuthRequestMetadata,
+    options?: { readonly identityLoginId?: string },
   ) {
     // A page on a preview's own origin signs nobody in, and replaces no session (login CSRF).
     if (crossesFromPreviewOrigin(config.previewOrigin, request.headers)) {
@@ -1951,6 +1954,9 @@ export const make = Effect.gen(function* () {
         ...(previousSession?.method === "browser-session-cookie"
           ? { replaceSessionId: previousSession.sessionId }
           : {}),
+        ...(options?.identityLoginId === undefined
+          ? {}
+          : { identityLoginId: options.identityLoginId }),
         client: requestMetadata,
       })
       .pipe(Effect.mapError((cause) => new ServerAuthAuthenticatedSessionIssueError({ cause })));

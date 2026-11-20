@@ -11,6 +11,8 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import {
   KeycloakCheckResult,
+  KeycloakStartRequest,
+  KeycloakStartResult,
   SignInSettings,
   UpdateSignInSettingsRequest,
 } from "./signInSettings.ts";
@@ -207,6 +209,8 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "invalid_code_challenge",
   // An audit log filter that is not a date, a cursor or a page size.
   "invalid_audit_query",
+  // A Keycloak flow's `returnTo` that is not a path on this Hub.
+  "invalid_return_to",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -250,6 +254,8 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "sign_in_settings_failed",
   /** The settings were saved, but the client secret could not be stored: enter it again. */
   "sign_in_secret_not_stored",
+  /** Keycloak is on but its realm could not be read (discovery or keys). */
+  "keycloak_unavailable",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -846,6 +852,18 @@ class EnvironmentAppSignInHttpApi extends HttpApiGroup.make("appSignIn")
       error: EnvironmentTokenExchangeErrors,
     }),
   ) {}
+
+// Keycloak sign-in spec, ticket 02: a flow to the realm starts here and comes back to the raw
+// route `/oauth/keycloak/callback`. `sign-in` needs no session; `link` needs the browser's own
+// session and a fresh proof of the User's current credential. Forbidden: Keycloak is off, or the
+// account may not link (`message` says why).
+class EnvironmentKeycloakSignInHttpApi extends HttpApiGroup.make("keycloakSignIn").add(
+  HttpApiEndpoint.post("start", "/api/auth/keycloak/start", {
+    payload: KeycloakStartRequest,
+    success: KeycloakStartResult,
+    error: [...EnvironmentUserSignInErrors, ...EnvironmentAccountErrors],
+  }),
+) {}
 
 class EnvironmentMcpOAuthHttpApi extends HttpApiGroup.make("mcpOAuth")
   .add(
@@ -1630,6 +1648,7 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentAppSignInHttpApi)
+  .add(EnvironmentKeycloakSignInHttpApi)
   .add(EnvironmentMcpOAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)

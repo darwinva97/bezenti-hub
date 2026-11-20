@@ -35,6 +35,13 @@ const GRANT_MAKES_ACTIVE = own(
 const SIGN_IN_SETTINGS = own(
   "AccessPolicy `signInSettings.manage` on the Installation (the Owner only; everyone else the same 403, before any scope is looked at), then access:read to read and access:write to change or «Check»; the client secret is write-only (never in an answer, log, span or audit entry); «Check» fetches only the saved issuer's discovery and key set (5 s, 128 KiB, no redirects, endpoints on the issuer's host); no WS or MCP door",
 );
+/** Keycloak sign-in spec, ticket 02: a flow to the realm and back. */
+const KEYCLOAK_START = own(
+  "public for `sign-in`; `link` needs the browser's own session (never an app's token) and UserDirectory.confirmLinkStepUp (a fresh passkey or password proof; no Admin but the Owner until ticket 06; refused once linked). Only an `Origin` that is the request's own (forwarded only by a trusted proxy) or a trusted one; a few starts a minute per client; the oldest of 1 000 flows goes first; `returnTo` only a path on this Hub",
+);
+const KEYCLOAK_CALLBACK = own(
+  "the flow its `state` names (single-use, 10 minutes) from the browser that started it (`__Host-` cookie), `iss` = the issuer (RFC 9207), the code exchanged with its PKCE verifier and `client_secret_basic`, the ID token verified (keys, `iss`, `aud`/`azp`, `exp`/`iat`, `nonce`); failures count toward the sign-in back-off; `sign-in`: only a known identity of an active User; `link`: the very session that started it, never another User's identity",
+);
 const WEBHOOK = own("the task's secret token in the path; runs as the task's creator");
 const THREAD_READ = own(
   "SpaceVisibility.visibleThreadIds like getThreadProjection: hidden answers thread_not_found",
@@ -100,6 +107,7 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "environments.sshInstallStart": SSH_INSTALL,
   "environments.sshInstallStatus": SSH_INSTALL,
   "environments.startJoin": ENVIRONMENTS,
+  "keycloakSignIn.start": KEYCLOAK_START,
   "installationUsers.list": OWNER,
   "installationUsers.setStatus": OWNER,
   "signInSettings.check": SIGN_IN_SETTINGS,
@@ -214,6 +222,7 @@ export const RAW_ROUTE_RULES: Readonly<Record<string, DoorRule>> = {
   "auth/clientAdmission.ts: middleware": own(
     "every request: public clients wait for an Owner; answers nothing else itself",
   ),
+  "auth/keycloakSignInHttp.ts: GET KEYCLOAK_CALLBACK_PATH": KEYCLOAK_CALLBACK,
   "http.ts: middleware": own("compression; answers nothing itself"),
   "server.ts: middleware": own("waits for startup; answers nothing itself"),
   'ws.ts: GET "/ws"': own("a session; every RPC by RPC_SPACE_ACCESS"),
@@ -337,6 +346,9 @@ export const AMBIENT_COOKIE_RULES: Readonly<Record<string, AmbientCookieRule>> =
     "EnvironmentAuth reads a session cookie past isBrowserOriginAllowed; auth/http.ts sets or clears one only off a preview origin",
   ),
   "auth/clientAdmission.ts: middleware": none("reads no credential"),
+  "auth/keycloakSignInHttp.ts: GET KEYCLOAK_CALLBACK_PATH": refused(
+    "the flow cookie through readHubCookie (`__Host-`, none from a preview page); the session cookie through EnvironmentAuth, and no session issued for a request from a preview origin",
+  ),
   "device/DeviceHubProxy.ts: * `${DeviceService.DEVICE_HUB_ROUTE_PREFIX}/*`": BY_ENVIRONMENT_AUTH,
   'environments/JoinedHub.ts: GET "/health"': none("public, on a joined machine"),
   "environments/connectRoute.ts: GET ENVIRONMENT_CONNECT_PATH": ENVIRONMENT_CREDENTIAL,

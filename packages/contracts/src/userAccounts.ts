@@ -137,6 +137,17 @@ export const AuthPassword = Schema.String.check(Schema.isMinLength(8), Schema.is
 
 export const AuthTotpCode = Schema.String.check(Schema.isPattern(/^\d{6}$/));
 
+/**
+ * A linked Keycloak account, as the account page shows it: its user name and email (labels, as
+ * Keycloak last sent them) and the realm's own account page, where the password and MFA change.
+ */
+export const AuthLinkedIdentity = Schema.Struct({
+  username: Schema.NullOr(Schema.String),
+  email: Schema.NullOr(Schema.String),
+  accountUrl: Schema.String,
+});
+export type AuthLinkedIdentity = typeof AuthLinkedIdentity.Type;
+
 export const AuthAccount = Schema.Struct({
   user: AuthUser,
   loginName: Schema.NullOr(Schema.String),
@@ -145,6 +156,14 @@ export const AuthAccount = Schema.Struct({
   totpEnrolled: Schema.Boolean,
   /** This account may sign in with a password only together with a TOTP code. */
   passwordRequiresTotp: Schema.Boolean,
+  /** The Keycloak account this User signs in with (Keycloak sign-in spec, ticket 02). */
+  identity: Schema.optionalKey(AuthLinkedIdentity),
+  /**
+   * Without an identity, whether «Connect Keycloak» is open to this account: `allowed`; `admins-later`
+   * for an Admin other than the Owner (their strong factor from Keycloak comes with ticket 06);
+   * `needs-reset` for an account with no passkey or password to confirm with.
+   */
+  keycloakLink: Schema.optionalKey(Schema.Literals(["allowed", "admins-later", "needs-reset"])),
 });
 export type AuthAccount = typeof AuthAccount.Type;
 

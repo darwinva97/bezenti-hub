@@ -58,6 +58,8 @@ export const CreateAuthSessionInput = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
   /** Each use moves expiresAt to the session lifetime from now. */
   sliding: Schema.optionalKey(Schema.Boolean),
+  /** The Keycloak sign-in this session comes from (ticket 02); it ends with it (ticket 07). */
+  identityLoginId: Schema.optionalKey(Schema.String),
 });
 export type CreateAuthSessionInput = typeof CreateAuthSessionInput.Type;
 
@@ -252,7 +254,8 @@ export const make = Effect.gen(function* () {
           issued_at,
           expires_at,
           sliding,
-          revoked_at
+          revoked_at,
+          identity_login_id
         )
         VALUES (
           ${input.sessionId},
@@ -269,7 +272,8 @@ export const make = Effect.gen(function* () {
           ${input.issuedAt},
           ${input.expiresAt},
           ${input.sliding === true ? 1 : 0},
-          NULL
+          NULL,
+          ${input.identityLoginId ?? null}
         )
         ${ignoreExisting ? sql`ON CONFLICT(session_id) DO NOTHING` : sql``}
       `,

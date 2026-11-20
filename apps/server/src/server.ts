@@ -193,6 +193,8 @@ import * as InstallationUsersHttp from "./spaces/installationUsersHttp.ts";
 import * as AuditLog from "./audit/AuditLog.ts";
 import * as AuditHttp from "./audit/http.ts";
 import * as KeycloakClient from "./auth/KeycloakClient.ts";
+import * as KeycloakSignIn from "./auth/KeycloakSignIn.ts";
+import * as KeycloakSignInHttp from "./auth/keycloakSignInHttp.ts";
 import * as SignInSettings from "./auth/SignInSettings.ts";
 import * as SignInSettingsHttp from "./auth/signInSettingsHttp.ts";
 import * as EnvironmentConnectRoute from "./environments/connectRoute.ts";
@@ -561,8 +563,12 @@ const layerAuth = Layer.mergeAll(
   // Secret providers' scopes and «Test connection» (Vaults ticket 03), over the same reads.
   SecretProviderScopes.layer.pipe(Layer.provide(layerProviderReads), Layer.provide(AuditLog.layer)),
   // The Owner's sign-in settings and the Keycloak realm they name (Keycloak sign-in, ticket 01):
-  // its own fetch, which never follows a redirect.
-  SignInSettings.layer.pipe(Layer.provide(KeycloakClient.layerLive), Layer.provide(AuditLog.layer)),
+  // its own fetch, which never follows a redirect. Sign-in and linking through it (ticket 02).
+  KeycloakSignIn.layer.pipe(
+    Layer.provideMerge(SignInSettings.layer.pipe(Layer.provide(AuditLog.layer))),
+    Layer.provideMerge(KeycloakClient.layerLive),
+    Layer.provide(AuditLog.layer),
+  ),
   // The Sandboxes' base image: built on this Hub, one build at a time.
   SandboxImage.layer,
   // CLIProxyAPI, run by the Hub on loopback (`T3CODE_AI_GATEWAY`), and the AI accounts it gets
@@ -858,6 +864,7 @@ const layerMakeRoutes = Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
       Layer.provide(AuthHttp.layer),
       Layer.provide(AppSignInHttp.layer),
+      Layer.provide(KeycloakSignInHttp.layerApi),
       Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
@@ -876,6 +883,8 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
     ServerHttp.layerOtlpTracesProxyRoute,
+    // Where Keycloak sends the browser back (Keycloak sign-in, ticket 02).
+    KeycloakSignInHttp.layerCallbackRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
     GuestHttp.layer,

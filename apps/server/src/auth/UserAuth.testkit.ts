@@ -65,6 +65,8 @@ import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as OwnerPresence from "./OwnerPresence.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
+import * as KeycloakSignIn from "./KeycloakSignIn.ts";
+import * as KeycloakSignInHttp from "./keycloakSignInHttp.ts";
 import * as KeycloakTestkit from "./Keycloak.testkit.ts";
 import * as SignInSettings from "./SignInSettings.ts";
 import * as SignInSettingsHttp from "./signInSettingsHttp.ts";
@@ -106,6 +108,7 @@ import * as VaultGroups from "../vaults/VaultGroups.ts";
 class AuthTestApi extends HttpApi.make("environment")
   .add(EnvironmentHttpApi.groups.auth)
   .add(EnvironmentHttpApi.groups.appSignIn)
+  .add(EnvironmentHttpApi.groups.keycloakSignIn)
   .add(EnvironmentHttpApi.groups.spaces)
   .add(EnvironmentHttpApi.groups.invitations)
   .add(EnvironmentHttpApi.groups.installationUsers)
@@ -220,11 +223,13 @@ export interface TestSignInOptions {
   readonly secretStore?: (
     store: ServerSecretStore.ServerSecretStore["Service"],
   ) => ServerSecretStore.ServerSecretStore["Service"];
+  /** Keycloak flows' bounds (ticket 02): how many wait, and starts a client may make a minute. */
+  readonly flows?: Parameters<typeof KeycloakSignIn.layerWith>[0];
 }
 
 const layerSignInSettings = (options: TestSignInOptions = {}) =>
   SignInSettings.layer.pipe(
-    Layer.provide(
+    Layer.provideMerge(
       KeycloakClient.layer.pipe(
         Layer.provide(options.keycloakHttp ?? KeycloakTestkit.layerNoNetwork),
       ),
@@ -257,6 +262,8 @@ const makeLayerServices = (
         layerPullRequests,
         // Outside MCP clients: OAuth approval and the bearer check /mcp runs.
         Layer.mergeAll(
+          // Sign-in and linking through Keycloak (ticket 02), over the realm the test gives.
+          KeycloakSignIn.layerWith(signIn?.flows),
           InvitationService.layer,
           MembershipService.layer,
           InstallationUserService.layer,
@@ -439,8 +446,8 @@ export const serveAuthHttpWith = Effect.fn(function* (
     ),
   );
   const services = config.extend === undefined ? base : yield* config.extend(base);
-  const routes = HttpApiBuilder.layer(AuthTestApi)
-    .pipe(Layer.provide(SignInSettingsHttp.layer))
+  const apiRoutes = HttpApiBuilder.layer(AuthTestApi)
+    .pipe(Layer.provide(SignInSettingsHttp.layer), Layer.provide(KeycloakSignInHttp.layerApi))
     .pipe(
       Layer.provide(AuthHttp.layer),
       Layer.provide(AppSignInHttp.layer),
@@ -463,6 +470,11 @@ export const serveAuthHttpWith = Effect.fn(function* (
       Layer.provide(Etag.layerWeak),
       Layer.provide(NodeServices.layer),
     );
+  // Where Keycloak sends the browser back: a raw route beside the API, as on the server.
+  const routes = Layer.mergeAll(
+    apiRoutes,
+    KeycloakSignInHttp.layerCallbackRoute.pipe(Layer.provide(Layer.succeedContext(services))),
+  );
   const { handler, dispose } = HttpRouter.toWebHandler(routes, { disableLogger: true });
   yield* Effect.addFinalizer(() => Effect.promise(dispose));
   let url = "";
@@ -541,6 +553,10 @@ export const serveAuthHttpWith = Effect.fn(function* (
         setCookie,
         /** Every cookie the answer sets or expires. */
         setCookies: response.headers.getSetCookie(),
+        /** Where a redirect sends the browser. */
+        location: response.headers.get("location") ?? undefined,
+        /** The whole answer as text, to look for what must never be in it. */
+        text,
       };
     });
   return {

@@ -352,6 +352,7 @@ export const HTTP_DOOR_RULES: Record<string, DoorRule> = {
   "auth.redeemResetLinkWithPassword": none("sessions and sign-in"),
   "appSignIn.approve": none("sign-in"),
   "appSignIn.token": none("sign-in"),
+  "keycloakSignIn.start": none("sign-in: the realm's sign-in address for a new flow"),
   "mcpOAuth.protectedResource": none("MCP sign-in"),
   "mcpOAuth.mcpProtectedResource": none("MCP sign-in"),
   "mcpOAuth.authorizationServer": none("MCP sign-in"),

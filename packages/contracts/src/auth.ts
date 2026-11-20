@@ -462,6 +462,8 @@ export const AuthSessionState = Schema.Struct({
   ownerExists: Schema.optionalKey(Schema.Boolean),
   /** Whether this session's User is the Owner, who alone sets the Installation up. */
   isOwner: Schema.optionalKey(Schema.Boolean),
+  /** What the sign-in page offers besides local sign-in: «Sign in with Keycloak» while it is on. */
+  signInOptions: Schema.optionalKey(Schema.Struct({ keycloak: Schema.Boolean })),
 });
 export type AuthSessionState = typeof AuthSessionState.Type;
 

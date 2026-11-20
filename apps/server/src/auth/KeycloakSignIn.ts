@@ -1,0 +1,700 @@
+/**
+ * Sign-in and linking through Keycloak (Keycloak sign-in spec, ticket 02): authorization code with
+ * PKCE S256, `state` bound to the browser by a `__Host-` cookie, `nonce` and the RFC 9207 `iss`.
+ * Flows live 10 minutes in memory and are spent the first time the browser comes back.
+ */
+import {
+  type AuthReauth,
+  type AuthUser,
+  KEYCLOAK_CALLBACK_PATH,
+  KEYCLOAK_RESULT_PARAM,
+  type KeycloakFlowIntent,
+  type KeycloakSignInFailure,
+  type UserId,
+  type AuthSessionId,
+} from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Aead from "effect/crypto/Aead";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as SqlClient from "effect/sql/SqlClient";
+import type { HttpServerRequest } from "effect/http";
+import type * as Jwks from "effect/jose/Jwks";
+
+import * as AuditLog from "../audit/AuditLog.ts";
+import * as ServerConfig from "../config.ts";
+import * as UserIdentities from "../persistence/UserIdentities.ts";
+import * as Users from "../persistence/Users.ts";
+import { crossesFromPreviewOrigin, readHubCookie } from "../preview/PreviewOrigin.ts";
+import * as AccountCredentials from "./AccountCredentials.ts";
+import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import * as KeycloakClient from "./KeycloakClient.ts";
+import * as PairingGrantStore from "./PairingGrantStore.ts";
+import { makeGrantStore } from "./pkceGrants.ts";
+import * as ServerSecretStore from "./ServerSecretStore.ts";
+import * as SessionStore from "./SessionStore.ts";
+import * as SignInSettings from "./SignInSettings.ts";
+import * as UserDirectory from "./UserDirectory.ts";
+import { base64UrlEncode, deriveAuthClientMetadata, timingSafeEqualBase64Url } from "./utils.ts";
+
+/** Long enough to sign in at Keycloak (and register there), short enough that a stray one dies. */
+const FLOW_TTL = Duration.minutes(10);
+/** Flows waiting for their callback; past this the oldest go, so `start` never locks anyone out. */
+const MAX_PENDING_FLOWS = 1_000;
+/** Starts one client may make per minute; the rest are refused until the minute passes. */
+const STARTS_PER_MINUTE = 20;
+const MAX_TRACKED_CLIENTS = 10_000;
+/** How long a realm's discovery document and key set are kept before being read again. */
+const REALM_TTL = Duration.minutes(10);
+
+/** The flow cookie: `__Host-` over HTTPS (Path=/, no Domain), the bare name on loopback HTTP. */
+export const FLOW_COOKIE_NAME = "t3_keycloak_flow";
+/** The key in the Hub's encrypted store that seals refresh tokens. */
+export const REFRESH_TOKEN_KEY_NAME = "identity-login-key";
+/** Where a `link` lands by default: the User's account settings. */
+export const ACCOUNT_PATH = "/settings/user/account";
+
+/** A refresh token's associated data: a row copied to another login does not open. */
+export const refreshTokenContext = (loginId: string) => `identity-login:${loginId}`;
+
+interface PendingFlow {
+  readonly intent: KeycloakFlowIntent;
+  readonly returnTo: string;
+  /** SHA-256 of the cookie value: the flow comes back only to the browser that started it. */
+  readonly browserBinding: string;
+  readonly nonce: string;
+  readonly codeVerifier: Redacted.Redacted<string>;
+  /** Exactly what the authorization request named, sent again at the exchange. */
+  readonly redirectUri: string;
+  readonly issuer: string;
+  readonly clientId: string;
+  /** For `link`: the User and the browser session that proved their credential at `start`. */
+  readonly link: { readonly userId: UserId; readonly sessionId: AuthSessionId } | undefined;
+  readonly expiresAtMs: number;
+}
+
+/** Why `start` refused, before any flow exists. */
+export class KeycloakStartRefusedError extends Schema.TaggedError<KeycloakStartRefusedError>()(
+  "KeycloakStartRefusedError",
+  {
+    reason: Schema.Literals([
+      // Keycloak is off, or has no client secret.
+      "off",
+      "invalid-return-to",
+      // No `Origin`, or one the Hub does not take as its own; or a preview's page.
+      "invalid-origin",
+      // `link` without this browser's own session.
+      "not-signed-in",
+      // Too many starts from this client in a minute.
+      "rate-limited",
+      // The realm's discovery or keys could not be read.
+      "unavailable",
+    ]),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "off":
+        return "Sign-in with Keycloak is off on this Hub.";
+      case "rate-limited":
+        return "Too many attempts. Wait a minute and try again.";
+      case "unavailable":
+        return "Keycloak is not answering. Try again in a moment.";
+      default:
+        return "This sign-in cannot start from here.";
+    }
+  }
+}
+
+export interface FlowCookie {
+  readonly name: string;
+  readonly value: string;
+  readonly secure: boolean;
+}
+
+/** Where the callback sends the browser, and the session it signed in, if any. */
+export interface CallbackOutcome {
+  readonly redirectTo: string;
+  readonly session: { readonly token: string; readonly expiresAt: DateTime.DateTime } | undefined;
+  /** Whether the flow cookie was set `Secure` (`__Host-`): the name to expire. */
+  readonly secure: boolean;
+}
+
+export class KeycloakSignIn extends Context.Service<
+  KeycloakSignIn,
+  {
+    readonly start: (
+      request: HttpServerRequest.HttpServerRequest,
+      input: {
+        readonly intent: KeycloakFlowIntent;
+        readonly returnTo?: string | undefined;
+        readonly reauth?: AuthReauth | undefined;
+      },
+    ) => Effect.Effect<
+      { readonly authorizationUrl: string; readonly cookie: FlowCookie },
+      | KeycloakStartRefusedError
+      | UserDirectory.AccountChangeRefusedError
+      | UserDirectory.SignInThrottledError
+      | UserDirectory.UserDirectoryStorageError
+      | SignInSettings.SignInSettingsStorageError
+    >;
+    /** Never fails: every refusal is a redirect with `?keycloak=<code>`. */
+    readonly callback: (
+      request: HttpServerRequest.HttpServerRequest,
+    ) => Effect.Effect<CallbackOutcome>;
+  }
+>()("t3/auth/KeycloakSignIn") {}
+
+/**
+ * `returnTo` as a path on this Hub, or undefined: one leading `/`, never `//` or a `\` (which
+ * browsers read as another host), no control characters, and still on this origin once resolved.
+ */
+export const safeReturnTo = (value: string): string | undefined => {
+  if (value.length === 0 || value.length > 2048) return undefined;
+  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return undefined;
+  if ([...value].some((char) => char < " " || char === "\u007f")) return undefined;
+  const base = "https://hub.invalid";
+  const url = URL.parse(value, base);
+  if (url === null || url.origin !== base) return undefined;
+  return `${url.pathname}${url.search}${url.hash}`;
+};
+
+const withResult = (path: string, failure: KeycloakSignInFailure) => {
+  const url = new URL(path, "https://hub.invalid");
+  url.searchParams.set(KEYCLOAK_RESULT_PARAM, failure);
+  return `${url.pathname}${url.search}${url.hash}`;
+};
+
+/** Internal: a refusal and whether it counts toward the client's sign-in back-off. */
+class CallbackRefusal extends Schema.TaggedError<CallbackRefusal>()("CallbackRefusal", {
+  failure: Schema.String,
+  counted: Schema.Boolean,
+  /** For a debug log: which check. Never a value from the request or the token. */
+  detail: Schema.String,
+}) {}
+
+const refuse = (failure: KeycloakSignInFailure, detail: string, counted = false) =>
+  new CallbackRefusal({ failure, counted, detail });
+
+interface Realm {
+  readonly issuer: string;
+  readonly discovery: KeycloakClient.KeycloakDiscovery;
+  readonly keys: Jwks.Jwks["Service"];
+  readonly scope: Scope.Closeable;
+  readonly expiresAtMs: number;
+}
+
+export interface FlowBounds {
+  readonly maxPendingFlows?: number;
+  readonly startsPerMinute?: number;
+}
+
+const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBounds) {
+  const config = yield* ServerConfig.ServerConfig;
+  const settings = yield* SignInSettings.SignInSettings;
+  const keycloak = yield* KeycloakClient.KeycloakClient;
+  const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+  const userDirectory = yield* UserDirectory.UserDirectory;
+  const users = yield* Users.UserRepository;
+  const identities = yield* UserIdentities.UserIdentities;
+  const sessions = yield* SessionStore.SessionStore;
+  const pairingLinks = yield* PairingGrantStore.PairingGrantStore;
+  const secretStore = yield* ServerSecretStore.ServerSecretStore;
+  const audit = yield* AuditLog.AuditLog;
+  const sql = yield* SqlClient.SqlClient;
+  const random = yield* SecureRandom.SecureRandom;
+  const digester = yield* Digest.Digest;
+  const cryptoContext = yield* Effect.context<Aead.Aead | SecureRandom.SecureRandom>();
+
+  const flows = yield* makeGrantStore<PendingFlow>(options.maxPendingFlows ?? MAX_PENDING_FLOWS);
+  const startsPerMinute = options.startsPerMinute ?? STARTS_PER_MINUTE;
+  const startWindows = new Map<string, { windowStartMs: number; count: number }>();
+
+  const sha256 = (value: string) =>
+    digester.digest(Digest.sha256, new TextEncoder().encode(value)).pipe(
+      Effect.orDie,
+      Effect.map((digest) => base64UrlEncode(digest)),
+    );
+  const randomToken = random.randomBytes(32).pipe(Effect.map((bytes) => base64UrlEncode(bytes)));
+
+  // The Hub's own page origins besides the request's: the public URL and the dev servers'.
+  const trustedOrigins = new Set<string>([
+    ...(config.publicUrl === undefined ? [] : [config.publicUrl.origin]),
+    ...(config.devUrl === undefined ? [] : [config.devUrl.origin]),
+    ...config.devAllowedOrigins,
+  ]);
+
+  /**
+   * Where the realm sends the browser back: `T3CODE_PUBLIC_URL` when set, else the page's own
+   * origin, taken only when it is the request's own (scheme and host as the client-connection
+   * middleware resolved them: forwarded only by a trusted proxy) or one the Hub trusts.
+   */
+  const redirectUriFor = (request: HttpServerRequest.HttpServerRequest) => {
+    const origin = request.headers.origin;
+    if (origin === undefined || crossesFromPreviewOrigin(config.previewOrigin, request.headers)) {
+      return undefined;
+    }
+    const host = request.headers.host;
+    const own = host === undefined ? null : URL.parse(`${request.protocol}://${host}`);
+    const allowed =
+      trustedOrigins.has(origin) ||
+      (config.publicUrl === undefined && own !== null && own.origin === origin);
+    if (!allowed) return undefined;
+    const base = config.publicUrl?.origin ?? origin;
+    return `${base}${KEYCLOAK_CALLBACK_PATH}`;
+  };
+
+  /** Counts this start against its client; false past the minute's allowance. */
+  const allowStart = (clientIp: string | undefined, nowMs: number) => {
+    const key = clientIp ?? "unknown";
+    const window = startWindows.get(key);
+    if (window === undefined || nowMs - window.windowStartMs >= 60_000) {
+      startWindows.delete(key);
+      startWindows.set(key, { windowStartMs: nowMs, count: 1 });
+      for (const oldest of startWindows.keys()) {
+        if (startWindows.size <= MAX_TRACKED_CLIENTS) break;
+        startWindows.delete(oldest);
+      }
+      return true;
+    }
+    window.count += 1;
+    return window.count <= startsPerMinute;
+  };
+
+  // One realm at a time: discovery and its key set, read again after REALM_TTL or for another
+  // issuer. jose's remote key set keeps its own cache and refetches for an unknown `kid`.
+  let realm: Realm | undefined;
+  const realmLock = yield* Semaphore.make(1);
+  const dropRealm = Effect.suspend(() => {
+    const current = realm;
+    realm = undefined;
+    return current === undefined ? Effect.void : Scope.close(current.scope, Exit.void);
+  });
+  yield* Effect.addFinalizer(() => dropRealm);
+  const realmFor = (issuer: string) =>
+    realmLock.withPermits(1)(
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        if (realm !== undefined && realm.issuer === issuer && realm.expiresAtMs > now) {
+          return realm;
+        }
+        yield* dropRealm;
+        const discovery = yield* keycloak.discover(issuer);
+        const scope = yield* Scope.make();
+        const keys = yield* keycloak.keySet(discovery).pipe(
+          Scope.provide(scope),
+          Effect.onError(() => Scope.close(scope, Exit.void)),
+        );
+        const fresh: Realm = {
+          issuer,
+          discovery,
+          keys,
+          scope,
+          expiresAtMs: now + Duration.toMillis(REALM_TTL),
+        };
+        realm = fresh;
+        return fresh;
+      }),
+    );
+
+  const enabledConfig = settings.keycloakConfig;
+
+  const start: KeycloakSignIn["Service"]["start"] = Effect.fn("KeycloakSignIn.start")(
+    function* (request, input) {
+      const returnTo =
+        input.returnTo === undefined
+          ? input.intent === "link"
+            ? ACCOUNT_PATH
+            : "/"
+          : safeReturnTo(input.returnTo);
+      if (returnTo === undefined) {
+        return yield* new KeycloakStartRefusedError({ reason: "invalid-return-to" });
+      }
+      const redirectUri = redirectUriFor(request);
+      if (redirectUri === undefined) {
+        return yield* new KeycloakStartRefusedError({ reason: "invalid-origin" });
+      }
+      const nowMs = yield* Clock.currentTimeMillis;
+      const clientIp = deriveAuthClientMetadata({ request }).ipAddress;
+      // Unauthenticated: a client gets a few starts a minute, and the store keeps the newest.
+      if (!allowStart(clientIp, nowMs)) {
+        return yield* new KeycloakStartRefusedError({ reason: "rate-limited" });
+      }
+      const enabled = yield* enabledConfig;
+      if (Option.isNone(enabled)) {
+        return yield* new KeycloakStartRefusedError({ reason: "off" });
+      }
+      const { issuer, clientId } = enabled.value;
+
+      let link: PendingFlow["link"];
+      if (input.intent === "link") {
+        // The browser's own session, never a token an app holds, and a fresh proof of the
+        // User's current credential: a stolen session alone cannot attach another account.
+        const session = yield* environmentAuth
+          .authenticateBrowserSession(request)
+          .pipe(Effect.mapError(() => new KeycloakStartRefusedError({ reason: "not-signed-in" })));
+        if (session.userId === undefined) {
+          return yield* new KeycloakStartRefusedError({ reason: "not-signed-in" });
+        }
+        yield* userDirectory.confirmLinkStepUp(
+          {
+            userId: session.userId,
+            sessionId: session.sessionId,
+            origin: request.headers.origin ?? "",
+          },
+          input.reauth,
+        );
+        link = { userId: session.userId, sessionId: session.sessionId };
+      }
+
+      const realmNow = yield* realmFor(issuer).pipe(
+        Effect.mapError(() => new KeycloakStartRefusedError({ reason: "unavailable" })),
+      );
+      const [state, nonce, verifier, binding] = yield* Effect.all([
+        randomToken,
+        randomToken,
+        randomToken,
+        randomToken,
+      ]);
+      yield* flows.put(
+        yield* sha256(state),
+        {
+          intent: input.intent,
+          returnTo,
+          browserBinding: yield* sha256(binding),
+          nonce,
+          codeVerifier: Redacted.make(verifier),
+          redirectUri,
+          issuer,
+          clientId,
+          link,
+          expiresAtMs: nowMs + Duration.toMillis(FLOW_TTL),
+        },
+        nowMs,
+      );
+      const secure = request.protocol === "https";
+      return {
+        authorizationUrl: KeycloakClient.authorizationUrl(realmNow.discovery, {
+          clientId,
+          redirectUri,
+          state,
+          nonce,
+          codeChallenge: yield* sha256(verifier),
+          ...(input.intent === "link" ? { prompt: "login" as const } : {}),
+        }),
+        cookie: {
+          name: secure ? `__Host-${FLOW_COOKIE_NAME}` : FLOW_COOKIE_NAME,
+          value: binding,
+          secure,
+        },
+      };
+    },
+  );
+
+  const storage = (detail: string) => () => refuse("failed", detail);
+
+  const sealRefreshToken = (loginId: string, token: Redacted.Redacted<string> | undefined) =>
+    token === undefined
+      ? Effect.succeed(null)
+      : secretStore.getOrCreateRandom(REFRESH_TOKEN_KEY_NAME, 32).pipe(
+          Effect.flatMap((key) =>
+            AccountCredentials.seal(
+              key,
+              new TextEncoder().encode(Redacted.value(token)),
+              refreshTokenContext(loginId),
+            ),
+          ),
+          Effect.provide(cryptoContext),
+          Effect.mapError(storage("seal refresh token")),
+        );
+
+  const inactiveRefusal = (userId: UserId) =>
+    userDirectory.inactiveReason(userId).pipe(
+      Effect.mapError(storage("inactive reason")),
+      Effect.flatMap((inactive) =>
+        inactive === undefined
+          ? Effect.void
+          : Effect.fail(refuse(inactive.removed ? "removed" : "disabled", "user inactive")),
+      ),
+    );
+
+  /** The browser session for a User the callback proved, from this login. */
+  const issueSession = (
+    request: HttpServerRequest.HttpServerRequest,
+    user: AuthUser,
+    loginId: string,
+  ) =>
+    environmentAuth
+      .startUserBrowserSession(request, user, deriveAuthClientMetadata({ request }), {
+        identityLoginId: loginId,
+      })
+      .pipe(
+        // The Owner may disable the User between the checks and the write (migration 092).
+        Effect.catch(() =>
+          inactiveRefusal(user.id).pipe(
+            Effect.andThen(Effect.fail(refuse("failed", "session issue"))),
+          ),
+        ),
+      );
+
+  const newLogin = Effect.fn("KeycloakSignIn.newLogin")(function* (
+    userId: UserId,
+    flow: PendingFlow,
+    claims: KeycloakClient.IdTokenClaims,
+    tokens: KeycloakClient.TokenSet,
+    now: string,
+  ) {
+    const loginId = yield* random.uuidV4();
+    yield* identities
+      .insertLogin({
+        loginId,
+        userId,
+        issuer: flow.issuer,
+        subject: claims.sub,
+        keycloakSid: claims.sid ?? null,
+        refreshTokenSealed: yield* sealRefreshToken(loginId, tokens.refreshToken),
+        offline: tokens.refreshToken !== undefined && tokens.scopes.includes("offline_access"),
+        now,
+      })
+      .pipe(Effect.mapError(storage("insert login")));
+    return loginId;
+  });
+
+  const signIn = Effect.fn("KeycloakSignIn.signIn")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+    flow: PendingFlow,
+    claims: KeycloakClient.IdTokenClaims,
+    tokens: KeycloakClient.TokenSet,
+  ) {
+    const identity = yield* identities
+      .findBySubject(flow.issuer, claims.sub)
+      .pipe(Effect.mapError(storage("find identity")));
+    // Admission of someone new is ticket 03. Nothing about them is kept.
+    if (Option.isNone(identity)) return yield* refuse("unknown", "unknown identity");
+    const { userId } = identity.value;
+    yield* inactiveRefusal(userId);
+    const record = yield* users.getById(userId).pipe(Effect.mapError(storage("read user")));
+    if (Option.isNone(record)) return yield* refuse("unknown", "identity without user");
+    const user: AuthUser = {
+      id: record.value.userId,
+      displayName: record.value.displayName,
+      isOwner: record.value.isOwner,
+    };
+    const now = DateTime.formatIso(yield* DateTime.now);
+    return yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* identities
+            .updateLabels({
+              userId,
+              username: claims.preferred_username ?? null,
+              email: claims.email ?? null,
+              now,
+            })
+            .pipe(Effect.mapError(storage("update labels")));
+          const loginId = yield* newLogin(userId, flow, claims, tokens, now);
+          return yield* issueSession(request, user, loginId);
+        }),
+      )
+      .pipe(Effect.catchTags({ SqlError: () => Effect.fail(refuse("failed", "transaction")) }));
+  });
+
+  const link = Effect.fn("KeycloakSignIn.link")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+    flow: PendingFlow,
+    linkTo: NonNullable<PendingFlow["link"]>,
+    claims: KeycloakClient.IdTokenClaims,
+    tokens: KeycloakClient.TokenSet,
+  ) {
+    const { userId } = linkTo;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const done = yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* inactiveRefusal(userId);
+          const record = yield* users.getById(userId).pipe(Effect.mapError(storage("read user")));
+          if (Option.isNone(record)) return yield* refuse("failed", "user gone");
+          const holder = yield* identities
+            .findBySubject(flow.issuer, claims.sub)
+            .pipe(Effect.mapError(storage("find identity")));
+          if (Option.isSome(holder) && holder.value.userId !== userId) {
+            return yield* refuse("taken", "identity of another user");
+          }
+          const linked = yield* identities
+            .link({
+              userId,
+              issuer: flow.issuer,
+              subject: claims.sub,
+              username: claims.preferred_username ?? null,
+              email: claims.email ?? null,
+              now,
+            })
+            .pipe(Effect.mapError(storage("link")));
+          if (!linked) return yield* refuse("failed", "already linked");
+          const isOwner = record.value.isOwner;
+          // From now on only Keycloak lets them in; the Owner keeps the break-glass.
+          if (!isOwner) {
+            yield* users
+              .removePasskeysExcept({ userId, credentialId: "" })
+              .pipe(Effect.mapError(storage("remove passkeys")));
+            yield* users.removePassword(userId).pipe(Effect.mapError(storage("remove password")));
+            yield* users.removeTotp(userId).pipe(Effect.mapError(storage("remove totp")));
+          }
+          // Every session and unspent pairing link of the User ends, the Owner's too; machines'
+          // credentials, gateway and CLI keys are not sessions and stay.
+          const closeLinks = yield* pairingLinks
+            .revokeAllForUserDeferred(userId)
+            .pipe(Effect.mapError(storage("revoke pairing links")));
+          const closeSockets = yield* sessions
+            .revokeAllForUserDeferred(userId)
+            .pipe(Effect.mapError(storage("revoke sessions")));
+          const loginId = yield* newLogin(userId, flow, claims, tokens, now);
+          const session = yield* issueSession(
+            request,
+            { id: userId, displayName: record.value.displayName, isOwner },
+            loginId,
+          );
+          yield* audit
+            .record({
+              actor: AuditLog.userActor(userId),
+              action: "user.identity.link",
+              target: { kind: "user", id: userId, name: record.value.displayName },
+              detail: { issuer: flow.issuer, credentialsRemoved: !isOwner },
+            })
+            .pipe(Effect.mapError(storage("audit")));
+          return { session, afterCommit: Effect.all([closeSockets, closeLinks]) };
+        }),
+      )
+      .pipe(Effect.catchTags({ SqlError: () => Effect.fail(refuse("failed", "transaction")) }));
+    // After the commit: the old sessions' sockets close, and their Admin rights are re-read.
+    yield* done.afterCommit;
+    yield* userDirectory.credentialsChanged(userId);
+    return done.session;
+  });
+
+  const callback: KeycloakSignIn["Service"]["callback"] = Effect.fn("KeycloakSignIn.callback")(
+    function* (request) {
+      const secure = request.protocol === "https";
+      const clientIp = deriveAuthClientMetadata({ request }).ipAddress;
+      const params = new URL(request.url, "https://hub.invalid").searchParams;
+      const state = params.get("state");
+      // Spent the first time it comes back, whatever happens next.
+      const flow =
+        state === null || state.length > 512 ? undefined : yield* flows.take(yield* sha256(state));
+
+      const run = Effect.gen(function* () {
+        yield* userDirectory
+          .requireClientNotThrottled(clientIp)
+          .pipe(Effect.mapError(() => refuse("throttled", "throttled")));
+        if (flow === undefined) return yield* refuse("failed", "unknown state", true);
+        if (flow.expiresAtMs <= (yield* Clock.currentTimeMillis)) {
+          return yield* refuse("failed", "expired flow", true);
+        }
+        const cookie = readHubCookie(request, FLOW_COOKIE_NAME, config.previewOrigin);
+        if (
+          cookie === undefined ||
+          cookie.length > 512 ||
+          !timingSafeEqualBase64Url(yield* sha256(cookie), flow.browserBinding)
+        ) {
+          return yield* refuse("failed", "browser binding", true);
+        }
+        const enabled = yield* enabledConfig.pipe(Effect.mapError(storage("settings")));
+        if (
+          Option.isNone(enabled) ||
+          enabled.value.issuer !== flow.issuer ||
+          enabled.value.clientId !== flow.clientId
+        ) {
+          return yield* refuse("unavailable", "settings changed");
+        }
+        const realmNow = yield* realmFor(flow.issuer).pipe(
+          Effect.mapError(() => refuse("unavailable", "realm")),
+        );
+        // RFC 9207: the response names its issuer; required when the realm says it always does.
+        const iss = params.get("iss");
+        if (iss === null ? realmNow.discovery.issParameterSupported : iss !== flow.issuer) {
+          return yield* refuse("failed", "iss", true);
+        }
+        if (params.has("error")) return yield* refuse("cancelled", "error response");
+        if (flow.link !== undefined) {
+          // A `link` comes back to the very session that proved the credential.
+          const session = yield* environmentAuth
+            .authenticateBrowserSession(request)
+            .pipe(Effect.mapError(() => refuse("failed", "link without session", true)));
+          if (session.sessionId !== flow.link.sessionId || session.userId !== flow.link.userId) {
+            return yield* refuse("failed", "link from another session", true);
+          }
+        }
+        const code = params.get("code");
+        if (code === null || code === "" || code.length > 4096) {
+          return yield* refuse("failed", "no code", true);
+        }
+        const tokens = yield* keycloak
+          .exchangeCode(realmNow.discovery, {
+            clientId: flow.clientId,
+            clientSecret: enabled.value.clientSecret,
+            code: Redacted.make(code),
+            codeVerifier: flow.codeVerifier,
+            redirectUri: flow.redirectUri,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              error.reason === "invalid-grant"
+                ? refuse("failed", error.detail, true)
+                : refuse("unavailable", error.detail),
+            ),
+          );
+        const claims = yield* keycloak
+          .verifyIdToken(realmNow.keys, tokens.idToken, {
+            issuer: flow.issuer,
+            clientId: flow.clientId,
+            nonce: flow.nonce,
+          })
+          .pipe(Effect.mapError((error) => refuse("failed", error.detail, true)));
+        const session =
+          flow.link === undefined
+            ? yield* signIn(request, flow, claims, tokens)
+            : yield* link(request, flow, flow.link, claims, tokens);
+        return {
+          redirectTo: flow.returnTo,
+          session: { token: session.sessionToken, expiresAt: session.response.expiresAt },
+          secure,
+        } satisfies CallbackOutcome;
+      });
+
+      const refused = Effect.fn("KeycloakSignIn.refused")(function* (refusal: CallbackRefusal) {
+        if (refusal.counted) yield* userDirectory.recordClientSignInFailure(clientIp);
+        // Which check, never a value from the request or the token (no subject, no email).
+        yield* Effect.logDebug("Keycloak sign-in refused", {
+          failure: refusal.failure,
+          check: refusal.detail,
+        });
+        const landing = flow?.intent === "link" ? flow.returnTo : "/sign-in";
+        return {
+          redirectTo: withResult(landing, refusal.failure as KeycloakSignInFailure),
+          session: undefined,
+          secure,
+        } satisfies CallbackOutcome;
+      });
+
+      return yield* run.pipe(Effect.catchTags({ CallbackRefusal: refused }));
+    },
+  );
+
+  return KeycloakSignIn.of({ start, callback });
+});
+
+export const layerWith = (options: FlowBounds = {}) =>
+  Layer.effect(KeycloakSignIn, makeWith(options));
+
+export const layer = layerWith();

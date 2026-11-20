@@ -30,6 +30,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
+import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as Users from "../persistence/Users.ts";
 import * as AccessChanges from "./AccessChanges.ts";
 import * as AccountCredentials from "./AccountCredentials.ts";
@@ -349,6 +350,22 @@ export class UserDirectory extends Context.Service<
     readonly getAccount: (
       userId: UserId,
     ) => Effect.Effect<AuthAccount, AccountChangeRefusedError | UserDirectoryStorageError>;
+    /**
+     * «Connect Keycloak» (Keycloak sign-in spec, ticket 02): a proof in this request of the
+     * account's current passkey or password (and code), always; refused for an account already
+     * linked, one with nothing to confirm with (the Owner's reset link is its way), and an Admin
+     * other than the Owner until Keycloak can give them a strong factor (ticket 06).
+     */
+    readonly confirmLinkStepUp: (
+      actor: AccountActor,
+      reauth: AuthReauth | undefined,
+    ) => Effect.Effect<AuthUser, AccountChangeError>;
+    /** The per-client sign-in back-off, for a door that signs in some other way (Keycloak). */
+    readonly requireClientNotThrottled: (
+      clientIp: string | undefined,
+    ) => Effect.Effect<void, SignInThrottledError>;
+    /** Counts a failed sign-in against the client: a bad state, cookie, code or token. */
+    readonly recordClientSignInFailure: (clientIp: string | undefined) => Effect.Effect<void>;
     readonly setPassword: (
       actor: AccountActor,
       input: AuthSetPasswordRequest,
@@ -555,6 +572,7 @@ const normalizeRecoveryCode = (code: string) =>
 
 const make = Effect.gen(function* () {
   const users = yield* Users.UserRepository;
+  const identities = yield* UserIdentities.UserIdentities;
   const random = yield* SecureRandom.SecureRandom;
   const digest = yield* Digest.Digest;
   const ownerRegistrations = makeCeremonyStore<OwnerRegistrationCeremony>(
@@ -892,8 +910,23 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const identityOf = (userId: UserId) =>
+    identities.findByUser(userId).pipe(Effect.map(Option.getOrUndefined), storage);
+
+  /** Whether «Connect Keycloak» is open to an account without an identity, and if not, why. */
+  const keycloakLinkOf = (
+    user: Users.UserRecord,
+    credentials: Users.UserCredentials,
+  ): NonNullable<AuthAccount["keycloakLink"]> =>
+    !credentials.hasPasskey && credentials.passwordHash === null
+      ? "needs-reset"
+      : !user.isOwner && credentials.isAdmin
+        ? "admins-later"
+        : "allowed";
+
   const accountOf = Effect.fn("UserDirectory.accountOf")(function* (user: Users.UserRecord) {
     const credentials = yield* users.getCredentials(user.userId).pipe(storage);
+    const identity = yield* identityOf(user.userId);
     return {
       user: toAuthUser(user),
       loginName: user.loginName,
@@ -901,7 +934,32 @@ const make = Effect.gen(function* () {
       hasPassword: credentials.passwordHash !== null,
       totpEnrolled: credentials.totpSecretCiphertext !== null,
       passwordRequiresTotp: passwordRequiresTotp(user, credentials),
+      ...(identity === undefined
+        ? { keycloakLink: keycloakLinkOf(user, credentials) }
+        : {
+            identity: {
+              username: identity.username,
+              email: identity.email,
+              accountUrl: `${identity.issuer}/account`,
+            },
+          }),
     } satisfies AuthAccount;
+  });
+
+  /**
+   * A User who signs in with Keycloak keeps no local credentials (the Owner aside, whose passkey
+   * and codes are the break-glass): adding one would be a way in Keycloak cannot cut.
+   */
+  const refuseLocalCredentialsForIdentity = Effect.fn(
+    "UserDirectory.refuseLocalCredentialsForIdentity",
+  )(function* (user: Users.UserRecord) {
+    if (user.isOwner) return;
+    if ((yield* identityOf(user.userId)) !== undefined) {
+      return yield* new AccountChangeRefusedError({
+        reason:
+          "You sign in with Keycloak: change your password or second factor in your Keycloak account.",
+      });
+    }
   });
 
   const getAccount: UserDirectory["Service"]["getAccount"] = Effect.fn("UserDirectory.getAccount")(
@@ -945,7 +1003,16 @@ const make = Effect.gen(function* () {
     reauth: AuthReauth | undefined,
   ) {
     const credentials = yield* users.getCredentials(user.userId).pipe(storage);
-    if (!credentials.hasPasskey && credentials.passwordHash === null) return;
+    if (!credentials.hasPasskey && credentials.passwordHash === null) {
+      // Signing in with Keycloak is a way to sign in: an account with an identity always has
+      // something to prove, and until Keycloak can confirm it (ticket 06) nothing here does.
+      if ((yield* identityOf(user.userId)) !== undefined) {
+        return yield* new AccountChangeRefusedError({
+          reason: "Confirming it's you through Keycloak is not available yet for this action.",
+        });
+      }
+      return;
+    }
     const keys = [accountKey(user.userId)];
     yield* requireNotThrottled(keys);
     const verified =
@@ -979,6 +1046,33 @@ const make = Effect.gen(function* () {
     throttle.reset(keys);
   });
 
+  const confirmLinkStepUp: UserDirectory["Service"]["confirmLinkStepUp"] = Effect.fn(
+    "UserDirectory.confirmLinkStepUp",
+  )(function* (actor, reauth) {
+    const user = yield* requireAccount(actor.userId);
+    if ((yield* identityOf(user.userId)) !== undefined) {
+      return yield* new AccountChangeRefusedError({
+        reason: "This account already signs in with Keycloak.",
+      });
+    }
+    const credentials = yield* users.getCredentials(user.userId).pipe(storage);
+    switch (keycloakLinkOf(user, credentials)) {
+      case "needs-reset":
+        return yield* new AccountChangeRefusedError({
+          reason: "Ask the Owner for a reset link to connect Keycloak to this account.",
+        });
+      case "admins-later":
+        return yield* new AccountChangeRefusedError({
+          reason: "Connecting Keycloak is available soon for Admins.",
+        });
+      case "allowed":
+        break;
+    }
+    // The account has a passkey or password, so a missing or wrong proof is refused (and counted).
+    yield* requireStepUp(actor, user, reauth);
+    return toAuthUser(user);
+  });
+
   const confirmStrongFactor: UserDirectory["Service"]["confirmStrongFactor"] = Effect.fn(
     "UserDirectory.confirmStrongFactor",
   )(function* (actor, reauth) {
@@ -1010,6 +1104,7 @@ const make = Effect.gen(function* () {
     "UserDirectory.setPassword",
   )(function* (actor, input) {
     const user = yield* requireAccount(actor.userId);
+    yield* refuseLocalCredentialsForIdentity(user);
     const credentials = yield* users.getCredentials(actor.userId).pipe(storage);
     if (passwordRequiresTotp(user, credentials) && credentials.totpSecretCiphertext === null) {
       return yield* new AccountChangeRefusedError({
@@ -1074,6 +1169,7 @@ const make = Effect.gen(function* () {
     "UserDirectory.startTotpEnrollment",
   )(function* (userId) {
     const user = yield* requireAccount(userId);
+    yield* refuseLocalCredentialsForIdentity(user);
     const secret = yield* AccountCredentials.generateTotpSecret.pipe(withCrypto);
     const enrollmentId = yield* random.uuidV4();
     const now = yield* DateTime.now;
@@ -1096,6 +1192,7 @@ const make = Effect.gen(function* () {
     "UserDirectory.confirmTotpEnrollment",
   )(function* (actor, input) {
     const user = yield* requireAccount(actor.userId);
+    yield* refuseLocalCredentialsForIdentity(user);
     const now = yield* DateTime.now;
     const pending = yield* totpEnrollments.get(input.enrollmentId, now);
     if (pending === undefined || pending.userId !== actor.userId) {
@@ -1537,7 +1634,17 @@ const make = Effect.gen(function* () {
     return credentials.hasPasskey || credentials.totpSecretCiphertext !== null;
   });
 
+  const requireClientNotThrottled: UserDirectory["Service"]["requireClientNotThrottled"] = (
+    clientIp,
+  ) => requireNotThrottled(throttleKeys(undefined, clientIp));
+  const recordClientSignInFailure: UserDirectory["Service"]["recordClientSignInFailure"] = (
+    clientIp,
+  ) => recordFailure(throttleKeys(undefined, clientIp));
+
   return UserDirectory.of({
+    confirmLinkStepUp,
+    requireClientNotThrottled,
+    recordClientSignInFailure,
     startInviteeRegistration,
     verifyInviteeRegistration,
     startInviteeTotpEnrollment,
@@ -1605,4 +1712,7 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(UserDirectory, make).pipe(Layer.provideMerge(Users.layer));
+export const layer = Layer.effect(UserDirectory, make).pipe(
+  Layer.provideMerge(Users.layer),
+  Layer.provideMerge(UserIdentities.layer),
+);

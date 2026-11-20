@@ -1,7 +1,7 @@
 /**
- * The Hub's one adapter to a Keycloak realm over OIDC (Keycloak sign-in spec, «Módulos»). Not a
- * fetch tool: only the issuer's host, no redirects, 5 s and 128 KiB a request, and errors that
- * never echo a body (but the issuer a mismatching realm names, to show the address to type).
+ * The Hub's one adapter to a Keycloak realm over OIDC (Keycloak sign-in spec, «Módulos»): only the
+ * issuer's host, no redirects, 5 s and 128 KiB a request, errors that never echo a body. Tokens,
+ * the code and the client secret travel Redacted; no error carries one.
  */
 import {
   KeycloakCheckFailureReason,
@@ -9,7 +9,9 @@ import {
   KeycloakCheckStep,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Context from "effect/Context";
+import * as Signature from "effect/crypto/Signature";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -17,9 +19,13 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import type * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as JoseError from "effect/jose/JoseError";
 import * as Jwk from "effect/jose/Jwk";
 import * as Jwks from "effect/jose/Jwks";
+import * as Jwt from "effect/jose/Jwt";
+import * as Redacted from "effect/Redacted";
 
 /** How long the Hub waits for each request to the realm, body included. */
 const REQUEST_TIMEOUT = "5 seconds";
@@ -30,7 +36,14 @@ const MAX_KEYS = 64;
 const UNKNOWN_KEY_COOLDOWN_MS = 30_000;
 
 /** The ID token algorithms the Hub accepts (spec: RS256, PS256, ES256, EdDSA). */
-const ID_TOKEN_ALGORITHMS = ["RS256", "PS256", "ES256", "EdDSA"] as const;
+export const ID_TOKEN_ALGORITHMS = ["RS256", "PS256", "ES256", "EdDSA"] as const;
+
+/** What every flow asks the realm for; `offline_access` makes the refresh token outlive SSO idle. */
+const KEYCLOAK_SCOPES = "openid profile email offline_access";
+/** Clock skew allowed on `exp` and `iat`. */
+const ID_TOKEN_CLOCK_TOLERANCE = "60 seconds";
+/** An ID token older than a flow is not one this flow asked for. */
+const ID_TOKEN_MAX_AGE = "10 minutes";
 
 /**
  * The HTTP client for the realm, apart from the Hub's: it must never follow a redirect, so a 3xx
@@ -100,6 +113,8 @@ export interface KeycloakDiscovery {
   readonly backchannelLogoutSessionSupported: boolean;
   readonly scopesSupported: ReadonlyArray<string>;
   readonly acrValuesSupported: ReadonlyArray<string>;
+  /** RFC 9207: the realm names itself in `iss` on every authorization response. */
+  readonly issParameterSupported: boolean;
 }
 
 const DiscoveryDocument = Schema.Struct({
@@ -112,6 +127,7 @@ const DiscoveryDocument = Schema.Struct({
   backchannel_logout_session_supported: Schema.optionalKey(Schema.Boolean),
   scopes_supported: Schema.optionalKey(Schema.Array(Schema.String)),
   acr_values_supported: Schema.optionalKey(Schema.Array(Schema.String)),
+  authorization_response_iss_parameter_supported: Schema.optionalKey(Schema.Boolean),
 });
 const decodeDiscovery = Schema.decodeUnknownEffect(DiscoveryDocument);
 const decodeKeySet = Schema.decodeUnknownEffect(Jwks.KeySet);
@@ -137,10 +153,105 @@ const isUsable = (key: Jwk.PublicJwk) =>
   });
 
 /** The keys of a set the Hub can verify ID tokens with. */
-const usableKeys = (keySet: Jwks.KeySet): ReadonlyArray<Jwk.PublicJwk> =>
+export const usableKeys = (keySet: Jwks.KeySet): ReadonlyArray<Jwk.PublicJwk> =>
   keySet.keys.filter(isPublicJwk).filter(isUsable);
 
 const clip = (text: string) => (text.length > 200 ? `${text.slice(0, 200)}…` : text);
+
+/**
+ * Why a code exchange or an ID token failed, for the Hub's logic and logs only, never with a body,
+ * a token or the secret. `invalid-grant`: the realm refused the code (spent, expired, another
+ * verifier or redirect); `rejected`: another 4xx (client id or secret); `unreachable`: no answer.
+ */
+export class KeycloakFlowError extends Schema.TaggedError<KeycloakFlowError>()(
+  "KeycloakFlowError",
+  {
+    reason: Schema.Literals([
+      "invalid-grant",
+      "rejected",
+      "unreachable",
+      "invalid-response",
+      "invalid-token",
+    ]),
+    /** Which check, for logs: a claim name or a step, never a value. */
+    detail: Schema.String,
+  },
+) {}
+
+const flowError = (reason: KeycloakFlowError["reason"], detail: string) =>
+  new KeycloakFlowError({ reason, detail });
+
+/** What the browser is sent to the realm with. */
+export interface AuthorizationRequest {
+  readonly clientId: string;
+  readonly redirectUri: string;
+  readonly state: string;
+  readonly nonce: string;
+  /** `BASE64URL(SHA-256(verifier))`: the method is always S256. */
+  readonly codeChallenge: string;
+  /** `login` makes Keycloak ask again even with a live SSO session (`link`). */
+  readonly prompt?: "login";
+}
+
+/** The realm's sign-in page for this flow (OIDC authorization code with PKCE S256). */
+export const authorizationUrl = (
+  discovery: KeycloakDiscovery,
+  request: AuthorizationRequest,
+): string => {
+  const url = new URL(discovery.authorizationEndpoint);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", request.clientId);
+  url.searchParams.set("redirect_uri", request.redirectUri);
+  url.searchParams.set("scope", KEYCLOAK_SCOPES);
+  url.searchParams.set("state", request.state);
+  url.searchParams.set("nonce", request.nonce);
+  url.searchParams.set("code_challenge", request.codeChallenge);
+  url.searchParams.set("code_challenge_method", "S256");
+  if (request.prompt !== undefined) url.searchParams.set("prompt", request.prompt);
+  return url.href;
+};
+
+/** What a code exchange gives back, every token Redacted. */
+export interface TokenSet {
+  readonly idToken: Redacted.Redacted<string>;
+  readonly refreshToken: Redacted.Redacted<string> | undefined;
+  /** The scopes the realm granted; `offline_access` among them makes the refresh token offline. */
+  readonly scopes: ReadonlyArray<string>;
+}
+
+const TokenResponse = Schema.Struct({
+  id_token: Schema.String.check(Schema.isMinLength(1)),
+  refresh_token: Schema.optionalKey(Schema.String),
+  scope: Schema.optionalKey(Schema.String),
+});
+const decodeTokenResponse = Schema.decodeUnknownEffect(TokenResponse);
+const TokenErrorResponse = Schema.Struct({ error: Schema.String });
+const isTokenErrorResponse = Schema.is(TokenErrorResponse);
+
+/** The claims of a Keycloak ID token the Hub reads; `iss`, `aud`, `exp`, `iat` are the policy's. */
+export const IdTokenClaims = Schema.Struct({
+  sub: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255)),
+  nonce: Schema.optionalKey(Schema.String),
+  azp: Schema.optionalKey(Schema.String),
+  sid: Schema.optionalKey(Schema.String),
+  preferred_username: Schema.optionalKey(Schema.String),
+  email: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
+});
+export type IdTokenClaims = typeof IdTokenClaims.Type;
+
+/** RFC 6749 §2.3.1: the client id and secret are form-encoded before Basic authentication. */
+const formEncode = (value: string) => new URLSearchParams({ v: value }).toString().slice(2);
+
+const sameText = (a: string, b: string) => {
+  const left = new TextEncoder().encode(a);
+  const right = new TextEncoder().encode(b);
+  let difference = left.length ^ right.length;
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
+  }
+  return difference === 0;
+};
 
 export class KeycloakClient extends Context.Service<
   KeycloakClient,
@@ -157,11 +268,37 @@ export class KeycloakClient extends Context.Service<
     ) => Effect.Effect<Jwks.Jwks["Service"], KeycloakProblem, Scope.Scope>;
     /** «Check»: discovery, then the key set; a failure says which step and why. */
     readonly check: (issuer: string) => Effect.Effect<KeycloakCheckResult>;
+    /**
+     * Trades an authorization code for tokens at the realm's token endpoint, authenticated with
+     * `client_secret_basic`, with the flow's PKCE verifier and its exact redirect URI.
+     */
+    readonly exchangeCode: (
+      discovery: KeycloakDiscovery,
+      input: {
+        readonly clientId: string;
+        readonly clientSecret: Redacted.Redacted<string>;
+        readonly code: Redacted.Redacted<string>;
+        readonly codeVerifier: Redacted.Redacted<string>;
+        readonly redirectUri: string;
+      },
+    ) => Effect.Effect<TokenSet, KeycloakFlowError>;
+    /**
+     * Verifies an ID token: signature against the realm's keys with an allowed algorithm, `iss`
+     * identical to the issuer, `aud` with the client id (and `azp`, when present or when there are
+     * several audiences, the client id), `exp` and `iat` within a minute's skew and no older than a
+     * flow, and the flow's `nonce`.
+     */
+    readonly verifyIdToken: (
+      keys: Jwks.Jwks["Service"],
+      idToken: Redacted.Redacted<string>,
+      expected: { readonly issuer: string; readonly clientId: string; readonly nonce: string },
+    ) => Effect.Effect<IdTokenClaims, KeycloakFlowError>;
   }
 >()("t3/auth/KeycloakClient") {}
 
-export const make = Effect.gen(function* () {
+const makeClient = Effect.gen(function* () {
   const http = yield* KeycloakHttp;
+  const signature = yield* Signature.Signature;
 
   /** A JSON document from the realm: 200 from that very URL, within the time and size caps. */
   const fetchJson = (url: string, step: KeycloakCheckStep, what: string) => {
@@ -303,6 +440,7 @@ export const make = Effect.gen(function* () {
       backchannelLogoutSessionSupported: document.backchannel_logout_session_supported ?? false,
       scopesSupported: document.scopes_supported ?? [],
       acrValuesSupported: document.acr_values_supported ?? [],
+      issParameterSupported: document.authorization_response_iss_parameter_supported ?? false,
     } satisfies KeycloakDiscovery;
   });
 
@@ -399,8 +537,122 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  return KeycloakClient.of({ discover, keySet, check });
+  /** A response's body, at most `MAX_DOCUMENT_BYTES`; undefined past that. */
+  const readBounded = (response: HttpClientResponse.HttpClientResponse) => {
+    const body = new Uint8Array(MAX_DOCUMENT_BYTES);
+    return Stream.runFoldEffect(
+      response.stream,
+      (): number | undefined => 0,
+      (length, chunk) => {
+        if (length === undefined || chunk.length > body.length - length) {
+          return Effect.succeed(undefined);
+        }
+        body.set(chunk, length);
+        return Effect.succeed(length + chunk.length);
+      },
+    ).pipe(
+      Effect.map((length) =>
+        length === undefined ? undefined : new TextDecoder().decode(body.subarray(0, length)),
+      ),
+    );
+  };
+
+  const exchangeCode: KeycloakClient["Service"]["exchangeCode"] = Effect.fn(
+    "KeycloakClient.exchangeCode",
+  )(function* (discovery, input) {
+    const request = HttpClientRequest.post(discovery.tokenEndpoint).pipe(
+      HttpClientRequest.basicAuth(
+        formEncode(input.clientId),
+        Redacted.make(formEncode(Redacted.value(input.clientSecret))),
+      ),
+      HttpClientRequest.setHeader("accept", "application/json"),
+      HttpClientRequest.bodyUrlParams({
+        grant_type: "authorization_code",
+        code: Redacted.value(input.code),
+        redirect_uri: input.redirectUri,
+        code_verifier: Redacted.value(input.codeVerifier),
+      }),
+    );
+    return yield* Effect.gen(function* () {
+      const response = yield* http
+        .execute(request)
+        .pipe(Effect.mapError(() => flowError("unreachable", "token endpoint")));
+      if (response.status >= 500 || (response.status >= 300 && response.status < 400)) {
+        return yield* flowError("unreachable", `token endpoint ${response.status}`);
+      }
+      const text = yield* readBounded(response).pipe(
+        Effect.mapError(() => flowError("unreachable", "token endpoint body")),
+      );
+      const json =
+        text === undefined
+          ? undefined
+          : yield* parseJson(text).pipe(Effect.orElseSucceed(() => undefined));
+      if (response.status !== 200) {
+        if (isTokenErrorResponse(json) && json.error === "invalid_grant") {
+          return yield* flowError("invalid-grant", "token endpoint");
+        }
+        return yield* flowError("rejected", `token endpoint ${response.status}`);
+      }
+      const tokens = yield* decodeTokenResponse(json).pipe(
+        Effect.mapError(() => flowError("invalid-response", "token response")),
+      );
+      return {
+        idToken: Redacted.make(tokens.id_token),
+        refreshToken:
+          tokens.refresh_token === undefined || tokens.refresh_token === ""
+            ? undefined
+            : Redacted.make(tokens.refresh_token),
+        scopes: (tokens.scope ?? "").split(" ").filter((scope) => scope !== ""),
+      } satisfies TokenSet;
+    }).pipe(
+      Effect.scoped,
+      Effect.timeoutOrElse({
+        duration: REQUEST_TIMEOUT,
+        orElse: () => Effect.fail(flowError("unreachable", "token endpoint timeout")),
+      }),
+    );
+  });
+
+  const verifyIdToken: KeycloakClient["Service"]["verifyIdToken"] = Effect.fn(
+    "KeycloakClient.verifyIdToken",
+  )(function* (keys, idToken, expected) {
+    const verified = yield* Jwt.verifyWithKeySet(IdTokenClaims, idToken, {
+      algorithms: ID_TOKEN_ALGORITHMS,
+      issuer: expected.issuer,
+      audience: expected.clientId,
+      clockTolerance: ID_TOKEN_CLOCK_TOLERANCE,
+      maxTokenAge: ID_TOKEN_MAX_AGE,
+      requiredClaims: ["iss", "sub", "aud", "exp", "iat"],
+    }).pipe(
+      Effect.provideService(Jwks.Jwks, keys),
+      Effect.provideService(Signature.Signature, signature),
+      Effect.mapError((error) =>
+        flowError(
+          "invalid-token",
+          JoseError.isJoseError(error) ? `id token: ${error.reason._tag}` : "id token: claims",
+        ),
+      ),
+    );
+    const { claims, registeredClaims } = verified;
+    const audiences =
+      typeof registeredClaims.aud === "string" ? [registeredClaims.aud] : registeredClaims.aud;
+    if (
+      (claims.azp !== undefined || (audiences?.length ?? 0) > 1) &&
+      claims.azp !== expected.clientId
+    ) {
+      return yield* flowError("invalid-token", "id token: azp");
+    }
+    if (claims.nonce === undefined || !sameText(claims.nonce, expected.nonce)) {
+      return yield* flowError("invalid-token", "id token: nonce");
+    }
+    return claims;
+  });
+
+  return KeycloakClient.of({ discover, keySet, check, exchangeCode, verifyIdToken });
 });
+
+/** The adapter over a given KeycloakHttp; ID tokens are verified with Node's crypto. */
+export const make = makeClient.pipe(Effect.provide(NodeCrypto.layer));
 
 export const layer = Layer.effect(KeycloakClient, make);
 

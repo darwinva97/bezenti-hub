@@ -6,6 +6,7 @@
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime } from "./baseSchemas.ts";
+import { AuthReauth } from "./userAccounts.ts";
 
 /**
  * Who may get a new User: anyone who signs in (`open`), someone with an Invitation or a mapped
@@ -123,11 +124,11 @@ export const KeycloakCheckResult = Schema.Union([
 export type KeycloakCheckResult = typeof KeycloakCheckResult.Type;
 
 /** Where Keycloak sends the browser back after sign-in (the client's «Valid redirect URIs»). */
-const KEYCLOAK_CALLBACK_PATH = "/oauth/keycloak/callback";
+export const KEYCLOAK_CALLBACK_PATH = "/oauth/keycloak/callback";
 /** Where Keycloak posts a logout token (the client's «Backchannel logout URL»). */
-const KEYCLOAK_BACKCHANNEL_LOGOUT_PATH = "/oauth/keycloak/backchannel-logout";
+export const KEYCLOAK_BACKCHANNEL_LOGOUT_PATH = "/oauth/keycloak/backchannel-logout";
 /** Where Keycloak sends the browser after signing out (the client's «Valid post logout redirect URIs»). */
-const KEYCLOAK_POST_LOGOUT_PATH = "/sign-in";
+export const KEYCLOAK_POST_LOGOUT_PATH = "/sign-in";
 
 /** The three URLs the Owner pastes into the Keycloak client, from the Hub's base address. */
 export const keycloakClientUrls = (base: string) => {
@@ -138,3 +139,50 @@ export const keycloakClientUrls = (base: string) => {
     postLogout: `${origin}${KEYCLOAK_POST_LOGOUT_PATH}`,
   };
 };
+
+/**
+ * Why a Keycloak flow starts (Keycloak sign-in spec, «Intenciones del flujo»): `sign-in` from the
+ * sign-in page, without a session; `link` from a User's account, with their browser session and a
+ * fresh proof of their current credential. Tickets 03, 06 and the reset add the others.
+ */
+export const KeycloakFlowIntent = Schema.Literals(["sign-in", "link"]);
+export type KeycloakFlowIntent = typeof KeycloakFlowIntent.Type;
+
+/** The longest path the browser may come back to. */
+const MAX_RETURN_TO_LENGTH = 2048;
+
+/**
+ * Starts a flow. `returnTo` is where the browser lands after the callback: a path on this Hub
+ * (one leading `/`, no `//`, no `\`), or the start is refused. `reauth` is the `link` proof.
+ */
+export const KeycloakStartRequest = Schema.Struct({
+  intent: KeycloakFlowIntent,
+  returnTo: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_RETURN_TO_LENGTH))),
+  reauth: Schema.optionalKey(AuthReauth),
+});
+export type KeycloakStartRequest = typeof KeycloakStartRequest.Type;
+
+/** Where the browser goes next: the realm's sign-in page. */
+export const KeycloakStartResult = Schema.Struct({ authorizationUrl: Schema.String });
+export type KeycloakStartResult = typeof KeycloakStartResult.Type;
+
+/** The query parameter the callback adds to the page it sends a refused browser to. */
+export const KEYCLOAK_RESULT_PARAM = "keycloak";
+
+/**
+ * Why a callback did not sign in (`?keycloak=<code>`): an identity this Hub doesn't know (ticket 03
+ * admits new people), a User the Owner disabled or removed, an identity linked to another User, the
+ * person cancelled at Keycloak, too many failures from this client, Keycloak off or unreachable,
+ * or any other check that failed (state, cookie, `iss`, code, token: never said which).
+ */
+export const KeycloakSignInFailure = Schema.Literals([
+  "unknown",
+  "disabled",
+  "removed",
+  "taken",
+  "cancelled",
+  "throttled",
+  "unavailable",
+  "failed",
+]);
+export type KeycloakSignInFailure = typeof KeycloakSignInFailure.Type;

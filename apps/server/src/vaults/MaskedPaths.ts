@@ -486,6 +486,9 @@ export const RAW_DOOR_RULES: Record<string, DoorRule> = {
     unmasked: "a dev server's pages (as preview.proxyHttp), live, never stored",
   },
   "auth/clientAdmission.ts: middleware": none("admission"),
+  "auth/keycloakSignInHttp.ts: GET KEYCLOAK_CALLBACK_PATH": none(
+    "sign-in: a redirect and a session cookie, never a Thread's output",
+  ),
   "http.ts: middleware": none("the web app, assets, uploads and browser traces"),
   "server.ts: middleware": none("routing"),
   'ws.ts: GET "/ws"': { history: "WS methods: each is in WS_DOOR_RULES" },

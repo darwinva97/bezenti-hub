@@ -573,11 +573,17 @@ Admin rights, and nothing enrolls TOTP from the sign-in form: a pending Admin ad
 under Settings → Access with a step-up. Promoting a User who has a passkey and a
 password but no TOTP revokes their sessions in the same transaction, since any of
 them may have come from the password; their password then answers
-`SecondFactorMissingError`. Promoting a User who signs in with Keycloak (in the
-Hub, or by accepting an Admin Invitation with a session) ends their Keycloak
-sign-ins that were not strong, with their sessions and sockets, so every live
-session of a Keycloak Admin is strong; that is why a Keycloak identity counts as
-a strong sign-in above. Credential changes that start or end Admin rights call
+`SecondFactorMissingError`. Promoting a User who signs in with Keycloak (a Role
+change, accepting an Admin Invitation, creating an Organization) ends their
+Keycloak sign-ins that were not strong, with their sessions and sockets, and
+every session born of no sign-in (apps, MCP clients, pairing) and unspent
+pairing link, since nothing vouches for their strength until ticket 07. Accepting
+an Admin Invitation or creating an Organization themselves needs a session born
+of a strong Keycloak sign-in: from a weak one they could never sign in as an
+Admin again. So every live session of a Keycloak Admin is strong; that is why a
+Keycloak identity counts as a strong sign-in above. Whose Keycloak sign-in must
+be strong reads the stored Role (any Admin Membership, pending or not), never
+the gated `isAdmin`: a pending Admin's weak link would otherwise make them one. Credential changes that start or end Admin rights call
 `AccessChanges` (provided by SpaceDirectory, so account code need not depend on
 Spaces) after they commit.
 

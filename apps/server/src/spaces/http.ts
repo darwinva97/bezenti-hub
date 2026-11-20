@@ -14,6 +14,7 @@ import {
   failEnvironmentInternal,
 } from "../auth/http.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
+import * as UserDirectory from "../auth/UserDirectory.ts";
 import * as MembershipService from "./MembershipService.ts";
 import * as OrganizationLifecycle from "./OrganizationLifecycle.ts";
 import * as SpaceDirectory from "./SpaceDirectory.ts";
@@ -47,6 +48,7 @@ export const layer = HttpApiBuilder.group(
     const spaces = yield* SpaceDirectory.SpaceDirectory;
     const memberships = yield* MembershipService.MembershipService;
     const lifecycle = yield* OrganizationLifecycle.OrganizationLifecycle;
+    const users = yield* UserDirectory.UserDirectory;
     // Stopping and deleting Threads acts as the Owner who asked.
     const runLifecycle = Effect.fnUntraced(function* (
       change: (actor: UserId) => ReturnType<typeof lifecycle.archive>,
@@ -69,8 +71,25 @@ export const layer = HttpApiBuilder.group(
         "createOrganization",
         Effect.fn("environment.spaces.createOrganization")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          return yield* spaces.createOrganization(yield* requireUser, args.payload.name).pipe(
+          const userId = yield* requireUser;
+          const { sessionId } = yield* EnvironmentAuthenticatedPrincipal;
+          // Its creator becomes its Admin: for a Keycloak User, only from a strong sign-in, and
+          // their weak access ends with it (ticket 06).
+          const asStorage = (cause: UserDirectory.UserDirectoryStorageError) =>
+            new SpaceDirectory.SpaceDirectoryStorageError({ cause });
+          const promotion: SpaceDirectory.CreatorPromotion = {
+            allowed: users
+              .keycloakSessionMayBecomeAdmin(userId, sessionId)
+              .pipe(Effect.mapError(asStorage)),
+            inTransaction: users.endWeakKeycloakLogins(userId).pipe(
+              Effect.map((ended) => ended.afterCommit),
+              Effect.mapError(asStorage),
+            ),
+          };
+          return yield* spaces.createOrganization(userId, args.payload.name, promotion).pipe(
             Effect.catchTags({
+              CreatorNeedsStrongSignInError: (error) =>
+                Effect.fail(new EnvironmentHttpForbiddenError({ message: error.message })),
               SpaceAccessDeniedError: () =>
                 Effect.fail(
                   new EnvironmentHttpForbiddenError({

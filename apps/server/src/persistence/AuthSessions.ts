@@ -101,6 +101,12 @@ export const RevokeUserAuthSessionsInput = Schema.Struct({
 });
 export type RevokeUserAuthSessionsInput = typeof RevokeUserAuthSessionsInput.Type;
 
+export const RevokeUnboundSessionsInput = Schema.Struct({
+  userId: UserId,
+  revokedAt: Schema.DateTimeUtcFromString,
+});
+export type RevokeUnboundSessionsInput = typeof RevokeUnboundSessionsInput.Type;
+
 export const RevokeIdentityLoginSessionsInput = Schema.Struct({
   loginIds: Schema.Array(Schema.String),
   revokedAt: Schema.DateTimeUtcFromString,
@@ -147,6 +153,13 @@ export class AuthSessionRepository extends Context.Service<
     /** Revokes every live session of one User in a single write; returns their ids. */
     readonly revokeAllForUser: (
       input: RevokeUserAuthSessionsInput,
+    ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
+    /**
+     * Revokes a User's live sessions born of no Keycloak sign-in (app, MCP, pairing; ticket 06:
+     * nothing vouches for their strength). Only for a User whose sign-in is Keycloak alone.
+     */
+    readonly revokeUnboundForUser: (
+      input: RevokeUnboundSessionsInput,
     ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
     /** Revokes the live sessions born of these Keycloak sign-ins (Keycloak sign-in, ticket 06). */
     readonly revokeForIdentityLogins: (
@@ -449,6 +462,29 @@ export const make = Effect.gen(function* () {
       Effect.map((rows) => rows.map((row) => row.sessionId)),
     );
 
+  const revokeUnboundSessionRows = SqlSchema.findAll({
+    Request: RevokeUnboundSessionsInput,
+    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    execute: ({ userId, revokedAt }) =>
+      sql`
+        UPDATE auth_sessions
+        SET revoked_at = ${revokedAt}
+        WHERE user_id = ${userId} AND revoked_at IS NULL AND identity_login_id IS NULL
+        RETURNING session_id AS "sessionId"
+      `,
+  });
+
+  const revokeUnboundForUser: AuthSessionRepository["Service"]["revokeUnboundForUser"] = (input) =>
+    revokeUnboundSessionRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "AuthSessionRepository.revokeUnboundForUser:query",
+          "AuthSessionRepository.revokeUnboundForUser:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => rows.map((row) => row.sessionId)),
+    );
+
   const revokeIdentityLoginSessionRows = SqlSchema.findAll({
     Request: RevokeIdentityLoginSessionsInput,
     Result: Schema.Struct({ sessionId: AuthSessionId }),
@@ -632,6 +668,7 @@ export const make = Effect.gen(function* () {
     revokeAllExcept,
     revokeAllForUser,
     revokeForIdentityLogins,
+    revokeUnboundForUser,
     setLastConnectedAt,
   } satisfies AuthSessionRepository["Service"];
 });

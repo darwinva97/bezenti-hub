@@ -214,6 +214,15 @@ const requiresStrongSignIn = (
   credentials: Pick<Users.UserCredentials, "isAdmin">,
 ): boolean => user.isOwner || credentials.isAdmin;
 
+/**
+ * Whose Keycloak sign-in must be strong (ticket 06): the Owner and every Admin Membership, pending
+ * or not. Never the gated `isAdmin`: a pending Admin's weak Keycloak sign-in would make them one.
+ */
+const keycloakNeedsStrong = (
+  user: Pick<Users.UserRecord, "isOwner">,
+  credentials: Pick<Users.UserCredentials, "hasAdminMembership">,
+): boolean => user.isOwner || credentials.hasAdminMembership;
+
 /** A User an Invitation creates, verified and hashed but not stored yet. */
 export interface PendingInvitee {
   readonly userId: UserId;
@@ -454,19 +463,29 @@ export class UserDirectory extends Context.Service<
       UserDirectoryStorageError
     >;
     /**
-     * Ends a User's Keycloak sign-ins without a strong factor and the sessions born of them
-     * (ticket 06: they now need one). Run it in the transaction that made them an Admin, and
-     * `afterCommit` once it commits, so their sockets close; `ended` is how many sign-ins ended.
+     * For a User who signs in with Keycloak: ends their weak Keycloak sign-ins with their sessions,
+     * and (but the Owner's) every session born of no sign-in and unspent pairing link. Run it in the
+     * transaction that made them an Admin, then `afterCommit`, so their sockets close.
      */
-    readonly endWeakKeycloakLogins: (
-      userId: UserId,
-    ) => Effect.Effect<
-      { readonly ended: number; readonly afterCommit: Effect.Effect<void> },
+    readonly endWeakKeycloakLogins: (userId: UserId) => Effect.Effect<
+      {
+        readonly ended: number;
+        readonly signedOut: boolean;
+        readonly afterCommit: Effect.Effect<void>;
+      },
       UserDirectoryStorageError
     >;
-    /** Whether the User needs a strong sign-in: the Owner, or an Admin of some Organization. */
+    /** Whether the User's Keycloak sign-in must be strong: the Owner, or any Admin Membership. */
     readonly requiresStrongSignIn: (
       userId: UserId,
+    ) => Effect.Effect<boolean, UserDirectoryStorageError>;
+    /**
+     * Whether this session may make its User an Admin (ticket 06): a User who signs in with
+     * Keycloak only from a session born of a live strong Keycloak sign-in; anyone else, yes.
+     */
+    readonly keycloakSessionMayBecomeAdmin: (
+      userId: UserId,
+      sessionId: AuthSessionId,
     ) => Effect.Effect<boolean, UserDirectoryStorageError>;
     /**
      * After a change to a User's credentials commits: their Admin rights may have started or
@@ -1052,7 +1071,7 @@ const make = Effect.gen(function* () {
         yield* recordFailure(keys);
         return yield* stepUpRefused;
       }
-      if (!proof.strong && (options.strong === true || requiresStrongSignIn(user, credentials))) {
+      if (!proof.strong && (options.strong === true || keycloakNeedsStrong(user, credentials))) {
         return yield* new AccountChangeRefusedError({
           reason: "This needs a second factor in Keycloak. Confirm again with it.",
         });
@@ -1426,8 +1445,8 @@ const make = Effect.gen(function* () {
     if ((yield* identityOf(userId)) !== undefined) {
       // A Keycloak sign-in's strength is its own: the weak ones end, and they sign in again
       // with a second factor (an Admin's weak sign-in is refused from now on).
-      const { ended, afterCommit } = yield* endWeakKeycloakLogins(userId);
-      return { pending: false, signedOut: ended > 0, afterCommit };
+      const { signedOut, afterCommit } = yield* endWeakKeycloakLogins(userId);
+      return { pending: false, signedOut, afterCommit };
     }
     const credentials = yield* users.getCredentials(userId).pipe(storage);
     const hasApp = credentials.totpSecretCiphertext !== null;
@@ -1445,11 +1464,38 @@ const make = Effect.gen(function* () {
   const endWeakKeycloakLogins: UserDirectory["Service"]["endWeakKeycloakLogins"] = Effect.fn(
     "UserDirectory.endWeakKeycloakLogins",
   )(function* (userId) {
+    const user = yield* users.getById(userId).pipe(storage);
+    if (Option.isNone(user) || (yield* identityOf(userId)) === undefined) {
+      return { ended: 0, signedOut: false, afterCommit: Effect.void };
+    }
     const now = DateTime.formatIso(yield* DateTime.now);
     const loginIds = yield* identities.endWeakLogins(userId, now).pipe(storage);
-    const closeSockets = yield* sessions.revokeForIdentityLoginsDeferred(loginIds).pipe(storage);
-    return { ended: loginIds.length, afterCommit: Effect.asVoid(closeSockets) };
+    const closeLogins = yield* sessions.revokeForIdentityLoginsDeferred(loginIds).pipe(storage);
+    if (user.value.isOwner) {
+      // The Owner's sessions without a Keycloak sign-in are their local break-glass ones.
+      return {
+        ended: loginIds.length,
+        signedOut: loginIds.length > 0,
+        afterCommit: Effect.asVoid(closeLogins),
+      };
+    }
+    // Apps, MCP clients and pairing links carry no sign-in to weigh (ticket 07 makes them inherit
+    // one): any may have come from a weak sign-in, so none outlives the promotion.
+    const unbound = yield* sessions.revokeUnboundForUserDeferred(userId).pipe(storage);
+    const closeLinks = yield* pairingLinks.revokeAllForUserDeferred(userId).pipe(storage);
+    return {
+      ended: loginIds.length,
+      signedOut: loginIds.length > 0 || unbound.revoked > 0,
+      afterCommit: Effect.all([closeLogins, unbound.close, closeLinks], { discard: true }),
+    };
   });
+
+  const keycloakSessionMayBecomeAdmin: UserDirectory["Service"]["keycloakSessionMayBecomeAdmin"] =
+    Effect.fn("UserDirectory.keycloakSessionMayBecomeAdmin")(function* (userId, sessionId) {
+      if ((yield* identityOf(userId)) === undefined) return true;
+      const strong = yield* identities.sessionLoginStrong(sessionId).pipe(storage);
+      return Option.getOrElse(strong, () => false);
+    });
 
   const requiresStrongSignInOf: UserDirectory["Service"]["requiresStrongSignIn"] = Effect.fn(
     "UserDirectory.requiresStrongSignIn",
@@ -1457,7 +1503,7 @@ const make = Effect.gen(function* () {
     const user = yield* users.getById(userId).pipe(storage);
     if (Option.isNone(user)) return false;
     const credentials = yield* users.getCredentials(userId).pipe(storage);
-    return requiresStrongSignIn(user.value, credentials);
+    return keycloakNeedsStrong(user.value, credentials);
   });
 
   const accessChanges = yield* Effect.serviceOption(AccessChanges.AccessChanges);
@@ -1766,6 +1812,7 @@ const make = Effect.gen(function* () {
     createIdentityUser,
     hasStrongSignIn,
     endWeakKeycloakLogins,
+    keycloakSessionMayBecomeAdmin,
     requiresStrongSignIn: requiresStrongSignInOf,
     issueResetLink,
     onPromotedToAdmin,

@@ -35,6 +35,7 @@ import {
 } from "./Keycloak.testkit.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
 import * as KeycloakSignIn from "./KeycloakSignIn.ts";
+import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as UserDirectory from "./UserDirectory.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import {
@@ -375,6 +376,44 @@ describe("Keycloak sign-in (ticket 02)", () => {
       assert.isTrue(yield* isSignedIn(server, admin.cookie));
 
       const strong = yield* linkWith({ sub: "kc-ada-admin", claims: { acr: "critica" } });
+      assert.equal(strong.location, KeycloakSignIn.ACCOUNT_PATH);
+      assert.isDefined((yield* account(server, strong.cookie ?? "")).identity);
+    }),
+  );
+
+  it.effect("a pending Admin with only a password links only with a strong sign-in", () =>
+    Effect.gen(function* () {
+      const { server, realm, owner } = yield* hub();
+      const member = yield* memberWithPassword(server, "pending-admin");
+      const spaceId = yield* organizationOf(server, owner, member.id);
+      const promoted = yield* server.request(`/api/spaces/${spaceId}/members/role`, {
+        cookie: owner,
+        body: { userId: member.id, role: "admin" },
+      });
+      assert.equal(promoted.status, 200, promoted.text);
+      // A password alone makes no Admin: they act as a Member until a second factor.
+      assert.isTrue(promoted.body.pendingAdmin as boolean);
+      const reauth = { method: "password", password: PASSWORD };
+
+      // Their stored Role needs a strong sign-in: a weak one links nothing.
+      const weak = yield* roundTrip(
+        server,
+        realm,
+        { sub: "kc-pending" },
+        { intent: "link", reauth },
+        member.cookie,
+      );
+      assert.equal(resultOf(weak.location), "strong-factor-required");
+      assert.isUndefined(weak.cookie);
+      assert.isUndefined((yield* account(server, member.cookie)).identity);
+
+      const strong = yield* roundTrip(
+        server,
+        realm,
+        { sub: "kc-pending", claims: STRONG },
+        { intent: "link", reauth },
+        member.cookie,
+      );
       assert.equal(strong.location, KeycloakSignIn.ACCOUNT_PATH);
       assert.isDefined((yield* account(server, strong.cookie ?? "")).identity);
     }),
@@ -1698,6 +1737,40 @@ const confirmStrong = (server: Server, cookie: string, proofId: string | undefin
       .pipe(Effect.result);
   });
 
+/**
+ * What an app sign-in, an MCP client or a pairing link leaves a User with: a bearer session born
+ * of no Keycloak sign-in (ticket 07 makes them inherit one), and an unspent pairing link.
+ */
+const otherAccessOf = Effect.fn(function* (server: Server, userId: string) {
+  const app = yield* server.sessions.issue({
+    method: "bearer-access-token",
+    subject: "app-sign-in",
+    userId: UserId.make(userId),
+  });
+  const link = yield* Context.get(
+    server.services,
+    PairingGrantStore.PairingGrantStore,
+  ).issueOneTimeToken({ userId: UserId.make(userId) });
+  return { appToken: app.token, linkCredential: link.credential };
+});
+
+const otherAccessAlive = Effect.fn(function* (
+  server: Server,
+  access: { readonly appToken: string; readonly linkCredential: string },
+) {
+  const app = yield* server.sessions.verify(access.appToken).pipe(Effect.result);
+  const link = yield* Context.get(server.services, PairingGrantStore.PairingGrantStore).inspect(
+    access.linkCredential,
+  );
+  return {
+    app: Result.isSuccess(app),
+    link: Option.isSome(link) && link.value.spendable,
+  };
+});
+
+const createOrganization = (server: Server, cookie: string, name: string) =>
+  server.request("/api/spaces/organizations", { cookie, body: { name } });
+
 describe("strong factor from Keycloak (ticket 06)", () => {
   describe("signing in", () => {
     it.effect("an Admin without MFA is refused, with MFA gets in", () =>
@@ -1840,6 +1913,9 @@ describe("strong factor from Keycloak (ticket 06)", () => {
         const strong = yield* roundTrip(server, realm, { sub: "kc-ana", claims: STRONG });
         const spaceId = yield* organizationOf(server, owner, member.id);
         const weakSocket = yield* watchSocket(server, member.cookie);
+        // An app, an MCP client or a pairing link the weak sign-in may have approved.
+        const other = yield* otherAccessOf(server, member.id);
+        assert.deepEqual(yield* otherAccessAlive(server, other), { app: true, link: true });
 
         const promoted = yield* server.request(`/api/spaces/${spaceId}/members/role`, {
           cookie: owner,
@@ -1850,6 +1926,8 @@ describe("strong factor from Keycloak (ticket 06)", () => {
 
         yield* Fiber.join(weakSocket.socket);
         assert.isFalse(yield* isSignedIn(server, member.cookie));
+        // Nothing born of no strong sign-in outlives it: apps, MCP clients, pairing links.
+        assert.deepEqual(yield* otherAccessAlive(server, other), { app: false, link: false });
         // The strong sign-in stays, with its session.
         assert.isTrue(yield* isSignedIn(server, strong.cookie ?? ""));
         const live = yield* liveLoginsOf(server, member.id);
@@ -1866,6 +1944,14 @@ describe("strong factor from Keycloak (ticket 06)", () => {
         const member = yield* keycloakMember(server, realm, "kc-ana");
         const strong = yield* roundTrip(server, realm, { sub: "kc-ana", claims: STRONG });
         const invitation = yield* organizationInvite(server, owner, "admin");
+        // From the weak session it would make an Admin they can't sign in as again: refused.
+        const fromWeak = yield* server.request("/api/invitations/join", {
+          cookie: member.cookie,
+          body: { token: invitation.token },
+        });
+        assert.notEqual(fromWeak.status, 200);
+        assert.include(String(fromWeak.body.message), "second factor");
+        assert.deepEqual(yield* membershipsOf(server, member.id), []);
         const weakSocket = yield* watchSocket(server, member.cookie);
         const joined = yield* server.request("/api/invitations/join", {
           cookie: strong.cookie ?? "",
@@ -1876,6 +1962,50 @@ describe("strong factor from Keycloak (ticket 06)", () => {
         assert.isFalse(yield* isSignedIn(server, member.cookie));
         assert.isTrue(yield* isSignedIn(server, strong.cookie ?? ""));
       }).pipe(Effect.scoped),
+    );
+  });
+
+  describe("creating an Organization (its creator becomes its Admin)", () => {
+    it.effect("is refused from a weak Keycloak session", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const refused = yield* createOrganization(server, member.cookie, "Weakly");
+        assert.equal(refused.status, 403);
+        assert.include(String(refused.body.message), "second factor in Keycloak");
+        assert.deepEqual(yield* membershipsOf(server, member.id), []);
+      }),
+    );
+
+    it.effect("from a strong one, ends the creator's other weak access", () =>
+      Effect.gen(function* () {
+        const { server, realm } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        const strong = yield* roundTrip(server, realm, { sub: "kc-ana", claims: STRONG });
+        const weakSocket = yield* watchSocket(server, member.cookie);
+        const other = yield* otherAccessOf(server, member.id);
+
+        const created = yield* createOrganization(server, strong.cookie ?? "", "Strongly");
+        assert.equal(created.status, 200, created.text);
+        assert.deepEqual(
+          (yield* membershipsOf(server, member.id)).map((row) => row.role),
+          ["admin"],
+        );
+        yield* Fiber.join(weakSocket.socket);
+        assert.isFalse(yield* isSignedIn(server, member.cookie));
+        assert.deepEqual(yield* otherAccessAlive(server, other), { app: false, link: false });
+        assert.isTrue(yield* isSignedIn(server, strong.cookie ?? ""));
+      }).pipe(Effect.scoped),
+    );
+
+    it.effect("a local User creates one as today, a pending Admin", () =>
+      Effect.gen(function* () {
+        const { server } = yield* hub();
+        const local = yield* memberWithPassword(server, "local-creator");
+        const created = yield* createOrganization(server, local.cookie, "Locally");
+        assert.equal(created.status, 200, created.text);
+        assert.isTrue(yield* isSignedIn(server, local.cookie));
+      }),
     );
   });
 
@@ -2145,6 +2275,8 @@ describe("strong factor from Keycloak (ticket 06)", () => {
         });
         const member = yield* keycloakMember(server, realm, "kc-bo", STRONG);
         const socket = yield* watchSocket(server, admin.cookie);
+        const adminOther = yield* otherAccessOf(server, admin.id);
+        const memberOther = yield* otherAccessOf(server, member.id);
 
         // `otp` no longer counts: the Admin's `otp` sign-in would end. Asked first, nothing saved.
         const change = { strongAcr: ["critica"], strongAmr: [] };
@@ -2154,7 +2286,10 @@ describe("strong factor from Keycloak (ticket 06)", () => {
         });
         assert.equal(unconfirmed.status, 409);
         assert.include(String(unconfirmed.body.message), "1 Keycloak sign-in");
+        // And the Admin's app session and pairing link, which no sign-in strength vouches for.
+        assert.include(String(unconfirmed.body.message), "2 app sessions or pairing links");
         assert.isTrue(yield* isSignedIn(server, admin.cookie));
+        assert.deepEqual(yield* otherAccessAlive(server, adminOther), { app: true, link: true });
 
         const confirmed = yield* server.request("/api/installation/sign-in-settings", {
           cookie: owner,
@@ -2163,6 +2298,8 @@ describe("strong factor from Keycloak (ticket 06)", () => {
         assert.equal(confirmed.status, 200, confirmed.text);
         yield* Fiber.join(socket.socket);
         assert.isFalse(yield* isSignedIn(server, admin.cookie));
+        assert.deepEqual(yield* otherAccessAlive(server, adminOther), { app: false, link: false });
+        assert.deepEqual(yield* otherAccessAlive(server, memberOther), { app: true, link: true });
         // Its `acr` sign-in is still strong; the Member's is only re-marked, not ended.
         assert.isTrue(yield* isSignedIn(server, viaAcr.cookie ?? ""));
         assert.isTrue(yield* isSignedIn(server, member.cookie));

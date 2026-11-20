@@ -28,7 +28,7 @@ import * as AccessPolicy from "./AccessPolicy.ts";
 import * as KeycloakAdmission from "./KeycloakAdmission.ts";
 import * as KeycloakClient from "./KeycloakClient.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
-import * as SessionStore from "./SessionStore.ts";
+import * as UserDirectory from "./UserDirectory.ts";
 
 /** The client secret's name in the Hub's encrypted store. */
 export const CLIENT_SECRET_NAME = "keycloak-client-secret";
@@ -78,12 +78,18 @@ export class SignInSecretNotStoredError extends Schema.TaggedError<SignInSecretN
  */
 export class SignInSettingsConfirmError extends Schema.TaggedError<SignInSettingsConfirmError>()(
   "SignInSettingsConfirmError",
-  { loginsToEnd: Schema.Number },
+  { loginsToEnd: Schema.Number, otherAccessToEnd: Schema.Number },
 ) {
   override get message(): string {
     const signIns =
       this.loginsToEnd === 1 ? "1 Keycloak sign-in" : `${this.loginsToEnd} Keycloak sign-ins`;
-    return `This change ends ${signIns} of the Owner or Admins that would no longer count as strong (yours too, if yours is one; your passkey still signs you in). Save again to confirm.`;
+    const other =
+      this.otherAccessToEnd === 0
+        ? ""
+        : this.otherAccessToEnd === 1
+          ? ", and 1 app session or pairing link of those Admins"
+          : `, and ${this.otherAccessToEnd} app sessions or pairing links of those Admins`;
+    return `This change ends ${signIns} of the Owner or Admins that would no longer count as strong${other} (yours too, if yours is one; your passkey still signs you in). Save again to confirm.`;
   }
 }
 
@@ -215,7 +221,7 @@ const make = Effect.gen(function* () {
   const keycloak = yield* KeycloakClient.KeycloakClient;
   const config = yield* ServerConfig.ServerConfig;
   const identities = yield* UserIdentities.UserIdentities;
-  const sessions = yield* SessionStore.SessionStore;
+  const userDirectory = yield* UserDirectory.UserDirectory;
   // One change at a time: two tabs of the Owner's never interleave a row and a secret.
   const changing = yield* Semaphore.make(1);
 
@@ -291,13 +297,18 @@ const make = Effect.gen(function* () {
     const toStrong: Array<string> = [];
     const toWeak: Array<string> = [];
     const toEnd: Array<string> = [];
+    /** Whose weak access ends: the Owner's and Admins' with a sign-in that turns (or is) weak. */
+    const users = new Set<UserId>();
     for (const login of live) {
       const strong = KeycloakAdmission.loginIsStrong(login, next);
       if (strong && !login.strong) toStrong.push(login.loginId);
       if (!strong && login.strong) toWeak.push(login.loginId);
-      if (!strong && login.requiresStrong) toEnd.push(login.loginId);
+      if (!strong && login.requiresStrong) {
+        toEnd.push(login.loginId);
+        users.add(login.userId);
+      }
     }
-    return { toStrong, toWeak, toEnd };
+    return { toStrong, toWeak, toEnd, users: [...users] };
   });
 
   const read: SignInSettings["Service"]["read"] = Effect.fn("SignInSettings.read")(
@@ -398,7 +409,19 @@ const make = Effect.gen(function* () {
           if (listsChanged && request.endLoginsConfirmed !== true) {
             const planned = yield* strengthPlan(next);
             if (planned.toEnd.length > 0) {
-              return yield* new SignInSettingsConfirmError({ loginsToEnd: planned.toEnd.length });
+              // The Owner's sessions without a sign-in are their local ones, and stay.
+              const admins: Array<UserId> = [];
+              for (const userId of planned.users) {
+                const principal = yield* spaces.principalOf(userId).pipe(Effect.mapError(storage));
+                if (!principal.isOwner) admins.push(userId);
+              }
+              const otherAccessToEnd = yield* identities
+                .unboundAccessCount(admins, DateTime.formatIso(yield* DateTime.now))
+                .pipe(Effect.mapError(storage));
+              return yield* new SignInSettingsConfirmError({
+                loginsToEnd: planned.toEnd.length,
+                otherAccessToEnd,
+              });
             }
           }
 
@@ -426,15 +449,21 @@ const make = Effect.gen(function* () {
                 // Read again inside the transaction: a sign-in that arrived since the dry run is
                 // weighed too. A Member's sign-in is only re-marked: it matters if they become
                 // an Admin, which ends it then if it is weak.
-                let ended: ReadonlyArray<string> = [];
-                let close: Effect.Effect<unknown> = Effect.void;
+                let ended = 0;
+                const closes: Array<Effect.Effect<void>> = [];
                 if (listsChanged) {
                   const plan = yield* strengthPlan(next);
                   yield* identities.setStrength(plan.toStrong, true);
                   yield* identities.setStrength(plan.toWeak, false);
-                  ended = yield* identities.endLogins(plan.toEnd, now);
-                  close = yield* sessions.revokeForIdentityLoginsDeferred(ended);
+                  // As a promotion does: their weak sign-ins, and the apps, MCP clients and
+                  // pairing links no sign-in vouches for, end with their sessions.
+                  for (const userId of plan.users) {
+                    const done = yield* userDirectory.endWeakKeycloakLogins(userId);
+                    ended += done.ended;
+                    closes.push(done.afterCommit);
+                  }
                 }
+                const close = Effect.all(closes, { discard: true });
                 yield* audit.record({
                   actor: AuditLog.userActor(actor),
                   action: "signIn.settings.update",
@@ -450,7 +479,7 @@ const make = Effect.gen(function* () {
                       ? {
                           strongAcr: next.strongAcr.join(" "),
                           strongAmr: next.strongAmr.join(" "),
-                          loginsEnded: ended.length,
+                          loginsEnded: ended,
                         }
                       : {}),
                   },

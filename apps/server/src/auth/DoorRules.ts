@@ -117,7 +117,9 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "signInSettings.update": SIGN_IN_SETTINGS,
   "invitations.accept": INVITATIONS,
   "invitations.create": INVITATIONS,
-  "invitations.join": INVITATIONS,
+  "invitations.join": own(
+    "an Invitation token for the session's own User; an Admin Role needs a passkey, TOTP or Keycloak identity, and for a Keycloak User a session born of a live strong Keycloak sign-in (ticket 06), and ends their weak Keycloak access (sign-ins, app and MCP sessions, pairing links)",
+  ),
   "invitations.list": INVITATIONS,
   "invitations.preview": INVITATIONS,
   "invitations.registration": INVITATIONS,
@@ -146,8 +148,12 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "sandboxImage.status": OWNER,
   "sandboxImage.update": OWNER,
   "spaces.archiveOrganization": SPACES,
-  "spaces.changeMemberRole": SPACES,
-  "spaces.createOrganization": SPACES,
+  "spaces.changeMemberRole": own(
+    "SpaceDirectory/AccessPolicy for the session's User; making a Keycloak User an Admin ends their weak Keycloak access (sign-ins, app and MCP sessions, pairing links) in the same transaction (ticket 06)",
+  ),
+  "spaces.createOrganization": own(
+    "AccessPolicy `organization.create` for the session's User; its creator becomes its Admin, so a Keycloak User creates one only from a session born of a live strong Keycloak sign-in, and their weak Keycloak access ends in the same transaction (ticket 06)",
+  ),
   "spaces.deleteOrganization": SPACES,
   "spaces.issueMemberResetLink": SPACES,
   "spaces.leave": SPACES,

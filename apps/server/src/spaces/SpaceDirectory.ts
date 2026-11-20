@@ -184,6 +184,27 @@ export class OrganizationNameTakenError extends Schema.TaggedError<OrganizationN
   }
 }
 
+/**
+ * Creating an Organization makes its creator its Admin, which a Keycloak User may become only from
+ * a strong Keycloak sign-in (ticket 06); from a weak one they could never sign in as it again.
+ */
+export class CreatorNeedsStrongSignInError extends Schema.TaggedError<CreatorNeedsStrongSignInError>()(
+  "CreatorNeedsStrongSignInError",
+  {},
+) {
+  override get message(): string {
+    return "Creating an Organization makes you its Admin, which needs a second factor in Keycloak. Sign out, sign in again with it, and try again.";
+  }
+}
+
+/** How the door that creates an Organization weighs, and applies, its creator becoming Admin. */
+export interface CreatorPromotion {
+  /** Whether the creating session may make its User an Admin. */
+  readonly allowed: Effect.Effect<boolean, SpaceDirectoryStorageError>;
+  /** Run in the creation's transaction; its result once that commits (sockets close). */
+  readonly inTransaction: Effect.Effect<Effect.Effect<void>, SpaceDirectoryStorageError>;
+}
+
 /** An Organization's name as stored: no outer spaces, inner runs of spaces made one. */
 const tidyOrganizationName = (name: string) => name.trim().replace(/\s+/g, " ");
 
@@ -431,9 +452,13 @@ export class SpaceDirectory extends Context.Service<
     readonly createOrganization: (
       userId: UserId,
       name: string,
+      promotion?: CreatorPromotion,
     ) => Effect.Effect<
       SpaceSummary,
-      SpaceAccessDeniedError | OrganizationNameTakenError | SpaceDirectoryStorageError
+      | SpaceAccessDeniedError
+      | OrganizationNameTakenError
+      | CreatorNeedsStrongSignInError
+      | SpaceDirectoryStorageError
     >;
     /**
      * Archives or restores an Organization (the Owner's). Archiving hides it from its Members at
@@ -1031,16 +1056,20 @@ const make = Effect.gen(function* () {
   const createOrganization = Effect.fn("SpaceDirectory.createOrganization")(function* (
     userId: UserId,
     name: string,
+    promotion?: CreatorPromotion,
   ) {
     const principal = yield* principalOf(userId);
     yield* requireAllowed(principal, "organization.create", AccessPolicy.installation);
+    if (!principal.isOwner && promotion !== undefined && !(yield* promotion.allowed)) {
+      return yield* new CreatorNeedsStrongSignInError({});
+    }
     const tidy = tidyOrganizationName(name);
     const key = organizationNameKey(tidy);
     const spaceId = SpaceId.make(yield* random.uuidV4().pipe(Effect.mapError(storageError)));
     const now = DateTime.formatIso(yield* DateTime.now);
     // One write: the name check, the Space, its creator's Membership and the audit entry, so no
     // Organization is left without its Admin and no two get the same name.
-    yield* sql
+    const afterCommit = yield* sql
       .withTransaction(
         Effect.gen(function* () {
           const names = yield* sql<{ readonly name: string }>`
@@ -1063,6 +1092,10 @@ const make = Effect.gen(function* () {
             spaceId,
             target: { kind: "space", id: spaceId },
           });
+          // Becoming its Admin is a promotion (ticket 06): the creator's weak access ends with it.
+          return principal.isOwner || promotion === undefined
+            ? Effect.void
+            : yield* promotion.inTransaction;
         }),
       )
       .pipe(
@@ -1072,6 +1105,7 @@ const make = Effect.gen(function* () {
             : storageError(error),
         ),
       );
+    yield* afterCommit;
     yield* Effect.andThen(changed, accessChanged(userId));
     const created = (yield* view(userId)).spaces.find((space) => space.id === spaceId);
     if (created === undefined) {

@@ -71,7 +71,8 @@ import * as KeycloakTestkit from "./Keycloak.testkit.ts";
 import * as SignInSettings from "./SignInSettings.ts";
 import * as SignInSettingsHttp from "./signInSettingsHttp.ts";
 import * as SessionStore from "./SessionStore.ts";
-import * as UserIdentities from "../persistence/UserIdentities.ts";
+import * as PairingGrantStore from "./PairingGrantStore.ts";
+import * as UserDirectory from "./UserDirectory.ts";
 import * as AuthHttp from "./http.ts";
 import * as AppSignInHttp from "./appSignInHttp.ts";
 import * as McpOAuth from "./McpOAuth.ts";
@@ -243,9 +244,14 @@ const layerSignInSettings = (options: TestSignInOptions = {}) =>
             Effect.map(ServerSecretStore.ServerSecretStore, options.secretStore),
           ),
     ),
-    // A change to the strong-factor lists ends sign-ins (ticket 06): the Hub's one session store
-    // (the same layer as EnvironmentAuth's, so one instance), whose sockets then close.
-    Layer.provide(Layer.mergeAll(SessionStore.layer, UserIdentities.layer)),
+    // A change to the strong-factor lists ends sign-ins (ticket 06) through the Hub's one
+    // UserDirectory, session and pairing stores (EnvironmentAuth's layers, so one instance each).
+    Layer.provide(
+      UserDirectory.layer.pipe(
+        Layer.provideMerge(PairingGrantStore.layer),
+        Layer.provideMerge(SessionStore.layer),
+      ),
+    ),
   );
 
 const makeLayerServices = (

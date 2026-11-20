@@ -4,6 +4,7 @@
  * link works once even when two browsers race.
  */
 import {
+  type AuthSessionId,
   type AcceptInvitationRequest,
   type AcceptInvitationResult,
   type AuthPasskeyRegistrationCeremony,
@@ -152,6 +153,8 @@ export class InvitationService extends Context.Service<
       userId: UserId,
       token: string,
       clientIp: string | undefined,
+      /** The joining session, when one is; an Admin's Role needs it strong (ticket 06). */
+      sessionId?: AuthSessionId,
     ) => Effect.Effect<JoinInvitationResult, RedeemError>;
     /**
      * Keycloak sign-in, ticket 03: whether a token is a live Invitation and its Role, spending
@@ -663,6 +666,7 @@ const make = Effect.gen(function* () {
   const joinLive = Effect.fnUntraced(function* (
     userId: UserId,
     { tokenHash, invitation, keys }: LiveLink,
+    sessionId: AuthSessionId | undefined,
   ) {
     const principal = yield* spaces.principalOf(userId).pipe(storage);
     if (principal.isOwner) {
@@ -680,6 +684,19 @@ const make = Effect.gen(function* () {
     if (invitation.role === "admin" && !(yield* users.hasStrongSignIn(userId).pipe(storage))) {
       return yield* new InvitationRefusedError({
         reason: `${ADMIN_NEEDS_MORE} Add one in Settings, then open this link again.`,
+        code: "strong-factor-required",
+      });
+    }
+    // A Keycloak User becomes an Admin only from a strong sign-in: from a weak one they could
+    // never sign in as it again (ticket 06).
+    if (
+      invitation.role === "admin" &&
+      sessionId !== undefined &&
+      !(yield* users.keycloakSessionMayBecomeAdmin(userId, sessionId).pipe(storage))
+    ) {
+      return yield* new InvitationRefusedError({
+        reason:
+          "Becoming an Admin needs a second factor in Keycloak. Sign in again with it, then open this link again.",
         code: "strong-factor-required",
       });
     }
@@ -726,9 +743,9 @@ const make = Effect.gen(function* () {
   });
 
   const join: InvitationService["Service"]["join"] = Effect.fn("InvitationService.join")(
-    function* (userId, token, clientIp) {
+    function* (userId, token, clientIp, sessionId) {
       const live = yield* requireLive(token, clientIp);
-      return yield* joinLive(userId, live).pipe(countRefusals(live.keys));
+      return yield* joinLive(userId, live, sessionId).pipe(countRefusals(live.keys));
     },
   );
 

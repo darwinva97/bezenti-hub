@@ -457,6 +457,16 @@ export class SessionStore extends Context.Service<
     readonly revokeForIdentityLoginsDeferred: (
       loginIds: ReadonlyArray<string>,
     ) => Effect.Effect<Effect.Effect<number>, SessionCredentialInternalError>;
+    /**
+     * Revokes a User's sessions born of no Keycloak sign-in (apps, MCP clients, pairing) in the
+     * caller's transaction: how many, and what closes their sockets once it commits.
+     */
+    readonly revokeUnboundForUserDeferred: (
+      userId: UserId,
+    ) => Effect.Effect<
+      { readonly revoked: number; readonly close: Effect.Effect<number> },
+      SessionCredentialInternalError
+    >;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
   }
@@ -1168,6 +1178,14 @@ const make = Effect.gen(function* () {
       return closeRevoked(sessionIds);
     });
 
+  const revokeUnboundForUserDeferred: SessionStore["Service"]["revokeUnboundForUserDeferred"] =
+    Effect.fn("SessionStore.revokeUnboundForUserDeferred")(function* (userId) {
+      const sessionIds = yield* authSessions
+        .revokeUnboundForUser({ userId, revokedAt: yield* DateTime.now })
+        .pipe(Effect.mapError((cause) => new ActiveSessionsListError({ cause })));
+      return { revoked: sessionIds.length, close: closeRevoked(sessionIds) };
+    });
+
   const revokeAllForUser: SessionStore["Service"]["revokeAllForUser"] = Effect.fn(
     "SessionStore.revokeAllForUser",
   )(function* (userId, options) {
@@ -1277,6 +1295,7 @@ const make = Effect.gen(function* () {
     revokeAllForUser,
     revokeAllForUserDeferred,
     revokeForIdentityLoginsDeferred,
+    revokeUnboundForUserDeferred,
     markConnected,
     markDisconnected,
   });

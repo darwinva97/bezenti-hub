@@ -161,8 +161,9 @@ export const layer = HttpApiBuilder.group(
         "join",
         Effect.fn("environment.invitations.join")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
+          const { sessionId } = yield* EnvironmentAuthenticatedPrincipal;
           return yield* invitations
-            .join(yield* requireUser, args.payload.token, yield* clientIp)
+            .join(yield* requireUser, args.payload.token, yield* clientIp, sessionId)
             .pipe(Effect.catchTags(redeemFailures));
         }),
       );

@@ -90,6 +90,21 @@ export class UserIdentities extends Context.Service<
       userId: UserId,
       now: string,
     ) => Effect.Effect<ReadonlyArray<string>, SqlError.SqlError>;
+    /**
+     * Whether the Keycloak sign-in a session was born of is live and strong; none when the session
+     * comes from no Keycloak sign-in (ticket 06: may this session make its User an Admin).
+     */
+    readonly sessionLoginStrong: (
+      sessionId: string,
+    ) => Effect.Effect<Option.Option<boolean>, SqlError.SqlError>;
+    /**
+     * How many live sessions born of no Keycloak sign-in and unspent pairing links these Users
+     * hold: what ending their weak access also ends (the confirmation's count).
+     */
+    readonly unboundAccessCount: (
+      userIds: ReadonlyArray<UserId>,
+      now: string,
+    ) => Effect.Effect<number, SqlError.SqlError>;
     /** Ends these live sign-ins; the ones it ended. */
     readonly endLogins: (
       loginIds: ReadonlyArray<string>,
@@ -240,6 +255,34 @@ const make = Effect.gen(function* () {
     return rows.map((row) => row.loginId);
   });
 
+  const sessionLoginStrong: UserIdentities["Service"]["sessionLoginStrong"] = Effect.fn(
+    "UserIdentities.sessionLoginStrong",
+  )(function* (sessionId) {
+    const rows = yield* sql<{ readonly strong: number; readonly live: number }>`
+      SELECT l.strong AS strong, (l.ended_at IS NULL) AS live
+      FROM auth_sessions AS s JOIN identity_logins AS l ON l.login_id = s.identity_login_id
+      WHERE s.session_id = ${sessionId}
+    `;
+    const row = rows[0];
+    return row === undefined ? Option.none() : Option.some(row.live === 1 && row.strong === 1);
+  });
+
+  const unboundAccessCount: UserIdentities["Service"]["unboundAccessCount"] = Effect.fn(
+    "UserIdentities.unboundAccessCount",
+  )(function* (userIds, now) {
+    if (userIds.length === 0) return 0;
+    const rows = yield* sql<{ readonly count: number }>`
+      SELECT
+        (SELECT COUNT(*) FROM auth_sessions
+          WHERE ${sql.in("user_id", userIds)} AND revoked_at IS NULL
+            AND identity_login_id IS NULL AND expires_at > ${now})
+        + (SELECT COUNT(*) FROM auth_pairing_links
+          WHERE ${sql.in("user_id", userIds)} AND revoked_at IS NULL AND consumed_at IS NULL
+            AND expires_at > ${now}) AS count
+    `;
+    return rows[0]?.count ?? 0;
+  });
+
   const endLogins: UserIdentities["Service"]["endLogins"] = Effect.fn("UserIdentities.endLogins")(
     function* (loginIds, now) {
       if (loginIds.length === 0) return [];
@@ -275,6 +318,8 @@ const make = Effect.gen(function* () {
     setStrength,
     endWeakLogins,
     endLogins,
+    sessionLoginStrong,
+    unboundAccessCount,
     unlink,
   });
 });

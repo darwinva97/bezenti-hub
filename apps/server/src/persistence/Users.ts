@@ -60,6 +60,8 @@ export const UserCredentials = Schema.Struct({
   hasPasskey: Schema.BooleanFromBit,
   /** An Admin of some Organization, who like the Owner needs more than a password. */
   isAdmin: Schema.BooleanFromBit,
+  /** An Admin Membership, pending or not: what a Keycloak sign-in must be strong for. */
+  hasAdminMembership: Schema.BooleanFromBit,
   passwordHash: Schema.NullOr(Schema.String),
   totpSecretCiphertext: Schema.NullOr(Schema.String),
 });
@@ -342,6 +344,9 @@ const make = Effect.gen(function* () {
           OR EXISTS (SELECT 1 FROM user_totp WHERE user_id = ${userId})
           OR EXISTS (SELECT 1 FROM user_identities WHERE user_id = ${userId})
         ) AS "isAdmin",
+        EXISTS (
+          SELECT 1 FROM space_memberships WHERE user_id = ${userId} AND role = 'admin'
+        ) AS "hasAdminMembership",
         (SELECT password_hash FROM user_passwords WHERE user_id = ${userId}) AS "passwordHash",
         (SELECT secret_ciphertext FROM user_totp WHERE user_id = ${userId}) AS "totpSecretCiphertext"
     `,

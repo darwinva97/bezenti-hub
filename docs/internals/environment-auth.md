@@ -732,7 +732,8 @@ sign-in's id:
 
 They end with the sign-in. A session or link naming a sign-in is written only
 while that sign-in is live (a conditional insert), so nothing approved in a race
-outlives it. Sessions issued from the shell stay unbound.
+outlives it. Sessions issued from the shell stay unbound, and carry
+`issued_by_shell` instead (see the next section).
 
 Inheritance changes how ticket 06's weak-access ending treats them:
 
@@ -763,6 +764,60 @@ handle is given back for a retry until it expires. Audit: `keycloak.login.end`
 with its reason (`refresh-refused`, `backchannel`, `sign-out`, `no-refresh-token`,
 `token-unusable`, `keycloak-off`, `issuer-changed`) and how many sessions and
 links ended with it.
+
+### Local sign-in for everyone but the Owner
+
+`sign_in_settings.local_sign_in_for_members` lets the Owner close passkey,
+password, TOTP and recovery-code sign-in to everyone else once they have moved
+to Keycloak. It is closed only while Keycloak is on: turning it off is refused
+with Keycloak off, and turning Keycloak off opens it again, since local sign-in
+is then the only way in.
+
+**The doors.** Every session is issued in
+[EnvironmentAuth](../../apps/server/src/auth/EnvironmentAuth.ts), and one check
+(`localDoorOpen`) runs there before any session for a User other than the Owner
+that names no Keycloak sign-in and was not issued by the shell:
+
+- `issueUserBrowserSession`: passkey, password, the TOTP step, recovery code, a
+  reset link's passkey or password, and an Invitation accepted with new
+  credentials. Each caller has verified the credential first, so the refusal
+  (403, «sign in with Keycloak») is no oracle. A refused recovery code stays
+  unspent, and a refused Invitation or reset link rolls back unspent.
+- `issueAppSession`, `issueMcpClientSession` and the pairing-link exchanges:
+  something approved from a local session before the switch gets no session
+  after it.
+
+Migration 157's trigger refuses the same rows on `auth_sessions`, so a sign-in
+that read the switch as open just before it closed still gets nothing.
+
+**The shell's mark.** `t3 auth session issue --user` and `t3 pair --user` are
+the Owner's own act on the machine, so their access stays when the switch
+closes. `auth_sessions.issued_by_shell` and `auth_pairing_links.issued_by_shell`
+mark it; a link's sessions, and an MCP client approved with a shell-made code,
+inherit the mark. The column marks the shell rather than the local sign-in, so a
+new issuance path that forgets it is revoked (visible) instead of kept (a way in
+Keycloak cannot cut). The migration backfills only the shell's own subjects
+(`cli-issued-session`, `t3-shell`); every other existing session and every
+existing link reads as local.
+
+**Turning it off** runs `UserDirectory.endLocalSignIns` in the settings'
+transaction. It revokes every session and unspent pairing link of anyone but the
+Owner that carries neither a Keycloak sign-in nor the shell's mark, and closes
+their sockets after the commit. A first save answers 409 with how many Users have
+no Keycloak identity yet (their way back is a reset link) and how many sessions
+and links end; `endLoginsConfirmed` saves it.
+
+**Turning Keycloak off**, or saving a new issuer, ends the Keycloak sign-ins
+nothing can re-check any more (all of them, or the old issuer's) through
+`endKeycloakLogins`, each with its own `keycloak.login.end`. Configuration,
+identities and group mappings stay. Both answer 409 first: how many sign-ins and
+sessions end, and for a new issuer how many identities stop matching (each
+needs a reset link; in open registration they would get a new, empty User).
+
+The sign-in page reads `signInOptions.localForMembers` from `/api/auth/session`.
+While it is false and Keycloak is offered, the local form folds under «Owner
+access», still there for the Owner's break-glass, and `/invite` offers no new
+credentials.
 
 ### Disabled and removed Users
 
@@ -797,7 +852,27 @@ Reset links are the Owner's alone (`UserDirectory.issueResetLink`; `created_by`
 names the issuer), since a link takes the account over. Redeeming one registers a
 passkey or, for anyone but the Owner, sets a new password; either way it removes
 every other passkey, the password and TOTP and ends every session, in one
-transaction.
+transaction. While local sign-in is closed, only the Owner's link does that.
+
+With Keycloak on, a link of anyone but the Owner can bind a Keycloak account
+instead: the `reset` intent of `POST /api/auth/keycloak/start` takes the token,
+checks the link is live without spending it, and keeps only its hash in the
+flow. At the callback one transaction:
+
+1. spends the link by its hash (a newer link, or a second callback, finds nothing);
+2. refuses an identity that is another User's (`taken`), or a weak sign-in for
+   an Admin;
+3. ends the old identity and its sign-ins, links the new one, and removes the
+   passkeys, password and TOTP;
+4. revokes every session and pairing link, and issues a session born of this
+   sign-in;
+5. records `resetLink.redeem` (`method: keycloak`) and `user.identity.link`
+   (`via: reset`).
+
+Any refusal leaves the link unspent; the browser lands on `/reset?keycloak=<why>`,
+never with the token. The Owner's link (`t3 auth owner-reset`) never offers
+Keycloak: it is the passkey break-glass. `/api/auth/reset/status` says what a
+link offers (`keycloak`, `local`).
 
 ### Audit log
 

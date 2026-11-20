@@ -178,7 +178,10 @@ function AcceptWithKeycloak({ token }: { readonly token: string }) {
       <Button disabled={busy} size="sm" variant="outline" onClick={accept}>
         Sign in with Keycloak to accept
       </Button>
-      <p className="text-xs text-muted-foreground">Or create an account on this Hub below.</p>
+      <p className="text-xs text-muted-foreground">
+        Already have an account on this Hub? Sign in with it first, then open this link again. Or
+        create an account below.
+      </p>
       {error ? (
         <Alert variant="error">
           <AlertDescription>{error}</AlertDescription>

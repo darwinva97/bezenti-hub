@@ -126,6 +126,39 @@ const ROWS: ReadonlyArray<Row> = [
     ],
   },
   {
+    name: "label G deleted while another mapping remains, person not in it: release",
+    memberships: [managed(bezenti, "admin", "bezenti-admin")],
+    groups: [],
+    mappings: [mapping("bezenti", bezenti, "member")],
+    changes: [{ kind: "release", spaceId: bezenti, role: "admin", group: "bezenti-admin" }],
+  },
+  {
+    name: "label G disabled while another mapping applies: release",
+    memberships: [managed(bezenti, "admin", "bezenti-admin")],
+    groups: ["bezenti-admin"],
+    mappings: [
+      mapping("bezenti", bezenti, "member"),
+      mapping("bezenti-admin", bezenti, "admin", { enabled: false }),
+    ],
+    changes: [{ kind: "release", spaceId: bezenti, role: "admin", group: "bezenti-admin" }],
+  },
+  {
+    name: "label G enabled and the person left G: remove",
+    memberships: [managed(bezenti, "admin", "bezenti-admin")],
+    groups: ["unrelated"],
+    mappings: bezentiMappings,
+    changes: [{ kind: "remove", spaceId: bezenti, role: "admin", group: "bezenti-admin" }],
+  },
+  {
+    name: "label G deleted but the person is in H, mapped: H decides",
+    memberships: [managed(bezenti, "admin", "gone")],
+    groups: ["bezenti"],
+    mappings: bezentiMappings,
+    changes: [
+      { kind: "changeRole", spaceId: bezenti, from: "admin", to: "member", group: "bezenti" },
+    ],
+  },
+  {
     name: "leaving every mapped group removes the managed Membership",
     memberships: [managed(bezenti, "member", "bezenti")],
     groups: ["other"],

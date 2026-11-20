@@ -808,4 +808,48 @@ describe("Keycloak group mappings (Keycloak 05)", () => {
       assert.notInclude(JSON.stringify(entry!.detail), SECRET);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("deleting one of two mappings releases only the Memberships its group made", () =>
+    Effect.gen(function* () {
+      const { server, owner } = yield* hub();
+      const spaceDirectory = Context.get(server.services, SpaceDirectory.SpaceDirectory);
+      const organizations = (yield* server.request(SETTINGS, { cookie: owner })).body
+        .mappableOrganizations as ReadonlyArray<{ spaceId: string; name: string }>;
+      const acmeId = organizations.find((organization) => organization.name === "Acme")!.spaceId;
+      const both = [
+        { group: "bezenti-admin", spaceId: acmeId, role: "admin" },
+        { group: "bezenti", spaceId: acmeId, role: "member" },
+      ];
+      assert.equal((yield* save(server, owner, { groupMappings: both })).status, 200);
+      yield* seedMember(server, "kc-g", acmeId, "admin", "bezenti-admin");
+      yield* seedMember(server, "kc-h", acmeId, "member", "bezenti");
+      const sockets = yield* spaceDirectory.subscribeMembershipChanges;
+      const notified = yield* Stream.runCollect(Stream.take(sockets, 1)).pipe(Effect.forkScoped);
+
+      assert.equal((yield* save(server, owner, { groupMappings: [both[1]!] })).status, 200);
+      assert.deepEqual(yield* rolesIn(server, acmeId), [
+        { userId: "kc-g", role: "admin", group: null, managed: 0 },
+        { userId: "kc-h", role: "member", group: "bezenti", managed: 1 },
+      ]);
+      const audited = yield* server.request(
+        "/api/installation/audit?action=membership.changeRole",
+        { cookie: owner },
+      );
+      const entries = (
+        audited.body.entries as ReadonlyArray<{
+          target: { id: string };
+          detail: Record<string, unknown>;
+        }>
+      ).filter((entry) => entry.target.id.startsWith("kc-"));
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0]!.target.id, "kc-g");
+      assert.deepEqual(entries[0]!.detail, {
+        from: "admin",
+        to: "admin",
+        managed: "manual",
+        keycloakGroup: "bezenti-admin",
+      });
+      assert.deepEqual(Array.from(yield* Fiber.join(notified)), ["kc-g"]);
+    }).pipe(Effect.scoped),
+  );
 });

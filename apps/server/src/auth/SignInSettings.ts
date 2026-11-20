@@ -361,9 +361,10 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Inside the settings' transaction: a managed Membership in an Organization left without an
-   * enabled mapping becomes manual, its Role kept, so it never stays where nobody may change it.
-   * Archived Organizations are left as they are. Returns whose Memberships changed.
+   * In the settings' transaction: a managed Membership whose group no longer has an enabled mapping
+   * in its Organization becomes manual, its Role kept, so it never stays where nobody may change
+   * it, even if the Organization keeps other mappings. Archived ones are left. Returns whose
+   * Memberships changed.
    */
   const releaseUnmapped = Effect.fn("SignInSettings.releaseUnmapped")(function* (
     actor: UserId,
@@ -372,7 +373,6 @@ const make = Effect.gen(function* () {
     const remaining = yield* readMappings;
     const users: Array<UserId> = [];
     for (const spaceId of new Set(spaceIds)) {
-      if (remaining.some((mapping) => mapping.spaceId === spaceId && mapping.enabled)) continue;
       const managed = yield* sql<{
         readonly userId: UserId;
         readonly role: SpaceRole;
@@ -383,6 +383,11 @@ const make = Effect.gen(function* () {
         WHERE m.space_id = ${spaceId} AND m.managed_by_keycloak = 1 AND s.archived_at IS NULL
       `.pipe(Effect.mapError(storage));
       for (const membership of managed) {
+        const stillMapped = remaining.some(
+          (mapping) =>
+            mapping.spaceId === spaceId && mapping.enabled && mapping.group === membership.group,
+        );
+        if (stillMapped) continue;
         yield* spaces
           .setKeycloakManaged({ spaceId, userId: membership.userId, keycloakGroup: null })
           .pipe(Effect.mapError(storage));

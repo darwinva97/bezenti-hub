@@ -621,9 +621,11 @@ A mapping may point only into an Organization whose Steward the Owner is
 (today the creator, with a missing creator counting as the Owner for single-user-era
 Organizations), so a group never puts the Owner into someone else's Organization. A
 saved mapping that stops qualifying reads `enabled: false`, applies nothing and
-shows a warning. When an Organization is left with no enabled mapping, its managed
-Memberships turn manual with their Role kept: immediately when the Owner removes
-the mapping, otherwise at the next sign-in. Deleting an Organization deletes its
+shows a warning. When a managed Membership's group no longer has an enabled mapping in its
+Organization (deleted, or disabled because the Owner stopped being Steward), the
+Membership turns manual with its Role kept, even if the Organization keeps other
+mappings: immediately when the Owner removes the mapping, otherwise at the next
+sign-in. Only leaving the group in Keycloak, with the mapping still in force, removes it. Deleting an Organization deletes its
 mappings (foreign key). Lowering a mapping's Role lowers, in the same transaction as the
 save, the managed Memberships that mapping made to the new Role (audited as
 `membership.changeRole`, actor `system`); a Role is never raised at save, and another

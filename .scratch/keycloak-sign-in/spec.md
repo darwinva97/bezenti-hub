@@ -127,13 +127,13 @@ El Hub habla OIDC con un realm de Keycloak (authorization code + PKCE, cliente c
 
 ### Intenciones del flujo
 
-| Intención    | Quién la empieza                       | Qué pide a Keycloak                                        | Qué hace al volver                                                                                   |
-| ------------ | -------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `sign-in`    | cualquiera, sin sesión                 | nada especial                                              | admisión; crea User si toca; sesión                                                                  |
-| `invitation` | quien abre `/invite#token=…`           | nada especial                                              | admisión con esa Invitation; acepta (Organization o plataforma); sesión                              |
-| `link`       | un User con sesión local, tras step-up | `prompt=login`                                             | vincula; borra credenciales locales (no al Owner); revoca todas sus sesiones; sesión nueva de Keycloak |
-| `reset`      | quien abre un reset link               | `prompt=login`                                             | vincula (sustituye la identidad anterior); borra credenciales locales; revoca sesiones; sesión       |
-| `step-up`    | un User con sesión de Keycloak         | `prompt=login`, `max_age=0`, `acr_values` si hay lista     | prueba de un solo uso, 5 minutos, atada a esa sesión, si el login es fuerte y es la misma identidad  |
+| Intención    | Quién la empieza                       | Qué pide a Keycloak                                    | Qué hace al volver                                                                                     |
+| ------------ | -------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `sign-in`    | cualquiera, sin sesión                 | nada especial                                          | admisión; crea User si toca; sesión                                                                    |
+| `invitation` | quien abre `/invite#token=…`           | nada especial                                          | admisión con esa Invitation; acepta (Organization o plataforma); sesión                                |
+| `link`       | un User con sesión local, tras step-up | `prompt=login`                                         | vincula; borra credenciales locales (no al Owner); revoca todas sus sesiones; sesión nueva de Keycloak |
+| `reset`      | quien abre un reset link               | `prompt=login`                                         | vincula (sustituye la identidad anterior); borra credenciales locales; revoca sesiones; sesión         |
+| `step-up`    | un User con sesión de Keycloak         | `prompt=login`, `max_age=0`, `acr_values` si hay lista | prueba de un solo uso, 5 minutos, atada a esa sesión, si el login es fuerte y es la misma identidad    |
 
 - `returnTo` es una ruta relativa del mismo origen (empieza por una sola `/`); cualquier otra cosa vuelve a `/`. Así `/app-sign-in?…` y `/connect-agent?…` vuelven con sus parámetros y desktop, móvil y clientes MCP siguen igual.
 - Si la respuesta trae `iss` (RFC 9207), debe ser el issuer configurado.
@@ -141,14 +141,14 @@ El Hub habla OIDC con un realm de Keycloak (authorization code + PKCE, cliente c
 
 ### Admisión (`KeycloakAdmission`)
 
-| Identidad                     | Abierto                         | Solo con invitación                                    | Cerrado                                  |
-| ----------------------------- | ------------------------------- | ------------------------------------------------------ | ---------------------------------------- |
-| De un User activo             | entra                           | entra                                                  | entra                                    |
-| De un User desactivado/quitado | rechazo, como hoy (tras verificar) | igual                                               | igual                                    |
-| Nueva, con Platform invitation | crea User                       | crea User                                              | crea User                                |
-| Nueva, con Invitation de Organization | crea User y membership  | crea User y membership                                 | rechazo                                  |
-| Nueva, con grupo mapeado      | crea User                       | crea User (el mapeo es una invitación permanente)      | rechazo                                  |
-| Nueva, sin nada               | crea User                       | rechazo «solo con invitación»                          | rechazo «registro cerrado»               |
+| Identidad                             | Abierto                            | Solo con invitación                               | Cerrado                    |
+| ------------------------------------- | ---------------------------------- | ------------------------------------------------- | -------------------------- |
+| De un User activo                     | entra                              | entra                                             | entra                      |
+| De un User desactivado/quitado        | rechazo, como hoy (tras verificar) | igual                                             | igual                      |
+| Nueva, con Platform invitation        | crea User                          | crea User                                         | crea User                  |
+| Nueva, con Invitation de Organization | crea User y membership             | crea User y membership                            | rechazo                    |
+| Nueva, con grupo mapeado              | crea User                          | crea User (el mapeo es una invitación permanente) | rechazo                    |
+| Nueva, sin nada                       | crea User                          | rechazo «solo con invitación»                     | rechazo «registro cerrado» |
 
 - Un User que ya existe y abre una Platform invitation: «ya tienes cuenta»; la Invitation sigue sin usar. Con una Invitation de Organization, se une como hoy hace `/api/invitations/join` (con sus mismas negativas).
 - La creación del User, el gasto de la Invitation (`UPDATE` condicional, como hoy), las memberships del mapeo, la identidad, el login y la sesión van en una transacción. Una negativa dentro deja la Invitation sin gastar.
@@ -158,7 +158,7 @@ El Hub habla OIDC con un realm de Keycloak (authorization code + PKCE, cliente c
 
 - Se leen del ID token, en el claim que diga el Owner (por defecto `groups`). Un grupo casa si es igual al del mapeo o igual quitándole la `/` inicial (Keycloak manda la ruta completa si así está el mapper). Un claim ausente cuenta como lista vacía, porque Keycloak lo omite cuando no hay grupos.
 - Por cada Organization con mapeos, el Role deseado es el mayor de los grupos que casan (Admin > Member > Guest):
-  - sin Role deseado: una membership gestionada se quita; una manual no se toca;
+  - sin Role deseado: una membership gestionada cuyo grupo sigue mapeado (la persona salió del grupo) se quita; si el mapeo de su grupo ya no aplica (borrado, o desactivado porque el Owner dejó de ser Steward) pasa a manual con su Role, aunque la Organization conserve otros mapeos; una manual no se toca;
   - con Role deseado: se crea gestionada si no había; una gestionada cambia de Role si hace falta; una manual pasa a gestionada con ese Role (donde hay grupo, manda Keycloak).
 - Organizations archivadas: no se tocan.
 - Se aplica en cada inicio de sesión y en cada re-comprobación (el refresh devuelve un ID token nuevo). Así salir del grupo en Keycloak saca de la Organization en menos de una hora, no en 30 días.

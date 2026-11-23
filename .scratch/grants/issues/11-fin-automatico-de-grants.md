@@ -12,11 +12,11 @@ Archivar el destino no lo termina. Cada caso pasa por el mismo camino que «Reti
 
 **Blocked by:** 02, 07, 10.
 
-**Status:** ready-for-agent
+**Status:** done (design: 11-design.md)
 
-- [ ] Recurso borrado (AI account, Vault group, máquina) → `resource-gone`. Cambio de dueño (si `owned-resources` lo permite) → `owner-changed`.
-- [ ] Organization destino borrada (flujo de borrado de `OrganizationLifecycle.ts`) o Personal space borrado → `target-gone`. Archivada → sigue `active` sin uso; al restaurarla vuelve a usarse.
-- [ ] User prestador borrado (borrado de cuenta de `platform-privacy`) u Organization prestadora borrada → `lender-gone`.
-- [ ] Red-first por cada caso: después no queda acceso (gateway, conjunto efectivo, conexión de Sandbox) y la auditoría registra `grant.end` con el motivo.
-- [ ] Que el prestador deje la Organization destino no termina el Grant (test).
-- [ ] «Préstamos dados» y «Prestado a este Space» muestran los terminados con su motivo y fecha.
+- [x] Recurso borrado (AI account, Vault group, máquina) → `resource-gone`. Cambio de dueño (si `owned-resources` lo permite) → `owner-changed`: hoy no lo permite (máquina prestada: `machine-lent`); dedicar una máquina cancela sus enlaces abiertos.
+- [x] Organization destino borrada (flujo de borrado de `OrganizationLifecycle.ts`) o Personal space borrado → `target-gone`. Archivada → sigue `active` sin uso; al restaurarla vuelve a usarse.
+- [x] User prestador borrado (borrado de cuenta de `platform-privacy`) u Organization prestadora borrada → `lender-gone`.
+- [x] Red-first por cada caso: después no queda acceso (gateway, conjunto efectivo, conexión de Sandbox) y la auditoría registra `grant.end` con el motivo.
+- [x] Que el prestador deje la Organization destino no termina el Grant (test).
+- [x] «Préstamos dados» y «Prestado a este Space» muestran los terminados con su motivo y fecha.

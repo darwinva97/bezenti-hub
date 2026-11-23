@@ -37,13 +37,43 @@ only from the state it read (a concurrent change loses with «changed meanwhile�
 there (`grant.give`, `grant.accept`, `grant.reject`, `grant.cancel`, `grant.end` with `reason` and
 `side`, `grant.limits.change`), never with a credential.
 
-A side that is gone ends its loans in the removal's own transaction
-([GrantEnding](../../apps/server/src/grants/GrantEnding.ts), whatever the resource's kind): a
-deleted Organization ends every live loan to it with `target-gone` and every one it gave with
-`lender-gone`. `pending` and `active` loans end, an `offered` one is cancelled, each audited by the
-`system` side with `via` (`organization.delete`). A machine's Sandbox for an ended loan is closed in
-the same commit (its credential stops there) and its socket after it. Removing the machine itself
-ends its loans with `resource-gone`.
+### Loans that end by themselves
+
+A side that is gone ends its loans in the removal's own transaction (Grants ticket 11; design
+`.scratch/grants/issues/11-design.md`), through one path,
+[GrantEnding](../../apps/server/src/grants/GrantEnding.ts), whatever the resource's kind:
+
+| What goes                                                 | Reason                        | `via`                 |
+| --------------------------------------------------------- | ----------------------------- | --------------------- |
+| An AI account deleted                                     | `resource-gone`               | `ai_account.delete`   |
+| A Vault group deleted                                     | `resource-gone`               | `vault_group.delete`  |
+| A machine removed (or revoked with its User)              | `resource-gone`               | `environment.remove`  |
+| An Organization deleted: loans to it / it gave            | `target-gone` / `lender-gone` | `organization.delete` |
+| A User removed: loans to their Personal space / they gave | `target-gone` / `lender-gone` | `user.remove`         |
+
+`pending` and `active` loans end, an open `offered` one is cancelled, each audited (`grant.end`
+with `reason` and the `system` side, or `grant.cancel`) with `via`. It does what «Take back» does
+for the kind: a Vault group's default and choices in the borrowing Space go, audited `vault.choose`
+`via: grant.end`; a machine's Sandbox is closed in the same commit (its credential stops there) and
+its socket after it; an AI account's next gateway request is refused (deleting one also signals
+`AiAccountChanges`). The removals end loans _before_ deleting what the owner had, so the borrower's
+lent defaults go audited and each loan keeps its names.
+
+`owner-changed` exists for a resource that stays but is no longer its lender's. Nothing moves an AI
+account or a Vault group to another owner, and a lent machine's mode change is refused
+(`machine-lent`); a machine dedicated to an Organization while it only had open lending links
+cancels them (`via: environment.mode.change`).
+
+Names: `grants.resource_name`, `lender_name` and `target_name` (migration 162) are written from the
+live rows on every change of a loan's state; the lists read the live name first, then the kept one,
+so an ended loan of a deleted group, a purged AI account or a deleted Organization is still named.
+A loan whose Space is gone is decided on its lender's side only (as a link with no destination), so
+its lender still sees it. `grants.listReceived` lists `ended` loans too, to whoever sees active
+ones there. Migration 162 also ended the live loans of resources earlier Hubs deleted without ending
+them, and cancelled their links.
+
+Leaving the destination Organization ends nothing: the lender still takes it back, the Space still
+gives it back.
 
 A loan to an archived (or frozen) Organization, or to the Personal space of a turned-off User,
 stays `active` and unused: its Sandbox runs no turn and takes no Thread (`spaceRefusalOf` answers
@@ -176,7 +206,9 @@ passkey or authenticator app is sent to Settings → Account). Settings → Envi
 and the lender's risks; the strong factor when the loan starts active; «Someone else's Space: make a
 link» makes a lending link and shows it once) and the **Loans** section
 (`GrantsSettings`: waiting loans to accept with a strong factor or reject, borrowed machines to give
-back, lent ones to take back or cancel, with the Sandbox's state and disk). A lent machine shows in
+back, lent ones to take back or cancel, with the Sandbox's state and disk; ended ones on both
+sides with their day and reason, the borrowing Spaces' under «Ended loans to your Spaces»). A lent
+machine shows in
 the Space's lists as «Lent to <Space> by <lender>, who sees everything that runs on it»
 (`environmentUseDescription`). Vault groups (Grants ticket 07): **Lend…** on each named group the
 User manages (`LendVaultGroupDialog`: the warning that the Space's agents, Guests' Threads

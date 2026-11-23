@@ -1,0 +1,176 @@
+# App de escritorio para Windows de bezenti (solo en este fork, darwinva97/bezenti-hub). Ver bezenti/README.md.
+#
+# Después de cada ejecución correcta de `bezenti` en main (y a mano, para una Release ya publicada):
+# compila el instalador de Windows x64 (NSIS) del MISMO commit que la Release `v<versión>` (el Hub y sus
+# clientes tienen que ir en la misma versión) y le añade `T3-Code-<versión>-x64.exe` y su `.sha256`.
+#
+# - Reutiliza release-desktop.yml del original (desactivado como workflow, pero se puede llamar): empaqueta
+#   en Linux y comprueba los binarios nativos en un runner de Windows.
+# - El backend de WSL de la app lleva dentro la CLI `t3` de Linux: es la de la propia Release (la que
+#   `bezenti` ya compiló y probó), subida aquí como el artefacto `cli-linux-x64` que release-desktop.yml espera.
+# - Sin firma: no hay certificado de firma de código de Windows (Azure Trusted Signing u otro). Windows
+#   SmartScreen avisa «Windows protegió su PC» la primera vez: «Más información» → «Ejecutar de todas formas».
+# - La suma va en un `.sha256` aparte, no en SHA256SUMS: bezenti-android.yml reescribe ese archivo a la vez
+#   y uno pisaría la línea del otro.
+name: bezenti-desktop
+
+on:
+  workflow_run:
+    workflows: [bezenti]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release ya publicada (p. ej. v0.1.7-bezenti.30)
+        required: true
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: bezenti-desktop-${{ github.event.workflow_run.head_sha || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  preparar:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      sha: ${{ steps.release.outputs.sha }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      # Igual que en bezenti-android.yml.
+      - name: Release y commit
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            tag="$INPUT_TAG"
+          else
+            base=$(gh api "repos/$GITHUB_REPOSITORY/contents/apps/server/package.json?ref=$RUN_SHA" --jq .content | base64 -d | jq -r .version)
+            tag="v${base}-bezenti.${RUN_NUMBER}"
+          fi
+          case "$tag" in v*-bezenti.*) ;; *) echo "Tag inesperado: $tag" >&2; exit 1;; esac
+          sha=$(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)
+          if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Release $tag, commit $sha"
+
+      # La CLI de Linux de la Release, comprobada contra su SHA256SUMS, para el backend de WSL.
+      - name: CLI de Linux de la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p wsl-runtime && cd wsl-runtime
+          archivo="t3-${VERSION}-linux-x64.tar.gz"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$archivo" -p SHA256SUMS
+          grep " ${archivo}\$" SHA256SUMS | sha256sum -c -
+          rm SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cli-linux-x64
+          path: wsl-runtime/*
+          if-no-files-found: error
+          retention-days: 1
+
+      # Sin .repos (referencias vendorizadas con gitlinks huérfanos), como en bezenti.yml.
+      - name: Checkout
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --depth=1 origin "$SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach FETCH_HEAD
+
+      - name: Dependencias
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Versión de la Release en los paquetes
+        run: node scripts/update-release-package-versions.ts "${{ steps.release.outputs.version }}"
+
+      # @t3tools/desktop#build compila el ayudante de secretos del navegador de Linux: necesita libsecret.
+      - name: Librerías de compilación
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      # Como build_bundle de release.yml: servidor + cliente web + main de Electron, una sola vez.
+      - name: Paquete JS
+        env:
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: vp run build:desktop
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+
+  windows:
+    needs: preparar
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.preparar.outputs.version }}
+      ref: ${{ needs.preparar.outputs.sha }}
+      release_channel: latest
+      label: Windows x64
+      runner: ubuntu-latest
+      verify_runner: windows-2025
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      resource_key: win32-x64
+
+  publicar:
+    needs: [preparar, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-win-x64
+          path: salida
+
+      - name: Subir a la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preparar.outputs.tag }}
+          VERSION: ${{ needs.preparar.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd salida
+          ls -la
+          shopt -s nullglob
+          exes=(*.exe)
+          [ "${#exes[@]}" -eq 1 ] || { echo "Esperaba un solo .exe y hay ${#exes[@]}" >&2; exit 1; }
+          exe="${exes[0]}"
+          case "$exe" in *"$VERSION"*) ;; *) echo "El instalador $exe no lleva la versión $VERSION" >&2; exit 1;; esac
+          sha256sum "$exe" > "$exe.sha256"
+          cat "$exe.sha256"
+          gh release upload "$TAG" "$exe" "$exe.sha256" --clobber -R "$GITHUB_REPOSITORY"

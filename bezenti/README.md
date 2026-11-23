@@ -105,8 +105,24 @@ Firma: secretos `BEZENTI_ANDROID_KEYSTORE_B64` (PKCS12 en base64) y `BEZENTI_AND
 GitHub no deja leerlos de vuelta: la copia de la clave se guarda fuera (gestor de contraseñas). Si se
 pierde, los móviles tienen que desinstalar la app para instalar una firmada con otra clave.
 
+## App de escritorio para Windows
+
+`.github/workflows/bezenti-desktop.yml` corre después de cada `bezenti` correcto en `main` (o a mano con el
+tag de una Release) y añade a esa misma Release el instalador `T3-Code-<versión>-x64.exe` y su `.sha256`,
+compilado del mismo commit que el Hub. Usa `release-desktop.yml` del original (que sigue desactivado como
+workflow: solo se llama) con runners normales de GitHub, y lleva dentro, para el backend de WSL, la CLI de
+Linux de la propia Release. La app no se actualiza sola: cada versión nueva del Hub se instala encima.
+
+No está firmado (no hay certificado de firma de código de Windows), así que SmartScreen avisa la primera
+vez: «Más información» → «Ejecutar de todas formas». La suma está en el `.sha256` de al lado.
+
+Para conectarla al Hub: Settings → Environments → This app → apagar **Local environment**, luego **Add Hub**
+con `claude.bezenti.com` y **Sign in in browser**. Para que el PC ejecute agentes del Hub: **Use this
+computer as an Environment** → **Join**.
+
 ## Workflows del original
 
 Están **desactivados** en este fork (Actions → cada workflow → «Disable workflow», o `gh workflow disable`):
-usan runners de Blacksmith que aquí no existen y se quedarían en cola para siempre. Solo corren `bezenti` y `bezenti-android`.
+usan runners de Blacksmith que aquí no existen y se quedarían en cola para siempre. Solo corren `bezenti`,
+`bezenti-android` y `bezenti-desktop` (este llama a `release-desktop.yml`, que sigue desactivado).
 Si un merge de Eijun añade workflows nuevos, desactivarlos también.

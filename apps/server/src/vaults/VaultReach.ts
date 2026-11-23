@@ -51,11 +51,22 @@ const toReach = (row: RawReachRow): ReachRow => ({
 const ownSpaceSql = `(CASE v.owner_kind WHEN 'organization' THEN v.owner_id
   ELSE 'personal:' || v.owner_id END)`;
 
-/** The active Grants lending group `v` to the Space named by the SQL expression `space`. */
+/**
+ * The active Grants lending group `v` to the Space named by the SQL expression `space`, while their
+ * lender may lend it (Grants ticket 13, as AI accounts and machines): still its owner, a User not
+ * disabled or removed, an Organization not archived, frozen or gone.
+ */
 const lentSql = (space: string) => `
   SELECT g.grant_id FROM grants g
   WHERE g.resource_kind = 'vault-group' AND g.resource_id = v.group_id
-    AND g.target_kind = 'space' AND g.target_id = ${space} AND g.state = 'active'`;
+    AND g.target_kind = 'space' AND g.target_id = ${space} AND g.state = 'active'
+    AND g.lender_kind = v.owner_kind AND g.lender_id = v.owner_id
+    AND (g.lender_kind <> 'user' OR EXISTS (
+      SELECT 1 FROM users u WHERE u.user_id = g.lender_id
+        AND u.disabled_at IS NULL AND u.removed_at IS NULL))
+    AND (g.lender_kind <> 'organization' OR EXISTS (
+      SELECT 1 FROM spaces s WHERE s.space_id = g.lender_id AND s.kind = 'organization'
+        AND s.archived_at IS NULL AND s.frozen_at IS NULL))`;
 
 /**
  * The fixed defaults among the groups reaching a Space: its owner's `default` (the only `default`

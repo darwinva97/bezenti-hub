@@ -991,3 +991,45 @@ it.effect(
       assert.isFalse(VALUES.some((value) => JSON.stringify(bare).includes(value)));
     }),
 );
+
+// Grants ticket 13: as with AI accounts and machines, a lender who cannot lend now lends nothing.
+it.effect(
+  "a lent group delivers nothing while its User lender is disabled or its lending Organization archived",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const gusTools = yield* h.vaults
+        .create({ name: "Gus tools", owner: userOwner(h.gus.id) })
+        .pipe(h.as(h.gus.id));
+      yield* h.vaults
+        .putEntry({ vaultId: gusTools.id, name: "GUS_TOKEN", value: Redacted.make(VALUES[1]!) })
+        .pipe(h.as(h.gus.id));
+      const globexKeys = yield* h.ownersVault(
+        "Globex keys",
+        [["GLOBEX_KEY", VALUES[2]!]],
+        h.globexId,
+      );
+      yield* h.lend(gusTools.id, h.acmeId, { kind: "user", id: h.gus.id });
+      yield* h.lend(globexKeys, h.acmeId, { kind: "organization", id: h.globexId });
+      yield* h.vaults
+        .setSpaceDefaults({ spaceId: h.acmeId, vaultIds: [gusTools.id, globexKeys] })
+        .pipe(h.as(h.ada.id));
+      const thread = yield* h.thread("thread:grace-lenders", h.grace.id, h.acmeId, null);
+      const now = () =>
+        h.effective
+          .forThread({ threadId: thread, actingUserId: h.grace.id })
+          .pipe(Effect.map(h.names));
+      assert.deepEqual([...(yield* now())].sort(), ["GLOBEX_KEY", "GUS_TOKEN"]);
+
+      yield* h.server
+        .sql`UPDATE users SET disabled_at = '2026-11-20T00:00:00.000Z' WHERE user_id = ${h.gus.id}`;
+      yield* h.server
+        .sql`UPDATE spaces SET archived_at = '2026-11-20T00:00:00.000Z' WHERE space_id = ${h.globexId}`;
+      assert.deepEqual(yield* now(), []);
+
+      // Back: they lend again (the loans never ended).
+      yield* h.server.sql`UPDATE users SET disabled_at = NULL WHERE user_id = ${h.gus.id}`;
+      yield* h.server.sql`UPDATE spaces SET archived_at = NULL WHERE space_id = ${h.globexId}`;
+      assert.deepEqual([...(yield* now())].sort(), ["GLOBEX_KEY", "GUS_TOKEN"]);
+    }),
+);

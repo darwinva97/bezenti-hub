@@ -20,15 +20,23 @@ export const ACCESS_KEY_MAX_VALIDITY_DAYS = 366;
 /** Who the key is for, as its issuer names it (the recipient's name, a team, a test). */
 export const AccessKeyLabel = TrimmedNonEmptyString.check(Schema.isMaxLength(80));
 
+/** The largest token cap a key takes. */
+export const ACCESS_KEY_MAX_CAP = 1_000_000_000_000;
+
+/** One token cap: a whole number of tokens, 1 to 10¹². */
+export const AccessKeyCap = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: ACCESS_KEY_MAX_CAP }),
+);
+
 /**
- * Token caps of a key: for its whole life (`total`) and per UTC day, ISO week and month; null: no
- * cap of that kind. Access-keys ticket 05 sets them; until then every key has none.
+ * Token caps of a key (access-keys ticket 05): for its whole life (`total`) and per UTC day, ISO
+ * week and month, in any combination; null: no cap of that kind.
  */
 export const AccessKeyLimits = Schema.Struct({
-  total: Schema.NullOr(Schema.Number),
-  day: Schema.NullOr(Schema.Number),
-  week: Schema.NullOr(Schema.Number),
-  month: Schema.NullOr(Schema.Number),
+  total: Schema.NullOr(AccessKeyCap),
+  day: Schema.NullOr(AccessKeyCap),
+  week: Schema.NullOr(AccessKeyCap),
+  month: Schema.NullOr(AccessKeyCap),
 });
 export type AccessKeyLimits = typeof AccessKeyLimits.Type;
 
@@ -175,6 +183,10 @@ export const AccessKeyCreateInput = Schema.Struct({
       ),
     ),
   ),
+  /** Its token caps (access-keys ticket 05): at least one, unless `unlimited`. */
+  limits: Schema.optionalKey(AccessKeyLimits),
+  /** «No token limit», chosen explicitly: every cap null. */
+  unlimited: Schema.optionalKey(Schema.Boolean),
 });
 export type AccessKeyCreateInput = typeof AccessKeyCreateInput.Type;
 

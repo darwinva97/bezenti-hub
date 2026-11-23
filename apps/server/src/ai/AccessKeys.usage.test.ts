@@ -28,7 +28,7 @@ const ownClaude = (setup: Hub, as: UserId, organization: boolean) =>
 
 const keyIn = (setup: Hub, as: UserId, spaceId: Hub["acmeId"], label: string) =>
   setup.accessKeys
-    .createForSession({ spaceId, label, validity: WEEK, models: ["*"] })
+    .createForSession({ spaceId, label, validity: WEEK, models: ["*"], unlimited: true })
     .pipe(CommandActor.actAs(as));
 
 /** A streamed answer read up to its first event, then dropped by the client. */

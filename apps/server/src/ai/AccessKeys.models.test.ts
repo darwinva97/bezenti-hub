@@ -51,7 +51,13 @@ const acmeModels = Effect.fn(function* (setup: Hub) {
 
 const keyWith = (setup: Hub, models: ReadonlyArray<string>) =>
   setup.accessKeys
-    .createForSession({ spaceId: setup.acmeId, label: "Partner", validity: WEEK, models })
+    .createForSession({
+      spaceId: setup.acmeId,
+      label: "Partner",
+      validity: WEEK,
+      models,
+      unlimited: true,
+    })
     .pipe(CommandActor.actAs(setup.people.admin));
 
 it.live.skipIf(!posix || platform === undefined)(

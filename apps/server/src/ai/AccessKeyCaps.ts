@@ -3,7 +3,7 @@
  * (`ai_usage_daily.access_key_id`) plus what the usage log has not written yet, so a cap never
  * counts less than was used. UTC calendar periods, as a Grant's. docs: ai-gateway.md.
  */
-import type { AccessKeyUsage } from "@t3tools/contracts";
+import type { AccessKeyLimits, AccessKeyUsage } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -19,6 +19,23 @@ export class AccessKeyCapsError extends Schema.TaggedError<AccessKeyCapsError>()
   { message: Schema.String },
 ) {}
 
+/** Which cap: the whole life of the key, or a UTC calendar period. */
+export type AccessKeyCapKind = "total" | "month" | "week" | "day";
+
+/** A cap reached: how much, how much was used, and when it resets (null: never, the total). */
+export interface AccessKeyCapReached {
+  readonly which: AccessKeyCapKind;
+  readonly amount: number;
+  readonly used: number;
+  readonly resetsAt: string | null;
+}
+
+export interface AccessKeyCapState {
+  readonly usage: AccessKeyUsage;
+  /** The first cap reached in the spec's order (total, month, week, day); null: room in all. */
+  readonly exhausted: AccessKeyCapReached | null;
+}
+
 export class AccessKeyCaps extends Context.Service<
   AccessKeyCaps,
   {
@@ -26,8 +43,24 @@ export class AccessKeyCaps extends Context.Service<
     readonly usageOf: (
       keyIds: ReadonlyArray<string>,
     ) => Effect.Effect<ReadonlyMap<string, AccessKeyUsage>, AccessKeyCapsError>;
+    /** Where a key stands against its caps now (access-keys ticket 05). */
+    readonly check: (
+      keyId: string,
+      limits: AccessKeyLimits,
+    ) => Effect.Effect<AccessKeyCapState, AccessKeyCapsError>;
   }
 >()("t3/ai/AccessKeyCaps") {}
+
+const PERIOD_WORDS = { day: "daily", week: "weekly", month: "monthly" } as const;
+
+/**
+ * What a client is told when a cap is reached, in UTC; never anyone else's use. The total does
+ * not come back by itself; a period resets.
+ */
+export const capReachedMessage = (reached: AccessKeyCapReached) =>
+  reached.which === "total" || reached.resetsAt === null
+    ? `This access key used its total token limit (${reached.amount.toLocaleString("en-US")}). Ask whoever gave it to you to raise it.`
+    : `This access key reached its ${PERIOD_WORDS[reached.which]} token limit (${reached.amount.toLocaleString("en-US")}); it resets ${reached.resetsAt.slice(0, 10)} 00:00 UTC.`;
 
 /**
  * The tokens caps count of a daily row: input not read from the cache (all its input for a row
@@ -113,7 +146,22 @@ const make = Effect.gen(function* () {
     return answer as ReadonlyMap<string, AccessKeyUsage>;
   });
 
-  return AccessKeyCaps.of({ usageOf });
+  const check = Effect.fn("AccessKeyCaps.check")(function* (
+    keyId: string,
+    limits: AccessKeyLimits,
+  ) {
+    const usage = (yield* usageOf([keyId])).get(keyId)!;
+    const order: ReadonlyArray<AccessKeyCapKind> = ["total", "month", "week", "day"];
+    const reached = order.flatMap((which): ReadonlyArray<AccessKeyCapReached> => {
+      const amount = limits[which];
+      const used = usage[which];
+      if (amount === null || used < amount) return [];
+      return [{ which, amount, used, resetsAt: which === "total" ? null : usage.resets[which] }];
+    })[0];
+    return { usage, exhausted: reached ?? null } satisfies AccessKeyCapState;
+  });
+
+  return AccessKeyCaps.of({ usageOf, check });
 });
 
 export const layer = Layer.effect(AccessKeyCaps, make);

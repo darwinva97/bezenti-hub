@@ -64,7 +64,13 @@ const acmeOwn = Effect.fn(function* (setup: Hub) {
 /** Ada makes a key for Acme; the key's value, for the test's own requests. */
 const adaKey = Effect.fn(function* (setup: Hub, label = "Partner") {
   const made = yield* setup.accessKeys
-    .createForSession({ spaceId: setup.acmeId, label, validity: WEEK, models: ALL })
+    .createForSession({
+      spaceId: setup.acmeId,
+      label,
+      validity: WEEK,
+      models: ALL,
+      unlimited: true,
+    })
     .pipe(CommandActor.actAs(setup.people.admin));
   return { ...made, value: Redacted.value(made.key) };
 });
@@ -332,7 +338,13 @@ it.live.skipIf(!posix || platform === undefined)(
       assert.include(refused.text, "This access key's Space is archived.");
       // Archived: nobody makes a key, the Owner included; the Owner still lists and could revoke.
       const blocked = yield* setup.accessKeys
-        .createForSession({ spaceId: setup.acmeId, label: "Late", validity: WEEK, models: ALL })
+        .createForSession({
+          spaceId: setup.acmeId,
+          label: "Late",
+          validity: WEEK,
+          models: ALL,
+          unlimited: true,
+        })
         .pipe(setup.asOwner, Effect.flip);
       assert.equal(blocked.reason, "forbidden");
       const listed = yield* setup.accessKeys
@@ -363,6 +375,7 @@ it.live.skipIf(!posix || platform === undefined)(
           label: "A friend",
           validity: WEEK,
           models: ALL,
+          unlimited: true,
         })
         .pipe(asGrace);
       const friend = Redacted.value(personal.key);
@@ -401,7 +414,13 @@ it.live.skipIf(!posix || platform === undefined)(
       for (const outsider of [member, guest, globexMember]) {
         const as = CommandActor.actAs(outsider);
         const create = yield* setup.accessKeys
-          .createForSession({ spaceId: setup.acmeId, label: "Mine", validity: WEEK, models: ALL })
+          .createForSession({
+            spaceId: setup.acmeId,
+            label: "Mine",
+            validity: WEEK,
+            models: ALL,
+            unlimited: true,
+          })
           .pipe(as, Effect.flip);
         assert.equal(create.reason, "forbidden", outsider);
         const list = yield* setup.accessKeys
@@ -428,6 +447,7 @@ it.live.skipIf(!posix || platform === undefined)(
               label: "Agent",
               validity: WEEK,
               models: ALL,
+              unlimited: true,
             })
             .pipe(Effect.asVoid),
           setup.accessKeys.listForSession({ spaceId: setup.acmeId }).pipe(Effect.asVoid),
@@ -452,6 +472,7 @@ it.live.skipIf(!posix || platform === undefined)(
           label: "Tester",
           validity: { days: 1 },
           models: ALL,
+          unlimited: true,
         })
         .pipe(CommandActor.actAs(olga));
       // Olga revokes Ada's; the next request is refused.
@@ -468,6 +489,7 @@ it.live.skipIf(!posix || platform === undefined)(
           label: "Friend",
           validity: WEEK,
           models: ALL,
+          unlimited: true,
         })
         .pipe(CommandActor.actAs(member));
       const ownerThere = yield* setup.accessKeys
@@ -476,6 +498,7 @@ it.live.skipIf(!posix || platform === undefined)(
           label: "Owner's",
           validity: WEEK,
           models: ALL,
+          unlimited: true,
         })
         .pipe(setup.asOwner, Effect.flip);
       assert.equal(ownerThere.reason, "forbidden");
@@ -498,7 +521,13 @@ it.live.skipIf(!posix || platform === undefined)(
       );
       // The Owner makes one in Acme; Grace's own list holds only her Personal space's.
       yield* setup.accessKeys
-        .createForSession({ spaceId: setup.acmeId, label: "Owner's", validity: WEEK, models: ALL })
+        .createForSession({
+          spaceId: setup.acmeId,
+          label: "Owner's",
+          validity: WEEK,
+          models: ALL,
+          unlimited: true,
+        })
         .pipe(setup.asOwner);
       const gracesList = yield* setup.accessKeys
         .listForSession({ includeEnded: true })
@@ -539,7 +568,13 @@ it.live.skipIf(!posix || platform === undefined)(
       const asAda = CommandActor.actAs(setup.people.admin);
       const create = (label: string, validity: { days: number } | { until: string }) =>
         setup.accessKeys
-          .createForSession({ spaceId: setup.acmeId, label, validity, models: ALL })
+          .createForSession({
+            spaceId: setup.acmeId,
+            label,
+            validity,
+            models: ALL,
+            unlimited: true,
+          })
           .pipe(asAda);
       const now = yield* Clock.currentTimeMillis;
       const iso = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));

@@ -50,6 +50,7 @@ const keyFor = (setup: Hub, accounts: ReadonlyArray<AiAccountId> | null, label =
       label,
       validity: WEEK,
       models: ["*"],
+      unlimited: true,
       ...(accounts === null ? {} : { accounts }),
     })
     .pipe(CommandActor.actAs(setup.people.admin));

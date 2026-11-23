@@ -27,12 +27,13 @@ const RESPONSE_HEADERS = {
   "x-content-type-options": "nosniff",
 };
 
-const json = (status: number, body: unknown) =>
+const json = (status: number, body: unknown, extra: Readonly<Record<string, string>> = {}) =>
   HttpServerResponse.jsonUnsafe(body, {
     status,
     headers: {
       ...RESPONSE_HEADERS,
       ...(status === 401 ? { "www-authenticate": 'Bearer realm="T3 Code AI gateway"' } : {}),
+      ...extra,
     },
   });
 
@@ -123,7 +124,7 @@ const handlerFor = (deps: {
           }),
         );
       }
-      return json(answer.status, answer.body);
+      return json(answer.status, answer.body, answer.headers);
     }
     return HttpServerResponse.stream(answer.body, {
       status: answer.status,

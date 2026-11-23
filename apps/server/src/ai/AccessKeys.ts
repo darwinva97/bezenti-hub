@@ -8,6 +8,7 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   ACCESS_KEY_MAX_ACCOUNTS,
+  ACCESS_KEY_MAX_CAP,
   ACCESS_KEY_MAX_MODELS,
   ACCESS_KEY_MAX_PER_SPACE,
   ACCESS_KEY_MAX_VALIDITY_DAYS,
@@ -54,9 +55,54 @@ const DAY_MS = 86_400_000;
 const MAX_LABEL_LENGTH = 80;
 /** A key that ended this long ago no longer counts as live, nor shows by default. */
 const ENDED_SHOWN_DAYS = 30;
-/** No caps until access-keys ticket 05. */
-const NO_LIMITS_JSON = JSON.stringify(ACCESS_KEY_NO_LIMITS);
-const jsonOf = (value: ReadonlyArray<string>) => JSON.stringify(value);
+const jsonOf = (value: ReadonlyArray<string> | AccessKeyLimits) => JSON.stringify(value);
+
+const CAP_KINDS = ["total", "day", "week", "month"] as const;
+
+/**
+ * A key's caps as stored (access-keys ticket 05): at least one whole number of tokens from 1 to
+ * 10¹², or none at all only by choosing «No token limit» (`unlimited`), never both.
+ */
+const checkedLimits = (
+  limits: AccessKeyLimits | undefined,
+  unlimited: boolean | undefined,
+):
+  | { readonly _tag: "limits"; readonly limits: AccessKeyLimits }
+  | { readonly _tag: "refused"; readonly message: string } => {
+  const given = limits ?? ACCESS_KEY_NO_LIMITS;
+  const set = CAP_KINDS.filter((kind) => given[kind] !== null);
+  if (unlimited === true) {
+    return set.length === 0
+      ? { _tag: "limits", limits: ACCESS_KEY_NO_LIMITS }
+      : { _tag: "refused", message: "Set token caps or choose «No token limit», not both." };
+  }
+  if (set.length === 0) {
+    return {
+      _tag: "refused",
+      message:
+        "Set at least one token cap (total, per day, week or month), or choose «No token limit».",
+    };
+  }
+  for (const kind of set) {
+    const amount = given[kind]!;
+    if (!Number.isInteger(amount) || amount < 1 || amount > ACCESS_KEY_MAX_CAP) {
+      return {
+        _tag: "refused",
+        message: "A token cap is a whole number from 1 to 1,000,000,000,000.",
+      };
+    }
+  }
+  return {
+    _tag: "limits",
+    limits: { total: given.total, day: given.day, week: given.week, month: given.month },
+  };
+};
+
+/** Caps as the audit says them: `none`, or each kind's amount (`-`: no cap of it). */
+const limitsText = (limits: AccessKeyLimits) =>
+  CAP_KINDS.every((kind) => limits[kind] === null)
+    ? "none"
+    : CAP_KINDS.map((kind) => `${kind}=${limits[kind] ?? "-"}`).join(",");
 
 /**
  * A key's model list as stored (access-keys ticket 02): 1 to 50 well-formed entries, each once
@@ -457,6 +503,8 @@ const make = Effect.gen(function* () {
         "Choose all of this Space's AI accounts, or at least one of them.",
       );
     }
+    const limits = checkedLimits(input.limits, input.unlimited);
+    if (limits._tag === "refused") return yield* fail("invalid", limits.message);
     const now = yield* DateTime.now;
     const expiry = expiryOf(input.validity, now);
     if (expiry._tag === "refused") return yield* fail("invalid", expiry.message);
@@ -475,7 +523,7 @@ const make = Effect.gen(function* () {
       modelsJson: jsonOf(models.models),
       accountsJson: chosen === null ? null : jsonOf(chosen),
       expiresAt,
-      limitsJson: NO_LIMITS_JSON,
+      limitsJson: jsonOf(limits.limits),
       lastUsedAt: null,
       revokedAt: null,
     };
@@ -518,7 +566,7 @@ const make = Effect.gen(function* () {
             detail: {
               space: input.spaceId,
               expiresAt,
-              limits: "none",
+              limits: limitsText(limits.limits),
               models: models.models.includes("*") ? "all" : models.models.length,
               accounts: chosen === null ? "all" : chosen.length,
               subscription,

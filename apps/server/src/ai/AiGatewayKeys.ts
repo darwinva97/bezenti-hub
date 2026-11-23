@@ -7,6 +7,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import {
+  type AccessKeyLimits,
   AI_GATEWAY_KEY_PREFIX,
   type AiAccountId,
   AiGatewayKeyError,
@@ -61,6 +62,8 @@ export interface GatewayCaller {
    * gateway key, whose models are its accounts'.
    */
   readonly allowedModels: ReadonlyArray<string> | null;
+  /** An access key's token caps (access-keys ticket 05), read again on every request; else null. */
+  readonly accessKeyLimits: AccessKeyLimits | null;
   readonly spaceId: SpaceId;
   readonly threadId: ThreadId | null;
   /**
@@ -674,6 +677,7 @@ const make = Effect.gen(function* () {
       userId: null,
       accessKeyId: accessKey.keyId,
       allowedModels: accessKey.models,
+      accessKeyLimits: accessKey.limits,
       spaceId: accessKey.spaceId,
       threadId: null,
       allowed,
@@ -802,6 +806,7 @@ const make = Effect.gen(function* () {
       userId,
       accessKeyId: null,
       allowedModels: null,
+      accessKeyLimits: null,
       spaceId,
       threadId,
       allowed,

@@ -20,6 +20,7 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
+import * as AccessKeyCaps from "./AccessKeyCaps.ts";
 import * as AiAccounts from "./AiAccounts.ts";
 import * as AiGateway from "./AiGateway.ts";
 import * as AiGatewayActivity from "./AiGatewayActivity.ts";
@@ -104,7 +105,13 @@ export interface ProxyRequest {
 }
 
 export type ProxyAnswer =
-  | { readonly _tag: "json"; readonly status: number; readonly body: unknown }
+  | {
+      readonly _tag: "json";
+      readonly status: number;
+      readonly body: unknown;
+      /** Extra response headers (an access key's cap: `retry-after`, `x-should-retry`). */
+      readonly headers?: Readonly<Record<string, string>>;
+    }
   | {
       readonly _tag: "stream";
       readonly status: number;
@@ -192,6 +199,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
     const gateway = yield* AiGateway.AiGateway;
     const activity = yield* AiGatewayActivity.AiGatewayActivity;
     const caps = yield* GrantCaps.GrantCaps;
+    const keyCaps = yield* AccessKeyCaps.AccessKeyCaps;
     const httpClient = yield* HttpClient.HttpClient;
     const slots = makePool({ perKey: limits.perKey, perUser: limits.perUser, total: limits.total });
     const readers = makePool({ perUser: limits.readersPerUser, total: limits.readersTotal });
@@ -540,6 +548,32 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
           "model_not_allowed",
         );
       }
+      // An access key's token caps (access-keys ticket 05): checked once, before anything is
+      // sent; a request admitted below a cap finishes and counts whole, so only those already in
+      // flight can pass it (bounded by the key's general in-flight limit, no limit of its own).
+      const keyLimits = caller.accessKeyLimits;
+      if (caller.accessKeyId !== null && keyLimits !== null) {
+        const state = yield* keyCaps.check(caller.accessKeyId, keyLimits).pipe(Effect.result);
+        if (state._tag === "Failure") return yield* refuseRecorded(503, state.failure.message);
+        const reached = state.success.exhausted;
+        if (reached !== null) {
+          const message = AccessKeyCaps.capReachedMessage(reached);
+          if (reached.resetsAt === null) return yield* refuseRecorded(403, message);
+          const now = yield* Clock.currentTimeMillis;
+          const answer = yield* refuseRecorded(429, message, "insufficient_quota");
+          if (answer._tag !== "json") return answer;
+          return {
+            ...answer,
+            headers: {
+              "retry-after": String(
+                Math.max(1, Math.ceil((Date.parse(reached.resetsAt) - now) / 1000)),
+              ),
+              // Anthropic's and OpenAI's SDKs (Claude Code, Codex) do not retry it.
+              "x-should-retry": "false",
+            },
+          } satisfies ProxyAnswer;
+        }
+      }
       const plan = planRoute({
         allowed,
         chosenAccountId: caller.chosenAccountId,
@@ -731,7 +765,10 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
  * loans' caps (GrantCaps), which the picker reads too.
  */
 export const layerWith = (limits: AiGatewayProxyLimits) =>
-  Layer.effect(AiGatewayProxy, make(limits)).pipe(Layer.provideMerge(GrantCaps.layer));
+  Layer.effect(AiGatewayProxy, make(limits)).pipe(
+    Layer.provideMerge(GrantCaps.layer),
+    Layer.provideMerge(AccessKeyCaps.layer),
+  );
 
 export const layer = Layer.effect(
   AiGatewayProxy,
@@ -741,4 +778,4 @@ export const layer = Layer.effect(
     );
     return yield* make({ ...DEFAULT_AI_GATEWAY_PROXY_LIMITS, maxRequestBytes });
   }),
-).pipe(Layer.provideMerge(GrantCaps.layer));
+).pipe(Layer.provideMerge(GrantCaps.layer), Layer.provideMerge(AccessKeyCaps.layer));

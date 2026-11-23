@@ -558,6 +558,35 @@ describe("back-channel logout (ticket 07)", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("an unsigned, HMAC-signed or unknown-key logout token is a 400 (ticket 11)", () =>
+    Effect.gen(function* () {
+      const { server, realm } = yield* hub();
+      const member = yield* keycloakMember(server, realm, "kc-ana");
+      for (const forge of ["none", "hs256-jwk", "hs256-pem"] as const) {
+        const token = yield* realm.logoutToken({ sub: "kc-ana", forge });
+        const header = JSON.parse(
+          Buffer.from(token.split(".")[0] ?? "", "base64url").toString(),
+        ) as { alg: string };
+        assert.equal(header.alg, forge === "none" ? "none" : "HS256");
+        const answer = yield* backchannel(server, { logout_token: token });
+        assert.equal(answer.status, 400, forge);
+      }
+      // Anyone may post here: a flood of keys the realm never published fetches its key set at
+      // most once more (the remote key set's cooldown), and ends nothing.
+      const fetchesBefore = realm.requests.filter((url) => url === realm.jwksUrl).length;
+      for (let index = 0; index < 20; index += 1) {
+        const answer = yield* backchannel(server, {
+          logout_token: yield* realm.logoutToken({ sub: "kc-ana", kid: `unknown-${index}` }),
+        });
+        assert.equal(answer.status, 400);
+      }
+      const refetched =
+        realm.requests.filter((url) => url === realm.jwksUrl).length - fetchesBefore;
+      assert.isAtMost(refetched, 1);
+      assert.isTrue(yield* isSignedIn(server, member.cookie));
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("a full replay cache refuses instead of forgetting a token", () =>
     Effect.gen(function* () {
       const { server, realm } = yield* hub({ flows: { maxRememberedJtis: 2 } });

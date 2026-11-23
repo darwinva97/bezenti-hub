@@ -578,6 +578,8 @@ export const serveAuthHttpWith = Effect.fn(function* (
         location: response.headers.get("location") ?? undefined,
         /** The whole answer as text, to look for what must never be in it. */
         text,
+        /** Every header of the answer, one `name: value` a line (Keycloak ticket 11, likewise). */
+        headerText: [...response.headers].map(([name, value]) => `${name}: ${value}`).join("\n"),
       };
     });
   return {

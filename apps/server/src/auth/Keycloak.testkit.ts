@@ -1,9 +1,12 @@
+// @effect-diagnostics nodeBuiltinImport:off -- forged tokens (ticket 11) use Node's HMAC and keys.
 /**
- * A fake Keycloak realm in process (its `.test` issuer never resolves): `signIn` plays the person at
- * the sign-in page, `serve` changes an answer. Ticket 07: refresh tokens rotate (a spent one is
- * `invalid_grant`), `refreshAs` bends a person's refreshes, `logoutToken` signs a logout token.
+ * A fake Keycloak realm in process (its `.test` issuer never resolves): `signIn` plays the person,
+ * `serve` changes an answer, `refreshAs` and `logoutToken` serve ticket 07, and ticket 11's `forge`
+ * and `kid` make an attacker's tokens; `secretsHandedOut` is every secret value it gave out.
  */
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeCrypto from "node:crypto";
+
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -75,6 +78,13 @@ export const layerNoNetwork = Layer.succeed(
   ),
 );
 
+/**
+ * Ticket 11: a token no realm key signed. `none`: `alg: none`, no signature. `hs256-jwk` and
+ * `hs256-pem`: HMAC-SHA256 keyed with the realm's public key (its JWK, or its PEM), the classic
+ * confusion of a public key for a shared secret.
+ */
+export type ForgedAlgorithm = "none" | "hs256-jwk" | "hs256-pem";
+
 /** Who signs in at the fake realm, and how its answer is bent for a test. */
 export interface FakeSignIn {
   readonly sub: string;
@@ -84,6 +94,10 @@ export interface FakeSignIn {
   readonly claims?: Record<string, unknown>;
   /** Sign the ID token with a key the realm never published. */
   readonly foreignKey?: boolean;
+  /** Ticket 11: an ID token no realm key signed. */
+  readonly forge?: ForgedAlgorithm;
+  /** Ticket 11: the `kid` the ID token's header names (by default, the realm's key's). */
+  readonly kid?: string;
   /** The `iss` the authorization response names (RFC 9207); `null` leaves it out. */
   readonly responseIss?: string | null;
   /** Leave out the refresh token, as when `offline_access` is not granted. */
@@ -124,6 +138,28 @@ const sha256Base64Url = (text: string) =>
     ),
   );
 
+const base64UrlText = (text: string) => Buffer.from(text).toString("base64url");
+
+/** A compact JWT no realm key signed (ticket 11), keyed with the realm's public key if HMAC. */
+function forgeJwt(
+  forge: ForgedAlgorithm,
+  header: Record<string, unknown>,
+  claims: Record<string, unknown>,
+  publicJwk: NodeCrypto.JsonWebKey,
+): string {
+  const alg = forge === "none" ? "none" : "HS256";
+  const input = `${base64UrlText(JSON.stringify({ ...header, alg }))}.${base64UrlText(JSON.stringify(claims))}`;
+  if (forge === "none") return `${input}.`;
+  const secret =
+    forge === "hs256-jwk"
+      ? JSON.stringify(publicJwk)
+      : NodeCrypto.createPublicKey({ key: publicJwk, format: "jwk" })
+          .export({ type: "spki", format: "pem" })
+          .toString();
+  const signature = NodeCrypto.createHmac("sha256", secret).update(input).digest("base64url");
+  return `${input}.${signature}`;
+}
+
 const formDecode = (value: string) => decodeURIComponent(value.replaceAll("+", " "));
 
 const bodyText = (request: HttpClientRequest.HttpClientRequest) => {
@@ -147,7 +183,7 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
   const [signingKey, foreignKey] = yield* Effect.all([
     Jwk.generateKeyPair({ algorithm: "ES256", kid: "fake-realm-1" }),
     Jwk.generateKeyPair({ algorithm: "ES256", kid: "fake-realm-1" }),
-  ]).pipe(Effect.provide(NodeCrypto.layer));
+  ]).pipe(Effect.provide(PlatformNodeCrypto.layer));
   const answers = new Map<string, FakeAnswer>([
     [discoveryUrl(issuer), { json: discoveryDocument(issuer) }],
     [jwksUrl(issuer), { json: { keys: [signingKey.publicKey] } }],
@@ -163,6 +199,15 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
   const refreshTokens: Array<string> = [];
   /** Every ID token it handed out, likewise. */
   const idTokens: Array<string> = [];
+  /** Ticket 11: every authorization code, access token and logout token, likewise. */
+  const authorizationCodes: Array<string> = [];
+  const accessTokens: Array<string> = [];
+  const logoutTokens: Array<string> = [];
+  const accessToken = () => {
+    const token = `fake-access-token-${counter}-z9x8c7v6b5n4m3`;
+    accessTokens.push(token);
+    return token;
+  };
   /** Live refresh tokens: each refresh spends its token and hands out a new one. */
   const refreshSessions = new Map<string, RefreshSession>();
   /** The newest SSO session (`sid`) of each person, for back-channel logout tokens. */
@@ -210,14 +255,25 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
       if (value === undefined) delete claims[name];
       else claims[name] = value;
     }
+    const kid = pending.as.kid ?? "fake-realm-1";
+    if (pending.as.forge !== undefined) {
+      const forged = forgeJwt(
+        pending.as.forge,
+        { kid, typ: "JWT" },
+        claims,
+        signingKey.publicKey as NodeCrypto.JsonWebKey,
+      );
+      idTokens.push(forged);
+      return forged;
+    }
     const key = yield* Jwk.importPrivate(
       (pending.as.foreignKey === true ? foreignKey : signingKey).privateKey,
       "ES256",
     );
-    const token = yield* Jwt.sign(Claims, claims, key, { kid: "fake-realm-1", typ: "JWT" });
+    const token = yield* Jwt.sign(Claims, claims, key, { kid, typ: "JWT" });
     idTokens.push(Redacted.value(token));
     return Redacted.value(token);
-  }, Effect.provide(NodeCrypto.layer));
+  }, Effect.provide(PlatformNodeCrypto.layer));
 
   /** A new refresh token for this session, the realm's to recognise. */
   const newRefreshToken = (session: RefreshSession) => {
@@ -259,7 +315,7 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
       });
     }
     return respond(request, url, 200, {
-      access_token: `fake-access-token-${counter}`,
+      access_token: accessToken(),
       token_type: "Bearer",
       expires_in: 300,
       id_token: yield* idToken(
@@ -317,7 +373,7 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
     sidsBySub.set(pending.as.sub, sid);
     const session: RefreshSession = { pending, sid };
     return respond(request, url, 200, {
-      access_token: `fake-access-token-${counter}`,
+      access_token: accessToken(),
       token_type: "Bearer",
       expires_in: 300,
       id_token: yield* idToken(pending, sid),
@@ -387,7 +443,8 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
         throw new Error(`not an authorization request the realm takes: ${authorizationUrl}`);
       }
       counter += 1;
-      const code = `fake-authorization-code-${counter}`;
+      const code = `fake-authorization-code-${counter}-k1j2h3g4f5d6s7`;
+      authorizationCodes.push(code);
       codes.set(code, {
         clientId: param("client_id"),
         redirectUri: param("redirect_uri"),
@@ -412,6 +469,8 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
     readonly sub?: string;
     readonly claims?: Record<string, unknown>;
     readonly foreignKey?: boolean;
+    readonly forge?: ForgedAlgorithm;
+    readonly kid?: string;
   }) {
     const now = Math.floor((yield* Clock.currentTimeMillis) / 1000);
     counter += 1;
@@ -430,14 +489,29 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
       if (value === undefined) delete claims[name];
       else claims[name] = value;
     }
-    const key = yield* Jwk.importPrivate(
-      (input.foreignKey === true ? foreignKey : signingKey).privateKey,
-      "ES256",
-    );
-    return Redacted.value(
-      yield* Jwt.sign(Claims, claims, key, { kid: "fake-realm-1", typ: "logout+jwt" }),
-    );
-  }, Effect.provide(NodeCrypto.layer));
+    const kid = input.kid ?? "fake-realm-1";
+    const token =
+      input.forge !== undefined
+        ? forgeJwt(
+            input.forge,
+            { kid, typ: "logout+jwt" },
+            claims,
+            signingKey.publicKey as NodeCrypto.JsonWebKey,
+          )
+        : Redacted.value(
+            yield* Jwt.sign(
+              Claims,
+              claims,
+              yield* Jwk.importPrivate(
+                (input.foreignKey === true ? foreignKey : signingKey).privateKey,
+                "ES256",
+              ),
+              { kid, typ: "logout+jwt" },
+            ),
+          );
+    logoutTokens.push(token);
+    return token;
+  }, Effect.provide(PlatformNodeCrypto.layer));
 
   return {
     issuer,
@@ -452,6 +526,26 @@ export const makeFakeKeycloak = Effect.fnUntraced(function* (
     /** Ticket 07: the newest SSO session of a person, as their ID token's `sid`. */
     sidOf: (sub: string) => sidsBySub.get(sub),
     idTokens,
+    authorizationCodes,
+    accessTokens,
+    logoutTokens,
+    /**
+     * Ticket 11: every secret value the realm and the Hub's flows put on the wire so far: the
+     * client secret, codes, ID, access, refresh and logout tokens, and the PKCE verifiers the Hub
+     * sent to the token endpoint. None may come back out of the Hub anywhere.
+     */
+    secretsHandedOut: (): ReadonlyArray<string> => [
+      clientSecret,
+      ...authorizationCodes,
+      ...idTokens,
+      ...accessTokens,
+      ...refreshTokens,
+      ...logoutTokens,
+      ...tokenRequests.flatMap((request) => {
+        const verifier = new URLSearchParams(request.body).get("code_verifier");
+        return verifier === null ? [] : [verifier];
+      }),
+    ],
     logoutToken,
     /** Put the fake where the Hub's Keycloak requests go. */
     layer: Layer.succeed(KeycloakHttp, client),

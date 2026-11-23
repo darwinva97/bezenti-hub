@@ -542,6 +542,17 @@ describe("Keycloak sign-in (ticket 02)", () => {
       { name: "an expired ID token", as: { claims: { exp: -3600 } } },
       { name: "an ID token issued long before the flow", as: { claims: { iat: -3600 } } },
       { name: "an ID token signed by another key", as: { foreignKey: true } },
+      // Ticket 11: tokens no realm key signed, and a key the realm never published.
+      { name: "an ID token with `alg: none`", as: { forge: "none" } },
+      {
+        name: "an ID token signed HS256 with the realm's public JWK",
+        as: { forge: "hs256-jwk" },
+      },
+      {
+        name: "an ID token signed HS256 with the realm's public key as PEM",
+        as: { forge: "hs256-pem" },
+      },
+      { name: "an ID token naming a `kid` the realm never published", as: { kid: "rotated" } },
     ];
 
     it.effect.each(tampered)("$name", (testCase) =>
@@ -565,6 +576,18 @@ describe("Keycloak sign-in (ticket 02)", () => {
         assert.equal(answer.status, 303);
         assert.equal(answer.location, "/sign-in?keycloak=failed");
         assert.isUndefined(answer.cookie);
+        if (testCase.as?.forge !== undefined || testCase.as?.kid !== undefined) {
+          // The realm did hand the Hub the bent token: the Hub refused it, nothing else did.
+          const header = JSON.parse(
+            Buffer.from(realm.idTokens.at(-1)?.split(".")[0] ?? "", "base64url").toString(),
+          ) as { alg: string; kid: string };
+          const forge = testCase.as.forge;
+          assert.deepEqual(header, {
+            ...header,
+            alg: forge === undefined ? "ES256" : forge === "none" ? "none" : "HS256",
+            kid: testCase.as.kid ?? "fake-realm-1",
+          });
+        }
         // The flow is spent: the same answer again is refused too.
         const replay = yield* callback(server, back.href, joinCookies(started.flowCookie));
         assert.equal(resultOf(replay.location), "failed");

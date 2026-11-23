@@ -761,13 +761,19 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
           AND host.revoked_at IS NULL AND host.mode = 'personal'
           AND lender.disabled_at IS NULL AND lender.removed_at IS NULL
       )) AS "lentLive",
-      (environments.mode <> 'lent' OR EXISTS (
+      (environments.mode <> 'lent' OR (EXISTS (
         SELECT 1 FROM environments AS host
         JOIN users AS lender ON lender.user_id = host.owner_user_id
         WHERE host.environment_id = environments.host_environment_id
           AND host.revoked_at IS NULL AND host.mode = 'personal'
           AND lender.disabled_at IS NULL AND lender.removed_at IS NULL
-      )) AS "lentHostLive"
+      ) AND EXISTS (
+        -- Grants ticket 13: its loan active, or ended within the time its turns get to stop
+        -- (LENT_DRAIN_MS), even if closing it failed.
+        SELECT 1 FROM grants AS g
+        WHERE g.grant_id = environments.grant_id AND (g.state = 'active'
+          OR (g.state = 'ended' AND g.ended_at > ${sql.literal(`strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${LENT_DRAIN_MS / 1000} seconds')`)}))
+      ))) AS "lentHostLive"
     FROM environments WHERE ${sql.and(conditions)}
     ORDER BY kind = 'hub' DESC, registered_at, environment_id
   `;

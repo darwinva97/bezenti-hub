@@ -19,6 +19,7 @@ import {
   ThreadId,
   UserId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
@@ -425,6 +426,32 @@ describe("Hub con Environments: a machine lent to Spaces", () => {
         yield* acmeThreadOn(t, ThreadId.make("thread:acme-git"));
         assert.equal(yield* gitStatus(hub, t.acmeProject, acmeLaunch.credential), 200);
         assert.equal(yield* gitStatus(hub, otherProject, acmeLaunch.credential), 403);
+      }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "a lent Sandbox's credential dies once its loan ended and the time to stop its turns passed, even if closing it failed (Grants 13)",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* lentToAcmeAndGlobex();
+        const { hub, acmeLaunch } = t;
+        const sandbox = acmeLaunch.joined.environmentId;
+        assert.equal(yield* checkOf(hub, acmeLaunch.credential), sandbox);
+        // Ended just now, not closed yet: its running turns may still save their checkpoints.
+        const now = yield* DateTime.now;
+        const endedAt = (msAgo: number) =>
+          DateTime.formatIso(DateTime.subtract(now, { milliseconds: msAgo }));
+        yield* hub.server.sql`
+          UPDATE grants SET state = 'ended', end_reason = 'revoked', ended_at = ${endedAt(1000)}
+          WHERE grant_id = ${t.acmeGrant}
+        `;
+        assert.equal(yield* checkOf(hub, acmeLaunch.credential), sandbox);
+        // Three minutes on and still not closed (its close failed): it reaches nothing.
+        yield* hub.server.sql`
+          UPDATE grants SET ended_at = ${endedAt(3 * 60_000)} WHERE grant_id = ${t.acmeGrant}
+        `;
+        assert.equal(yield* checkOf(hub, acmeLaunch.credential), "credential-revoked");
+        assert.equal(yield* gitStatus(hub, t.acmeProject, acmeLaunch.credential), 401);
       }).pipe(Effect.scoped),
   );
 

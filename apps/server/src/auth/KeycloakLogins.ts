@@ -564,7 +564,7 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
       url.searchParams.set("client_id", enabled.value.clientId);
       url.searchParams.set("post_logout_redirect_uri", `${origin}${KEYCLOAK_POST_LOGOUT_PATH}`);
       // Ticket 11: no `id_token_hint`, so no ID token ever reaches the browser (its history, the
-      // realm's access log); Keycloak asks the person to confirm instead.
+      // realm's access log); the realm may ask the person to confirm instead.
       return { endSessionUrl: url.href };
     },
   );

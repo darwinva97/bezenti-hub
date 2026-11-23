@@ -811,8 +811,8 @@ sign-in with the apps, MCP clients and pairing links approved from it, which is
 why the page says so. It answers the realm's `end_session_endpoint` with
 `client_id` and `post_logout_redirect_uri` (`<base>/sign-in`), never an
 `id_token_hint`: an ID token in that address would sit in the browser's history
-and the realm's access log, so no door hands one out. Without the hint, Keycloak
-asks the person to confirm before it signs them out. The Hub ends the sign-in itself because an offline session
+and the realm's access log, so no door hands one out. Without the hint, an OP may
+ask the person to confirm (Keycloak 26.4, in ticket 11's real test, did not). The Hub ends the sign-in itself because an offline session
 outlives Keycloak's SSO logout, so no back-channel call would come for it. If
 the sign-in can't be ended, the answer is an error with no realm address, and the
 handle is given back for a retry until it expires. Audit: `keycloak.login.end`

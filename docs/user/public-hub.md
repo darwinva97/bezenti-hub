@@ -194,9 +194,10 @@ Keycloak that is down does not sign anyone out; the Platform page then warns
 that it has not answered since a time.
 
 **Also sign out of Keycloak.** Signing out of the Hub from a Keycloak sign-in
-offers to sign out of Keycloak too. Keycloak then shows its own «Do you want to
-log out?» page: the Hub never sends Keycloak a token of the person, so Keycloak
-asks them to confirm. After that it brings them back to the Hub's sign-in page.
+offers to sign out of Keycloak too. The Hub never sends Keycloak a token of the
+person, so depending on its version and settings Keycloak may first show its own
+«Do you want to log out?» page (Keycloak 26.4 signs them out straight away).
+Then it brings them back to the Hub's sign-in page.
 
 ## If something does not work
 
@@ -221,6 +222,12 @@ asks them to confirm. After that it brings them back to the Hub's sign-in page.
   the client.
 - **Sessions end when the Keycloak session does.** The newest sign-in did not get
   `offline_access`. Allow that scope for the client.
+- **Signing someone out in Keycloak's console leaves them in the Hub.** The Hub
+  asks for `offline_access`, so its sign-in lives on the person's _offline_
+  session. The user's **Sign out** ends only their regular sessions. To cut
+  them at once, open the user's **Sessions** tab and sign out the session of
+  type **Offline**; Keycloak then sends the back-channel logout. Disabling the
+  user works too, at the next hourly re-check.
 - **Back-channel logout never arrives.** Keycloak must reach the Hub's address.
   On a Hub it cannot reach (a LAN or Tailscale), the hourly re-check ends the
   sign-in instead, a little later.

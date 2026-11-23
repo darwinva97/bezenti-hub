@@ -866,8 +866,8 @@ describe("«also sign out of Keycloak» (ticket 07)", () => {
       );
       assert.equal(url.searchParams.get("client_id"), realm.clientId);
       assert.equal(url.searchParams.get("post_logout_redirect_uri"), "http://127.0.0.1/sign-in");
-      // Ticket 11: no ID token leaves the Hub, not even as a hint (Keycloak asks the person to
-      // confirm instead), and the Hub keeps none to hand out.
+      // Ticket 11: no ID token leaves the Hub, not even as a hint, and the Hub keeps none to hand
+      // out.
       assert.isFalse(url.searchParams.has("id_token_hint"));
       assert.deepEqual(
         realm.idTokens.filter((token) => left.text.includes(token)),

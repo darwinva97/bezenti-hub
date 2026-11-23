@@ -64,6 +64,10 @@ _Avoid_: Cuenta, provider account, personal AI account, credential
 The Hub's single endpoint through which agents reach their AI accounts, so real credentials never leave the Hub.
 _Avoid_: Proxy, CLIProxy, router, hub (for this meaning)
 
+**Access key**:
+A key to the AI gateway that a Space gives to someone, with or without a Hub account, with its own validity (and models and token caps). It is the Space's: it is not a User and never acts as one, and its use counts on the key.
+_Avoid_: API key (for this meaning), User key, clave de acceso, guest key
+
 **Vault**:
 Each owner's (a User's or an Organization's) one set of entries, Secrets and Variables, each under an environment-variable name, whose values the Hub stores itself or reads from a Secret provider. It is made of Vault groups.
 _Avoid_: Secret store, env file, bóveda

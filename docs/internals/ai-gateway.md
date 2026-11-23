@@ -113,6 +113,8 @@ version, `updated` or `failed`, reason) and `ai_gateway.rollback` (`rolled-back`
   `AllowedAiAccounts` (`HubWithEnvironments.aiAccountPicker.test.ts`).
 - **WS `aiGatewayKeys.*`:** the caller's own keys (`AiGatewayKeys.localCli.test.ts`).
   `aiUsage.summary`: counts only (`AiUsage.test.ts`).
+- **WS `accessKeys.list|create|revoke`:** a Space's access keys, for whoever manages the Space and
+  the Owner, from a person's own session only (`AccessKeys.test.ts`).
 - **Raw `/api/ai/*`:** a gateway key, checked per request against `AllowedAiAccounts` for its turn
   owner and Space (`AiGatewayRoute*.test.ts`), in `DoorRules.RAW_ROUTE_RULES` and
   `AMBIENT_COOKIE_RULES`.
@@ -331,6 +333,8 @@ rest, so any other door (ticket 06's relay included) reuses it.
   ticket 06 hands it to the agent, with its `providerSessionId`) and it expires after 7 days at
   most. A **User key** is for one Space the User works in (local CLIs, ticket 10, below), at most
   five live per User; `revoke` by its User or the Owner, audited `ai_gateway_key.create|revoke`.
+  An **access key** (`t3ak_`, its own table, below) is a Space's, with no User: `authorize` tells
+  the two by prefix and reads only that key's table.
 - **Revocation recorded** (`ai/AiGatewayKeyRevocation.ts`, from the domain events and User status
   changes): a provider session that stops or fails (`provider-session.updated`) takes its keys, a
   detach takes that Thread's; a Thread archived or deleted (its account in use forgotten too); a
@@ -524,6 +528,75 @@ AI accounts → «Local CLI keys» (web and desktop; every User, not only the Ow
 - **Accepted risk:** a key lives in the User's files on their own machine, readable by whatever
   runs as them there. It reaches only that User's allowed accounts in one Space, and its use shows
   under them; revoke it from any device.
+
+## Access keys (access-keys ticket 01)
+
+An **access key** is a key to the gateway that a Space gives to someone, with or without a Hub
+account, for their own agent (Claude Code, Codex, any OpenAI-, Anthropic- or Gemini-compatible
+client). It is the Space's, not a User's: it never acts as a User, and its use counts on the key.
+Space settings → AI accounts → «Access keys» (web and desktop), for an Organization below its AI
+accounts and for a Personal space below its note.
+
+- **Table** (`ai/AccessKeys.ts`, migration 159 `ai_access_keys`, the only file that names it):
+  - `key_id` (`ak_<24 hex>`), `key_hash` (SHA-256, unique), `key_hint` (the last 4 characters);
+  - `space_id`, `label` (who it is for, 80 characters), `created_by`;
+  - `models_json` (`["*"]`), `accounts_json` (NULL: every AI account the Space owns, now and
+    later), `limits_json` (no caps yet);
+  - `expires_at` (always set), `last_used_at` (at most once a minute), `revoked_*`.
+  - Rows are never deleted: they are the usage's and the audit's history.
+- **Key:** `t3ak_` + 32 random bytes, base64url, of its own prefix so a leaked one is recognisable
+  and `authorize` reads one table. Shown once, in `accessKeys.create`'s answer (Redacted on the
+  wire's both ends); never logged, never in a URL, never in the audit. Only the hint is listed.
+- **Who** (AccessPolicy):
+  - `accessKey.manage` makes one: an open Organization's Admins and the Owner; a Personal space's
+    User (the Owner in their own, never in another User's).
+  - `accessKey.view` lists and revokes: whoever manages, also in an archived or frozen Space, and
+    the Owner in every Space.
+  - Everyone else: `forbidden` for a Space's list, `not-found` for a key.
+- **Doors:** WS only, `accessKeys.list` (`access:read`), `create` and `revoke` (`access:write`),
+  decided in `AccessKeys` for a person's own session: an agent (MCP, `via: agent`), the Hub's
+  shell or a session limited to one Space gets `forbidden`. No HTTP endpoint or MCP tool.
+- **Create:**
+  - a label and a validity: «Valid for N days» (1 to 366, N × 24 h) or «Valid until <date>» (the
+    end of that day in the issuer's time zone, sent as UTC, at most 366 days from now);
+  - the Space check, the count and the insert in one write transaction;
+  - at most 50 live keys per Space (live: not revoked, not expired more than 30 days ago);
+  - audited `access_key.create` (`space`, `expiresAt`, `limits`, `models`, `accounts`, and
+    `subscription` when the Space's own accounts hold one).
+- **List:** the Space's keys with label, hint, issuer, created, expiry and last use; without a
+  Space, the Owner's list holds every Space's (`everyone`) and anyone else's the Spaces they
+  manage. Revoked keys and those expired more than 30 days ago only with `includeEnded`
+  («Show ended keys»). It also says whether the viewer may make keys there and whether a key would
+  reach a subscription (the form's ToS warning, ADR 0005).
+- **Revoke:** effective from the next request (401); a request in flight finishes. For good: a new
+  key is made instead. Audited `access_key.revoke` (`reason: revoked`).
+- **At the gateway** (`AiGatewayKeys.authorize`, in this order, first match wins):
+  1. unknown, revoked, or its Space gone: 401, the message of an unknown key;
+  2. expired: 403 «This access key expired on 2026-12-01 18:00 UTC. Ask whoever gave it to you to
+     renew it.» (403, not 401: a 401 makes Claude Code ask for `/login` and hides why);
+  3. its Space archived or being deleted: 403 «This access key's Space is archived. It works again
+     if the Space is restored.»; frozen, or a Personal space whose User is disabled or removed:
+     403 «… is closed now …»;
+  4. no AI account: 403 «No AI account this access key may use is available now.»
+  - The accounts are `AllowedAiAccounts.forSpace`: the Space's own enabled ones in its order, no
+    User's condition, never one lent by a Grant (the lender trusted the Space's people, not a
+    key's holder) and never a `direct` one.
+  - The caller is `kind: "access"`, `userId: null`, `accessKeyId`. It routes as a User key does
+    (`planRoute`): `acct-<id>/` pins only an account the key reaches (403 otherwise).
+- **Load:** the same limits as any gateway key, with no limit of its own (the Owner's decision):
+  16 requests in flight per key; the per-User pools take `ak:<keyId>` as the key's subject.
+- **Usage:** `ai_usage` rows with `user_id = ''` and `access_key_id` (migration 159); the daily
+  summary keeps them under `user_id = ''`. Settings → AI accounts → Usage leaves those rows out
+  until access-keys ticket 04 shows them as «Access key: <label>».
+- **Setup** (`@t3tools/shared/aiGatewayAccessKey`, the Hub's public URL, else the address the
+  client reaches it on): Claude Code `env.ANTHROPIC_BASE_URL` and `env.ANTHROPIC_AUTH_TOKEN`; Codex
+  `model_provider = "t3"` with the key in the shell line, never in `config.toml`; other clients,
+  each shape's base URL (`/api/ai/openai/v1`, `/api/ai/anthropic`, `/api/ai/gemini`) and the key's
+  headers. A plain `http:` Hub off loopback is warned about: the key would cross the network
+  unencrypted.
+- **Accepted risk:** the key lives in its holder's files. It reaches only the Space's own accounts
+  until it expires or is revoked from any device; whoever runs the Space sees it, and the Owner
+  sees and revokes every one.
 
 ## Usage (spec 4 ticket 05)
 

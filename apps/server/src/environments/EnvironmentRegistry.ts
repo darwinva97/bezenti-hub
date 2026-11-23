@@ -63,6 +63,7 @@ import { base64UrlEncode } from "../auth/utils.ts";
 import * as HubRepositoryUploadIssues from "../checkpointing/HubRepositoryUploadIssues.ts";
 import * as HubRunsAgents from "../environment/HubRunsAgents.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as GrantEnding from "../grants/GrantEnding.ts";
 import type * as SandboxRuntime from "../sandboxes/SandboxRuntime.ts";
 import * as Sandboxes from "../sandboxes/Sandboxes.ts";
 import * as SandboxRuntimeFromConfig from "../sandboxes/sandboxRuntimeFromConfig.ts";
@@ -1145,36 +1146,13 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     row: EnvironmentRow,
     actor: AuditLog.AuditActor,
   ) {
-    const at = yield* nowIso;
-    const ended = yield* sql<{
-      readonly grantId: string;
-      readonly lenderId: string;
-      readonly targetId: string | null;
-    }>`
-      UPDATE grants SET state = 'ended', end_reason = 'resource-gone', ended_at = ${at}
-      WHERE resource_kind = 'environment' AND resource_id = ${row.environmentId}
-        AND state IN ('pending', 'active')
-      RETURNING grant_id AS "grantId", lender_id AS "lenderId", target_id AS "targetId"
-    `;
-    for (const grant of ended) {
-      yield* audit
-        .record({
-          actor,
-          action: "grant.end",
-          spaceId: grant.targetId === null ? null : SpaceId.make(grant.targetId),
-          target: { kind: "grant", id: grant.grantId, name: row.name },
-          detail: {
-            resourceKind: "environment",
-            resourceId: row.environmentId,
-            resourceName: row.name,
-            lenderId: grant.lenderId,
-            targetSpaceId: grant.targetId,
-            reason: "resource-gone",
-            side: "system",
-          },
-        })
-        .pipe(Effect.mapError(storageError));
-    }
+    // The same ending as any other removal (Grants ticket 11): its open links are cancelled too.
+    const ended = yield* GrantEnding.endGone(
+      sql,
+      actor,
+      { resource: { kind: "environment", id: row.environmentId } },
+      "environment.remove",
+    ).pipe(Effect.mapError(storageError));
     const closed: Array<EnvironmentId> = [];
     for (const grant of ended) {
       const lent = yield* closeLentSandbox(grant.grantId);
@@ -1390,6 +1368,13 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
               threads: active.map(({ threadId, title }) => ({ threadId, title })),
             });
           }
+          // Its open lending links die with its owner's hold on it (Grants ticket 11).
+          yield* GrantEnding.endGone(
+            sql,
+            AuditLog.userActor(actorUserId),
+            { resource: { kind: "environment", id: environmentId }, reason: "owner-changed" },
+            "environment.mode.change",
+          ).pipe(Effect.mapError(storageError));
           // Personal: the actor's own. Dedicated: its Organization's, owned by no User.
           yield* sql`
             UPDATE environments SET mode = ${mode}, space_id = ${toSpaceId ?? null},

@@ -59,6 +59,7 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as GrantEnding from "../grants/GrantEnding.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { makeCliproxyApi } from "../usage/cliproxyApi.ts";
 import { heldByThread, pruneAndListHeld } from "../vaults/ThreadSecretValues.ts";
@@ -1901,6 +1902,13 @@ const make = Effect.fn("AiAccounts.make")(function* (options: AiAccountsOptions)
       yield* sql
         .withTransaction(
           Effect.gen(function* () {
+            // Its loans end with it (Grants ticket 11), named while its row still is.
+            yield* GrantEnding.endGone(
+              sql,
+              AuditLog.userActor(userId),
+              { resource: { kind: "ai-account", id: row.accountId } },
+              "ai_account.delete",
+            );
             yield* AiAccountRetire.retireWithin(sql, row);
             yield* audit.record({
               actor: AuditLog.userActor(userId),

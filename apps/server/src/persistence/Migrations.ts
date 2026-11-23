@@ -150,6 +150,7 @@ import Migration0158 from "./Migrations/158_ForgetKeycloakIdTokens.ts";
 import Migration0159 from "./Migrations/159_AiAccessKeys.ts";
 import Migration0160 from "./Migrations/160_AiUsageAccessKey.ts";
 import Migration0161 from "./Migrations/161_AccessKeysOfGoneSpaces.ts";
+import Migration0162 from "./Migrations/162_GrantEndings.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -302,6 +303,7 @@ const migrationEntries = [
   [159, "AiAccessKeys", Migration0159],
   [160, "AiUsageAccessKey", Migration0160],
   [161, "AccessKeysOfGoneSpaces", Migration0161],
+  [162, "GrantEndings", Migration0162],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

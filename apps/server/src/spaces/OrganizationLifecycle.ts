@@ -203,21 +203,9 @@ const make = Effect.gen(function* () {
           const [row] = yield* sql<{ readonly name: string }>`
             SELECT name FROM spaces WHERE space_id = ${spaceId}
           `;
-          const gone = yield* VaultReachLoss.forgetOrganization(sql, AuditLog.userActor(actor), {
-            spaceId,
-            name: row?.name ?? spaceId,
-          });
-          // Its AI account allowances, and the keys made for its Space (spec 4 ticket 11).
-          yield* AiAccountReachLoss.forgetSpace(sql, AuditLog.userActor(actor), spaceId);
-          // Its own AI accounts (owned-resources 10): the gateway's next tick takes them out.
-          yield* AiAccountRetire.retireOwned(
-            sql,
-            AuditLog.userActor(actor),
-            { kind: "organization", id: spaceId },
-            "organization.delete",
-          );
           // Every loan to it ends (`target-gone`) and every loan it gave (`lender-gone`); a lent
-          // machine's Sandbox for it is closed in this commit (owned-resources 10).
+          // machine's Sandbox for it is closed in this commit (owned-resources 10). First, while
+          // what it owns is still there to name (Grants ticket 11).
           const ended = [
             ...(yield* GrantEnding.endGone(
               sql,
@@ -242,6 +230,19 @@ const make = Effect.gen(function* () {
               if (Option.isSome(lent)) closed.push(lent.value);
             }
           }
+          const gone = yield* VaultReachLoss.forgetOrganization(sql, AuditLog.userActor(actor), {
+            spaceId,
+            name: row?.name ?? spaceId,
+          });
+          // Its AI account allowances, and the keys made for its Space (spec 4 ticket 11).
+          yield* AiAccountReachLoss.forgetSpace(sql, AuditLog.userActor(actor), spaceId);
+          // Its own AI accounts (owned-resources 10): the gateway's next tick takes them out.
+          yield* AiAccountRetire.retireOwned(
+            sql,
+            AuditLog.userActor(actor),
+            { kind: "organization", id: spaceId },
+            "organization.delete",
+          );
           return { valueIds: gone.valueIds, closed };
         }),
       )

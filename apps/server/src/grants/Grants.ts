@@ -67,6 +67,7 @@ import { LentSandboxDisk } from "../sandboxes/sandboxSpace.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as VaultGrantUsage from "../vaults/VaultGrantUsage.ts";
 import * as VaultReachLoss from "../vaults/VaultReachLoss.ts";
+import { KEEP_NAMES_SQL } from "./GrantEnding.ts";
 
 /** What a change does to a Grant. */
 export type GrantOp = "accept" | "reject" | "cancel" | "end" | "setLimits";
@@ -192,6 +193,8 @@ interface GrantRow {
   readonly offerExpiresAt: string | null;
   readonly resourceName: string | null;
   readonly lenderName: string | null;
+  /** The destination's name as last kept (Grants ticket 11): shown once its Space is gone. */
+  readonly targetName: string | null;
   /** A machine's: what it last said of hosting Sandboxes. */
   readonly hostJson: string | null;
   /** An active machine Grant's Sandbox on the Hub, and what its host last said of it. */
@@ -411,20 +414,22 @@ const make = Effect.gen(function* () {
       g.end_reason AS "endReason", g.limits_json AS "limitsJson", g.created_at AS "createdAt",
       g.created_by AS "createdBy", g.decided_at AS "decidedAt", g.ended_at AS "endedAt",
       (g.offer_token_hash IS NOT NULL) AS "isOffer", g.offer_expires_at AS "offerExpiresAt",
-      CASE g.resource_kind
+      COALESCE(CASE g.resource_kind
         WHEN 'environment' THEN (SELECT name FROM environments WHERE environment_id = g.resource_id)
         WHEN 'ai-account' THEN (SELECT name FROM ai_accounts WHERE account_id = g.resource_id)
         WHEN 'vault-group' THEN (SELECT name FROM vault_groups WHERE group_id = g.resource_id)
-        ELSE NULL END AS "resourceName",
+        ELSE NULL END, g.resource_name) AS "resourceName",
       CASE g.resource_kind
         WHEN 'ai-account' THEN (SELECT provider FROM ai_accounts WHERE account_id = g.resource_id)
         ELSE NULL END AS "aiProvider",
       CASE g.resource_kind
         WHEN 'ai-account' THEN (SELECT type FROM ai_accounts WHERE account_id = g.resource_id)
         ELSE NULL END AS "aiType",
-      CASE g.lender_kind
+      COALESCE(CASE g.lender_kind
         WHEN 'user' THEN (SELECT display_name FROM users WHERE user_id = g.lender_id)
-        ELSE (SELECT name FROM spaces WHERE space_id = g.lender_id) END AS "lenderName",
+        ELSE (SELECT name FROM spaces WHERE space_id = g.lender_id) END,
+        g.lender_name) AS "lenderName",
+      g.target_name AS "targetName",
       CASE g.resource_kind
         WHEN 'environment' THEN
           (SELECT sandbox_host_json FROM environments WHERE environment_id = g.resource_id)
@@ -505,12 +510,11 @@ const make = Effect.gen(function* () {
    * lender's side only (the destination stands in, unread). Undefined: its Space is gone.
    */
   const policyResourceOf = (row: GrantRow, known: KnownSpaces, who: Caller) => {
-    if (row.targetId === null) {
-      return { resource: resourceOf(row, principalSpace(who), known), lenderSideOnly: true };
-    }
-    const target = known.get(row.targetId as SpaceId);
+    const target = row.targetId === null ? undefined : known.get(row.targetId as SpaceId);
+    // A link with no destination yet, or a loan whose Space is gone (Grants ticket 11): its
+    // lender's side alone, which still sees it.
     return target === undefined
-      ? undefined
+      ? { resource: resourceOf(row, principalSpace(who), known), lenderSideOnly: true }
       : { resource: resourceOf(row, target.resource, known), lenderSideOnly: false };
   };
 
@@ -562,14 +566,22 @@ const make = Effect.gen(function* () {
       resource: { kind: row.resourceKind, id: row.resourceId, name: row.resourceName },
       lender: { kind: row.lenderKind, id: row.lenderId, name: row.lenderName },
       target:
-        target === undefined
-          ? null
-          : {
+        target !== undefined
+          ? {
               spaceId: target.resource.id,
               kind: target.resource.kind,
               name: target.name,
               ...ownerNameOf(owners, target.resource.id),
-            },
+            }
+          : // Its Space is gone (Grants ticket 11): by the name it had.
+            row.targetId !== null && row.targetName !== null
+            ? {
+                spaceId: SpaceId.make(row.targetId),
+                kind: row.targetId.startsWith("personal:") ? "personal" : "organization",
+                name: row.targetName,
+                ...ownerNameOf(owners, row.targetId),
+              }
+            : null,
       state: row.state,
       endReason: row.endReason,
       limits,
@@ -914,7 +926,8 @@ const make = Effect.gen(function* () {
   /** Moves the Grant from `from` to `to` only if nobody moved it first. */
   const move = (grantId: string, from: GrantState, set: Fragment) =>
     sql<{ readonly grantId: string }>`
-      UPDATE grants SET ${set} WHERE grant_id = ${grantId} AND state = ${from}
+      UPDATE grants SET ${set}, ${sql.literal(KEEP_NAMES_SQL)}
+      WHERE grant_id = ${grantId} AND state = ${from}
       RETURNING grant_id AS "grantId"
     `.pipe(
       Effect.flatMap((rows) =>
@@ -983,7 +996,7 @@ const make = Effect.gen(function* () {
   const listReceived = Effect.fn("Grants.listReceived")(function* (input: GrantListReceivedInput) {
     const who = yield* caller;
     const rows = yield* selectGrants(sql`
-      g.target_kind = 'space' AND g.state IN ('pending', 'active')
+      g.target_kind = 'space' AND g.state IN ('pending', 'active', 'ended')
       AND (${input.spaceId ?? null} IS NULL OR g.target_id = ${input.spaceId ?? null})
       AND g.target_id IN (
         SELECT space_id FROM space_memberships WHERE user_id = ${who.userId}

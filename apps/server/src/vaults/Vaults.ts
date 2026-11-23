@@ -70,6 +70,7 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as GrantEnding from "../grants/GrantEnding.ts";
 import * as IdentityIssuer from "../identity/IdentityIssuer.ts";
 import * as IdentityTokens from "../identity/IdentityTokens.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
@@ -1280,6 +1281,14 @@ const make = Effect.gen(function* () {
     const removed = yield* sql
       .withTransaction(
         Effect.gen(function* () {
+          // Its loans end first (Grants ticket 11): each borrower's default and choices of it go
+          // audited, as at «Return», and the loans keep its name.
+          yield* GrantEnding.endGone(
+            sql,
+            AuditLog.userActor(userId),
+            { resource: { kind: "vault-group", id: row.vaultId } },
+            "vault_group.delete",
+          );
           const gone = yield* VaultReachLoss.forgetVault(sql, row.vaultId);
           yield* audit.record({
             actor: AuditLog.userActor(userId),

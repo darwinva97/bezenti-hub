@@ -144,20 +144,10 @@ const make = Effect.gen(function* () {
             yield* AiAccountReachLoss.forgetUser(sql, actor, userId).pipe(
               Effect.mapError(storageError),
             );
-            // What they own goes too (owned-resources 10): their Vault with its values (after
-            // the commit) and their AI accounts (the gateway's next tick takes them out). Their
-            // loans end (`lender-gone`), as do the loans to their Personal space (`target-gone`),
-            // before their machines are revoked: a lent machine's Sandbox closes here.
-            const vault = yield* VaultReachLoss.forgetUserVault(sql, actor, userId).pipe(
-              Effect.mapError(storageError),
-            );
-            gone.valueIds.push(...vault.valueIds);
-            yield* AiAccountRetire.retireOwned(
-              sql,
-              actor,
-              { kind: "user", id: userId },
-              "user.remove",
-            ).pipe(Effect.mapError(storageError));
+            // Their loans end (`lender-gone`), as do the loans to their Personal space
+            // (`target-gone`): before what they own goes (Grants ticket 11: a borrower's default
+            // of a lent group goes audited, and each loan keeps its names) and before their
+            // machines are revoked (a lent machine's Sandbox closes here).
             const ended = [
               ...(yield* GrantEnding.endGone(
                 sql,
@@ -179,6 +169,18 @@ const make = Effect.gen(function* () {
                 .pipe(Effect.mapError(storageError));
               if (Option.isSome(closed)) gone.lent.push(closed.value);
             }
+            // What they own goes too (owned-resources 10): their Vault with its values (after
+            // the commit) and their AI accounts (the gateway's next tick takes them out).
+            const vault = yield* VaultReachLoss.forgetUserVault(sql, actor, userId).pipe(
+              Effect.mapError(storageError),
+            );
+            gone.valueIds.push(...vault.valueIds);
+            yield* AiAccountRetire.retireOwned(
+              sql,
+              actor,
+              { kind: "user", id: userId },
+              "user.remove",
+            ).pipe(Effect.mapError(storageError));
           }
           // Their machines go with their sign-in, and stay revoked if they come back.
           const disconnect = yield* environments

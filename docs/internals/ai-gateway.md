@@ -575,8 +575,8 @@ accounts and for a Personal space below its note.
   2. expired: 403 «This access key expired on 2026-12-01 18:00 UTC. Ask whoever gave it to you to
      renew it.» (403, not 401: a 401 makes Claude Code ask for `/login` and hides why);
   3. its Space archived or being deleted: 403 «This access key's Space is archived. It works again
-     if the Space is restored.»; frozen, or a Personal space whose User is disabled or removed:
-     403 «… is closed now …»;
+     if the Space is restored.»; a Personal space whose User is disabled: 403 «… is not available
+     while its User is disabled …»; frozen: 403 «… is closed.» (ticket 07);
   4. no AI account: 403 «No AI account this access key may use is available now.»
   - The accounts are `AllowedAiAccounts.forSpace`: the Space's own enabled ones in its order, no
     User's condition, never one lent by a Grant (the lender trusted the Space's people, not a
@@ -668,6 +668,23 @@ accounts and for a Personal space below its note.
   - **Audit** `access_key.update`: `space`, `changed` (the fields, by name), the new `expiresAt`
     and `limits`, `via: renew` when only the expiry changed.
   - **Web:** «Renew» and «Edit» on each live key (expired ones stay listed 30 days with «Renew»).
+- **Lifecycle** (access-keys ticket 07): the key is the Space's, so it follows the Space.
+  - **Deleted Organization / removed User:** its keys (the Personal space's for a User) are revoked
+    inside the removal's own transaction (`AccessKeys.revokeAccessKeysWithin` from
+    `AiAccountReachLoss`, `space-gone`, audited as `system` with `via: organization.delete` or
+    `user.remove`); a removal that fails revokes nothing. Migration 161 revoked the keys of Spaces
+    deleted before.
+  - **Archived or frozen Space, disabled User of a Personal space:** refused with 403 («… is
+    archived. It works again if the Space is restored.», «… is not available while its User is
+    disabled …», «… is closed.»), never revoked: restored or enabled, the same key works again
+    unless it expired. Its list stays visible and revocable; making and changing keys there is
+    refused.
+  - **Its issuer** leaving the Organization, losing the Admin role or being removed changes
+    nothing: the remaining Admins see and manage the key.
+  - **An account the Space no longer has** (disabled, deleted, given to another owner) stops
+    counting on the next request; none left: 403.
+  - **The Owner's view:** Settings → AI accounts → «Access keys» lists every Space's keys with the
+    Space's state (`spaceState`: `open`, `archived`, `frozen`, `gone`) and lets them revoke any.
 - **Load:** the same limits as any gateway key, with no limit of its own (the Owner's decision):
   16 requests in flight per key; the per-User pools take `ak:<keyId>` as the key's subject.
 - **Usage** (access-keys ticket 04):
@@ -943,12 +960,13 @@ processes agree with it at once, in the write that ends a reach (`ai/AiAccountRe
 `ai/AiAccountReachLoss.ts`, `orchestration-v2/AiSessionReach.ts`), as Vaults do
 (docs/internals/secrets.md, «Losing reach»).
 
-| How reach is lost                                                                 | In the same transaction                                                                                                                                                                                                                                                  | Live processes                                                                                                                          |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| A Project moves to another Space                                                  | each Thread's commit (`thread.space.move`): its gateway keys revoked (`thread-moved`, the old key answers 401), its `modelSelection.aiAccountId` kept if allowed to its turn owner there, else the first allowed one its driver takes, else none («needs an AI account») | closed after the commit (`reconcileAiSessions`)                                                                                         |
-| A User is removed                                                                 | every key of theirs revoked (`user-inactive`, User keys audited `ai_gateway_key.revoke` by the Owner); their loans end (`GrantEnding`); their own accounts deleted (`AiAccountRetire.retireOwned`, audited `ai_account.delete` `via: user.remove`)                       | closed after the commit                                                                                                                 |
-| An Organization is deleted                                                        | its Threads go first (their keys with them); then the keys made for its Space (`space-lost`), audited; its loans end (`GrantEnding`); its own accounts deleted (`via: organization.delete`)                                                                              | ended with its Threads                                                                                                                  |
-| A loan ended, an account disabled or deleted, a Membership ended, a User disabled | nothing to drop: the next request is refused (a Thread key is refused, never revoked, when its turn owner merely lost access)                                                                                                                                            | a direct credential's process closed (`AiAccountChanges`, the Space directory's watches); a gateway session stays, its requests refused |
+| How reach is lost                                                                 | In the same transaction                                                                                                                                                                                                                                                                                                                                | Live processes                                                                                                                          |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| A Project moves to another Space                                                  | each Thread's commit (`thread.space.move`): its gateway keys revoked (`thread-moved`, the old key answers 401), its `modelSelection.aiAccountId` kept if allowed to its turn owner there, else the first allowed one its driver takes, else none («needs an AI account»)                                                                               | closed after the commit (`reconcileAiSessions`)                                                                                         |
+| A User is removed                                                                 | every key of theirs revoked (`user-inactive`, User keys audited `ai_gateway_key.revoke` by the Owner); their loans end (`GrantEnding`); their own accounts deleted (`AiAccountRetire.retireOwned`, audited `ai_account.delete` `via: user.remove`); their Personal space's access keys revoked (`space-gone`, audited as `system`, `via: user.remove`) | closed after the commit                                                                                                                 |
+| An Organization is deleted                                                        | its Threads go first (their keys with them); then the keys made for its Space (`space-lost`), audited; its loans end (`GrantEnding`); its own accounts deleted (`via: organization.delete`); its access keys revoked (`space-gone`, audited as `system`, `via: organization.delete`)                                                                   | ended with its Threads                                                                                                                  |
+| A loan ended, an account disabled or deleted, a Membership ended, a User disabled | nothing to drop: the next request is refused (a Thread key is refused, never revoked, when its turn owner merely lost access)                                                                                                                                                                                                                          | a direct credential's process closed (`AiAccountChanges`, the Space directory's watches); a gateway session stays, its requests refused |
+| An Organization archived or frozen, a Personal space's User disabled              | its access keys are refused (403), never revoked; restored or enabled, they work again unless expired; whoever issued one leaving changes nothing                                                                                                                                                                                                      | none: an access key has no session                                                                                                      |
 
 - **Accounts of an owner that is gone** (owned-resources 10) are deleted in the removal's own
   transaction with «Delete»'s rows (`ai/AiAccountRetire.ts`): `deleted_at`, the credential queued in

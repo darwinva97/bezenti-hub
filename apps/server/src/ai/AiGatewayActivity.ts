@@ -45,9 +45,14 @@ export interface GatewayRequestRecord {
   readonly shed?: true;
   /** The Grant that lent the account that answered (grants ticket 03); absent or null: own. */
   readonly grantId?: string | null;
+  /**
+   * An access key's estimate for an answer with no usage (cut short, or none sent; access-keys
+   * ticket 04): counted by its caps and shown as «≈», never 0. Absent for everything else.
+   */
+  readonly estimatedTokens?: number;
 }
 
-/** What a Grant used on one UTC day and the usage log has not written yet. */
+/** What a cap's subject (a Grant, an access key) used on one UTC day and is not written yet. */
 export interface UnwrittenUse {
   readonly day: string;
   readonly tokens: number;
@@ -55,25 +60,36 @@ export interface UnwrittenUse {
 }
 
 /**
- * The tokens a Grant's caps count (grants ticket 03): input, output and cache writes. Cache reads
- * are shown but never counted (taken out of OpenAI's and Gemini's input, which holds them: grants
- * ticket 14); unknown tokens count 0.
+ * The tokens caps count (grants ticket 03): input, output and cache writes. Cache reads are shown
+ * but never counted (taken out of OpenAI's and Gemini's input, which holds them: grants ticket 14);
+ * unknown tokens count 0, or an access key's estimate (access-keys ticket 04).
  */
 const cappedTokensOf = (request: GatewayRequestRecord) =>
   uncachedInputOf(request.shape, request.usage) +
   (request.usage?.outputTokens ?? 0) +
-  (request.usage?.cacheWriteTokens ?? 0);
+  (request.usage?.cacheWriteTokens ?? 0) +
+  (request.estimatedTokens ?? 0);
 
-/** A request a Grant's caps count: one that reached its account (never shed, never a count). */
-const countsForCaps = (
-  request: GatewayRequestRecord,
-): request is GatewayRequestRecord & {
-  readonly grantId: string;
-} =>
-  request.grantId !== undefined &&
-  request.grantId !== null &&
-  request.shed !== true &&
-  !request.route.endsWith("/count_tokens");
+/** The subject of a Grant's caps in `unwritten`. */
+export const grantSubject = (grantId: string) => `grant:${grantId}`;
+/** The subject of an access key's caps in `unwritten` (access-keys ticket 05). */
+export const accessKeySubject = (keyId: string) => `access-key:${keyId}`;
+
+/**
+ * The cap subjects a request counts for: its Grant, its access key (never a shed request, never a
+ * count of tokens).
+ */
+const subjectsOf = (request: GatewayRequestRecord): ReadonlyArray<string> =>
+  request.shed === true || request.route.endsWith("/count_tokens")
+    ? []
+    : [
+        ...(request.grantId === undefined || request.grantId === null
+          ? []
+          : [grantSubject(request.grantId)]),
+        ...(request.accessKeyId === undefined || request.accessKeyId === null
+          ? []
+          : [accessKeySubject(request.accessKeyId)]),
+      ];
 
 /** The AI account a Thread's requests go to now. */
 export interface AccountInUse {
@@ -92,8 +108,11 @@ export class AiGatewayActivity extends Context.Service<
      * Grant is also held as unwritten until the usage log `settle`s it, so a cap sees it at once.
      */
     readonly record: (request: GatewayRequestRecord) => Effect.Effect<void>;
-    /** What a Grant used that the usage log has not written yet, by day (grants ticket 03). */
-    readonly unwritten: (grantId: string) => Effect.Effect<ReadonlyArray<UnwrittenUse>>;
+    /**
+     * What a cap's subject (`grantSubject`, `accessKeySubject`) used that the usage log has not
+     * written yet, by day (grants ticket 03).
+     */
+    readonly unwritten: (subject: string) => Effect.Effect<ReadonlyArray<UnwrittenUse>>;
     /** The usage log wrote (or lost) these: they are no longer unwritten. */
     readonly settle: (requests: ReadonlyArray<GatewayRequestRecord>) => Effect.Effect<void>;
     /** Subscribes now (nothing recorded after it returns is missed): every request from now on. */
@@ -117,20 +136,22 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const requests = yield* PubSub.unbounded<GatewayRequestRecord>();
   const changes = yield* PubSub.unbounded<AccountInUse>();
-  // Grant → day → what is recorded and not yet written. Changed synchronously: a request recorded
-  // is seen by the next cap check; it leaves only after the log committed (never undercounted).
+  // Subject → day → what is recorded and not yet written. Changed synchronously: a request
+  // recorded is seen by the next cap check; it leaves only after the log committed (never
+  // undercounted).
   const pending = new Map<string, Map<string, { tokens: number; requests: number }>>();
   const tally = (request: GatewayRequestRecord, sign: 1 | -1) => {
-    if (!countsForCaps(request)) return;
     const day = request.at.slice(0, 10);
-    const days = pending.get(request.grantId) ?? new Map();
-    const entry = days.get(day) ?? { tokens: 0, requests: 0 };
-    entry.tokens += sign * cappedTokensOf(request);
-    entry.requests += sign;
-    if (entry.requests <= 0) days.delete(day);
-    else days.set(day, entry);
-    if (days.size === 0) pending.delete(request.grantId);
-    else pending.set(request.grantId, days);
+    for (const subject of subjectsOf(request)) {
+      const days = pending.get(subject) ?? new Map();
+      const entry = days.get(day) ?? { tokens: 0, requests: 0 };
+      entry.tokens += sign * cappedTokensOf(request);
+      entry.requests += sign;
+      if (entry.requests <= 0) days.delete(day);
+      else days.set(day, entry);
+      if (days.size === 0) pending.delete(subject);
+      else pending.set(subject, days);
+    }
   };
 
   const inUse = Effect.fn("AiGatewayActivity.inUse")(function* (threadId: ThreadId) {
@@ -176,9 +197,9 @@ const make = Effect.gen(function* () {
       tally(request, 1);
       yield* PubSub.publish(requests, request);
     }),
-    unwritten: Effect.fn("AiGatewayActivity.unwritten")(function* (grantId: string) {
+    unwritten: Effect.fn("AiGatewayActivity.unwritten")(function* (subject: string) {
       return yield* Effect.sync(() =>
-        [...(pending.get(grantId) ?? new Map<string, { tokens: number; requests: number }>())].map(
+        [...(pending.get(subject) ?? new Map<string, { tokens: number; requests: number }>())].map(
           ([day, entry]) => ({ day, tokens: entry.tokens, requests: entry.requests }),
         ),
       );

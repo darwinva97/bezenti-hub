@@ -29,9 +29,11 @@ import {
   bodyTemplate,
   CHOSEN_NOT_ALLOWED,
   errorBody,
+  estimatedTokensOf,
   FORWARDED_REQUEST_HEADERS,
   type GatewayRoute,
   type GatewayShape,
+  type GatewayUsage,
   modelListBody,
   modelNotAllowedMessage,
   noQuotaMessage,
@@ -371,6 +373,11 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
       }
 
       let recorded = false;
+      // For an access key's estimate (access-keys ticket 04): the request's bytes, the answer's
+      // bytes delivered, and what the tap had read of its usage.
+      let requestBytes = 0;
+      let deliveredBytes = 0;
+      let partialUsage: () => GatewayUsage | null = () => null;
       // Only a model the plan accepted is kept: a refused name is the client's, never stored.
       let model: string | null = null;
       let failovers = 0;
@@ -386,6 +393,20 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
           if (recorded) return;
           recorded = true;
           const endedAt = yield* DateTime.now;
+          // An access key's answer with no usage counts an estimate, never 0 (access-keys 04):
+          // cutting an answer before its last event must not spend nothing.
+          const noUsage =
+            input.usage === null ||
+            (input.usage.inputTokens === null && input.usage.outputTokens === null);
+          const estimatedTokens =
+            caller.kind === "access" &&
+            input.account !== null &&
+            input.status < 400 &&
+            input.shed !== true &&
+            noUsage &&
+            !route.route.endsWith("/count_tokens")
+              ? estimatedTokensOf({ shape, partial: partialUsage(), requestBytes, deliveredBytes })
+              : undefined;
           const entry: AiGatewayActivity.GatewayRequestRecord = {
             at: DateTime.formatIso(startedAt),
             keyId: caller.keyId,
@@ -405,6 +426,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
             usage: input.usage,
             grantId: grantOf(input.account),
             ...(input.shed === true ? { shed: true as const } : {}),
+            ...(estimatedTokens === undefined ? {} : { estimatedTokens }),
           };
           // Method, route, account, model, status and tokens: never a key, a header or a body.
           // A refusal is already logged by the route: debug here, so it is not logged twice.
@@ -487,6 +509,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
       if (body._tag === "Failure") {
         return yield* refuseRecorded(body.failure.status, body.failure.message);
       }
+      requestBytes = body.success.length;
       const json = parseJsonObject(body.success);
       if (json === undefined) {
         return yield* refuseRecorded(400, "The request body must be a JSON object.");
@@ -649,6 +672,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
           prefix: upstreamModelOf(account.id, "").slice(0, -1),
           dropUsageChunks: askUsage,
         });
+        partialUsage = tap.usage;
         // Recorded even if the answer is never read (the client left before it).
         yield* Effect.addFinalizer(() =>
           record({ account, status: response.status, failovers, usage: null }),
@@ -665,6 +689,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
             ),
           ),
           Stream.filter((chunk) => chunk.length > 0),
+          Stream.tap((chunk) => Effect.sync(() => void (deliveredBytes += chunk.length))),
           // Tokens only from a whole answer: one that ended, or whose last event went through
           // before the body was cut (a client that stops reading there, ticket 16). One cut off
           // earlier counts the request, not its tokens.

@@ -528,6 +528,24 @@ export const EMPTY_USAGE: GatewayUsage = {
  * out; OpenAI's and Gemini's count the cache reads in. The rule of migration 147's backfill, the
  * price estimate and a Grant's caps (docs/internals/ai-gateway.md, «Caps»).
  */
+/**
+ * Access-keys ticket 04: what an access key's answer with no usage counts, never 0: the larger of
+ * the tokens the tap had read (input not read from the cache, output, cache writes) and a quarter
+ * of the request's and the delivered answer's bytes.
+ */
+export const estimatedTokensOf = (input: {
+  readonly shape: GatewayShape;
+  readonly partial: GatewayUsage | null;
+  readonly requestBytes: number;
+  readonly deliveredBytes: number;
+}) =>
+  Math.max(
+    uncachedInputOf(input.shape, input.partial) +
+      (input.partial?.outputTokens ?? 0) +
+      (input.partial?.cacheWriteTokens ?? 0),
+    Math.ceil(input.requestBytes / 4) + Math.ceil(input.deliveredBytes / 4),
+  );
+
 export const uncachedInputOf = (shape: GatewayShape, usage: GatewayUsage | null) => {
   const input = usage?.inputTokens ?? 0;
   return shape === "anthropic" ? input : Math.max(0, input - (usage?.cacheReadTokens ?? 0));

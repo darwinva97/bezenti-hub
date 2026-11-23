@@ -25,6 +25,8 @@ export const AiUsageSummaryInput = Schema.Struct({
   threadId: Schema.optionalKey(ThreadId),
   /** One loan's usage (Grants ticket 04): its lender sees it by Space and User, never a Thread. */
   grantId: Schema.optionalKey(Schema.String),
+  /** One access key's usage (access-keys ticket 04). */
+  accessKeyId: Schema.optionalKey(Schema.String),
 });
 export type AiUsageSummaryInput = typeof AiUsageSummaryInput.Type;
 
@@ -38,12 +40,20 @@ export const AiUsageTotals = Schema.Struct({
   outputTokens: NonNegativeInt,
   cacheReadTokens: NonNegativeInt,
   cacheWriteTokens: NonNegativeInt,
+  /**
+   * Access-keys ticket 04: tokens estimated for an access key's answers with no usage (cut short),
+   * shown as «≈»; their requests are in `unknownRequests` too.
+   */
+  estimatedTokens: Schema.optionalKey(NonNegativeInt),
 });
 export type AiUsageTotals = typeof AiUsageTotals.Type;
 
 export const AiUsageRow = Schema.Struct({
   day: AiUsageDay,
-  userId: UserId,
+  /** Null for an access key's requests: they are its Space's, never a User's. */
+  userId: Schema.NullOr(UserId),
+  /** The access key that made the requests (access-keys ticket 04); absent or null: a User. */
+  accessKeyId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   spaceId: SpaceId,
   /** Null for a request that reached no account. */
   accountId: Schema.NullOr(AiAccountId),
@@ -81,6 +91,10 @@ export type AiUsageQuotaShare = typeof AiUsageQuotaShare.Type;
 /** Names for the ids in the rows (a name the session may not see is left out). */
 export const AiUsageLabels = Schema.Struct({
   users: Schema.Array(Schema.Struct({ id: UserId, name: Schema.String })),
+  /** The access keys the rows name, by label (access-keys ticket 04). */
+  accessKeys: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String })),
+  ),
   /** Null for a Space the viewer can no longer see: its rows stay, its name does not. */
   spaces: Schema.Array(Schema.Struct({ id: SpaceId, name: Schema.NullOr(Schema.String) })),
   accounts: Schema.Array(
@@ -139,6 +153,7 @@ export const AI_USAGE_NO_TOTALS: AiUsageTotals = {
   outputTokens: 0,
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
+  estimatedTokens: 0,
 };
 
 export const addAiUsageTotals = (sum: AiUsageTotals, row: AiUsageTotals): AiUsageTotals => ({
@@ -149,4 +164,5 @@ export const addAiUsageTotals = (sum: AiUsageTotals, row: AiUsageTotals): AiUsag
   outputTokens: sum.outputTokens + row.outputTokens,
   cacheReadTokens: sum.cacheReadTokens + row.cacheReadTokens,
   cacheWriteTokens: sum.cacheWriteTokens + row.cacheWriteTokens,
+  estimatedTokens: (sum.estimatedTokens ?? 0) + (row.estimatedTokens ?? 0),
 });

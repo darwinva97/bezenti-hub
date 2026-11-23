@@ -109,6 +109,25 @@ export const AccessKeyReach = Schema.Struct({
 });
 export type AccessKeyReach = typeof AccessKeyReach.Type;
 
+/**
+ * What a key used (access-keys tickets 04, 05): tokens as its caps count them (input not read
+ * from the cache, output, cache writes and estimates) today, this ISO week and this month (UTC)
+ * and since it was made; cache reads apart; and when each period resets.
+ */
+export const AccessKeyUsage = Schema.Struct({
+  day: Schema.Number,
+  week: Schema.Number,
+  month: Schema.Number,
+  total: Schema.Number,
+  requests: Schema.Number,
+  cacheReadTokens: Schema.Number,
+  /** Answered requests with no usage; their tokens are in `estimatedTokens` too. */
+  unknownRequests: Schema.Number,
+  estimatedTokens: Schema.Number,
+  resets: Schema.Struct({ day: Schema.String, week: Schema.String, month: Schema.String }),
+});
+export type AccessKeyUsage = typeof AccessKeyUsage.Type;
+
 /** An access key as whoever manages its Space sees it: never the key, nor its hash. */
 export const AccessKey = Schema.Struct({
   keyId: TrimmedNonEmptyString,
@@ -133,6 +152,8 @@ export const AccessKey = Schema.Struct({
   /** `accounts` with names and whether the Space still has each; null for «all». */
   reaches: Schema.NullOr(Schema.Array(AccessKeyReach)),
   limits: AccessKeyLimits,
+  /** What it used (access-keys ticket 04); absent where nobody asked (the create answer). */
+  usage: Schema.optionalKey(AccessKeyUsage),
 });
 export type AccessKey = typeof AccessKey.Type;
 

@@ -39,6 +39,7 @@ import * as Stream from "effect/Stream";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as AccessKeys from "./AccessKeys.ts";
 import * as AiAccounts from "./AiAccounts.ts";
 import * as AiGatewayActivity from "./AiGatewayActivity.ts";
 import { AI_PRICES, AI_PRICES_REVIEWED, type AiPrice, costUsd, priceFor } from "./aiPrices.ts";
@@ -143,6 +144,9 @@ interface SummaryRow {
   readonly accountId: string;
   readonly model: string;
   readonly grantId: string;
+  /** '' unless an access key made the requests (access-keys ticket 04). */
+  readonly accessKeyId: string;
+  readonly estimatedTokens: number;
   readonly requests: number;
   readonly failedRequests: number;
   readonly unknownRequests: number;
@@ -221,15 +225,18 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       `;
       // A summary whose uncached input is unknown (from before migration 147) stays unknown.
       yield* sql`
-        INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model, grant_id, requests,
-          failed_requests, unknown_requests, input_tokens, output_tokens,
-          cache_read_tokens, cache_write_tokens, uncached_input_tokens)
+        INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model, grant_id,
+          access_key_id, requests, failed_requests, unknown_requests, input_tokens, output_tokens,
+          cache_read_tokens, cache_write_tokens, uncached_input_tokens, estimated_tokens)
         VALUES (${day}, ${userId}, ${request.spaceId}, ${accountId}, ${model},
-          ${grantId ?? ""}, 1, ${failed ? 1 : 0}, ${unknown ? 1 : 0}, ${usage?.inputTokens ?? 0},
-          ${usage?.outputTokens ?? 0}, ${usage?.cacheReadTokens ?? 0},
-          ${usage?.cacheWriteTokens ?? 0}, ${uncachedInputOf(request.shape, usage)})
-        ON CONFLICT (day, user_id, space_id, account_id, model, grant_id) DO UPDATE SET
+          ${grantId ?? ""}, ${request.accessKeyId ?? ""}, 1, ${failed ? 1 : 0}, ${unknown ? 1 : 0},
+          ${usage?.inputTokens ?? 0}, ${usage?.outputTokens ?? 0}, ${usage?.cacheReadTokens ?? 0},
+          ${usage?.cacheWriteTokens ?? 0}, ${uncachedInputOf(request.shape, usage)},
+          ${failed ? 0 : (request.estimatedTokens ?? 0)})
+        ON CONFLICT (day, user_id, space_id, account_id, model, grant_id, access_key_id)
+        DO UPDATE SET
           requests = requests + 1,
+          estimated_tokens = estimated_tokens + excluded.estimated_tokens,
           failed_requests = failed_requests + excluded.failed_requests,
           unknown_requests = unknown_requests + excluded.unknown_requests,
           input_tokens = input_tokens + excluded.input_tokens,
@@ -248,12 +255,20 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
     /**
      * Requests written together: rows and summaries in one transaction, so they never disagree. If
      * the batch cannot be written each request is tried alone, and only one that still fails is
-     * lost (logged). An outcome is published for each.
+     * lost (logged). An outcome is published for each, once the request is no longer held as
+     * unwritten for the caps (`settled`): whoever reads after an outcome counts it once.
      */
     const writeBatch = Effect.fn("AiUsage.writeBatch")(function* (
       batch: ReadonlyArray<AiGatewayActivity.GatewayRequestRecord>,
+      settled: Set<AiGatewayActivity.GatewayRequestRecord>,
     ) {
       if (batch.length === 0) return;
+      const settle = (requests: ReadonlyArray<AiGatewayActivity.GatewayRequestRecord>) =>
+        activity
+          .settle(requests)
+          .pipe(
+            Effect.andThen(Effect.sync(() => requests.forEach((request) => settled.add(request)))),
+          );
       const together = yield* sql
         .withTransaction(Effect.forEach(batch, insert, { discard: true }))
         .pipe(
@@ -261,6 +276,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
           Effect.catchCause(() => Effect.succeed(false)),
         );
       if (together) {
+        yield* settle(batch);
         for (const _ of batch) yield* PubSub.publish(outcomes, { written: true });
         return;
       }
@@ -268,15 +284,19 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         const written = yield* sql
           .withTransaction(insert(request))
           .pipe(Effect.as(true), Effect.catchCause(logLost));
+        yield* settle([request]);
         yield* PubSub.publish(outcomes, { written });
       }
     });
-    const writeAll = (all: ReadonlyArray<AiGatewayActivity.GatewayRequestRecord>) =>
+    const writeAll = (
+      all: ReadonlyArray<AiGatewayActivity.GatewayRequestRecord>,
+      settled: Set<AiGatewayActivity.GatewayRequestRecord>,
+    ) =>
       Effect.forEach(
         Array.from({ length: Math.ceil(all.length / WRITE_BATCH) }, (_, index) =>
           all.slice(index * WRITE_BATCH, (index + 1) * WRITE_BATCH),
         ),
-        (batch) => writeBatch(batch).pipe(Effect.ignoreCause),
+        (batch) => writeBatch(batch, settled).pipe(Effect.ignoreCause),
         { discard: true },
       );
 
@@ -287,7 +307,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
     );
     const shedCounts = new Map<
       string,
-      { day: string; userId: string; spaceId: string; count: number }
+      { day: string; userId: string; spaceId: string; accessKeyId: string; count: number }
     >();
     let shedMarked = false;
     const flushShed = Effect.suspend(() => {
@@ -300,11 +320,12 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
           Effect.forEach(
             taken,
             (entry) => sql`
-              INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model, requests,
-                failed_requests, uncached_input_tokens)
-              VALUES (${entry.day}, ${entry.userId}, ${entry.spaceId}, '', '', ${entry.count},
-                ${entry.count}, 0)
-              ON CONFLICT (day, user_id, space_id, account_id, model, grant_id) DO UPDATE SET
+              INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model,
+                access_key_id, requests, failed_requests, uncached_input_tokens)
+              VALUES (${entry.day}, ${entry.userId}, ${entry.spaceId}, '', '',
+                ${entry.accessKeyId}, ${entry.count}, ${entry.count}, 0)
+              ON CONFLICT (day, user_id, space_id, account_id, model, grant_id, access_key_id)
+              DO UPDATE SET
                 requests = requests + excluded.requests,
                 failed_requests = failed_requests + excluded.failed_requests
             `,
@@ -324,9 +345,13 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
     // only after its transaction, so a cap never undercounts.
     const writeItems = (items: ReadonlyArray<AiGatewayActivity.GatewayRequestRecord | null>) => {
       const records = items.filter((item) => item !== null);
-      return writeAll(records).pipe(
+      // Each is settled as it is written; any left (interrupted, a defect) are settled here.
+      const settled = new Set<AiGatewayActivity.GatewayRequestRecord>();
+      return writeAll(records, settled).pipe(
         Effect.andThen(items.includes(null) ? flushShed : Effect.void),
-        Effect.ensuring(activity.settle(records)),
+        Effect.ensuring(
+          Effect.suspend(() => activity.settle(records.filter((record) => !settled.has(record)))),
+        ),
       );
     };
 
@@ -348,10 +373,11 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       if (request.shed === true) {
         const day = request.at.slice(0, 10);
         const userId = request.userId ?? "";
-        const key = `${day}|${userId}|${request.spaceId}`;
+        const accessKeyId = request.accessKeyId ?? "";
+        const key = `${day}|${userId}|${request.spaceId}|${accessKeyId}`;
         const entry = shedCounts.get(key);
         if (entry === undefined) {
-          shedCounts.set(key, { day, userId, spaceId: request.spaceId, count: 1 });
+          shedCounts.set(key, { day, userId, spaceId: request.spaceId, accessKeyId, count: 1 });
         } else entry.count += 1;
         if (shedMarked) return Effect.void;
         shedMarked = true;
@@ -465,9 +491,17 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       }
       const scope: AiUsageScope = everything ? "all" : administered.length > 0 ? "spaces" : "own";
       const bound = limit === undefined ? [] : [sql`space_id = ${limit}`];
+      // An access key's rows: to whoever sees the Space's keys (access-keys ticket 04), a
+      // Personal space's User included; never a Member who does not.
+      const keySpaces = [...readSpaces].flatMap(([spaceId, space]) =>
+        can("accessKey.view", space.resource) ? [spaceId] : [],
+      );
       const own = [
         sql`user_id = ${userId}`,
         ...(administered.length > 0 ? [sql.in("space_id", administered)] : []),
+        ...(keySpaces.length > 0
+          ? [sql`(access_key_id <> '' AND ${sql.in("space_id", keySpaces)})`]
+          : []),
       ];
       const visible = sql.and([
         everything
@@ -661,12 +695,13 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       const filters = [
         sql`day >= ${fromDay}`,
         sql`day <= ${toDay}`,
-        // An access key's rows have no User; access-keys ticket 04 shows them as the key's.
-        sql`user_id <> ''`,
         // A Thread's rows never come through a loan given, and the Owner's only where they run.
         input.threadId === undefined ? visible : visibleThreads,
         ...(input.spaceId === undefined ? [] : [sql`space_id = ${input.spaceId}`]),
         ...(input.userId === undefined ? [] : [sql`user_id = ${input.userId}`]),
+        ...(input.accessKeyId === undefined
+          ? []
+          : [sql`COALESCE(access_key_id, '') = ${input.accessKeyId}`]),
         ...(input.accountId === undefined ? [] : [sql`account_id = ${input.accountId}`]),
         ...(input.threadId === undefined ? [] : [sql`thread_id = ${input.threadId}`]),
         ...(input.grantId === undefined
@@ -683,19 +718,22 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         input.threadId === undefined
           ? yield* sql<SummaryRow>`
               SELECT day, user_id AS "userId", space_id AS "spaceId", account_id AS "accountId",
-                model, grant_id AS "grantId", requests, failed_requests AS "failedRequests",
-                unknown_requests AS "unknownRequests", input_tokens AS "inputTokens",
-                output_tokens AS "outputTokens", cache_read_tokens AS "cacheReadTokens",
-                cache_write_tokens AS "cacheWriteTokens",
-                uncached_input_tokens AS "uncachedInputTokens"
+                model, grant_id AS "grantId", access_key_id AS "accessKeyId", requests,
+                failed_requests AS "failedRequests", unknown_requests AS "unknownRequests",
+                input_tokens AS "inputTokens", output_tokens AS "outputTokens",
+                cache_read_tokens AS "cacheReadTokens", cache_write_tokens AS "cacheWriteTokens",
+                uncached_input_tokens AS "uncachedInputTokens",
+                estimated_tokens AS "estimatedTokens"
               FROM ai_usage_daily WHERE ${sql.and(filters)}
-              ORDER BY day DESC, space_id, user_id, account_id, model, grant_id
+              ORDER BY day DESC, space_id, user_id, access_key_id, account_id, model, grant_id
               LIMIT ${maxRows + 1}
             `.pipe(Effect.catch(storage("read the AI usage")))
           : yield* sql<SummaryRow>`
               SELECT day, user_id AS "userId", space_id AS "spaceId",
                 COALESCE(account_id, '') AS "accountId", COALESCE(model, '') AS "model",
-                COALESCE(grant_id, '') AS "grantId", COUNT(*) AS "requests",
+                COALESCE(grant_id, '') AS "grantId",
+                COALESCE(access_key_id, '') AS "accessKeyId", 0 AS "estimatedTokens",
+                COUNT(*) AS "requests",
                 SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS "failedRequests",
                 SUM(CASE WHEN status < 400 AND input_tokens IS NULL AND output_tokens IS NULL
                   THEN 1 ELSE 0 END) AS "unknownRequests",
@@ -706,7 +744,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
                 COALESCE(SUM(${sql.literal(UNCACHED_INPUT_SQL)}), 0) AS "uncachedInputTokens"
               FROM ai_usage WHERE ${sql.and(filters)}
               GROUP BY day, user_id, space_id, COALESCE(account_id, ''), COALESCE(model, ''),
-                COALESCE(grant_id, '')
+                COALESCE(grant_id, ''), COALESCE(access_key_id, '')
               ORDER BY day DESC, space_id, user_id, account_id, model
               LIMIT ${maxRows + 1}
             `.pipe(Effect.catch(storage("read the AI usage")));
@@ -748,7 +786,9 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
 
       const outRows: Array<AiUsageRow> = kept.map((row) => ({
         day: row.day,
-        userId: row.userId as UserId,
+        // An access key's rows have no User: they are its Space's (access-keys ticket 04).
+        userId: row.userId === "" ? null : (row.userId as UserId),
+        accessKeyId: row.accessKeyId === "" ? null : row.accessKeyId,
         spaceId: row.spaceId as SpaceId,
         accountId: row.accountId === "" ? null : (row.accountId as AiAccountId),
         model: row.model === "" ? null : row.model,
@@ -760,6 +800,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         outputTokens: row.outputTokens,
         cacheReadTokens: row.cacheReadTokens,
         cacheWriteTokens: row.cacheWriteTokens,
+        estimatedTokens: row.estimatedTokens,
         estimatedUsd: priceRow(kinds, row).usd,
       }));
       // Cut rows must not undercount: the totals then come from a query of their own.
@@ -774,7 +815,8 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
                   COALESCE(SUM(input_tokens), 0) AS "inputTokens",
                   COALESCE(SUM(output_tokens), 0) AS "outputTokens",
                   COALESCE(SUM(cache_read_tokens), 0) AS "cacheReadTokens",
-                  COALESCE(SUM(cache_write_tokens), 0) AS "cacheWriteTokens"
+                  COALESCE(SUM(cache_write_tokens), 0) AS "cacheWriteTokens",
+                  COALESCE(SUM(estimated_tokens), 0) AS "estimatedTokens"
                 FROM ai_usage_daily WHERE ${sql.and(filters)}
               `
               : sql<AiUsageTotals>`
@@ -835,7 +877,20 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
             : [],
         ),
       );
-      const userIds = [...new Set(rows.map((row) => row.userId))];
+      const userIds = [
+        ...new Set(rows.flatMap((row) => (row.userId === null ? [] : [row.userId]))),
+      ];
+      const accessKeyIds = [
+        ...new Set(
+          rows.flatMap((row) =>
+            row.accessKeyId === undefined || row.accessKeyId === null ? [] : [row.accessKeyId],
+          ),
+        ),
+      ];
+      // Names of the access keys the rows name: their labels only (access-keys ticket 04).
+      const accessKeys = yield* AccessKeys.accessKeyLabels(sql, accessKeyIds).pipe(
+        Effect.catch(storage("read the access keys")),
+      );
       const spaceIds = [...new Set(rows.map((row) => row.spaceId))];
       const accountIds = [
         ...new Set(rows.flatMap((row) => (row.accountId === null ? [] : [row.accountId]))),
@@ -877,6 +932,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       }
       return {
         users: users.map((user) => ({ id: user.id as UserId, name: user.name })),
+        accessKeys: accessKeys.map((key) => ({ id: key.id, label: key.label })),
         // A Space the viewer can no longer see keeps its rows but no name (nor a new one).
         spaces: spaceIds.flatMap((id) => {
           const space = knownSpaces.get(id);

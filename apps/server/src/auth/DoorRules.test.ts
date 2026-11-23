@@ -730,6 +730,8 @@ describe("every door of the Hub declares its rule", () => {
       .filter(({ text }) => /\bai_usage(_daily)?\b/u.test(text))
       .map(({ file }) => file);
     expect(readers.toSorted()).toEqual([
+      // An access key's use, for its caps and its list (access-keys tickets 04, 05).
+      "ai/AccessKeyCaps.ts",
       "ai/AiUsage.ts",
       "ai/GrantCaps.ts",
       "persistence/Migrations/114_AiUsage.ts",
@@ -737,6 +739,7 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/146_AiUsageGrant.ts",
       "persistence/Migrations/147_AiUsageUncachedInput.ts",
       "persistence/Migrations/159_AiAccessKeys.ts",
+      "persistence/Migrations/160_AiUsageAccessKey.ts",
     ]);
   });
 

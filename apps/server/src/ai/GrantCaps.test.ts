@@ -189,7 +189,7 @@ describe("GrantCaps.check", () => {
         assert.equal((yield* caps.check("g1", TOKENS_A_DAY(1000))).tokens?.used, 120 + 30 + 57);
         // Written (or lost): taken back out by the same rule, so nothing is left over.
         yield* activity.settle([openai, gemini, anthropic]);
-        assert.deepEqual(yield* activity.unwritten("g1"), []);
+        assert.deepEqual(yield* activity.unwritten(AiGatewayActivity.grantSubject("g1")), []);
         assert.equal((yield* caps.check("g1", TOKENS_A_DAY(1000))).tokens?.used, 120);
       }).pipe(Effect.provide(layer)),
   );

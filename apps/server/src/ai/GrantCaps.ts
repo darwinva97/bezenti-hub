@@ -135,7 +135,10 @@ const make = Effect.gen(function* () {
         ),
       ),
     );
-    const days = [...written, ...(yield* activity.unwritten(grantId))];
+    const days = [
+      ...written,
+      ...(yield* activity.unwritten(AiGatewayActivity.grantSubject(grantId))),
+    ];
     const useOf = (entry: (typeof periods)[number]): CapUse => ({
       used: days
         .filter((day) => day.day >= entry.fromDay)

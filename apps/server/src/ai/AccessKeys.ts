@@ -44,6 +44,7 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as AccessKeyCaps from "./AccessKeyCaps.ts";
 import * as AiAccounts from "./AiAccounts.ts";
 import * as AllowedAiAccounts from "./AllowedAiAccounts.ts";
 
@@ -213,6 +214,18 @@ export const accessKeyForRequest = Effect.fn("AccessKeys.accessKeyForRequest")(f
   });
 });
 
+/** The labels of these keys, for the usage view (access-keys ticket 04); never more of a key. */
+export const accessKeyLabels = Effect.fn("AccessKeys.accessKeyLabels")(function* (
+  sql: SqlClient.SqlClient,
+  keyIds: ReadonlyArray<string>,
+) {
+  if (keyIds.length === 0)
+    return [] as ReadonlyArray<{ readonly id: string; readonly label: string }>;
+  return yield* sql<{ readonly id: string; readonly label: string }>`
+    SELECT key_id AS "id", label FROM ai_access_keys WHERE ${sql.in("key_id", [...new Set(keyIds)])}
+  `;
+});
+
 /** Notes a key's use: written at most once a minute per key. */
 export const noteAccessKeyUse = Effect.fn("AccessKeys.noteAccessKeyUse")(function* (
   sql: SqlClient.SqlClient,
@@ -318,7 +331,19 @@ const make = Effect.gen(function* () {
   const spaces = yield* SpaceDirectory.SpaceDirectory;
   const allowedAccounts = yield* AllowedAiAccounts.AllowedAiAccounts;
   const aiAccounts = yield* AiAccounts.AiAccounts;
+  const caps = yield* AccessKeyCaps.AccessKeyCaps;
   const audit = yield* AuditLog.AuditLog;
+
+  /** Listed keys with what each used (access-keys ticket 04). */
+  const withUsage = Effect.fn("AccessKeys.withUsage")(function* (keys: ReadonlyArray<AccessKey>) {
+    const usage = yield* caps
+      .usageOf(keys.map((key) => key.keyId))
+      .pipe(Effect.catch(storage("read the keys' use")));
+    return keys.map((key): AccessKey => {
+      const used = usage.get(key.keyId);
+      return used === undefined ? key : { ...key, usage: used };
+    });
+  });
 
   const storage = (what: string) => (cause: unknown) =>
     Effect.logError(`AccessKeys: could not ${what}`, { cause }).pipe(
@@ -566,7 +591,7 @@ const make = Effect.gen(function* () {
         Effect.catch(storage("read the Space's AI accounts")),
       );
       return {
-        keys: yield* shown(yield* read(sql`space_id = ${spaceId}`)),
+        keys: yield* withUsage(yield* shown(yield* read(sql`space_id = ${spaceId}`))),
         everyone: false,
         space: { canManage, subscription },
       } satisfies AccessKeyListResult;
@@ -574,7 +599,7 @@ const make = Effect.gen(function* () {
 
     if (principal.isOwner && principal.inactive !== true) {
       return {
-        keys: yield* shown(yield* read(sql`1 = 1`)),
+        keys: yield* withUsage(yield* shown(yield* read(sql`1 = 1`))),
         everyone: true,
         space: null,
       } satisfies AccessKeyListResult;
@@ -593,7 +618,10 @@ const make = Effect.gen(function* () {
         : [],
     );
     return {
-      keys: viewable.length === 0 ? [] : yield* shown(yield* read(sql.in("space_id", viewable))),
+      keys:
+        viewable.length === 0
+          ? []
+          : yield* withUsage(yield* shown(yield* read(sql.in("space_id", viewable)))),
       everyone: false,
       space: null,
     } satisfies AccessKeyListResult;
@@ -715,4 +743,5 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(AccessKeys, make);
+/** With the keys' use (AccessKeyCaps), which the gateway's caps read too. */
+export const layer = Layer.effect(AccessKeys, make).pipe(Layer.provideMerge(AccessKeyCaps.layer));

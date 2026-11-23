@@ -91,6 +91,20 @@ export function createAiGatewayEnvironmentAtoms<R, E>(
       label: "environment-data:ai-gateway-keys:revoke",
       tag: WS_METHODS.aiGatewayKeysRevoke,
     }),
+    // A Space's access keys (access-keys ticket 01), for whoever manages it; the Owner's list
+    // may hold every Space's. Only `createAccessKey` answers with a key, once.
+    listAccessKeys: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:access-keys:list",
+      tag: WS_METHODS.accessKeysList,
+    }),
+    createAccessKey: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:access-keys:create",
+      tag: WS_METHODS.accessKeysCreate,
+    }),
+    revokeAccessKey: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:access-keys:revoke",
+      tag: WS_METHODS.accessKeysRevoke,
+    }),
     // Subscriptions (spec 4 ticket 03): the Owner signs in through the Hub's CLIProxyAPI, pasting
     // the address the browser lands on; a Vertex service account is imported.
     startAccountLogin: createEnvironmentRpcCommand(runtime, {

@@ -263,6 +263,10 @@
       "types": "./src/aiGatewayLocalCli.ts",
       "import": "./src/aiGatewayLocalCli.ts"
     },
+    "./aiGatewayAccessKey": {
+      "types": "./src/aiGatewayAccessKey.ts",
+      "import": "./src/aiGatewayAccessKey.ts"
+    },
     "./threadLinks": {
       "types": "./src/threadLinks.ts",
       "import": "./src/threadLinks.ts"

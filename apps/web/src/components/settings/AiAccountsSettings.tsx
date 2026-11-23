@@ -145,13 +145,21 @@ type AccountCommands = ReturnType<typeof useAccountCommands>;
  * lend and delete; the Owner also reviews the loans the upgrade narrowed. Others' only by name,
  * provider and status. A key is never shown again once saved, only replaced.
  */
-export function AiAccountsSettingsPanel({ scope }: { readonly scope?: OwnedResourceScope }) {
+export function AiAccountsSettingsPanel({
+  scope,
+  after,
+}: {
+  readonly scope?: OwnedResourceScope;
+  /** Shown below the accounts (a Space's access keys, in Space settings). */
+  readonly after?: ReactNode;
+}) {
   const environmentId = usePrimaryEnvironmentId();
   return (
     <SettingsPageContainer>
       {environmentId === null ? null : (
         <AiAccountsPage environmentId={environmentId} scope={scope} />
       )}
+      {after}
     </SettingsPageContainer>
   );
 }

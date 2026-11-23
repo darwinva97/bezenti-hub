@@ -3,6 +3,7 @@ import type { SpaceSummary } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 
 import { Button } from "../ui/button";
+import { AccessKeysSection } from "./AccessKeysSettings";
 import { AiAccountsSettingsPanel } from "./AiAccountsSettings";
 import { HubEnvironmentsSettings } from "./HubEnvironmentsSettings";
 import type { OwnedResourceScope } from "./ownedResourceScope";
@@ -36,9 +37,12 @@ const RESOURCE_LABELS: Readonly<Record<OwnedResource, string>> = {
 function PersonalSpaceNote({
   space,
   resource,
+  children,
 }: {
   readonly space: SpaceSummary;
   readonly resource: OwnedResource;
+  /** What else the section shows for this Personal space (its access keys). */
+  readonly children?: ReactNode;
 }) {
   const label = RESOURCE_LABELS[resource];
   return (
@@ -65,6 +69,7 @@ function PersonalSpaceNote({
           />
         )}
       </SettingsSection>
+      {children}
     </SettingsPageContainer>
   );
 }
@@ -91,12 +96,23 @@ export function SpaceVaultSection() {
   );
 }
 
-/** Space → AI accounts: the Organization's AI accounts. */
+/**
+ * Space → AI accounts: the Organization's AI accounts, and the Space's access keys (access-keys
+ * ticket 01) for whoever manages them, a Personal space's User included.
+ */
 export function SpaceAiAccountsSection() {
+  const space = useSettingsSpace();
+  if (space === null) return null;
+  const keys = <AccessKeysSection spaceId={space.id} />;
+  if (space.kind === "personal") {
+    return (
+      <PersonalSpaceNote space={space} resource="ai-accounts">
+        {keys}
+      </PersonalSpaceNote>
+    );
+  }
   return (
-    <SpaceResourceSection resource="ai-accounts">
-      {(scope) => <AiAccountsSettingsPanel scope={scope} />}
-    </SpaceResourceSection>
+    <AiAccountsSettingsPanel scope={{ kind: "organization", spaceId: space.id }} after={keys} />
   );
 }
 

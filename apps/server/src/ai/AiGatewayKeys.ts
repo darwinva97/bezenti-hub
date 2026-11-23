@@ -655,7 +655,9 @@ const make = Effect.gen(function* () {
         403,
         accessKey.space === "archived" || accessKey.space === "deleting"
           ? "This access key's Space is archived. It works again if the Space is restored."
-          : "This access key's Space is closed now. It works again if the Space is reopened.",
+          : accessKey.space === "owner-inactive"
+            ? "This access key's Space is not available while its User is disabled. It works again once they are enabled."
+            : "This access key's Space is closed.",
       );
     }
     const own = yield* allowedAccounts.forSpace(accessKey.spaceId).pipe(Effect.catch(unavailable));

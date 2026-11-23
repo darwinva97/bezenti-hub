@@ -388,7 +388,7 @@ it.live.skipIf(!posix || platform === undefined)(
       assert.equal(disabled.status, 200);
       const closed = yield* call(setup, MESSAGES, { key: friend, body: messages() });
       assert.equal(closed.status, 403);
-      assert.include(closed.text, "This access key's Space is closed now.");
+      assert.include(closed.text, "not available while its User is disabled");
     }).pipe(Effect.scoped),
 );
 

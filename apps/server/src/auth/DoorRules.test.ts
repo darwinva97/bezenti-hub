@@ -701,7 +701,12 @@ describe("every door of the Hub declares its rule", () => {
         // The door inventory names the table among the credentials (Keycloak ticket 11).
         .filter((file) => file !== "auth/DoorRules.ts")
         .toSorted(),
-    ).toEqual(["ai/AccessKeys.ts", "persistence/Migrations/159_AiAccessKeys.ts"]);
+    ).toEqual([
+      "ai/AccessKeys.ts",
+      "persistence/Migrations/159_AiAccessKeys.ts",
+      // Revokes the keys of Spaces deleted before access-keys ticket 07.
+      "persistence/Migrations/161_AccessKeysOfGoneSpaces.ts",
+    ]);
   });
 
   it("reads AI usage over one WS RPC only, counts only: no HTTP, raw route or MCP door, tables read by AiUsage alone (spec 4 ticket 05)", () => {

@@ -162,6 +162,8 @@ export const AccessKey = Schema.Struct({
   limits: AccessKeyLimits,
   /** What it used (access-keys ticket 04); absent where nobody asked (the create answer). */
   usage: Schema.optionalKey(AccessKeyUsage),
+  /** How its Space stands (access-keys ticket 07): its keys are refused unless `open`. */
+  spaceState: Schema.optionalKey(Schema.Literals(["open", "archived", "frozen", "gone"])),
 });
 export type AccessKey = typeof AccessKey.Type;
 

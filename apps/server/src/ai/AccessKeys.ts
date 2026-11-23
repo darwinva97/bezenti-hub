@@ -273,6 +273,34 @@ export const accessKeyLabels = Effect.fn("AccessKeys.accessKeyLabels")(function*
   `;
 });
 
+/**
+ * Access-keys ticket 07: revokes, inside the caller's write transaction, every live key of a Space
+ * that goes (an Organization deleted, a User removed with their Personal space), audited as the
+ * Hub's own act (`space-gone`, `via` the removal). Rolled back with a removal that fails.
+ */
+export const revokeAccessKeysWithin = Effect.fn("AccessKeys.revokeAccessKeysWithin")(function* (
+  sql: SqlClient.SqlClient,
+  spaceId: SpaceId,
+  via: "organization.delete" | "user.remove",
+) {
+  const at = DateTime.formatIso(yield* DateTime.now);
+  const revoked = yield* sql<{ readonly keyId: string; readonly label: string }>`
+    UPDATE ai_access_keys SET revoked_at = ${at}, revoked_reason = 'space-gone', updated_at = ${at}
+    WHERE space_id = ${spaceId} AND revoked_at IS NULL
+    RETURNING key_id AS "keyId", label
+  `;
+  const write = AuditLog.write(sql);
+  for (const row of revoked) {
+    yield* write({
+      actor: { source: "system" },
+      action: "access_key.revoke",
+      spaceId,
+      target: { kind: "access_key", id: row.keyId, name: row.label },
+      detail: { space: spaceId, reason: "space-gone", via },
+    });
+  }
+});
+
 /** Notes a key's use: written at most once a minute per key. */
 export const noteAccessKeyUse = Effect.fn("AccessKeys.noteAccessKeyUse")(function* (
   sql: SqlClient.SqlClient,
@@ -468,10 +496,17 @@ const make = Effect.gen(function* () {
             inSpace: ownBySpace.get(row.spaceId)?.has(id) === true,
           }));
     };
+    const stateOf = (spaceId: string): NonNullable<AccessKey["spaceState"]> => {
+      const space = spaceNames.get(SpaceId.make(spaceId));
+      if (space === undefined) return "gone";
+      if (space.resource.archived) return "archived";
+      return space.resource.frozen ? "frozen" : "open";
+    };
     return rows.map((row): AccessKey => ({
       keyId: row.keyId,
       spaceId: SpaceId.make(row.spaceId),
       spaceName: spaceNames.get(SpaceId.make(row.spaceId))?.name ?? null,
+      spaceState: stateOf(row.spaceId),
       label: row.label,
       hint: row.hint,
       createdBy: UserId.make(row.createdBy),

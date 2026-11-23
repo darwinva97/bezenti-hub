@@ -4,11 +4,12 @@
  * anyway; this keeps the record true at once. (Allowances became Grants, Grants ticket 02; a
  * Grant to what is gone lends nothing, and its ending is Grants ticket 11.)
  */
-import type { SpaceId, UserId } from "@t3tools/contracts";
+import { SpaceId, type UserId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 import type * as AuditLog from "../audit/AuditLog.ts";
+import * as AccessKeys from "./AccessKeys.ts";
 import * as AiGatewayKeys from "./AiGatewayKeys.ts";
 
 /**
@@ -22,6 +23,8 @@ export const forgetUser = Effect.fn("AiAccountReachLoss.forgetUser")(function* (
   userId: UserId,
 ) {
   yield* AiGatewayKeys.revokeWithin(sql, actor, { userId }, "user-inactive");
+  // Their Personal space goes with them, and its access keys (access-keys ticket 07).
+  yield* AccessKeys.revokeAccessKeysWithin(sql, SpaceId.make(`personal:${userId}`), "user.remove");
 });
 
 /**
@@ -34,4 +37,6 @@ export const forgetSpace = Effect.fn("AiAccountReachLoss.forgetSpace")(function*
   spaceId: SpaceId,
 ) {
   yield* AiGatewayKeys.revokeWithin(sql, actor, { spaceId }, "space-lost");
+  // Its access keys too, as the Hub's own act (access-keys ticket 07).
+  yield* AccessKeys.revokeAccessKeysWithin(sql, spaceId, "organization.delete");
 });

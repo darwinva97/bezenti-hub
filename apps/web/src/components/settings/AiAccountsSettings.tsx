@@ -33,6 +33,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import { AccessKeysSection } from "./AccessKeysSettings";
 import { AiUsageTab } from "./AiUsageSettings";
 import { LendAiAccountDialog } from "./LendAiAccountDialog";
 import { MigratedLoansReview } from "./MigratedLoansReview";
@@ -282,6 +283,15 @@ function AiAccountsPage({
       </>
     );
   }
+  // The Owner's tab: every Space's access keys, to see and revoke (access-keys ticket 07).
+  if (organizationScope === null && canManage && tab === "access-keys") {
+    return (
+      <>
+        <AiAccountsTabs tab={tab} onTab={setTab} usage={canManage} />
+        <AccessKeysSection />
+      </>
+    );
+  }
   // The Owner's tab: what went through the AI gateway (spec 4 ticket 05).
   if (organizationScope === null && canManage && tab === "usage") {
     return (
@@ -450,7 +460,7 @@ function AiAccountOwnerSection(props: {
   );
 }
 
-type AiAccountsTab = "accounts" | "keys" | "usage";
+type AiAccountsTab = "accounts" | "keys" | "usage" | "access-keys";
 
 function AiAccountsTabs(props: {
   readonly tab: AiAccountsTab;
@@ -464,7 +474,11 @@ function AiAccountsTabs(props: {
       value={[props.tab]}
       onValueChange={(next) => {
         const value = next[0];
-        if (value === "accounts" || value === "keys" || (value === "usage" && props.usage)) {
+        if (
+          value === "accounts" ||
+          value === "keys" ||
+          ((value === "usage" || value === "access-keys") && props.usage)
+        ) {
           props.onTab(value);
         }
       }}
@@ -472,6 +486,8 @@ function AiAccountsTabs(props: {
       <Toggle value="accounts">Accounts</Toggle>
       <Toggle value="keys">Local CLI keys</Toggle>
       {props.usage ? <Toggle value="usage">Usage</Toggle> : null}
+      {/* The Owner's view of every Space's access keys (access-keys ticket 07). */}
+      {props.usage ? <Toggle value="access-keys">Access keys</Toggle> : null}
     </ToggleGroup>
   );
 }

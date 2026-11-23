@@ -227,19 +227,33 @@ const familyOf = (model: string) => {
  * key is shown once, with its setup; the Hub keeps only its hash. Hidden to whoever may not see
  * the Space's keys.
  */
-export function AccessKeysSection({ spaceId }: { readonly spaceId: SpaceId }) {
+export function AccessKeysSection({ spaceId }: { readonly spaceId?: SpaceId }) {
   const environmentId = usePrimaryEnvironmentId();
   return environmentId === null ? null : (
     <AccessKeysPanel environmentId={environmentId} spaceId={spaceId} />
   );
 }
 
+/** How a key's Space stands, said beside it in the Owner's list of every Space (ticket 07). */
+const SPACE_STATES: Readonly<Record<NonNullable<AccessKey["spaceState"]>, string | null>> = {
+  open: null,
+  archived: "archived: refused until restored",
+  frozen: "closed",
+  gone: "deleted",
+};
+
+/** One Space's list, or (no Space) the Owner's list of every Space's keys, to see and revoke. */
+const listInput = (space: SpaceId | undefined, ended: boolean) => ({
+  ...(space === undefined ? {} : { spaceId: space }),
+  ...(ended ? { includeEnded: true } : {}),
+});
+
 function AccessKeysPanel({
   environmentId,
   spaceId,
 }: {
   readonly environmentId: EnvironmentId;
-  readonly spaceId: SpaceId;
+  readonly spaceId: SpaceId | undefined;
 }) {
   const commands = useAccessKeyCommands();
   // The session may hand out credentials at all (access:write); the Hub decides the rest.
@@ -289,19 +303,12 @@ function AccessKeysPanel({
     setError(errorMessageOf(squashAtomCommandFailure(result), "Could not read the access keys."));
   };
   const applyListed = useEffectEvent(showListed);
-  const loadKeys = useEffectEvent((target: EnvironmentId, space: SpaceId, ended: boolean) =>
-    commands.list({
-      environmentId: target,
-      input: { spaceId: space, ...(ended ? { includeEnded: true } : {}) },
-    }),
+  const loadKeys = useEffectEvent(
+    (target: EnvironmentId, space: SpaceId | undefined, ended: boolean) =>
+      commands.list({ environmentId: target, input: listInput(space, ended) }),
   );
   const load = async () =>
-    showListed(
-      await commands.list({
-        environmentId,
-        input: { spaceId, ...(showEnded ? { includeEnded: true } : {}) },
-      }),
-    );
+    showListed(await commands.list({ environmentId, input: listInput(spaceId, showEnded) }));
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the Space's access keys from the Hub when the section opens or «Show ended» changes.
   useEffect(() => {
@@ -316,12 +323,14 @@ function AccessKeysPanel({
 
   // What a key may reach, for the form and the setup: only for whoever may make keys here.
   const canManage = listed?.space?.canManage === true;
-  const loadOptions = useEffectEvent((target: EnvironmentId, space: SpaceId) =>
-    commands.options({ environmentId: target, input: { spaceId: space } }),
+  const loadOptions = useEffectEvent((target: EnvironmentId, space: SpaceId | undefined) =>
+    space === undefined
+      ? Promise.resolve(null)
+      : commands.options({ environmentId: target, input: { spaceId: space } }),
   );
   const applyOptions = useEffectEvent(
-    (result: AtomCommandResult<AccessKeyModelOptions, unknown>) => {
-      if (result._tag === "Success") setOptions(result.value);
+    (result: AtomCommandResult<AccessKeyModelOptions, unknown> | null) => {
+      if (result !== null && result._tag === "Success") setOptions(result.value);
     },
   );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the Space's accounts and models from the Hub once the viewer may make keys there.
@@ -354,8 +363,14 @@ function AccessKeysPanel({
   return (
     <SettingsSection id="access-keys" title="Access keys">
       <SettingsRow
-        title="Keys for people outside this Space"
-        description="Give someone this Space's AI accounts for their own agent, with or without a Hub account: they paste the setup into Claude Code, Codex or another client. Each key is valid until a date you choose and its use counts on the key. A key is shown once, when you make it."
+        title={
+          spaceId === undefined ? "Every Space's access keys" : "Keys for people outside this Space"
+        }
+        description={
+          spaceId === undefined
+            ? "The access keys of every Space, with the state of their Space. Each Space's own settings make and change them; you may revoke any here."
+            : "Give someone this Space's AI accounts for their own agent, with or without a Hub account: they paste the setup into Claude Code, Codex or another client. Each key is valid until a date you choose and its use counts on the key. A key is shown once, when you make it."
+        }
         status={
           error === null ? null : (
             <span className="text-destructive" role="alert">
@@ -364,7 +379,7 @@ function AccessKeysPanel({
           )
         }
       />
-      {mayCreate && space?.canManage === true ? (
+      {mayCreate && spaceId !== undefined && space?.canManage === true ? (
         <NewAccessKeyForm
           environmentId={environmentId}
           spaceId={spaceId}
@@ -411,6 +426,16 @@ function AccessKeysPanel({
                   {key.label}{" "}
                   <span className="font-mono text-xs text-muted-foreground">…{key.hint}</span>
                 </span>
+                {spaceId === undefined ? (
+                  <span className="text-xs text-muted-foreground">
+                    {[
+                      key.spaceName ?? "A Space that no longer exists",
+                      key.spaceState === undefined ? null : SPACE_STATES[key.spaceState],
+                    ]
+                      .filter((part) => part !== null)
+                      .join(" · ")}
+                  </span>
+                ) : null}
                 <span className="text-xs text-muted-foreground">{modelsText(key.models)}</span>
                 {capsText(key).length === 0 ? (
                   <span className="text-xs text-muted-foreground">No token limit</span>

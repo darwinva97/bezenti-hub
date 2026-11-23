@@ -425,6 +425,235 @@ export const AMBIENT_COOKIE_RULES: Readonly<Record<string, AmbientCookieRule>> =
 };
 
 /**
+ * Keycloak ticket 11: every door that creates, links or keeps an identity, and what it does with
+ * one. DoorRules.test.ts fails on an identity group's door missing here; KeycloakDoors.test.ts
+ * calls each and looks for the client secret, codes and tokens in what it answers.
+ */
+const LOCAL_SIGN_IN =
+  "a local credential (ticket 08): refused, after it is checked, to anyone but the Owner while local sign-in is off; never answers a Keycloak token";
+const LOCAL_RESET =
+  "a reset link's local way back (ticket 08): refused to anyone but the Owner while local sign-in is off; Keycloak's way back is keycloakSignIn.start `reset`";
+const LOCAL_CREDENTIAL =
+  "the session's own User's local credential: refused to a User with a Keycloak identity but the Owner (UserDirectory.refuseLocalCredentialsForIdentity)";
+const MCP_METADATA = "public OAuth metadata or client registration: no identity, no session";
+
+export const IDENTITY_DOORS: Readonly<Record<string, string>> = {
+  "appSignIn.approve":
+    "the browser's own session approves an app; the app's session inherits its Keycloak sign-in and ends with it (ticket 09)",
+  "appSignIn.token":
+    "spends the app's code for its session, which carries the approving session's Keycloak sign-in",
+  "auth.account":
+    "the session's own User and linked identity (username, email, the realm's account page), never a subject or token",
+  "auth.browserSession":
+    "a pairing credential becomes a browser session of its User; one made from a Keycloak session carries its sign-in",
+  "auth.confirmTotpEnrollment": LOCAL_CREDENTIAL,
+  "auth.ownerBootstrap": "makes the Owner with a passkey, only until an Owner exists; no Keycloak",
+  "auth.ownerBootstrapStatus": "whether an Owner exists; no identity",
+  "auth.ownerRegistration": "the Owner's passkey ceremony, only until an Owner exists",
+  "auth.pairingCredential":
+    "a pairing link for the session's own User; one made from a Keycloak session carries its sign-in and ends with it (ticket 07)",
+  "auth.passkeyChallenge": LOCAL_SIGN_IN,
+  "auth.passkeySignIn": LOCAL_SIGN_IN,
+  "auth.passwordSignIn": LOCAL_SIGN_IN,
+  "auth.recoveryCodeSignIn":
+    "the Owner's break-glass, whatever Keycloak's state (only the Owner has recovery codes)",
+  "auth.redeemResetLink": LOCAL_RESET,
+  "auth.redeemResetLinkWithPassword": LOCAL_RESET,
+  "auth.removePassword": "the session's own User's password",
+  "auth.removeTotp": "the session's own User's TOTP",
+  "auth.resetLinkRegistration": LOCAL_RESET,
+  "auth.resetLinkStatus": "what a live reset link offers (Keycloak, local), spending nothing",
+  "auth.revokeClient": "ends one of the session's own User's sessions",
+  "auth.revokeOtherClients": "ends the session's own User's other sessions",
+  "auth.revokePairingLink": "ends one of the session's own User's pairing links",
+  "auth.session":
+    "the session's own User, and what the sign-in page offers (`keycloak`, `localForMembers`)",
+  "auth.setPassword": LOCAL_CREDENTIAL,
+  "auth.signOut":
+    "ends the Hub session only; for one born of a Keycloak sign-in, answers a single-use handle for keycloakSignIn.signOut, never a token",
+  "auth.startTotpEnrollment": LOCAL_CREDENTIAL,
+  "auth.token":
+    "a pairing credential becomes a bearer session of its User; one made from a Keycloak session carries its sign-in",
+  "auth.totpSignIn": LOCAL_SIGN_IN,
+  "auth.webSocketTicket":
+    "a 5-minute ticket for the session's own socket, checked against the session's row at use: a sign-in that ends closes the socket",
+  "auth.webSocketTicketFor":
+    "a 5-minute ticket for the session's own media routes, checked as auth.webSocketTicket",
+  "environments.approveJoin":
+    "a machine joins on a strong factor in the request, a Keycloak `step-up` proof for this very session among them (ticket 06)",
+  "installationUsers.list": "the Owner's list of Users; no subject or token",
+  "installationUsers.setStatus":
+    "disabling or removing a User ends their sessions, pairing links and Keycloak sign-ins in one transaction (ticket 11)",
+  "invitations.accept":
+    "a new User from an Invitation with new local credentials: refused while local sign-in is off (ticket 08); through Keycloak it is keycloakSignIn.start `invitation`",
+  "invitations.create":
+    "an Admin's Organization Invitation: someone else's way in, single-use, 7 days",
+  "invitations.join":
+    "an Invitation for the session's own User; an Admin Role needs a session of a live strong Keycloak sign-in (ticket 06)",
+  "invitations.list": "an Organization's Invitations, never a token",
+  "invitations.preview":
+    "what an Invitation token is (`kind: platform` for a Platform invitation), spending nothing",
+  "invitations.registration":
+    "the passkey ceremony of a new local User from an Invitation (ticket 08: refused while local sign-in is off)",
+  "invitations.revoke": "ends an Invitation (a Platform invitation the Owner's only)",
+  "invitations.totpEnrollment":
+    "a new local User's TOTP from an Invitation (ticket 08: refused while local sign-in is off)",
+  "keycloakSignIn.signOut":
+    "spends the sign-out handle and ends that Keycloak sign-in with all born of it; the realm's address carries no token (ticket 11)",
+  "keycloakSignIn.start":
+    "a flow to the realm (sign-in, invitation, link, reset, step-up): its secrets stay server-side, the browser gets only the authorization address and the flow cookie",
+  "mcpOAuth.approval": "the approver's own browser session reads what an MCP client asks for",
+  "mcpOAuth.authorizationServer": MCP_METADATA,
+  "mcpOAuth.authorize":
+    "sends the browser to the approval page with the client's request; no session issued",
+  "mcpOAuth.decision":
+    "the approver's own browser session approves an MCP client; its session inherits the Keycloak sign-in and ends with it (ticket 09)",
+  "mcpOAuth.mcpProtectedResource": MCP_METADATA,
+  "mcpOAuth.protectedResource": MCP_METADATA,
+  "mcpOAuth.register": MCP_METADATA,
+  "mcpOAuth.token":
+    "spends the MCP client's code for its session, which carries the approving session's Keycloak sign-in",
+  "platformInvitations.create":
+    "the Owner's Platform invitation: a User, never a Role; its token answered once",
+  "platformInvitations.list": "the Owner's Platform invitations, never a token",
+  "signInSettings.check":
+    "fetches the saved realm's discovery and keys; answers what is wrong, never the secret",
+  "signInSettings.get": "the Owner's settings: `clientSecretSet`, never the client secret",
+  "signInSettings.update":
+    "the Owner's settings; the client secret write-only into the encrypted store; ends sign-ins and sessions a change no longer allows",
+  "spaces.changeMemberRole":
+    "making a Keycloak User an Admin ends their weak Keycloak access (ticket 06)",
+  "spaces.createOrganization":
+    "its creator becomes its Admin: a Keycloak User only from a strong sign-in, their weak access ends (ticket 06)",
+  "spaces.issueMemberResetLink":
+    "a reset link for another User; with Keycloak on it binds a Keycloak identity in place of the old one (ticket 08)",
+  "auth/keycloakSignInHttp.ts: GET KEYCLOAK_CALLBACK_PATH":
+    "the flow's end: admission, link, reset or step-up proof; answers only a redirect and the session cookie",
+  "auth/keycloakSignInHttp.ts: POST KEYCLOAK_BACKCHANNEL_LOGOUT_PATH":
+    "the realm's logout token ends the sign-ins it names with all born of them; answers 200 or 400, never the token",
+  'ws.ts: GET "/ws"':
+    "a session's socket: closes when its session ends, a Keycloak sign-in's ending among the causes",
+};
+
+/**
+ * Ticket 11: every credential a person's session can lead to, and whether it ends with the Keycloak
+ * sign-in it was born of. `where` names what DoorRules.test.ts finds in the sources (a table's
+ * credential column, or a module that signs or holds credentials); a new one fails until listed.
+ */
+export type LoginCredentialRule = { readonly where: ReadonlyArray<string> } & (
+  | { readonly endsWithLogin: string }
+  | { readonly outlivesLogin: string }
+  | { readonly notFromSession: string }
+);
+
+export const KEYCLOAK_SESSION_CREDENTIALS: Readonly<Record<string, LoginCredentialRule>> = {
+  "the Keycloak sign-in itself": {
+    where: ["identity_logins.refresh_token_sealed", "identity_logins.id_token_sealed"],
+    endsWithLogin:
+      "its sealed refresh token is dropped as it ends; no ID token is kept at all (ticket 11, migration 158)",
+  },
+  "browser, app and MCP client sessions": {
+    where: [
+      "auth_sessions.identity_login_id",
+      "auth/SessionStore.ts",
+      "auth/AppSignIn.ts",
+      "auth/McpOAuth.ts",
+    ],
+    endsWithLogin:
+      "the callback's session carries the sign-in; an app's or MCP client's code and session copy the approving session's (AppSignIn.approve, McpOAuth.decision); UserDirectory.endKeycloakLogins revokes them all and closes their sockets",
+  },
+  "pairing links and the sessions they open": {
+    where: ["auth_pairing_links.identity_login_id"],
+    endsWithLogin:
+      "a link made from a Keycloak session carries its sign-in; unspent, it is revoked with it; spent, its session carries it",
+  },
+  "WebSocket and media tickets": {
+    where: ["auth/SessionStore.ts"],
+    endsWithLogin:
+      "5 minutes, and checked against the session's row at use: none outlives its session",
+  },
+  "the step-up proof": {
+    where: ["auth/KeycloakStepUpProofs.ts"],
+    endsWithLogin:
+      "single-use, 5 minutes, spent only by the very session that started it, so it dies with that session",
+  },
+  "the «also sign out of Keycloak» handle": {
+    where: ["auth/KeycloakLogins.ts"],
+    endsWithLogin: "single-use, 10 minutes, and its one use ends the sign-in",
+  },
+  "a pending Keycloak flow": {
+    where: ["auth/KeycloakSignIn.ts"],
+    notFromSession:
+      "before any sign-in: its state, nonce and PKCE verifier stay server-side, single-use, 10 minutes",
+  },
+  "Environment credentials": {
+    where: ["environments.credential_hash", "environments/EnvironmentJoin.ts"],
+    outlivesLogin:
+      "a machine's, for its Space: approving a join takes a fresh strong factor of the approver, and the machine then belongs to the Space (an Admin removes it), as with a local approver",
+  },
+  "Invitations, Platform invitations and reset links": {
+    where: ["space_invitations.token_hash", "user_reset_links.token_hash"],
+    outlivesLogin:
+      "someone else's way in, single-use, 7 days at most, revocable; a disabled or removed User's reset links expire with them",
+  },
+  "Grant offer links": {
+    where: ["grants.offer_token_hash"],
+    outlivesLogin:
+      "an offer for another Space's Admins, revocable; claiming takes their own session and strong factor",
+  },
+  "guest links": {
+    where: ["guest/GuestShareService.ts"],
+    outlivesLogin:
+      "a Thread's link for a guest, revocable; it stops when its creator is disabled or removed",
+  },
+  "asset and upload URLs": {
+    where: [
+      "assets/AssetSigner.ts",
+      "assets/AssetAccess.ts",
+      "assets/AttachmentUpload.ts",
+      "mcp/toolkits/attachment/handlers.ts",
+    ],
+    outlivesLogin:
+      "signed and short: one file the User may read for an hour, one upload for 10 minutes (an agent's too)",
+  },
+  "preview address passes": {
+    where: [],
+    outlivesLogin:
+      "the cookie of the User's own preview address, for its idle life; the address refuses anyone else",
+  },
+  "scheduled task webhook secrets": {
+    where: ["scheduled_tasks.webhook_secret"],
+    outlivesLogin:
+      "a task's, run as its creator: a Keycloak ending does not disable the User (spec «Bajas»); the Owner does, which pauses their tasks",
+  },
+  "AI gateway CLI keys": {
+    where: ["ai_gateway_keys.key_hash"],
+    outlivesLogin:
+      "the User's own key, revocable, gone when the User is disabled or removed: a Keycloak ending does not disable the User (spec «Bajas»); binding keys to the sign-in is a follow-up",
+  },
+  "the master key backup": {
+    where: [],
+    outlivesLogin: "data, not a way in: it leaves once, audited, after a strong factor",
+  },
+  "Sandbox and dedicated machine credentials": {
+    where: [
+      "dedicated_sandbox_credentials.credential_hash",
+      "dedicated_sandbox_credentials.previous_credential_hash",
+    ],
+    notFromSession: "the Hub's own, for the Sandboxes it runs",
+  },
+  "local passwords, TOTP secrets and recovery codes": {
+    where: [
+      "user_passwords.password_hash",
+      "user_totp.secret_ciphertext",
+      "user_recovery_codes.code_hash",
+    ],
+    notFromSession:
+      "a local User's own; refused to a Keycloak User but the Owner, and deleted when a User links (the Owner keeps theirs)",
+  },
+};
+
+/**
  * Spec 4 ticket 03. Signing in to a subscription (or importing a Vertex account): WS RPCs only, in
  * INSTALLATION_RPC_METHODS. No raw route or HTTP endpoint takes a provider's callback: the Owner
  * pastes the address the browser landed on, checked against the sign-in and never fetched.

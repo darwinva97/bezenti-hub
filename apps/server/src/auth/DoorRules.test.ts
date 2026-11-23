@@ -22,6 +22,8 @@ import {
   AI_ACCOUNT_SIGN_IN_RULES,
   AMBIENT_COOKIE_RULES,
   HTTP_ENDPOINT_RULES,
+  IDENTITY_DOORS,
+  KEYCLOAK_SESSION_CREDENTIALS,
   MCP_TOOL_RULES,
   RAW_ROUTE_RULES,
 } from "./DoorRules.ts";
@@ -477,6 +479,8 @@ describe("every door of the Hub declares its rule", () => {
       files
         .filter(({ text }) => /\bai_gateway_keys\b/u.test(text))
         .map(({ file }) => file)
+        // The door inventory names the table among the credentials (Keycloak ticket 11).
+        .filter((file) => file !== "auth/DoorRules.ts")
         .toSorted(),
     ).toEqual([
       "ai/AiGatewayKeys.ts",
@@ -773,6 +777,125 @@ describe("every door of the Hub declares its rule", () => {
         /ssh/iu.test(name),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("every door of the Keycloak sign-in spec (ticket 11)", () => {
+  const IDENTITY_GROUPS = new Set([
+    "auth",
+    "appSignIn",
+    "keycloakSignIn",
+    "signInSettings",
+    "platformInvitations",
+    "invitations",
+    "mcpOAuth",
+    "installationUsers",
+  ]);
+
+  it("lists in IDENTITY_DOORS every door that creates, links or keeps an identity", () => {
+    const doors = [
+      ...endpoints.filter((door) => IDENTITY_GROUPS.has(door.split(".")[0] ?? "")),
+      // Doors of other groups that link, promote or prove a person.
+      "environments.approveJoin",
+      "spaces.changeMemberRole",
+      "spaces.createOrganization",
+      "spaces.issueMemberResetLink",
+      ...rawRoutes.filter((door) => door.startsWith("auth/") && !door.endsWith(": middleware")),
+      'ws.ts: GET "/ws"',
+    ];
+    expect({
+      undeclared: undeclared(doors, IDENTITY_DOORS),
+      stale: stale(doors, IDENTITY_DOORS),
+    }).toEqual({ undeclared: [], stale: [] });
+    // The spec's own doors (its «Puertas y contratos»), each with a rule of its own.
+    const specEndpoints = [
+      "keycloakSignIn.start",
+      "keycloakSignIn.signOut",
+      "signInSettings.get",
+      "signInSettings.update",
+      "signInSettings.check",
+      "platformInvitations.create",
+      "platformInvitations.list",
+    ];
+    const specRoutes = [
+      "auth/keycloakSignInHttp.ts: GET KEYCLOAK_CALLBACK_PATH",
+      "auth/keycloakSignInHttp.ts: POST KEYCLOAK_BACKCHANNEL_LOGOUT_PATH",
+    ];
+    for (const door of specEndpoints) {
+      expect(HTTP_ENDPOINT_RULES[door], door).toHaveProperty("own");
+      expect(endpoints, door).toContain(door);
+    }
+    for (const door of specRoutes) {
+      expect(RAW_ROUTE_RULES[door], door).toHaveProperty("own");
+      expect(AMBIENT_COOKIE_RULES[door], door).toBeDefined();
+    }
+  });
+
+  it("opens no WS RPC or MCP tool for sign-in settings, Keycloak or Platform invitations", () => {
+    const pattern = /keycloak|signInSetting|sign-in-setting|platformInvitation|identityLogin/iu;
+    expect(
+      [...WsRpcGroup.requests.keys(), ...mcpTools].filter((name) => pattern.test(name)),
+    ).toEqual([]);
+  });
+
+  it("keeps the flow cookie to its flow: set by `start`, read by the callback alone", () => {
+    const naming = files
+      .filter(({ text }) => /FLOW_COOKIE_NAME|t3_keycloak_flow/u.test(text))
+      .map(({ file }) => file);
+    expect(naming.toSorted()).toEqual(["auth/KeycloakSignIn.ts", "auth/keycloakSignInHttp.ts"]);
+    const signIn = files.find(({ file }) => file === "auth/KeycloakSignIn.ts")?.text ?? "";
+    // One reader (flowCookieOf, through readHubCookie), and its one caller is the callback.
+    expect(signIn.match(/readHubCookie\([^)]*FLOW_COOKIE_NAME/gu)?.length).toBe(1);
+    const calls = [...signIn.matchAll(/flowCookieOf\(request/gu)].map((match) => match.index);
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toBeGreaterThan(signIn.indexOf('Effect.fn("KeycloakSignIn.callback")'));
+    expect(signIn.indexOf('Effect.fn("KeycloakSignIn.callback")')).toBeGreaterThan(0);
+  });
+
+  it("names, for every credential a session can lead to, whether it ends with its Keycloak sign-in", () => {
+    // Credential columns, by the table each statement makes or alters (a rebuilt `_new` table is
+    // the table it becomes).
+    const column = /\b(?:[a-z_]*_(?:hash|sealed|secret|ciphertext)|identity_login_id)\b/gu;
+    const columns = files
+      .filter(({ file }) => file.startsWith("persistence/Migrations/"))
+      .flatMap(({ text }) =>
+        text.split("sql`").flatMap((chunk) => {
+          const statement = chunk.split("`")[0] ?? "";
+          const table = /(?:CREATE TABLE(?: IF NOT EXISTS)?|ALTER TABLE)\s+([a-z_]+)/u.exec(
+            statement,
+          )?.[1];
+          if (table === undefined) return [];
+          return [...statement.matchAll(column)].map(
+            (match) => `${table.replace(/_new$/u, "")}.${match[0]}`,
+          );
+        }),
+      );
+    // Modules that sign credentials or hold them in memory.
+    const holders = files
+      .filter(
+        ({ file, text }) =>
+          !file.startsWith("persistence/") &&
+          // The server's wiring builds the signers' layers; it hands nothing out.
+          file !== "server.ts" &&
+          /from "[./a-z]*\/(?:PayloadSigner|AssetSigner)\.ts"|makeGrantStore</u.test(text),
+      )
+      .map(({ file }) => file);
+    const found = [...new Set([...columns, ...holders])];
+    const named = Object.values(KEYCLOAK_SESSION_CREDENTIALS).flatMap((rule) => rule.where);
+    expect({
+      unnamed: found.filter((where) => !named.includes(where)).toSorted(),
+      stale: named.filter((where) => !found.includes(where)).toSorted(),
+    }).toEqual({ unnamed: [], stale: [] });
+    // What carries a sign-in ends with it.
+    const ending = Object.values(KEYCLOAK_SESSION_CREDENTIALS)
+      .filter((rule) => "endsWithLogin" in rule)
+      .flatMap((rule) => rule.where);
+    const carriers = found.filter((where) => where.endsWith(".identity_login_id"));
+    expect(carriers.toSorted()).toEqual([
+      "auth_pairing_links.identity_login_id",
+      "auth_sessions.identity_login_id",
+    ]);
+    expect(carriers.filter((where) => !ending.includes(where))).toEqual([]);
   });
 });
 

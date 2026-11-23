@@ -352,10 +352,9 @@ describe("Hub con Environments: a machine lent to Spaces", () => {
         // A Sandbox's credential does not ask as the machine.
         assert.equal(yield* selfReportStatus(hub, acmeLaunch.credential), 401);
         assert.equal(yield* selfReportStatus(hub, host.native.credential), 200);
-        // Each reaches its own Space's repositories and no other's.
-        assert.equal(yield* gitStatus(hub, t.acmeProject, acmeLaunch.credential), 200);
+        // Neither reaches another Space's repositories; nor its own Space's until it runs one of
+        // their Threads (Grants ticket 13, below).
         assert.equal(yield* gitStatus(hub, t.globexProject, acmeLaunch.credential), 403);
-        assert.equal(yield* gitStatus(hub, t.globexProject, globexLaunch.credential), 200);
         assert.equal(yield* gitStatus(hub, t.acmeProject, globexLaunch.credential), 403);
 
         // Each Space sees its own and not the other's; neither sees the Owner's machine.
@@ -403,6 +402,29 @@ describe("Hub con Environments: a machine lent to Spaces", () => {
         // The Owner still uses their machine natively, in any of their Spaces.
         assert.equal(yield* choose(t.owner, t.acmeProject, host.native.environmentId), "placed");
         assert.equal(yield* choose(t.owner, t.globexProject, host.native.environmentId), "placed");
+      }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "a lent Sandbox reads only the repositories of the Threads it runs, never the Space's other Projects (Grants 13)",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* lentToAcmeAndGlobex();
+        const { hub, acmeLaunch } = t;
+        const otherProject = ProjectId.make("project:acme-other");
+        yield* seedProject(hub.server, {
+          projectId: otherProject,
+          title: "Acme other",
+          defaultModelSelection: null,
+          spaceId: t.acme,
+        });
+        // Nothing runs there yet: its lender's machine reads none of Acme's Projects.
+        assert.equal(yield* gitStatus(hub, t.acmeProject, acmeLaunch.credential), 403);
+        assert.equal(yield* gitStatus(hub, otherProject, acmeLaunch.credential), 403);
+        // A Thread of one Project runs there: that Project only.
+        yield* acmeThreadOn(t, ThreadId.make("thread:acme-git"));
+        assert.equal(yield* gitStatus(hub, t.acmeProject, acmeLaunch.credential), 200);
+        assert.equal(yield* gitStatus(hub, otherProject, acmeLaunch.credential), 403);
       }).pipe(Effect.scoped),
   );
 

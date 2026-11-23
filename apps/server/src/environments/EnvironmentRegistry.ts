@@ -307,11 +307,13 @@ const decodeSandboxHost = Schema.decodeUnknownOption(Schema.fromJsonString(Sandb
 const encodeSandboxHost = Schema.encodeSync(Schema.fromJsonString(SandboxHostReport));
 const decodeGrantLimits = Schema.decodeUnknownOption(Schema.fromJsonString(EnvironmentGrantLimits));
 
-/** A lent Sandbox's Environment id: one per Grant, never `sandbox:` (a Hub Sandbox's). */
 /** How long a lent Sandbox's running turns have to stop once its Grant ended. */
 export const LENT_DRAIN_MS = 2 * 60_000;
 
+/** A lent Sandbox's Environment id: one per Grant, never `sandbox:` (a Hub Sandbox's). */
 const lentEnvironmentIdOf = (grantId: string) => EnvironmentId.make(`lent:${grantId}`);
+/** Whether an Environment is a Sandbox a Grant runs on a lent machine. */
+export const isLentSandbox = (environmentId: string) => environmentId.startsWith("lent:");
 
 const encodeLentDisk = Schema.encodeSync(Schema.fromJsonString(LentSandboxDisk));
 const encodeProviders = Schema.encodeSync(

@@ -336,8 +336,11 @@ const makeHandler = Effect.fnUntraced(function* (deps: {
         .map((grant) => grant.ref);
   // A Thread's own repository is only for the machine that runs it (or the target of its move),
   // and a machine it left that the Hub asked for its changes.
+  // Grants ticket 13: a lent Sandbox likewise, in any repository: its lender sees what runs on the
+  // machine, never the borrowing Space's other Projects.
   if (
-    key.value.scratchThreadId !== undefined &&
+    (key.value.scratchThreadId !== undefined ||
+      EnvironmentRegistry.isLentSandbox(check.environmentId)) &&
     prefixes.readable.length === 0 &&
     granted.length === 0
   ) {
@@ -734,8 +737,12 @@ const refPrefixesFor = Effect.fn("HubRepositoryHttp.refPrefixesFor")(function* (
   }
   // The copy of the Project's checkout is for every machine that may work in it (the caller
   // checked that) to read, its new checkouts made from it; only the Hub writes it. A Thread's own
-  // repository has none.
-  if (key.scratchThreadId === undefined) {
+  // repository has none. A lent Sandbox reads it only while it runs one of the Project's Threads
+  // (Grants ticket 13): what is on the machine, which its lender sees anyway.
+  if (
+    key.scratchThreadId === undefined &&
+    (!EnvironmentRegistry.isLentSandbox(environmentId) || rows.length > 0)
+  ) {
     readable.add(HubRepository.PROJECT_REFS_PREFIX);
   }
   return { readable: [...readable], writable: [...writable] };

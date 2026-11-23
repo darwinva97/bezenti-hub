@@ -1,7 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
 import * as Dialog from "../components/ui/Dialog";
-import type { HomeListSpaceChoice } from "../features/home/home-list-filter-menu";
+import { type HomeListSpaceChoice, spaceChoiceOf } from "../features/home/home-list-filter-menu";
 import { createOrganization, useLoadSpaces, useSpaceSelections } from "./spaces";
 import { useSavedRemoteConnections } from "./use-remote-environment-registry";
 
@@ -11,18 +11,10 @@ export function useSpaceChoices(): ReadonlyArray<HomeListSpaceChoice> {
   const connections = Object.values(savedConnectionsById);
   useLoadSpaces(connections);
   const selections = useSpaceSelections();
+  // Each Space with the loans waiting there for the viewer; the count refreshes with the directory.
   return connections.flatMap((connection) => {
-    const selection = selections.get(connection.environmentId);
-    if (selection?.view == null || selection.view.spaces.length === 0) return [];
-    return [
-      {
-        environmentId: connection.environmentId,
-        environmentLabel: connection.environmentLabel,
-        spaces: selection.view.spaces.map((space) => ({ id: space.id, name: space.name })),
-        currentSpaceId: selection.currentSpaceId,
-        canCreateOrganization: selection.view.canCreateOrganization,
-      },
-    ];
+    const choice = spaceChoiceOf(connection, selections.get(connection.environmentId));
+    return choice === null ? [] : [choice];
   });
 }
 

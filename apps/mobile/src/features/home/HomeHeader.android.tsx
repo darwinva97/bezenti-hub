@@ -2,7 +2,7 @@ import type { MenuAction } from "@react-native-menu/menu";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { ThreadListToolbar } from "./ThreadListToolbar";
 import type { HomeHeaderProps } from "./HomeHeader.types";
-import { spaceMenuTitle } from "./home-list-filter-menu";
+import { spaceChoiceTitle, spaceMenuTitle } from "./home-list-filter-menu";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
@@ -22,7 +22,7 @@ export function HomeHeader(props: HomeHeaderProps) {
       subactions: [
         ...choice.spaces.map((space, spaceIndex) => ({
           id: `space:${choiceIndex}:${spaceIndex}`,
-          title: space.name,
+          title: spaceChoiceTitle(space),
           state: checkedMenuState(choice.currentSpaceId === space.id),
         })),
         ...(choice.canCreateOrganization === true && props.onCreateOrganization !== undefined

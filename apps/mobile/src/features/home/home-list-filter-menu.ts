@@ -1,3 +1,5 @@
+import { pendingGrantsOf } from "@t3tools/client-runtime/grants-view";
+import type { SpaceSelection } from "@t3tools/client-runtime/spaces/space-selection";
 import type { EnvironmentId, SpaceId } from "@t3tools/contracts";
 
 export interface HomeListFilterMenuEnvironment {
@@ -9,10 +11,48 @@ export interface HomeListFilterMenuEnvironment {
 export interface HomeListSpaceChoice {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
-  readonly spaces: ReadonlyArray<{ readonly id: SpaceId; readonly name: string }>;
+  readonly spaces: ReadonlyArray<{
+    readonly id: SpaceId;
+    readonly name: string;
+    /** Loans waiting for the viewer to decide there (Grants ticket 12); only where they decide. */
+    readonly pendingGrants?: number;
+  }>;
   readonly currentSpaceId: SpaceId | null;
   /** Any signed-in User may create an Organization there (ticket 18). */
   readonly canCreateOrganization?: boolean;
+}
+
+/**
+ * A Hub's Space selector entry from its Space directory: each Space with the loans waiting there
+ * for the viewer; null when the Hub lists no Space for them.
+ */
+export function spaceChoiceOf(
+  hub: { readonly environmentId: EnvironmentId; readonly environmentLabel: string },
+  selection: SpaceSelection | undefined,
+): HomeListSpaceChoice | null {
+  const view = selection?.view;
+  if (view == null || view.spaces.length === 0) return null;
+  const pending = pendingGrantsOf(view).bySpace;
+  return {
+    environmentId: hub.environmentId,
+    environmentLabel: hub.environmentLabel,
+    spaces: view.spaces.map((space) => {
+      const waiting = pending.get(space.id);
+      return waiting === undefined
+        ? { id: space.id, name: space.name }
+        : { id: space.id, name: space.name, pendingGrants: waiting };
+    }),
+    currentSpaceId: selection?.currentSpaceId ?? null,
+    canCreateOrganization: view.canCreateOrganization,
+  };
+}
+
+/** A Space as the selector names it: with «· 2 loans waiting» when loans wait for the viewer. */
+export function spaceChoiceTitle(space: HomeListSpaceChoice["spaces"][number]): string {
+  const waiting = space.pendingGrants ?? 0;
+  return waiting > 0
+    ? `${space.name} · ${waiting} ${waiting === 1 ? "loan" : "loans"} waiting`
+    : space.name;
 }
 
 /** "Space", or "Space · <Hub>" when several Hubs each have their own. */
@@ -66,7 +106,7 @@ export function buildHomeListFilterMenu(props: {
       items: [
         ...choice.spaces.map((space) => ({
           type: "action" as const,
-          title: space.name,
+          title: spaceChoiceTitle(space),
           subtitle: "New projects and threads go here",
           state: choice.currentSpaceId === space.id ? ("on" as const) : ("off" as const),
           onPress: () => props.onSpaceChange?.(choice.environmentId, space.id),

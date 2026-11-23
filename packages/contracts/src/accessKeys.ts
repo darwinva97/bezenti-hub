@@ -95,6 +95,20 @@ export const accessKeyModelAllowed = (entries: ReadonlyArray<string>, requested:
   });
 };
 
+/** At most this many AI accounts in a key's list. */
+export const ACCESS_KEY_MAX_ACCOUNTS = 100;
+
+/**
+ * One AI account of a key's list as the list shows it (access-keys ticket 03): its name (null once
+ * gone) and whether the Space still has it; one it no longer has serves the key no more.
+ */
+export const AccessKeyReach = Schema.Struct({
+  id: AiAccountId,
+  name: Schema.NullOr(Schema.String),
+  inSpace: Schema.Boolean,
+});
+export type AccessKeyReach = typeof AccessKeyReach.Type;
+
 /** An access key as whoever manages its Space sees it: never the key, nor its hash. */
 export const AccessKey = Schema.Struct({
   keyId: TrimmedNonEmptyString,
@@ -116,6 +130,8 @@ export const AccessKey = Schema.Struct({
   models: Schema.Array(Schema.String),
   /** The Space's AI accounts it reaches; null: every one the Space owns, now and later. */
   accounts: Schema.NullOr(Schema.Array(AiAccountId)),
+  /** `accounts` with names and whether the Space still has each; null for «all». */
+  reaches: Schema.NullOr(Schema.Array(AccessKeyReach)),
   limits: AccessKeyLimits,
 });
 export type AccessKey = typeof AccessKey.Type;
@@ -126,6 +142,18 @@ export const AccessKeyCreateInput = Schema.Struct({
   validity: AccessKeyValidity,
   /** Exact names or `prefix*` patterns; `["*"]` only by choosing «All models». */
   models: AccessKeyModels,
+  /**
+   * The Space's own gateway AI accounts it reaches (access-keys ticket 03); absent or null: every
+   * one, now and later.
+   */
+  accounts: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Array(AiAccountId).check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(ACCESS_KEY_MAX_ACCOUNTS),
+      ),
+    ),
+  ),
 });
 export type AccessKeyCreateInput = typeof AccessKeyCreateInput.Type;
 

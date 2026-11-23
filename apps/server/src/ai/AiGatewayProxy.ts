@@ -521,7 +521,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
         allowed,
         chosenAccountId: caller.chosenAccountId,
         // An access key routes as a User key does: `acct-<id>/` pins only an account it reaches.
-        keyKind: caller.kind === "access" ? "user" : caller.kind,
+        keyKind: caller.kind,
         requested,
         serves: (accountId, model) => served.get(accountId)?.has(model) === true,
       });

@@ -7,6 +7,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import {
+  ACCESS_KEY_MAX_ACCOUNTS,
   ACCESS_KEY_MAX_MODELS,
   ACCESS_KEY_MAX_PER_SPACE,
   ACCESS_KEY_MAX_VALIDITY_DAYS,
@@ -21,6 +22,7 @@ import {
   type AccessKeyListResult,
   type AccessKeyModelOptions,
   type AccessKeyModelOptionsInput,
+  type AccessKeyReach,
   type AccessKeyRevokeInput,
   type AccessKeyValidity,
   accessKeyModelEntryValid,
@@ -350,6 +352,40 @@ const make = Effect.gen(function* () {
             WHERE ${sql.in("user_id", userIds)}
           `.pipe(Effect.catch(storage("read the Users")));
     const userNames = new Map(users.map((user) => [user.userId, user.name]));
+    // A key's list of accounts (access-keys ticket 03): names, and whether the Space still has
+    // each (one it no longer has serves the key no more).
+    const lists = rows.flatMap((row) => {
+      const accounts = limitsOf(row).accounts;
+      return accounts === null ? [] : [{ spaceId: SpaceId.make(row.spaceId), accounts }];
+    });
+    const listedIds = [...new Set(lists.flatMap((list) => list.accounts))];
+    const names =
+      listedIds.length === 0
+        ? []
+        : yield* sql<{ readonly id: string; readonly name: string }>`
+            SELECT account_id AS "id", name FROM ai_accounts WHERE ${sql.in("account_id", listedIds)}
+          `.pipe(Effect.catch(storage("read the AI accounts")));
+    const nameOf = new Map(names.map((account) => [account.id, account.name]));
+    const ownBySpace = new Map<string, ReadonlySet<string>>();
+    for (const spaceId of new Set(lists.map((list) => list.spaceId))) {
+      const own = yield* allowedAccounts
+        .forSpace(spaceId)
+        .pipe(Effect.catch(storage("read the Space's AI accounts")));
+      ownBySpace.set(
+        spaceId,
+        new Set(own.filter((account) => account.type !== "direct").map((account) => account.id)),
+      );
+    }
+    const reachesOf = (row: KeyRow): ReadonlyArray<AccessKeyReach> | null => {
+      const accounts = limitsOf(row).accounts;
+      return accounts === null
+        ? null
+        : accounts.map((id) => ({
+            id,
+            name: nameOf.get(id) ?? null,
+            inSpace: ownBySpace.get(row.spaceId)?.has(id) === true,
+          }));
+    };
     return rows.map((row): AccessKey => ({
       keyId: row.keyId,
       spaceId: SpaceId.make(row.spaceId),
@@ -363,6 +399,7 @@ const make = Effect.gen(function* () {
       lastUsedAt: row.lastUsedAt,
       revokedAt: row.revokedAt,
       ...limitsOf(row),
+      reaches: reachesOf(row),
     }));
   });
 
@@ -386,6 +423,15 @@ const make = Effect.gen(function* () {
         `Choose «All models», or 1 to ${ACCESS_KEY_MAX_MODELS} model names or patterns ending in a single *.`,
       );
     }
+    // The accounts it reaches (access-keys ticket 03): absent or null, every one the Space owns.
+    const chosen =
+      input.accounts === undefined || input.accounts === null ? null : [...new Set(input.accounts)];
+    if (chosen !== null && (chosen.length === 0 || chosen.length > ACCESS_KEY_MAX_ACCOUNTS)) {
+      return yield* fail(
+        "invalid",
+        "Choose all of this Space's AI accounts, or at least one of them.",
+      );
+    }
     const now = yield* DateTime.now;
     const expiry = expiryOf(input.validity, now);
     if (expiry._tag === "refused") return yield* fail("invalid", expiry.message);
@@ -402,7 +448,7 @@ const make = Effect.gen(function* () {
       createdBy: input.actorUserId,
       createdAt: at,
       modelsJson: jsonOf(models.models),
-      accountsJson: null,
+      accountsJson: chosen === null ? null : jsonOf(chosen),
       expiresAt,
       limitsJson: NO_LIMITS_JSON,
       lastUsedAt: null,
@@ -421,13 +467,23 @@ const make = Effect.gen(function* () {
             WHERE space_id = ${input.spaceId} AND revoked_at IS NULL AND expires_at > ${liveSince}
           `;
           if ((live[0]?.n ?? 0) >= ACCESS_KEY_MAX_PER_SPACE) return { _tag: "limit" } as const;
-          const subscription = yield* reachesSubscription(input.spaceId);
+          // Only gateway accounts the Space owns: never one lent to it, a direct one or another's.
+          const own = (yield* allowedAccounts.forSpace(input.spaceId)).filter(
+            (account) => account.type !== "direct",
+          );
+          const ownIds = new Set<string>(own.map((account) => account.id));
+          if (chosen !== null && !chosen.every((id) => ownIds.has(id))) {
+            return { _tag: "not-own" } as const;
+          }
+          const reached =
+            chosen === null ? own : own.filter((account) => chosen.includes(account.id));
+          const subscription = reached.some((account) => account.type === "subscription");
           yield* sql`
             INSERT INTO ai_access_keys (key_id, key_hash, key_hint, space_id, label, created_by,
               created_at, models_json, accounts_json, expires_at, limits_json, updated_at)
             VALUES (${keyId}, ${accessKeyHash(key)}, ${row.hint}, ${row.spaceId}, ${label},
-              ${row.createdBy}, ${at}, ${row.modelsJson}, NULL, ${expiresAt}, ${row.limitsJson},
-              ${at})
+              ${row.createdBy}, ${at}, ${row.modelsJson}, ${row.accountsJson}, ${expiresAt},
+              ${row.limitsJson}, ${at})
           `;
           yield* audit.record({
             actor: AuditLog.userActor(input.actorUserId),
@@ -439,7 +495,7 @@ const make = Effect.gen(function* () {
               expiresAt,
               limits: "none",
               models: models.models.includes("*") ? "all" : models.models.length,
-              accounts: "all",
+              accounts: chosen === null ? "all" : chosen.length,
               subscription,
             },
           });
@@ -450,6 +506,11 @@ const make = Effect.gen(function* () {
     switch (outcome._tag) {
       case "forbidden":
         return yield* fail("forbidden", "You cannot make access keys in this Space.");
+      case "not-own":
+        return yield* fail(
+          "invalid",
+          "Choose AI accounts this Space owns that go through the AI gateway (not a direct one, nor one lent to it).",
+        );
       case "denied":
         return yield* fail(
           "forbidden",

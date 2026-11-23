@@ -278,8 +278,8 @@ export const planRoute = (input: {
   readonly allowed: ReadonlyArray<RoutableAccount>;
   readonly chosenAccountId: string | null;
   /** A Thread key routes only to its Thread's account; a User key may pin any allowed one. */
-  /** An access key routes as a User key does (access-keys ticket 01). */
-  readonly keyKind: "thread" | "user";
+  /** An access key routes as a User key does, within its own reach (access-keys 01, 03). */
+  readonly keyKind: "thread" | "user" | "access";
   readonly requested: RequestedModel;
   readonly serves: (accountId: AiAccountId, model: string) => boolean;
 }): RoutePlan => {
@@ -305,7 +305,10 @@ export const planRoute = (input: {
       return {
         _tag: "refused",
         status: 403,
-        message: "That AI account is not allowed to you in this Space.",
+        message:
+          input.keyKind === "access"
+            ? "This access key may not use that AI account."
+            : "That AI account is not allowed to you in this Space.",
       };
     }
   } else if (input.chosenAccountId !== null) {

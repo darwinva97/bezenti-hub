@@ -2,6 +2,7 @@ import type { Grant, GrantOfferPreview, SandboxHostReport, SpaceId } from "@t3to
 import { expect, it } from "vite-plus/test";
 
 import {
+  endedText,
   hostLimitsNotice,
   limitsText,
   offerLinkOf,
@@ -154,4 +155,17 @@ it("says a lent Vault group has no limits and warns that the Space's agents read
   const warning = vaultLendWarning("Acme");
   expect(warning).toContain("The agents of Acme, Guests' Threads included, can read");
   expect(warning).toContain("environment variables");
+});
+
+it("says when and why a loan ended, the day in local time (Grants 11)", () => {
+  const endedAt = "2026-11-20T10:00:00.000Z";
+  const day = new Date(endedAt).toLocaleDateString();
+  expect(endedText({ endReason: "resource-gone", endedAt })).toBe(`Ended ${day} (it was deleted)`);
+  expect(endedText({ endReason: "target-gone", endedAt })).toBe(
+    `Ended ${day} (the Space was deleted)`,
+  );
+  expect(endedText({ endReason: "lender-gone", endedAt })).toBe(
+    `Ended ${day} (its lender was removed)`,
+  );
+  expect(endedText({ endReason: "returned", endedAt: null })).toBe("Ended (given back)");
 });

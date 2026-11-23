@@ -39,6 +39,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { emptyStepUp, lacksStrongFactor, StepUpFields, toStepUp } from "./AccountSettingsSection";
 import {
   capUseText,
+  endedText,
   gib,
   hostLimitsNotice,
   lenderSeesEverything,
@@ -464,14 +465,9 @@ const STATE_LABELS: Record<Grant["state"], string> = {
   ended: "Ended",
 };
 
-const END_LABELS: Record<NonNullable<Grant["endReason"]>, string> = {
-  revoked: "taken back",
-  returned: "given back",
-  "resource-gone": "it was removed",
-  "target-gone": "the Space was deleted",
-  "lender-gone": "the lender left",
-  "owner-changed": "it changed owner",
-};
+/** A loan's state in words; an ended one with its day and why (Grants ticket 11). */
+const stateText = (grant: Grant) =>
+  grant.state === "ended" ? endedText(grant) : STATE_LABELS[grant.state];
 
 /** What an active loan adds to its description: cap use and, for a machine, its Sandbox and disk. */
 const loanStatusParts = (grant: Grant) => {
@@ -502,10 +498,7 @@ const loanDescription = (grant: Grant, side: "given" | "received") => {
     side === "given"
       ? `to ${targetLabel(grant, "a Space")}`
       : `by ${grant.lender.name ?? "another User"}`;
-  const parts = [
-    `${STATE_LABELS[grant.state]}${grant.endReason === null ? "" : ` (${END_LABELS[grant.endReason]})`} ${where}`,
-    limitsText(grant.limits),
-  ];
+  const parts = [`${stateText(grant)} ${where}`, limitsText(grant.limits)];
   parts.push(...loanStatusParts(grant));
   return parts.join(" · ");
 };
@@ -716,6 +709,8 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
 
   const waiting = (received ?? []).filter((grant) => grant.state === "pending" && grant.can.decide);
   const borrowed = (received ?? []).filter((grant) => grant.state === "active");
+  // Grants ticket 11: what ended, by whom or by itself, and when.
+  const endedHere = (received ?? []).filter((grant) => grant.state === "ended");
   if (given === null && received === null && error === null) return null;
   if ((given ?? []).length === 0 && (received ?? []).length === 0 && error === null) return null;
 
@@ -843,6 +838,14 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
           {usagePanel(grant)}
         </Fragment>
       ))}
+      {endedHere.length === 0 ? null : <LoanGroupTitle>Ended loans to your Spaces</LoanGroupTitle>}
+      {endedHere.map((grant) => (
+        <SettingsRow
+          key={grant.id}
+          title={`${grant.resource.name ?? `A ${nounOf(grant)}`} in ${targetLabel(grant, "your Space")}`}
+          description={loanDescription(grant, "received")}
+        />
+      ))}
       {lentGroups.length === 0 ? null : <LoanGroupTitle>Lent by you</LoanGroupTitle>}
       {lentGroups.map((group) => {
         const open = groupToggles[group.key] ?? lentCount <= OPEN_GROUPS_UP_TO;
@@ -871,7 +874,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
                       ? offerStatusText(unapplied)
                       : grant.state === "active"
                         ? null
-                        : `${STATE_LABELS[grant.state]}${grant.endReason === null ? "" : ` (${END_LABELS[grant.endReason]})`}`,
+                        : stateText(grant),
                     limitsText(grant.limits),
                     ...loanStatusParts(grant),
                   ]

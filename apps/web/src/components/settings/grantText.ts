@@ -107,6 +107,22 @@ export const offerStatusText = (offer: NonNullable<Grant["offer"]>) => {
   }
 };
 
+/** Why a loan ended, as both its sides read it (Grants ticket 11). */
+const END_LABELS: Record<NonNullable<Grant["endReason"]>, string> = {
+  revoked: "taken back",
+  returned: "given back",
+  "resource-gone": "it was deleted",
+  "target-gone": "the Space was deleted",
+  "lender-gone": "its lender was removed",
+  "owner-changed": "it is no longer its lender's",
+};
+
+/** An ended loan's state, reason and day, «Ended 11/20/2026 (it was deleted)». */
+export const endedText = (grant: Pick<Grant, "endReason" | "endedAt">) =>
+  `Ended${grant.endedAt === null ? "" : ` ${new Date(grant.endedAt).toLocaleDateString()}`}${
+    grant.endReason === null ? "" : ` (${END_LABELS[grant.endReason]})`
+  }`;
+
 /** Who a lent loan went to: its Space, or the link nobody applied yet. */
 export const recipientLabel = (grant: Grant) =>
   grant.target !== null

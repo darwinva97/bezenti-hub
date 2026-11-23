@@ -408,6 +408,40 @@ it("tells the lender which Secrets to rotate once a group's loan ended, by name"
     .toBeVisible();
 });
 
+it("lists loans that ended by themselves with their reason and day, on both sides (Grants 11)", async () => {
+  resetLoans();
+  const endedAt = "2026-11-20T10:00:00.000Z";
+  const day = new Date(endedAt).toLocaleDateString();
+  loans.received = [
+    {
+      ...grant("g10", "acct-9", "Globex Claude", "Acme"),
+      lender: { kind: "organization", id: "space-Globex", name: "Globex" },
+      state: "ended",
+      endReason: "lender-gone",
+      endedAt,
+      can: { cancel: false, revoke: false, decide: false, return: false, setLimits: false },
+    } as Grant,
+  ];
+  loans.given = [
+    {
+      ...grant("g11", "acct-1", "Ana Claude", "Acme"),
+      state: "ended",
+      endReason: "resource-gone",
+      endedAt,
+      can: { cancel: false, revoke: false, decide: false, return: false, setLimits: false },
+    } as Grant,
+  ];
+  await using _screen = await render(<GrantsSettings />);
+  await expect
+    .element(page.getByRole("heading", { name: "Ended loans to your Spaces" }))
+    .toBeVisible();
+  await expect.element(page.getByText("Globex Claude in Acme")).toBeVisible();
+  await expect
+    .element(page.getByText(`Ended ${day} (its lender was removed) by Globex · No cap`))
+    .toBeVisible();
+  await expect.element(page.getByText(`Ended ${day} (it was deleted) · No cap`)).toBeVisible();
+});
+
 it("warns before taking a group back that its Secrets may have been read", async () => {
   resetLoans();
   loans.given = [

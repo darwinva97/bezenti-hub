@@ -4,7 +4,7 @@
 
 **Blocked by:** —
 
-**Status:** in progress
+**Status:** done
 
 ## Causa de que cada subida lleve todo (experimento con git 2.56)
 
@@ -45,10 +45,10 @@ Un fichero con seguimiento modificado y sin commit (por ejemplo un binario grand
 
 ## Hecho
 
-- [ ] `HubRepositoryMaintenance` (compactación, `exclusive`, `compactSoon`, `uploadRefusal`, barrido) cableado en `server.ts` y en el testkit; los applies de `HubPackUploads` van con `exclusive` y piden `compactSoon`; `gitRoute` pide `compactSoon` tras un push y rechaza con 507 sin sitio.
-- [ ] `revisionsInput` con árboles, `packs/known` (Hub y máquina), decisión de transporte en `pushRefs`.
-- [ ] Docs: `docs/internals/overview.md` («What an upload leaves out», «Compaction», «A full disk»), `docs/user/install.md`.
-- [ ] Tests, rojo primero:
+- [x] `HubRepositoryMaintenance` (compactación, `exclusive`, `compactSoon`, `uploadRefusal`, barrido) cableado en `server.ts` y en el testkit; los applies de `HubPackUploads` van con `exclusive` y piden `compactSoon`; `gitRoute` pide `compactSoon` tras un push y rechaza con 507 sin sitio.
+- [x] `revisionsInput` con árboles, `packs/known` (Hub y máquina), decisión de transporte en `pushRefs`.
+- [x] Docs: `docs/internals/overview.md` («What an upload leaves out», «Compaction», «A full disk»), `docs/user/install.md`.
+- [x] Tests, rojo primero:
   - `HubRepositoryMaintenance.test.ts` (git real): 8 subidas de copia completa (la forma del incidente) quedan en ≤ 2 packs y menos de 2× el binario, con todos los refs y `fsck --connectivity-only` bien; un apply a medias (pack sin ref) y objetos sueltos no se pierden con una compactación al lado; sin sitio no compacta nada ni rechaza menos, y con sitio sí.
   - `HubWithEnvironments.hubRepository.test.ts`, «a machine's uploads carry only what the Hub lacks, across its Threads»: tres Threads en una máquina con un binario sin commit, subidas por partes; el segundo y el tercero (sin ningún Thread anunciado) añaden menos de la mitad del binario. Sin el arreglo de la máquina añadían 618 KB (dos copias de 300 KB).
 

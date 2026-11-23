@@ -205,6 +205,35 @@ the one still running.
 It is tracked per checkpoint, not as an ordinal per scope, because a rollback reuses its ordinals:
 a mark is written only if the checkpoint still has the ref and capture time that were pushed.
 
+**What an upload leaves out.** `git push` and `pack-objects --revs <new> --not <tips>` leave out
+a tip's files only through the new commits' parents, and a checkpoint's parent is HEAD, not the
+previous checkpoint. So each upload sent again every file not in HEAD (uncommitted work every
+turn; the whole tree when HEAD has no commit, or moved off the tips' history), and a Thread's first
+upload, when the Hub showed the machine none of its other Threads, sent the whole Project. A pack
+in parts therefore also excludes each tip's tree (`^<tip>^{tree}`, `HubRepository.revisionsInput`),
+and when `git push` would send more than 8 MiB the machine first asks `POST
+/api/git/<repo>/packs/known` which of its checkout's latest 64 `refs/t3/` commits are ref tips on
+the Hub, any Thread's (only tips: a ref is set once all it reaches is there, so the pack may leave
+it all out; the answer names only commits the machine already has). If `git push` would then send
+8 MiB more than needed, the upload goes in parts. A Hub from before answers 404: the machine pushes
+as it did.
+
+**Compaction.** Every upload lands as a pack (or loose objects) of its own and the Hub runs git with
+`gc.auto=0`, so before compaction a repository grew by each upload's size, duplicates included
+(one Project reached 61 packs, 55 copies of each object). [HubRepositoryMaintenance](../../apps/server/src/checkpointing/HubRepositoryMaintenance.ts)
+runs `git repack -d --geometric=2` 30 s after an apply or a push, and on a sweep of every repository
+a minute after start and hourly: the small packs and loose objects roll up until each pack is at
+least twice the next, so a repository holds a few packs and each object about once. It keeps every
+object of the packs it rolls up, reachable or not, and never touches a pack that appears meanwhile,
+so a push or an apply beside it loses nothing (applies still wait for it, per repository); pruning
+is not its job. One thread, `pack.windowMemory=128m`, no delta search past 32 MiB. The new pack is
+written before the old ones go, so it runs only with room for one copy of every object plus the
+floor below; otherwise it warns and waits for the next sweep.
+
+**A full disk.** The Hub keeps `max(512 MiB, 5%)` of its state volume free: below that a push or a
+part is refused with 507 (the machine backs off as for any transient failure), so uploads never
+take the space its database needs. The sweep warns in the log past 80% used.
+
 The Hub machine pushes to the repository on disk through the same executor operation
 (`checkpoint.push`), so there is one path; joined machines use `/api/git/<projectId>`
 ([gitRoute](../../apps/server/src/environments/gitRoute.ts)), git smart HTTP relayed to

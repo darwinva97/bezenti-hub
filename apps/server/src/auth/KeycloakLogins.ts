@@ -73,7 +73,10 @@ export type LoginEndReason =
   | "issuer-changed"
   // The sign-in's own tokens are unusable: its refresh token won't open, the refreshed ID token
   // fails verification or names someone else, or the new tokens can't be sealed.
-  | "token-unusable";
+  | "token-unusable"
+  // Ticket 11: the Owner disabled or removed the User in the Hub.
+  | "user-disabled"
+  | "user-removed";
 
 /** How one re-check ended, for whoever waits on it (tests, never a clock). */
 export interface RecheckOutcome {
@@ -116,7 +119,8 @@ export class KeycloakLogins extends Context.Service<
     readonly signOutHandle: (loginId: string) => Effect.Effect<string | undefined>;
     /**
      * «Also sign out of Keycloak»: spends the handle, ends that sign-in with all born of it, and
-     * answers where the browser leaves Keycloak (with `id_token_hint`), if the realm says.
+     * answers where the browser leaves Keycloak (`client_id` and `post_logout_redirect_uri`, never
+     * an ID token: ticket 11), if the realm says.
      */
     readonly signOut: (
       request: HttpServerRequest.HttpServerRequest,
@@ -360,16 +364,10 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
             loginId,
             tokens.tokens.refreshToken,
           ).pipe(Effect.provide(cryptoContext), Effect.mapError(unusable("seal refresh token")));
-    const sealedId = yield* KeycloakTokens.seal(
-      secretStore,
-      "id",
-      loginId,
-      tokens.tokens.idToken,
-    ).pipe(Effect.provide(cryptoContext), Effect.mapError(unusable("seal id token")));
     // Saved on its own, before anything else and before the turn is released: Keycloak may have
     // rotated the refresh token, and the next re-check must use the new one.
     const saved = yield* identities
-      .saveRefresh({ loginId, refreshTokenSealed: sealedRefresh, idTokenSealed: sealedId, now })
+      .saveRefresh({ loginId, refreshTokenSealed: sealedRefresh, now })
       .pipe(Effect.mapError(storageFailed("save refresh")));
     if (!saved) return "skipped";
     // The groups, as at a sign-in (KeycloakGroups): the labels and Memberships in one
@@ -544,19 +542,6 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
       if (entry === undefined || entry.expiresAtMs <= nowMs) {
         return yield* new KeycloakSignOutRefusedError({ reason: "invalid-handle" });
       }
-      const login = yield* identities
-        .loginForRefresh(entry.loginId)
-        .pipe(Effect.orElseSucceed(() => Option.none<UserIdentities.LoginForRefresh>()));
-      // Read before the sign-in ends: ending it drops its sealed tokens.
-      const sealed = yield* identities
-        .sealedIdToken(entry.loginId)
-        .pipe(Effect.orElseSucceed(() => Option.none<string>()));
-      const idToken = Option.isNone(sealed)
-        ? undefined
-        : yield* KeycloakTokens.open(secretStore, "id", entry.loginId, sealed.value).pipe(
-            Effect.provide(cryptoContext),
-            Effect.orElseSucceed(() => undefined),
-          );
       const ended = yield* endLogins(
         [entry.loginId],
         "sign-out",
@@ -578,14 +563,8 @@ const makeWith = Effect.fnUntraced(function* (options: LoginsBounds = {}) {
       const url = new URL(endpoint);
       url.searchParams.set("client_id", enabled.value.clientId);
       url.searchParams.set("post_logout_redirect_uri", `${origin}${KEYCLOAK_POST_LOGOUT_PATH}`);
-      // A hint only from this realm: one from an issuer the Owner since replaced means nothing.
-      if (
-        idToken !== undefined &&
-        Option.isSome(login) &&
-        login.value.issuer === enabled.value.issuer
-      ) {
-        url.searchParams.set("id_token_hint", Redacted.value(idToken));
-      }
+      // Ticket 11: no `id_token_hint`, so no ID token ever reaches the browser (its history, the
+      // realm's access log); Keycloak asks the person to confirm instead.
       return { endSessionUrl: url.href };
     },
   );

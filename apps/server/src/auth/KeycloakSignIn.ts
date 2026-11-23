@@ -578,8 +578,7 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
         subject: claims.sub,
         keycloakSid: claims.sid ?? null,
         refreshTokenSealed: yield* sealToken("refresh", loginId, tokens.refreshToken),
-        // Ticket 07: the latest ID token, for «also sign out of Keycloak»'s `id_token_hint`.
-        idTokenSealed: yield* sealToken("id", loginId, tokens.idToken),
+        // Ticket 11: the ID token is read here and kept nowhere (no door hands one out).
         offline: tokens.refreshToken !== undefined && tokens.scopes.includes("offline_access"),
         strong: strength.strong,
         acr: strength.evidence.acr,

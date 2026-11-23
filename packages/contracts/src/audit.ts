@@ -195,7 +195,8 @@ export const AUDIT_DETAIL_KEYS = {
   "user.register": ["via", "issuer"],
   /**
    * Ticket 07: why a Keycloak sign-in ended (`refresh-refused`, `backchannel`, `sign-out`,
-   * `no-refresh-token`, `token-unusable`, `keycloak-off`, `issuer-changed`; see KeycloakLogins)
+   * `no-refresh-token`, `token-unusable`, `keycloak-off`, `issuer-changed`, and ticket 11's
+   * `user-disabled`, `user-removed`; see KeycloakLogins)
    * and how many sessions and pairing links ended with it. Never the subject, `sid` or a token.
    */
   "keycloak.login.end": ["reason", "sessions", "pairingLinks"],

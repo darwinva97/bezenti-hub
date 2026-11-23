@@ -777,6 +777,39 @@ describe("what a Keycloak sign-in approves ends with it (ticket 07)", () => {
   );
 });
 
+describe("a User the Owner disables or removes (ticket 11)", () => {
+  it.effect.each(["disabled", "removed"] as const)(
+    "%s: their Keycloak sign-ins end with their sessions, tokens dropped, audited",
+    (status) =>
+      Effect.gen(function* () {
+        const { server, realm, owner } = yield* hub();
+        const member = yield* keycloakMember(server, realm, "kc-ana");
+        yield* roundTrip(server, realm, { sub: "kc-ana" });
+        const changed = yield* server.request(`/api/installation/users/${member.id}/status`, {
+          cookie: owner,
+          body: { status },
+        });
+        assert.equal(changed.status, 200, changed.text);
+        const live = yield* server.sql<{ loginId: string }>`
+          SELECT login_id AS "loginId" FROM identity_logins
+          WHERE user_id = ${member.id}
+            AND (ended_at IS NULL OR refresh_token_sealed IS NOT NULL OR id_token_sealed IS NOT NULL)
+        `;
+        assert.deepEqual(live, []);
+        const ended = yield* auditOf(server, owner, "keycloak.login.end");
+        assert.deepEqual(
+          ended.map((row) => ({ target: row.target.id, reason: row.detail.reason })),
+          [
+            { target: member.id, reason: `user-${status}` },
+            { target: member.id, reason: `user-${status}` },
+          ],
+        );
+        // A re-check finds nothing to refresh: Keycloak is never asked again for them.
+        assert.equal(realm.refreshCounts.requests, 0);
+      }).pipe(Effect.scoped),
+  );
+});
+
 describe("«also sign out of Keycloak» (ticket 07)", () => {
   it.effect("ends the sign-in with its apps and sends the browser to the realm", () =>
     Effect.gen(function* () {
@@ -804,7 +837,17 @@ describe("«also sign out of Keycloak» (ticket 07)", () => {
       );
       assert.equal(url.searchParams.get("client_id"), realm.clientId);
       assert.equal(url.searchParams.get("post_logout_redirect_uri"), "http://127.0.0.1/sign-in");
-      assert.include(realm.idTokens, url.searchParams.get("id_token_hint"));
+      // Ticket 11: no ID token leaves the Hub, not even as a hint (Keycloak asks the person to
+      // confirm instead), and the Hub keeps none to hand out.
+      assert.isFalse(url.searchParams.has("id_token_hint"));
+      assert.deepEqual(
+        realm.idTokens.filter((token) => left.text.includes(token)),
+        [],
+      );
+      const kept = yield* server.sql`
+        SELECT login_id FROM identity_logins WHERE id_token_sealed IS NOT NULL
+      `;
+      assert.deepEqual(kept, []);
       assert.isFalse(yield* tokenAlive(server, app));
       // Another sign-in of the same person is not this browser's.
       assert.isTrue(yield* isSignedIn(server, other.cookie ?? ""));

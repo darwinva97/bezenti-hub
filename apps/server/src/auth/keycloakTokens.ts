@@ -1,7 +1,7 @@
 /**
- * A Keycloak sign-in's tokens at rest (tickets 02 and 07): its refresh token and latest ID token,
- * sealed as the TOTP secrets are (AES-256-GCM under a key from the encrypted store), each bound to
- * its sign-in and kind as associated data, so a value copied to another row or column never opens.
+ * A Keycloak sign-in's token at rest (tickets 02 and 07): its refresh token, sealed as the TOTP
+ * secrets are (AES-256-GCM under a key from the encrypted store), bound to its sign-in as associated
+ * data, so a value copied to another row never opens. Ticket 11: its ID token is kept nowhere.
  * A failure carries no cause: nothing about a token or its plaintext reaches an error or a log.
  */
 import * as Effect from "effect/Effect";
@@ -16,18 +16,15 @@ export const REFRESH_TOKEN_KEY_NAME = "identity-login-key";
 
 /** A refresh token's associated data: a row copied to another login does not open. */
 export const refreshTokenContext = (loginId: string) => `identity-login:${loginId}`;
-/** An ID token's (ticket 07), apart from the refresh token's. */
-const idTokenContext = (loginId: string) => `identity-login-id-token:${loginId}`;
 
-export type TokenKind = "refresh" | "id";
+export type TokenKind = "refresh";
 
-const contextOf = (kind: TokenKind, loginId: string) =>
-  kind === "refresh" ? refreshTokenContext(loginId) : idTokenContext(loginId);
+const contextOf = (_kind: TokenKind, loginId: string) => refreshTokenContext(loginId);
 
 /** Sealing or opening a sign-in's token failed: which, and nothing about any value. */
 export class SealedTokenError extends Schema.TaggedError<SealedTokenError>()("SealedTokenError", {
   operation: Schema.Literals(["seal", "open"]),
-  kind: Schema.Literals(["refresh", "id"]),
+  kind: Schema.Literals(["refresh"]),
 }) {}
 
 /** Seals `token` for this sign-in and kind. */

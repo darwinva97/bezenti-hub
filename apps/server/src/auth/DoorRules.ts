@@ -50,7 +50,7 @@ const KEYCLOAK_CALLBACK = own(
 );
 /** Ticket 07: «also sign out of Keycloak», after the browser signed out. */
 const KEYCLOAK_SIGN_OUT = own(
-  "public: only the single-use handle the browser's own sign-out answered (random, kept hashed, 10 minutes, at most 10 000 and then none is handed out, never logged), from an `Origin` the Hub takes as its own; ends that Keycloak sign-in with the sessions, apps, MCP clients and pairing links born of it (UserDirectory.endKeycloakLogins, audited `keycloak.login.end`) and answers the realm's end-session address with `id_token_hint` (the sign-in's sealed ID token, dropped as it ends), `client_id` and `post_logout_redirect_uri` on the Hub's own origin",
+  "public: only the single-use handle the browser's own sign-out answered (random, kept hashed, 10 minutes, at most 10 000 and then none is handed out, never logged), from an `Origin` the Hub takes as its own; ends that Keycloak sign-in with the sessions, apps, MCP clients and pairing links born of it (UserDirectory.endKeycloakLogins, audited `keycloak.login.end`) and answers the realm's end-session address with `client_id` and `post_logout_redirect_uri` on the Hub's own origin, never an `id_token_hint` (ticket 11: no door hands out an ID token, and the Hub keeps none)",
 );
 /** Ticket 07: the realm's back-channel logout. */
 const KEYCLOAK_BACKCHANNEL = own(
@@ -126,7 +126,9 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
   "keycloakSignIn.signOut": KEYCLOAK_SIGN_OUT,
   "keycloakSignIn.start": KEYCLOAK_START,
   "installationUsers.list": OWNER,
-  "installationUsers.setStatus": OWNER,
+  "installationUsers.setStatus": own(
+    "the Installation's Owner only, plus the access scopes; disabling or removing a User ends, in the same transaction, their sessions, pairing links and live Keycloak sign-ins with their sealed refresh tokens (Keycloak ticket 11, audited `keycloak.login.end`)",
+  ),
   "signInSettings.check": SIGN_IN_SETTINGS,
   "signInSettings.get": SIGN_IN_SETTINGS,
   "signInSettings.update": SIGN_IN_SETTINGS,

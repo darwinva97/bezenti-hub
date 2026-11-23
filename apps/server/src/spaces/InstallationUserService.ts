@@ -24,6 +24,8 @@ import * as PairingGrantStore from "../auth/PairingGrantStore.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as ProjectMoveHooks from "../project/ProjectMoveHooks.ts";
 import * as AiAccountReachLoss from "../ai/AiAccountReachLoss.ts";
+import type * as KeycloakLogins from "../auth/KeycloakLogins.ts";
+import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as VaultReachLoss from "../vaults/VaultReachLoss.ts";
 import * as SpaceDirectory from "./SpaceDirectory.ts";
 
@@ -55,6 +57,7 @@ const make = Effect.gen(function* () {
   const pairingLinks = yield* PairingGrantStore.PairingGrantStore;
   const audit = yield* AuditLog.AuditLog;
   const environments = yield* EnvironmentRegistry.EnvironmentRegistry;
+  const identities = yield* UserIdentities.UserIdentities;
   // The orchestration's work, registered late; absent where nothing runs Threads.
   const moveHooks = yield* Effect.serviceOption(ProjectMoveHooks.ProjectMoveHooks);
   // Absent where the Hub keeps no secrets: a value left behind is swept at the next start.
@@ -187,6 +190,23 @@ const make = Effect.gen(function* () {
           const announceLinks = yield* pairingLinks
             .revokeAllForUserDeferred(userId)
             .pipe(Effect.mapError(storageError));
+          // Keycloak ticket 11: their Keycloak sign-ins end too, with their sealed refresh tokens,
+          // so nothing of theirs is left for a re-check or a back-channel logout to find.
+          const loginsEnded = yield* identities
+            .endLoginsOfUser(userId, DateTime.formatIso(yield* DateTime.now))
+            .pipe(Effect.mapError(storageError));
+          const reason: KeycloakLogins.LoginEndReason =
+            status === "removed" ? "user-removed" : "user-disabled";
+          for (const _loginId of loginsEnded) {
+            yield* audit
+              .record({
+                actor,
+                action: "keycloak.login.end",
+                target: { kind: "user", id: userId },
+                detail: { reason },
+              })
+              .pipe(Effect.mapError(storageError));
+          }
           // No cached principal outlives the commit, even if the work after it fails.
           yield* spaces.changed;
           return {

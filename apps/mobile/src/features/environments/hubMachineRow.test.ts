@@ -128,4 +128,16 @@ describe("the Owner's list of machines on mobile", () => {
       error: "Podman is not installed",
     });
   });
+
+  it("badges a machine lent to the Space and says its lender sees everything on it", () => {
+    const lent = hubMachineRow({
+      ...entry({ id: EnvironmentId.make("lent:g1"), name: "Ana's box" }),
+      mode: "dedicated",
+      spaceId: acme,
+      spaceName: "Acme",
+      lent: { grantId: "g1", lenderName: "Ana" },
+    });
+    expect(lent.mode).toBe("Lent machine");
+    expect(lent.details).toBe("Online · Lent to Acme by Ana, who sees everything that runs on it");
+  });
 });

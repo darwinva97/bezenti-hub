@@ -1,6 +1,7 @@
 import { type StaticScreenProps, useNavigation } from "@react-navigation/native";
 import {
   environmentStatusLabel,
+  environmentUseDescription,
   shownEnvironmentStatus,
   canMoveThread,
   activeEnvironmentOf,
@@ -38,7 +39,7 @@ import {
   useHubEnvironments,
   useHubEnvironmentsStatus,
 } from "../../state/hubEnvironments";
-import { useThreadRolePermissions } from "../../state/spaces";
+import { useSpaceSelections, useThreadRolePermissions } from "../../state/spaces";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
@@ -112,6 +113,14 @@ function MoveThreadForm({ threadRef }: { readonly threadRef: ScopedThreadRef }) 
     providerInstanceId === undefined
       ? null
       : environmentUnavailableReason(environment, providerInstanceId);
+  // A machine lent to the Space says who lent it and that they see everything that runs there.
+  const spaces = useSpaceSelections().get(threadRef.environmentId)?.view?.spaces ?? [];
+  const lentNote = (environment: HubEnvironmentSummary) =>
+    environment.lent === undefined
+      ? null
+      : environmentUseDescription(environment, {
+          spaceName: spaces.find((space) => space.id === environment.spaceId)?.name,
+        });
   const targetName = environmentNameOf(environments, shownMove?.targetEnvironmentId ?? target);
   const movedFromName =
     shownMove === null
@@ -226,7 +235,15 @@ function MoveThreadForm({ threadRef }: { readonly threadRef: ScopedThreadRef }) 
                       <View className="flex-1">
                         <ListChoiceRow
                           label={environment.name}
-                          description={reason ?? environmentStatusLabel(status, environment.kind)}
+                          description={
+                            reason ??
+                            [
+                              environmentStatusLabel(status, environment.kind),
+                              lentNote(environment),
+                            ]
+                              .filter((part) => part !== null)
+                              .join(" · ")
+                          }
                           selected={target === environment.id}
                           disabled={reason !== null}
                           separated={index > 0}

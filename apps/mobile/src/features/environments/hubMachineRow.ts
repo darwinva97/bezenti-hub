@@ -5,7 +5,12 @@ import {
   environmentUseOf,
   shownEnvironmentStatus,
 } from "@t3tools/client-runtime/environment/hub-environments";
-import type { HubEnvironmentOverviewEntry } from "@t3tools/contracts";
+import type { HubEnvironmentOverviewEntry, HubEnvironmentSummary } from "@t3tools/contracts";
+
+/** A machine of a list: a lent one (Grants) also says who lent it. */
+export type HubMachineEntry = HubEnvironmentOverviewEntry & {
+  readonly lent?: HubEnvironmentSummary["lent"];
+};
 
 /**
  * One machine as the Owner's list shows it: its status in words, how it is used with its Space
@@ -13,7 +18,7 @@ import type { HubEnvironmentOverviewEntry } from "@t3tools/contracts";
  * its running Threads; the same words and status as web's Settings → Environments.
  */
 export function hubMachineRow(
-  environment: HubEnvironmentOverviewEntry,
+  environment: HubMachineEntry,
   /** The Owner reading the list: their own machine is «Your personal machine». */
   viewerUserId?: string,
 ) {
@@ -33,7 +38,11 @@ export function hubMachineRow(
     .join(" · ");
   return {
     status,
-    mode: ENVIRONMENT_USE_LABELS[environmentUseOf(environment)],
+    // A machine lent to the Space: its lender controls it, so it says so beside its name.
+    mode:
+      environment.lent === undefined
+        ? ENVIRONMENT_USE_LABELS[environmentUseOf(environment)]
+        : "Lent machine",
     details,
     error: status === "failed" ? environment.startError : null,
     accessibilityLabel: `${environment.name}, ${details}`,

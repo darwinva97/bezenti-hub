@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  aiAccountPickerLabel,
   aiAccountServes,
   aiAccountsDecide,
   aiAccountsFor,
@@ -108,6 +109,11 @@ export function ThreadAiAccountStrip(props: {
     inUse ??
     (selected === undefined ? null : { name: selected.name, model: props.modelSelection.model });
   if (!decides || label === null) return null;
+  // A lent account says whose it is and how much of its cap is used («Team · from Ana · 40% of
+  // daily cap»), as web's picker does.
+  const inUseAccount =
+    inUse === null ? selected : picker?.accounts.find((account) => account.id === inUse.id);
+  const shownName = inUseAccount === undefined ? label.name : aiAccountPickerLabel(inUseAccount);
 
   const choose = async (accountId: AiAccountId) => {
     setOpen(false);
@@ -139,7 +145,7 @@ export function ThreadAiAccountStrip(props: {
           className="min-w-0 shrink text-xs text-foreground-muted"
           numberOfLines={1}
         >
-          {label.name}
+          {shownName}
           {label.model === null ? "" : ` · ${label.model}`}
         </Text>
         {mayChange && selectable.length > 1 ? (
@@ -155,7 +161,7 @@ export function ThreadAiAccountStrip(props: {
         ? selectable.map((account) => (
             <Button
               key={account.id}
-              label={account.name}
+              label={aiAccountPickerLabel(account)}
               accessibilityLabel={`Use AI account ${account.name}`}
               tone={account.id === selected?.id ? "primary" : "secondary"}
               size="compact"

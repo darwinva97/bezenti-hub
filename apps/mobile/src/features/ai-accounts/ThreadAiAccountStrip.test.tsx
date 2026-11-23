@@ -128,4 +128,48 @@ describe("the AI account strip on a mobile Thread", () => {
     await render(false, false);
     expect(text()).toBe("");
   });
+
+  it("names a lent account «· from <lender>» with its cap use, in use and among the choices", async () => {
+    const lent = {
+      id: "a3",
+      name: "Shared Claude",
+      type: "api-key",
+      provider: "claude",
+      models: null,
+      lentBy: {
+        grantId: "g1",
+        name: "Ana",
+        caps: {
+          tokens: { used: 40, amount: 100, period: "day", resetsAt: "2026-11-24T00:00:00.000Z" },
+          requests: null,
+        },
+      },
+    };
+    mocks.commands.picker = vi.fn(() =>
+      ok({ applies: true, spaceName: "Acme", accounts: [...accounts, lent] }),
+    );
+    await act(async () =>
+      root?.render(
+        <ThreadAiAccountStrip
+          environmentId={hub}
+          threadId={ThreadId.make("t1")}
+          isDraft
+          spaceId={SpaceId.make("space-acme")}
+          modelSelection={{ ...(modelSelection as object), aiAccountId: "a3" } as never}
+          providers={providers}
+          structure={null}
+          onChooseDraft={onChooseDraft}
+        />,
+      ),
+    );
+    await act(async () => {});
+    expect(byLabel("AI account in use: Shared Claude")?.textContent).toContain(
+      "Shared Claude · from Ana · 40%",
+    );
+    await click("Change AI account");
+    expect(byLabel("Use AI account Shared Claude")?.textContent).toContain(
+      "Shared Claude · from Ana · 40%",
+    );
+    expect(byLabel("Use AI account Work Claude")?.textContent).toBe("Work Claude");
+  });
 });

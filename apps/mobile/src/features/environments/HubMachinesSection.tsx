@@ -1,4 +1,4 @@
-import type { HubEnvironmentOverviewEntry, HubEnvironmentSummary } from "@t3tools/contracts";
+import type { HubEnvironmentSummary } from "@t3tools/contracts";
 import { View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -17,7 +17,7 @@ import {
 import { useSpaceSelections } from "../../state/spaces";
 import { useHubConnection } from "../../state/use-remote-environment-registry";
 import { EnvironmentStatusDot } from "./EnvironmentStatusDot";
-import { hubMachineRow } from "./hubMachineRow";
+import { type HubMachineEntry, hubMachineRow } from "./hubMachineRow";
 
 /**
  * «Machines on this Hub», to read only. The Owner gets every Environment, with how it is used, its
@@ -50,7 +50,7 @@ function AddMachineHint() {
 const asOverviewEntry = (
   environment: HubEnvironmentSummary,
   spaceNames: ReadonlyMap<string, string>,
-): HubEnvironmentOverviewEntry => ({
+): HubMachineEntry => ({
   id: environment.id,
   name: environment.name,
   kind: environment.kind,
@@ -67,6 +67,7 @@ const asOverviewEntry = (
   os: environment.os,
   lastSeenAt: environment.lastSeenAt,
   runningThreadCount: environment.runningThreadCount,
+  ...(environment.lent === undefined ? {} : { lent: environment.lent }),
 });
 
 function OwnMachinesList(props: {
@@ -105,7 +106,7 @@ function OwnMachinesList(props: {
 }
 
 function MachineRow(props: {
-  readonly environment: HubEnvironmentOverviewEntry;
+  readonly environment: HubMachineEntry;
   readonly viewerUserId: string;
 }) {
   const { environment } = props;

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ACCESS_KEY_PLACEHOLDER, accessKeySetup, sendsKeyInClear } from "./aiGatewayAccessKey.ts";
+import {
+  ACCESS_KEY_PLACEHOLDER,
+  accessKeySetup,
+  claudeCodeModels,
+  codexModel,
+  sendsKeyInClear,
+} from "./aiGatewayAccessKey.ts";
 
 // A made-up key of the right shape: never a real one.
 const KEY = "t3ak_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
@@ -41,6 +47,48 @@ describe("accessKeySetup", () => {
       expect(text).toContain(ACCESS_KEY_PLACEHOLDER);
       expect(text).not.toContain("t3ak_");
     }
+  });
+});
+
+describe("pinned models (access-keys ticket 02)", () => {
+  it("pins each Claude Code alias to its family, and the main model to Sonnet", () => {
+    const setup = accessKeySetup("https://hub.example.com", KEY, [
+      "claude-haiku-5",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+    ]);
+    expect(JSON.parse(setup.claudeCode).env).toMatchObject({
+      ANTHROPIC_MODEL: "claude-sonnet-5-5",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-5",
+    });
+  });
+
+  it("without Haiku or Opus, those aliases take the first allowed model, Claude first", () => {
+    expect(claudeCodeModels(["gpt-5.5", "claude-sonnet-5-5"])).toEqual({
+      main: "claude-sonnet-5-5",
+      opus: "claude-sonnet-5-5",
+      sonnet: "claude-sonnet-5-5",
+      haiku: "claude-sonnet-5-5",
+    });
+    expect(claudeCodeModels(["claude-opus-5-5"])).toEqual({
+      main: "claude-opus-5-5",
+      opus: "claude-opus-5-5",
+      sonnet: "claude-opus-5-5",
+      haiku: "claude-opus-5-5",
+    });
+    expect(claudeCodeModels([])).toBeNull();
+  });
+
+  it("gives Codex an OpenAI model when the key may use one, and pins nothing without models", () => {
+    expect(codexModel(["claude-sonnet-5-5", "gpt-5.5"])).toBe("gpt-5.5");
+    expect(codexModel(["gemini-3-pro"])).toBe("gemini-3-pro");
+    const pinned = accessKeySetup("https://hub.example.com", KEY, ["gpt-5.5"]);
+    expect(pinned.codex).toContain('model = "gpt-5.5"');
+    const unpinned = accessKeySetup("https://hub.example.com", KEY);
+    expect(unpinned.codex).not.toContain("model = ");
+    expect(JSON.parse(unpinned.claudeCode).env.ANTHROPIC_MODEL).toBeUndefined();
   });
 });
 

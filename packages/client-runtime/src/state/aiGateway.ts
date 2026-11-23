@@ -105,6 +105,11 @@ export function createAiGatewayEnvironmentAtoms<R, E>(
       label: "environment-data:access-keys:revoke",
       tag: WS_METHODS.accessKeysRevoke,
     }),
+    // What a key of the Space may reach: its own gateway accounts and their models (the form).
+    accessKeyModelOptions: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:access-keys:model-options",
+      tag: WS_METHODS.accessKeysModelOptions,
+    }),
     // Subscriptions (spec 4 ticket 03): the Owner signs in through the Hub's CLIProxyAPI, pasting
     // the address the browser lands on; a Vertex service account is imported.
     startAccountLogin: createEnvironmentRpcCommand(runtime, {

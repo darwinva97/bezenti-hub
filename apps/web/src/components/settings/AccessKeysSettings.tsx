@@ -2,12 +2,16 @@ import {
   type AtomCommandResult,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type {
-  AccessKey,
-  AccessKeyListResult,
-  AccessKeyValidity,
-  EnvironmentId,
-  SpaceId,
+import {
+  type AccessKey,
+  type AccessKeyListResult,
+  type AccessKeyModelOptions,
+  type AccessKeyValidity,
+  accessKeyAllowsAllModels,
+  accessKeyModelAllowed,
+  accessKeyModelEntryValid,
+  type EnvironmentId,
+  type SpaceId,
 } from "@t3tools/contracts";
 import { accessKeySetup, gatewayOrigin, sendsKeyInClear } from "@t3tools/shared/aiGatewayAccessKey";
 import { useAtomValue } from "@effect/atom-react";
@@ -98,8 +102,33 @@ function useAccessKeyCommands() {
     list: useAtomCommand(aiGatewayEnvironment.listAccessKeys, "list the access keys"),
     create: useAtomCommand(aiGatewayEnvironment.createAccessKey, "make an access key"),
     revoke: useAtomCommand(aiGatewayEnvironment.revokeAccessKey, "revoke an access key"),
+    options: useAtomCommand(
+      aiGatewayEnvironment.accessKeyModelOptions,
+      "read what a key may reach",
+    ),
   };
 }
+
+/** The models the Space's accounts serve, once each, in their order. */
+const catalogOf = (options: AccessKeyModelOptions | null) => [
+  ...new Set((options?.accounts ?? []).flatMap((account) => account.models)),
+];
+
+/** What a key's setup pins: the models it may use that the Space's accounts serve. */
+const usableModels = (options: AccessKeyModelOptions | null, entries: ReadonlyArray<string>) =>
+  catalogOf(options).filter((model) => accessKeyModelAllowed(entries, model));
+
+/** A key's models as the list says them. */
+const modelsText = (entries: ReadonlyArray<string>) =>
+  accessKeyAllowsAllModels(entries) ? "All models" : entries.join(", ");
+
+/** A model's family for the picker: `claude-sonnet`, `gpt`, `gemini`… */
+const familyOf = (model: string) => {
+  const parts = model.split("-");
+  return parts[0] === "claude" && parts.length > 2
+    ? `${parts[0]}-${parts[1]}`
+    : (parts[0] ?? model);
+};
 
 /**
  * Space settings → AI accounts → «Access keys» (access-keys ticket 01): keys of this Space's AI
@@ -139,6 +168,11 @@ function AccessKeysPanel({
   const [revoking, setRevoking] = useState<AccessKey | null>(null);
   const [revokePending, setRevokePending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [options, setOptions] = useState<AccessKeyModelOptions | null>(null);
+  const { copyToClipboard, isCopied } = useCopyToClipboard<string>({
+    onError: (cause) => setError(errorMessageOf(cause, "Could not copy it.")),
+  });
+  const [copied, setCopied] = useState<string | null>(null);
 
   const origin = gatewayOrigin(readHubLinkOrigin(environmentId) ?? "");
 
@@ -182,6 +216,28 @@ function AccessKeysPanel({
     };
   }, [environmentId, spaceId, showEnded]);
 
+  // What a key may reach, for the form and the setup: only for whoever may make keys here.
+  const canManage = listed?.space?.canManage === true;
+  const loadOptions = useEffectEvent((target: EnvironmentId, space: SpaceId) =>
+    commands.options({ environmentId: target, input: { spaceId: space } }),
+  );
+  const applyOptions = useEffectEvent(
+    (result: AtomCommandResult<AccessKeyModelOptions, unknown>) => {
+      if (result._tag === "Success") setOptions(result.value);
+    },
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the Space's accounts and models from the Hub once the viewer may make keys there.
+  useEffect(() => {
+    if (!canManage) return;
+    let cancelled = false;
+    void loadOptions(environmentId, spaceId).then((result) => {
+      if (!cancelled) applyOptions(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [environmentId, spaceId, canManage]);
+
   const revoke = async (key: AccessKey) => {
     setRevokePending(true);
     const result = await commands.revoke({ environmentId, input: { keyId: key.keyId } });
@@ -219,6 +275,7 @@ function AccessKeysPanel({
         <NewAccessKeyForm
           environmentId={environmentId}
           spaceId={spaceId}
+          catalog={catalogOf(options)}
           create={commands.create}
           onMade={(key, secret) => {
             setMade({ key, secret });
@@ -230,6 +287,7 @@ function AccessKeysPanel({
         <NewKeyPanel
           made={made}
           origin={origin}
+          models={usableModels(options, made.key.models)}
           onDone={() => setMade(null)}
           onError={(message) => setError(message)}
         />
@@ -259,6 +317,7 @@ function AccessKeysPanel({
                   {key.label}{" "}
                   <span className="font-mono text-xs text-muted-foreground">…{key.hint}</span>
                 </span>
+                <span className="text-xs text-muted-foreground">{modelsText(key.models)}</span>
                 <span className="text-xs text-muted-foreground">
                   {[
                     `By ${key.createdByName ?? key.createdBy}`,
@@ -280,6 +339,23 @@ function AccessKeysPanel({
                   ) : null}
                 </span>
               </div>
+              {origin === null || key.revokedAt !== null ? null : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-label={`Copy setup for ${key.label}`}
+                  onClick={() => {
+                    // The key is never shown again: the setup holds a placeholder for it.
+                    setCopied(key.keyId);
+                    copyToClipboard(
+                      accessKeySetup(origin, null, usableModels(options, key.models)).claudeCode,
+                      key.keyId,
+                    );
+                  }}
+                >
+                  {isCopied && copied === key.keyId ? "Copied" : "Copy setup"}
+                </Button>
+              )}
               {mayRevoke && key.revokedAt === null ? (
                 <Button
                   size="sm"
@@ -335,6 +411,8 @@ function AccessKeysPanel({
 function NewKeyPanel(props: {
   readonly made: { readonly key: AccessKey; readonly secret: string };
   readonly origin: string | null;
+  /** The models the key may use that the Space's accounts serve: the setup pins them. */
+  readonly models: ReadonlyArray<string>;
   readonly onDone: () => void;
   readonly onError: (message: string) => void;
 }) {
@@ -348,7 +426,7 @@ function NewKeyPanel(props: {
     setCopied(what);
     copyToClipboard(text, what);
   };
-  const setup = origin === null ? null : accessKeySetup(origin, made.secret);
+  const setup = origin === null ? null : accessKeySetup(origin, made.secret, props.models);
   const file =
     setup === null
       ? null
@@ -430,13 +508,122 @@ function NewKeyPanel(props: {
   );
 }
 
+/**
+ * The models a key may use (access-keys ticket 02): «All models» by an explicit choice, or the
+ * Space's catalog by family, plus patterns typed with «Add pattern» (`claude-sonnet-*`).
+ */
+function ModelPicker(props: {
+  readonly catalog: ReadonlyArray<string>;
+  readonly all: boolean;
+  readonly entries: ReadonlyArray<string>;
+  readonly disabled: boolean;
+  readonly onAll: (all: boolean) => void;
+  readonly onEntries: (entries: ReadonlyArray<string>) => void;
+}) {
+  const [pattern, setPattern] = useState("");
+  const families = [...new Set(props.catalog.map(familyOf))];
+  const typed = props.entries.filter((entry) => !props.catalog.includes(entry));
+  const toggle = (model: string, on: boolean) =>
+    props.onEntries(
+      on ? [...props.entries, model] : props.entries.filter((entry) => entry !== model),
+    );
+  const candidate = pattern.trim();
+  const valid = candidate !== "*" && accessKeyModelEntryValid(candidate);
+  return (
+    <div className="flex w-full flex-col gap-2 text-xs">
+      <div className="flex flex-col gap-1 font-medium">
+        Models
+        <ToggleGroup
+          aria-label="Models"
+          value={[props.all ? "all" : "choose"]}
+          onValueChange={(next) => {
+            const value = next[0];
+            if (value === "all" || value === "choose") props.onAll(value === "all");
+          }}
+        >
+          <Toggle value="choose">Choose models</Toggle>
+          <Toggle value="all">All models</Toggle>
+        </ToggleGroup>
+      </div>
+      {props.all ? null : (
+        <>
+          {families.map((family) => (
+            <fieldset key={family} className="flex flex-wrap items-center gap-3">
+              <legend className="mb-1 font-medium text-muted-foreground">{family}</legend>
+              {props.catalog
+                .filter((model) => familyOf(model) === family)
+                .map((model) => (
+                  <label key={model} className="flex items-center gap-1">
+                    <Checkbox
+                      aria-label={model}
+                      checked={props.entries.includes(model)}
+                      disabled={props.disabled}
+                      onCheckedChange={(checked) => toggle(model, checked === true)}
+                    />
+                    {model}
+                  </label>
+                ))}
+            </fieldset>
+          ))}
+          {typed.length === 0 ? null : (
+            <div className="flex flex-wrap items-center gap-2">
+              {typed.map((entry) => (
+                <Button
+                  key={entry}
+                  size="xs"
+                  variant="outline"
+                  aria-label={`Remove ${entry}`}
+                  disabled={props.disabled}
+                  onClick={() => toggle(entry, false)}
+                >
+                  {entry} ×
+                </Button>
+              ))}
+            </div>
+          )}
+          <div className="flex items-end gap-2">
+            <label className="flex flex-col gap-1 font-medium sm:w-64">
+              Pattern or exact name
+              <Input
+                aria-label="Pattern"
+                nativeInput
+                disabled={props.disabled}
+                maxLength={256}
+                placeholder="claude-sonnet-*"
+                value={pattern}
+                onChange={(event) => setPattern(event.currentTarget.value)}
+              />
+            </label>
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              disabled={props.disabled || !valid || props.entries.includes(candidate)}
+              onClick={() => {
+                props.onEntries([...props.entries, candidate]);
+                setPattern("");
+              }}
+            >
+              Add pattern
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function NewAccessKeyForm(props: {
   readonly environmentId: EnvironmentId;
   readonly spaceId: SpaceId;
+  /** The models the Space's accounts serve. */
+  readonly catalog: ReadonlyArray<string>;
   readonly create: ReturnType<typeof useAccessKeyCommands>["create"];
   readonly onMade: (key: AccessKey, secret: string) => void;
 }) {
   const [label, setLabel] = useState("");
+  const [allModels, setAllModels] = useState(false);
+  const [entries, setEntries] = useState<ReadonlyArray<string>>([]);
   const [mode, setMode] = useState<"days" | "until">("days");
   const [days, setDays] = useState(String(DEFAULT_DAYS));
   const [until, setUntil] = useState("");
@@ -450,7 +637,8 @@ function NewAccessKeyForm(props: {
     const end = endOfLocalDay(until);
     return end === null ? null : { until: end };
   })();
-  const ready = label.trim().length > 0 && validity !== null;
+  const models: ReadonlyArray<string> = allModels ? ["*"] : entries;
+  const ready = label.trim().length > 0 && validity !== null && models.length > 0;
   return (
     <form
       aria-label="Create an access key"
@@ -463,11 +651,13 @@ function NewAccessKeyForm(props: {
         void props
           .create({
             environmentId: props.environmentId,
-            input: { spaceId: props.spaceId, label: label.trim(), validity },
+            input: { spaceId: props.spaceId, label: label.trim(), validity, models },
           })
           .then((result) => {
             if (result._tag === "Success") {
               setLabel("");
+              setEntries([]);
+              setAllModels(false);
               props.onMade(result.value.created, Redacted.value(result.value.key));
             } else {
               setError(errorMessageOf(squashAtomCommandFailure(result), "Could not make the key."));
@@ -529,6 +719,14 @@ function NewAccessKeyForm(props: {
           />
         </label>
       )}
+      <ModelPicker
+        catalog={props.catalog}
+        all={allModels}
+        entries={entries}
+        disabled={pending}
+        onAll={setAllModels}
+        onEntries={setEntries}
+      />
       <div className="flex items-center gap-2">
         <Button disabled={pending || !ready} size="sm" type="submit">
           Create key

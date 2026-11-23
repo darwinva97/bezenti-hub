@@ -696,9 +696,9 @@ token, wherever they sit in its list.
 
 ### Keycloak sign-ins after the callback
 
-Each Keycloak sign-in is an `identity_logins` row with its refresh token and its
-latest ID token, both sealed (see Secrets at rest). Sessions born of it carry its
-`identity_login_id`.
+Each Keycloak sign-in is an `identity_logins` row with its refresh token, sealed
+(see Secrets at rest). Its ID token is verified and kept nowhere. Sessions born of
+it carry its `identity_login_id`.
 [KeycloakLogins](../../apps/server/src/auth/KeycloakLogins.ts) keeps it honest
 afterwards. Every ending goes through `UserDirectory.endKeycloakLogins`: the row
 ends, its sealed tokens are dropped, and every session and unspent pairing link
@@ -734,7 +734,7 @@ holds a token. It runs one refresh at a time per sign-in (at most 8 at once).
   the Hub's client (a wrong secret). Disabled accounts are not signed out
   meanwhile, so the two must look different. Re-checks then back off from 1 to
   10 minutes. This state is in memory, and a restart clears it.
-- **A good refresh** saves the new refresh token and ID token first, on their own,
+- **A good refresh** saves the new refresh token first, on its own,
   so a rotated token is never lost to a later failure. Then it applies Keycloak's
   groups through the callback's own code (`KeycloakGroups`), so an Admin group
   on a weak sign-in ends that sign-in, as a promotion does. It keeps the
@@ -809,15 +809,16 @@ the address straight away. «Also sign out of Keycloak» spends it at
 `POST /api/auth/keycloak/sign-out`, from the Hub's own origin. That ends the
 sign-in with the apps, MCP clients and pairing links approved from it, which is
 why the page says so. It answers the realm's `end_session_endpoint` with
-`client_id`, `post_logout_redirect_uri` (`<base>/sign-in`) and `id_token_hint`.
-The hint is the sign-in's latest ID token, read before the sign-in ends; OPs
-accept an expired one. The Hub ends the sign-in itself because an offline session
+`client_id` and `post_logout_redirect_uri` (`<base>/sign-in`), never an
+`id_token_hint`: an ID token in that address would sit in the browser's history
+and the realm's access log, so no door hands one out. Without the hint, Keycloak
+asks the person to confirm before it signs them out. The Hub ends the sign-in itself because an offline session
 outlives Keycloak's SSO logout, so no back-channel call would come for it. If
 the sign-in can't be ended, the answer is an error with no realm address, and the
 handle is given back for a retry until it expires. Audit: `keycloak.login.end`
 with its reason (`refresh-refused`, `backchannel`, `sign-out`, `no-refresh-token`,
-`token-unusable`, `keycloak-off`, `issuer-changed`) and how many sessions and
-links ended with it.
+`token-unusable`, `keycloak-off`, `issuer-changed`, `user-disabled`,
+`user-removed`) and how many sessions and links ended with it.
 
 ### Local sign-in for everyone but the Owner
 
@@ -887,7 +888,10 @@ credentials.
 sets `users.disabled_at` / `removed_at` and, in the same transaction, expires
 their reset links, revokes the Invitations they created, and revokes every
 `auth_sessions` row (browser, app, MCP client and CLI bearer are all sessions)
-and pairing link of theirs in one write each; removal also deletes their
+and pairing link of theirs in one write each. Their live Keycloak sign-ins end
+too, with their sealed refresh tokens (one `keycloak.login.end` each, reason
+`user-disabled` or `user-removed`), so no re-check or back-channel logout finds
+them later; removal also deletes their
 Memberships and sets their Personal space's `frozen_at`. Sockets and the
 per-User hub hear it after the commit. Asking again for the same status reruns
 the revocation, so a retry finishes a half-done one, and a session read treats
@@ -1148,10 +1152,10 @@ master key; only the Owner sees its status or downloads its backup (`masterKey.b
 `file` are sealed at rest and in clear only in a folder in memory (on the disk, emptied at every
 start, where there is none); that delivery applies only when
 the Hub machine runs agents, since a Sandbox or a joined machine cannot read a path on the Hub. See
-[secrets.md](secrets.md). A Keycloak sign-in's refresh token and latest ID token are
-sealed like TOTP secrets: AES-256-GCM under the `identity-login-key` store secret. The
-associated data names the sign-in and the kind of token, so a value moved to another row or
-column never opens. A failed seal or unseal carries no cause, and no token reaches a log, a
+[secrets.md](secrets.md). A Keycloak sign-in's refresh token is sealed like TOTP
+secrets: AES-256-GCM under the `identity-login-key` store secret. The associated data names
+the sign-in, so a value moved to another row never opens. Its ID token is kept nowhere
+(migration 158 dropped the ones sealed before). A failed seal or unseal carries no cause, and no token reaches a log, a
 span or an answer.
 
 ## Folders on the Hub's disk

@@ -193,6 +193,11 @@ hour, and back-channel logout ends one the moment Keycloak says it ended. A
 Keycloak that is down does not sign anyone out; the Platform page then warns
 that it has not answered since a time.
 
+**Also sign out of Keycloak.** Signing out of the Hub from a Keycloak sign-in
+offers to sign out of Keycloak too. Keycloak then shows its own «Do you want to
+log out?» page: the Hub never sends Keycloak a token of the person, so Keycloak
+asks them to confirm. After that it brings them back to the Hub's sign-in page.
+
 ## If something does not work
 
 - **Passkey sign-in says to open the Installation's own address.** The page's

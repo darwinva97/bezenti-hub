@@ -50,10 +50,10 @@ export interface AiGatewayProxyLimits {
   /** A body must arrive whole within this, and never pause longer than `bodyIdleMs`. */
   readonly bodyDeadlineMs: number;
   readonly bodyIdleMs: number;
-  /** Bodies being read at once, per User and for the Hub. */
+  /** Bodies being read at once, per User (or access key) and for the Hub. */
   readonly readersPerUser: number;
   readonly readersTotal: number;
-  /** Requests in flight at once: per key, per User, for the Hub. */
+  /** Requests in flight at once: per key, per User (or access key), for the Hub. */
   readonly perKey: number;
   readonly perUser: number;
   readonly total: number;
@@ -170,6 +170,14 @@ const makePool = (limits: { perKey?: number; perUser: number; total: number }) =
   };
 };
 
+/**
+ * Whose share of the pools a request takes: its key's User, or an access key itself
+ * (`ak:<id>`, access-keys ticket 01). An access key has no in-flight limit of its own beyond the
+ * one every key has (`perKey`).
+ */
+const subjectOf = (caller: GatewayCaller) =>
+  caller.userId ?? `ak:${caller.accessKeyId ?? caller.keyId}`;
+
 const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyLimits) {
   {
     const accounts = yield* AiAccounts.AiAccounts;
@@ -184,8 +192,9 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
     /** Takes a slot of `pool` for the scope; false when none is free. */
     const hold = (pool: ReturnType<typeof makePool>, caller: GatewayCaller) =>
       Effect.acquireRelease(
-        Effect.sync(() => pool.take(caller.keyId, caller.userId)),
-        (taken) => Effect.sync(() => (taken ? pool.give(caller.keyId, caller.userId) : undefined)),
+        Effect.sync(() => pool.take(caller.keyId, subjectOf(caller))),
+        (taken) =>
+          Effect.sync(() => (taken ? pool.give(caller.keyId, subjectOf(caller)) : undefined)),
       );
 
     /** Bytes held for the scope, within the Hub's budget. */
@@ -370,6 +379,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
             keyId: caller.keyId,
             keyKind: caller.kind,
             userId: caller.userId,
+            accessKeyId: caller.accessKeyId,
             spaceId: caller.spaceId,
             threadId: caller.threadId,
             shape,
@@ -452,14 +462,14 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
         return yield* refuseRecorded(415, "Send the request body uncompressed.");
       }
       // The body first, in a small pool of its own: a slow sender holds no request slot.
-      if (!readers.take(caller.keyId, caller.userId)) {
+      if (!readers.take(caller.keyId, subjectOf(caller))) {
         return yield* refuseRecorded(
           429,
           "Too many requests to the AI gateway at once. Try again.",
         );
       }
       const body = yield* readBody(request).pipe(
-        Effect.ensuring(Effect.sync(() => readers.give(caller.keyId, caller.userId))),
+        Effect.ensuring(Effect.sync(() => readers.give(caller.keyId, subjectOf(caller)))),
         Effect.result,
       );
       if (body._tag === "Failure") {
@@ -481,7 +491,8 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
       const plan = planRoute({
         allowed,
         chosenAccountId: caller.chosenAccountId,
-        keyKind: caller.kind,
+        // An access key routes as a User key does: `acct-<id>/` pins only an account it reaches.
+        keyKind: caller.kind === "access" ? "user" : caller.kind,
         requested,
         serves: (accountId, model) => served.get(accountId)?.has(model) === true,
       });

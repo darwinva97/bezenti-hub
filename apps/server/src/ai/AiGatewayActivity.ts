@@ -4,14 +4,7 @@
  * to, kept and published when it changes (a failover, a switch) so the Thread's header shows the
  * account in use (decision 7). Never a key, a header or a prompt.
  */
-import type {
-  AiAccountId,
-  AiAccountProvider,
-  AiGatewayKeyKind,
-  SpaceId,
-  ThreadId,
-  UserId,
-} from "@t3tools/contracts";
+import type { AiAccountId, AiAccountProvider, SpaceId, ThreadId, UserId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -22,14 +15,18 @@ import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
+import type { GatewayCallerKind } from "./AiGatewayKeys.ts";
 import { type GatewayShape, type GatewayUsage, uncachedInputOf } from "./gatewayShapes.ts";
 
 /** One request through `/api/ai/*`, as far as the Hub knows when it ends. */
 export interface GatewayRequestRecord {
   readonly at: string;
   readonly keyId: string;
-  readonly keyKind: AiGatewayKeyKind;
-  readonly userId: UserId;
+  readonly keyKind: GatewayCallerKind;
+  /** Null for an access key: its use counts on the key, in its Space (access-keys ticket 01). */
+  readonly userId: UserId | null;
+  /** The access key's id (`ak_…`); absent or null for a gateway key. */
+  readonly accessKeyId?: string | null;
   readonly spaceId: SpaceId;
   readonly threadId: ThreadId | null;
   readonly shape: GatewayShape;

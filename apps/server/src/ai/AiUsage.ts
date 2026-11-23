@@ -205,22 +205,26 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       const model = request.model ?? "";
       // Which Grant lent the account that answered (grants ticket 03); '' in the summary: own.
       const grantId = request.accountId === null ? null : (request.grantId ?? null);
+      // An access key's request has no User (`''`); the key is its subject (access-keys 01).
+      const userId = request.userId ?? "";
       yield* sql`
         INSERT INTO ai_usage (usage_id, at, day, user_id, space_id, thread_id, key_id,
           account_id, provider, model, shape, status, duration_ms, failovers,
-          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, grant_id)
-        VALUES (${usageId}, ${request.at}, ${day}, ${request.userId}, ${request.spaceId},
+          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, grant_id,
+          access_key_id)
+        VALUES (${usageId}, ${request.at}, ${day}, ${userId}, ${request.spaceId},
           ${request.threadId}, ${request.keyId}, ${request.accountId}, ${request.provider},
           ${request.model}, ${request.shape}, ${request.status}, ${request.durationMs},
           ${request.failovers}, ${usage?.inputTokens ?? null}, ${usage?.outputTokens ?? null},
-          ${usage?.cacheReadTokens ?? null}, ${usage?.cacheWriteTokens ?? null}, ${grantId})
+          ${usage?.cacheReadTokens ?? null}, ${usage?.cacheWriteTokens ?? null}, ${grantId},
+          ${request.accessKeyId ?? null})
       `;
       // A summary whose uncached input is unknown (from before migration 147) stays unknown.
       yield* sql`
         INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model, grant_id, requests,
           failed_requests, unknown_requests, input_tokens, output_tokens,
           cache_read_tokens, cache_write_tokens, uncached_input_tokens)
-        VALUES (${day}, ${request.userId}, ${request.spaceId}, ${accountId}, ${model},
+        VALUES (${day}, ${userId}, ${request.spaceId}, ${accountId}, ${model},
           ${grantId ?? ""}, 1, ${failed ? 1 : 0}, ${unknown ? 1 : 0}, ${usage?.inputTokens ?? 0},
           ${usage?.outputTokens ?? 0}, ${usage?.cacheReadTokens ?? 0},
           ${usage?.cacheWriteTokens ?? 0}, ${uncachedInputOf(request.shape, usage)})
@@ -343,10 +347,11 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       if (request.route.endsWith("/count_tokens")) return activity.settle([request]);
       if (request.shed === true) {
         const day = request.at.slice(0, 10);
-        const key = `${day}|${request.userId}|${request.spaceId}`;
+        const userId = request.userId ?? "";
+        const key = `${day}|${userId}|${request.spaceId}`;
         const entry = shedCounts.get(key);
         if (entry === undefined) {
-          shedCounts.set(key, { day, userId: request.userId, spaceId: request.spaceId, count: 1 });
+          shedCounts.set(key, { day, userId, spaceId: request.spaceId, count: 1 });
         } else entry.count += 1;
         if (shedMarked) return Effect.void;
         shedMarked = true;
@@ -656,6 +661,8 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       const filters = [
         sql`day >= ${fromDay}`,
         sql`day <= ${toDay}`,
+        // An access key's rows have no User; access-keys ticket 04 shows them as the key's.
+        sql`user_id <> ''`,
         // A Thread's rows never come through a loan given, and the Owner's only where they run.
         input.threadId === undefined ? visible : visibleThreads,
         ...(input.spaceId === undefined ? [] : [sql`space_id = ${input.spaceId}`]),

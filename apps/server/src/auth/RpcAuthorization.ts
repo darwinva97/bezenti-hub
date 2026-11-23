@@ -100,6 +100,9 @@ export const RPC_REQUIRED_SCOPES = {
   // The session's own local CLI keys (no key in the answer); making and revoking one is
   // CLIENT_GUARDED_RPC_SCOPES' (access:write).
   [WS_METHODS.aiGatewayKeysList]: AuthAccessReadScope,
+  // A Space's access keys (no key in the answer); making and revoking one is
+  // CLIENT_GUARDED_RPC_SCOPES' (access:write).
+  [WS_METHODS.accessKeysList]: AuthAccessReadScope,
   // Asks GitHub for the newest release, as the Owner opens Settings → AI gateway.
   [WS_METHODS.aiGatewayCheckForUpdates]: AuthSettingsWriteScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,

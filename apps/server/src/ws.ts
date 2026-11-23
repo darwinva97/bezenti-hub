@@ -268,6 +268,7 @@ import * as AiGateway from "./ai/AiGateway.ts";
 import * as AiUsage from "./ai/AiUsage.ts";
 import { withHubAiAccountLimits } from "./usage/hubAiAccountLimits.ts";
 import { withHubGatewayUsage } from "./usage/hubGatewayUsage.ts";
+import * as AccessKeys from "./ai/AccessKeys.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
@@ -1447,6 +1448,7 @@ export const layerWsRpc = (
       const aiUsage = yield* AiUsage.AiUsage;
       const withGatewayUsage = withHubGatewayUsage(usage, aiUsage);
       const aiGatewayKeys = yield* AiGatewayKeys.AiGatewayKeys;
+      const accessKeys = yield* AccessKeys.AccessKeys;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const triage = yield* TriageService.TriageService;
@@ -2992,6 +2994,11 @@ export const layerWsRpc = (
         [WS_METHODS.aiGatewayKeysList]: () => aiGatewayKeys.listForSession,
         [WS_METHODS.aiGatewayKeysCreate]: (input) => aiGatewayKeys.createForSession(input),
         [WS_METHODS.aiGatewayKeysRevoke]: (input) => aiGatewayKeys.revokeForSession(input),
+        // A Space's access keys, for whoever manages it; the Owner sees and revokes every one.
+        // Only a person's session: AccessKeys refuses an agent or a one-Space session.
+        [WS_METHODS.accessKeysList]: (input) => accessKeys.listForSession(input),
+        [WS_METHODS.accessKeysCreate]: (input) => accessKeys.createForSession(input),
+        [WS_METHODS.accessKeysRevoke]: (input) => accessKeys.revokeForSession(input),
         [WS_METHODS.projectCloneStart]: (input) =>
           requireCloneDestination(input.destinationPath, { asProject: true }).pipe(
             Effect.andThen(

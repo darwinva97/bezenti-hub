@@ -32,8 +32,9 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import { threadTurnOwner } from "../orchestration-v2/threadTurnOwner.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import { accessKeyForRequest, noteAccessKeyUse } from "./AccessKeys.ts";
 import * as AllowedAiAccounts from "./AllowedAiAccounts.ts";
-import { isGatewayKeyShaped } from "./gatewayShapes.ts";
+import { isAccessKeyShaped, isGatewayKeyShaped } from "./gatewayShapes.ts";
 
 /** Why a request's key gets nothing: 401 (no such live key), 403 (not here), 503 (try later). */
 export class AiGatewayRefusal extends Schema.TaggedError<AiGatewayRefusal>()("AiGatewayRefusal", {
@@ -44,14 +45,23 @@ export class AiGatewayRefusal extends Schema.TaggedError<AiGatewayRefusal>()("Ai
 /** Why making, listing or revoking a key failed, in words for its User (the WS doors' error). */
 export { AiGatewayKeyError };
 
+/** A gateway key's kind, or `access`: a Space's access key (access-keys ticket 01). */
+export type GatewayCallerKind = AiGatewayKeyKind | "access";
+
 /** Who a request is, decided on the Hub from its key alone, and what it may reach right now. */
 export interface GatewayCaller {
   readonly keyId: string;
-  readonly kind: AiGatewayKeyKind;
-  readonly userId: UserId;
+  readonly kind: GatewayCallerKind;
+  /** The key's User; null for an access key, which acts for its Space, never as a User. */
+  readonly userId: UserId | null;
+  /** The access key's id (`ak_…`); null for a gateway key. */
+  readonly accessKeyId: string | null;
   readonly spaceId: SpaceId;
   readonly threadId: ThreadId | null;
-  /** AllowedAiAccounts for (User, Space) now, through the gateway only (no direct credential). */
+  /**
+   * AllowedAiAccounts for (User, Space) now, or for an access key the Space's own accounts
+   * (`forSpace`), through the gateway only (no direct credential).
+   */
   readonly allowed: ReadonlyArray<AllowedAiAccounts.AllowedAiAccount>;
   /** The Thread's own AI account (its model selection), if it chose one. */
   readonly chosenAccountId: AiAccountId | null;
@@ -177,6 +187,10 @@ const KEY_COLUMNS = `key_id AS "keyId", kind, user_id AS "userId", space_id AS "
   last_used_at AS "lastUsedAt", revoked_at AS "revokedAt"`;
 
 const UNKNOWN_KEY = "This AI gateway key is not valid. It may have been revoked or expired.";
+
+/** `2026-12-01 18:00 UTC`: an instant as an error message says it. */
+const utcMinute = (millis: number) =>
+  `${DateTime.formatIso(DateTime.makeUnsafe(millis)).slice(0, 16).replace("T", " ")} UTC`;
 const SPACE_LOST = "You no longer work in this key's Space: it was revoked. Make a new key.";
 /** A Thread key is refused, never revoked, here: archive and restore, the key works again. */
 const THREAD_SPACE_LOST = "You cannot work in this Thread's Space now, so its key is refused.";
@@ -606,11 +620,67 @@ const make = Effect.gen(function* () {
       Effect.andThen(refused(503, "The AI gateway could not check this key. Try again.")),
     );
 
+  /**
+   * An access key (access-keys ticket 01): the Space's, never a User's. Decided in the spec's
+   * order: unknown or revoked (or its Space gone) 401, expired 403 with its date, its Space not
+   * open 403, no AI account of the Space's own 403. Read again on every request.
+   */
+  const authorizeAccessKey = Effect.fn("AiGatewayKeys.authorizeAccessKey")(function* (raw: string) {
+    const found = yield* accessKeyForRequest(sql, raw).pipe(Effect.catch(unavailable));
+    if (Option.isNone(found)) return yield* refused(401, UNKNOWN_KEY);
+    const accessKey = found.value;
+    // A deleted Space's keys answer as revoked ones (access-keys ticket 07 revokes them with it).
+    if (accessKey.revokedAt !== null || accessKey.space === "missing") {
+      return yield* refused(401, UNKNOWN_KEY);
+    }
+    const now = yield* DateTime.now;
+    const expiresAt = Date.parse(accessKey.expiresAt);
+    // 403, not 401: a 401 makes Claude Code ask for `/login` and hides why.
+    if (!(expiresAt > DateTime.toEpochMillis(now))) {
+      return yield* refused(
+        403,
+        `This access key expired on ${utcMinute(expiresAt)}. Ask whoever gave it to you to renew it.`,
+      );
+    }
+    if (accessKey.space !== "open") {
+      return yield* refused(
+        403,
+        accessKey.space === "archived" || accessKey.space === "deleting"
+          ? "This access key's Space is archived. It works again if the Space is restored."
+          : "This access key's Space is closed now. It works again if the Space is reopened.",
+      );
+    }
+    const own = yield* allowedAccounts.forSpace(accessKey.spaceId).pipe(Effect.catch(unavailable));
+    const reach = accessKey.accounts === null ? null : new Set<string>(accessKey.accounts);
+    const allowed = own.filter(
+      (account) => account.type !== "direct" && (reach === null || reach.has(account.id)),
+    );
+    if (allowed.length === 0) {
+      return yield* refused(403, "No AI account this access key may use is available now.");
+    }
+    yield* noteAccessKeyUse(sql, accessKey.keyId, now).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("AiGatewayKeys: could not note an access key's last use", { cause }),
+      ),
+    );
+    return {
+      keyId: accessKey.keyId,
+      kind: "access",
+      userId: null,
+      accessKeyId: accessKey.keyId,
+      spaceId: accessKey.spaceId,
+      threadId: null,
+      allowed,
+      chosenAccountId: null,
+    } satisfies GatewayCaller;
+  });
+
   const authorize = Effect.fn("AiGatewayKeys.authorize")(function* (
     key: Redacted.Redacted<string>,
   ) {
     const raw = Redacted.value(key);
     if (!isGatewayKeyShaped(raw)) return yield* refused(401, UNKNOWN_KEY);
+    if (isAccessKeyShaped(raw)) return yield* authorizeAccessKey(raw);
     // One read: the key, its User's state and, for a Thread key, the Thread.
     const rows = yield* sql<
       KeyRow & {
@@ -724,6 +794,7 @@ const make = Effect.gen(function* () {
       keyId: row.keyId,
       kind: row.kind,
       userId,
+      accessKeyId: null,
       spaceId,
       threadId,
       allowed,

@@ -63,6 +63,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // Switching a Thread's AI account changes the Thread, as any command on it does.
   [WS_METHODS.threadSetAiAccount]: AuthOrchestrationOperateScope,
   [WS_METHODS.aiGatewayKeysRevoke]: AuthAccessWriteScope,
+  // A Space's access keys (access-keys ticket 01): a credential to the Hub's AI gateway.
+  [WS_METHODS.accessKeysCreate]: AuthAccessWriteScope,
+  [WS_METHODS.accessKeysRevoke]: AuthAccessWriteScope,
   [WS_METHODS.projectCloneStart]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneCancel]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneRetry]: AuthSourceControlWriteScope,

@@ -194,7 +194,7 @@ export const HTTP_ENDPOINT_RULES: Readonly<Record<string, DoorRule>> = {
 
 /** Spec 4 ticket 04: a gateway key in a header only, never a cookie or another credential. */
 const AI_GATEWAY = own(
-  "AiGatewayKeys.authorize on every request (key live, User active, Thread in the key's Space and owned by its User; a User key whose User left its Space: 403), then AllowedAiAccounts now; planRoute pins the model to an allowed account; only fixed CLIProxyAPI paths",
+  "AiGatewayKeys.authorize on every request (key live, User active, Thread in the key's Space and owned by its User; a User key whose User left its Space: 403; an access key: live, not expired (403 with its date), its Space open (403), its Space's own AI accounts only), then AllowedAiAccounts now; planRoute pins the model to an allowed account; only fixed CLIProxyAPI paths",
 );
 
 export const RAW_ROUTE_RULES: Readonly<Record<string, DoorRule>> = {
@@ -630,6 +630,11 @@ export const KEYCLOAK_SESSION_CREDENTIALS: Readonly<Record<string, LoginCredenti
     where: ["ai_gateway_keys.key_hash"],
     outlivesLogin:
       "the User's own key, revocable, gone when the User is disabled or removed: a Keycloak ending does not disable the User (spec «Bajas»); binding keys to the sign-in is a follow-up",
+  },
+  "AI gateway access keys": {
+    where: ["ai_access_keys.key_hash"],
+    outlivesLogin:
+      "a Space's key, not a session's or a User's (access-keys spec): it lives until it expires (at most 366 days) or whoever manages the Space, or the Owner, revokes it; its issuer leaving or signing out changes nothing",
   },
   "the master key backup": {
     where: [],

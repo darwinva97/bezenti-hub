@@ -96,6 +96,15 @@ export class AllowedAiAccounts extends Context.Service<
       ReadonlyMap<SpaceId, ReadonlyArray<AllowedAiAccount>>,
       AllowedAiAccountsError
     >;
+    /**
+     * A Space's own AI accounts (its owner's enabled ones, in their order), with no User's
+     * condition: what an access key of the Space may reach (access-keys ticket 01). Never one lent
+     * by a Grant: the lender trusted the Space and its people, not whoever holds a key. Empty for
+     * a Space that does not exist. The caller drops `direct` ones (a key reaches the gateway only).
+     */
+    readonly forSpace: (
+      spaceId: SpaceId,
+    ) => Effect.Effect<ReadonlyArray<AllowedAiAccount>, AllowedAiAccountsError>;
   }
 >()("t3/ai/AllowedAiAccounts") {}
 
@@ -192,10 +201,11 @@ const make = Effect.gen(function* () {
 
   /**
    * For each of these Spaces (all worked in): its owner's enabled accounts, then those an active
-   * Grant lends to it.
+   * Grant lends to it (unless `ownOnly`).
    */
   const accountsIn = Effect.fn("AllowedAiAccounts.accountsIn")(function* (
     working: ReadonlyMap<SpaceId, { readonly resource: AccessPolicy.SpaceResource }>,
+    ownOnly = false,
   ) {
     const answer = new Map<SpaceId, ReadonlyArray<AllowedAiAccount>>();
     if (working.size === 0) return answer;
@@ -219,7 +229,9 @@ const make = Effect.gen(function* () {
           `.pipe(Effect.catch(failed("read the AI accounts")));
     // Lent by an active Grant whose lender still owns the account and may still lend: a disabled
     // or removed User, an archived, frozen or gone Organization lends nothing meanwhile.
-    const lentRows = yield* sql<LentRow>`
+    const lentRows: ReadonlyArray<LentRow> = ownOnly
+      ? []
+      : yield* sql<LentRow>`
       SELECT a.account_id AS "accountId", a.name AS "name", a.type AS "type",
         a.provider AS "provider", a.priority AS "priority", a.owner_kind AS "ownerKind",
         a.owner_id AS "ownerId", g.grant_id AS "grantId", g.target_id AS "targetId",
@@ -291,7 +303,16 @@ const make = Effect.gen(function* () {
     return { works, accounts };
   });
 
+  const forSpace = Effect.fn("AllowedAiAccounts.forSpace")(function* (spaceId: SpaceId) {
+    const known = yield* spaces.spacesById([spaceId]).pipe(Effect.catch(failed("read the Space")));
+    const space = known.get(spaceId);
+    if (space === undefined) return [] as ReadonlyArray<AllowedAiAccount>;
+    const own = yield* accountsIn(new Map([[spaceId, { resource: space.resource }]]), true);
+    return own.get(spaceId) ?? [];
+  });
+
   return AllowedAiAccounts.of({
+    forSpace,
     for: Effect.fn("AllowedAiAccounts.for")(function* (userId: UserId, spaceId: SpaceId) {
       const answer = yield* forSpaces(userId, [spaceId]);
       return answer.get(spaceId) ?? [];

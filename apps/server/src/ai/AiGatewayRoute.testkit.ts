@@ -37,6 +37,7 @@ import {
 } from "../auth/UserAuth.testkit.ts";
 import { activeAiGrants, lendAiAccount } from "../grants/Grants.testkit.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as AccessKeys from "./AccessKeys.ts";
 import * as AiAccounts from "./AiAccounts.ts";
 import * as AiGateway from "./AiGateway.ts";
 import * as AiGatewayActivity from "./AiGatewayActivity.ts";
@@ -142,6 +143,7 @@ export const hubWith = Effect.fn(function* (
       // A User removed or leaving a Space: their keys are revoked, as on the Hub (ticket 10).
       Layer.provideMerge(AiGatewayKeyRevocation.layerUserChanges),
       Layer.provideMerge(AiGatewayKeys.layer),
+      Layer.provideMerge(AccessKeys.layer),
       Layer.provideMerge(
         AiUsage.layerWith(options.usage ?? { retentionDays: 90, sweepEveryMs: 86_400_000 }),
       ),
@@ -167,6 +169,7 @@ export const hubWith = Effect.fn(function* (
   const port = address.port;
   const accounts = Context.get(context, AiAccounts.AiAccounts);
   const keys = Context.get(context, AiGatewayKeys.AiGatewayKeys);
+  const accessKeys = Context.get(context, AccessKeys.AccessKeys);
   const activity = Context.get(context, AiGatewayActivity.AiGatewayActivity);
   const usage = Context.get(context, AiUsage.AiUsage);
   // Each request the usage log took in, in order; `settled(n)` waits for the n-th (no polling).
@@ -316,6 +319,7 @@ export const hubWith = Effect.fn(function* (
     directory,
     accounts,
     keys,
+    accessKeys,
     activity,
     usage,
     written,

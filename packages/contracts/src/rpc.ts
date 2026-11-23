@@ -48,6 +48,15 @@ import {
   AiAccountUpdateInput,
 } from "./aiAccounts.ts";
 import {
+  AccessKeyCreateInput,
+  AccessKeyCreateResult,
+  AccessKeyError,
+  AccessKey,
+  AccessKeyListInput,
+  AccessKeyListResult,
+  AccessKeyRevokeInput,
+} from "./accessKeys.ts";
+import {
   AiGatewayError,
   AiGatewayKeyCreateInput,
   AiGatewayKeyCreateResult,
@@ -743,6 +752,10 @@ export const WS_METHODS = {
   aiGatewayKeysList: "aiGatewayKeys.list",
   aiGatewayKeysCreate: "aiGatewayKeys.create",
   aiGatewayKeysRevoke: "aiGatewayKeys.revoke",
+  // Access keys (access-keys ticket 01): a Space's keys, for whoever manages it.
+  accessKeysList: "accessKeys.list",
+  accessKeysCreate: "accessKeys.create",
+  accessKeysRevoke: "accessKeys.revoke",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1422,6 +1435,23 @@ const WsAiGatewayKeysRevokeRpc = Rpc.make(WS_METHODS.aiGatewayKeysRevoke, {
   payload: AiGatewayKeyRevokeInput,
   success: AiGatewayKeyListResult,
   error: AiGatewayKeyErrors,
+});
+// Access keys: only `create` answers with a key, once (Redacted); the Hub keeps its hash.
+const AccessKeyErrors = Schema.Union([AccessKeyError, EnvironmentAuthorizationError]);
+const WsAccessKeysListRpc = Rpc.make(WS_METHODS.accessKeysList, {
+  payload: AccessKeyListInput,
+  success: AccessKeyListResult,
+  error: AccessKeyErrors,
+});
+const WsAccessKeysCreateRpc = Rpc.make(WS_METHODS.accessKeysCreate, {
+  payload: AccessKeyCreateInput,
+  success: AccessKeyCreateResult,
+  error: AccessKeyErrors,
+});
+const WsAccessKeysRevokeRpc = Rpc.make(WS_METHODS.accessKeysRevoke, {
+  payload: AccessKeyRevokeInput,
+  success: AccessKey,
+  error: AccessKeyErrors,
 });
 const WsAiAccountsCreateRpc = Rpc.make(WS_METHODS.aiAccountsCreate, {
   payload: AiAccountCreateInput,
@@ -2541,6 +2571,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsAiGatewayKeysListRpc,
   WsAiGatewayKeysCreateRpc,
   WsAiGatewayKeysRevokeRpc,
+  WsAccessKeysListRpc,
+  WsAccessKeysCreateRpc,
+  WsAccessKeysRevokeRpc,
   WsProjectCloneStartRpc,
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,

@@ -983,6 +983,9 @@ const AI_SWEPT_ELSEWHERE: Record<string, string> = {
   "ws:aiGatewayKeys.list": "AiGatewayKeys.localCli.test.ts: the caller's own keys",
   "ws:aiGatewayKeys.create": "AiGatewayKeys.localCli.test.ts: the key once, to its maker",
   "ws:aiGatewayKeys.revoke": "AiGatewayKeys.localCli.test.ts: only its maker or the Owner",
+  "ws:accessKeys.list": "AccessKeys.test.ts: a Space's keys, to who manages it and the Owner",
+  "ws:accessKeys.create": "AccessKeys.test.ts: the key once, by a Space's Admin or its User",
+  "ws:accessKeys.revoke": "AccessKeys.test.ts: a Space's managers and the Owner only",
   "ws:aiGateway.status": "AiGateway.test.ts: the Installation's gateway, the Owner's",
   "ws:aiGateway.checkForUpdates": "AiGateway.test.ts",
   "ws:aiGateway.update": "AiGateway.test.ts",
@@ -992,7 +995,7 @@ const AI_SWEPT_ELSEWHERE: Record<string, string> = {
 };
 
 const RE_AI_DOORS =
-  /^(ws:(aiAccounts|aiGateway|aiUsage|aiGatewayKeys)\.|ws:thread\.setAiAccount|raw:ai\/)/u;
+  /^(ws:(aiAccounts|aiGateway|aiUsage|aiGatewayKeys|accessKeys)\.|ws:thread\.setAiAccount|raw:ai\/)/u;
 
 it.live.skipIf(!posix || platform === undefined)(
   "owned-resources 11: every AI-account door, called by the whole cast, never answers a credential, a name its caller may not see, or a write on what is not theirs",

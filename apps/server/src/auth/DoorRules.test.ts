@@ -639,12 +639,67 @@ describe("every door of the Hub declares its rule", () => {
           ),
         )
         .map(({ file }) => file)
-        .filter((file) => file !== "ai/AiGatewayKeys.ts")
+        // AccessKeys has session doors of its own (access-keys ticket 01), swept below.
+        .filter((file) => file !== "ai/AiGatewayKeys.ts" && file !== "ai/AccessKeys.ts")
         .toSorted(),
     ).toEqual(["ws.ts"]);
     for (const { file, text } of toolModules) {
       expect(text, file).not.toMatch(/AiGatewayKeys/u);
     }
+  });
+
+  it("makes, lists and revokes access keys over the session's WS RPCs only: no HTTP, raw route or MCP door, the key in one answer, the table AccessKeys' alone (access-keys ticket 01)", () => {
+    const keyRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
+      /^accessKeys\./u.test(rpc._tag),
+    );
+    expect(keyRpcs.map((rpc) => rpc._tag).toSorted()).toEqual([
+      "accessKeys.create",
+      "accessKeys.list",
+      "accessKeys.revoke",
+    ]);
+    // Decided in AccessKeys for the session's own person, by AccessPolicy on the key's Space.
+    for (const rpc of keyRpcs) {
+      expect(typeof spaceAccessForRpcMethod(rpc._tag), rpc._tag).toBe("object");
+    }
+    expect(
+      [
+        ...Object.keys(HTTP_ENDPOINT_RULES),
+        ...Object.keys(MCP_TOOL_RULES),
+        ...Object.keys(RAW_ROUTE_RULES),
+        ...rawRoutes,
+        ...mcpTools,
+        ...endpoints,
+      ].filter((name) => /access[-_ ]?key/iu.test(name)),
+    ).toEqual([]);
+    // Only `create` answers with the key; no answer carries a hash.
+    for (const rpc of keyRpcs) {
+      const fields = successFields(rpc.successSchema.ast);
+      expect(fields.has("key"), rpc._tag).toBe(rpc._tag === "accessKeys.create");
+      for (const secret of ["hash", "keyHash", "secret", "token"]) {
+        expect(fields, rpc._tag).not.toContain(secret);
+      }
+    }
+    // The session doors are reached from the WS RPCs alone.
+    expect(
+      files
+        .filter(({ text }) => /\.(createForSession|listForSession|revokeForSession)\(/u.test(text))
+        .filter(({ text }) => /accessKeys\./u.test(text))
+        .map(({ file }) => file)
+        .toSorted(),
+    ).toEqual(["ws.ts"]);
+    for (const { file, text } of toolModules) {
+      expect(text, file).not.toMatch(/AccessKeys/u);
+    }
+    // The table: written and read by AccessKeys alone (and created by its migration);
+    // AiGatewayKeys.authorize reads a request's key through AccessKeys' exported functions.
+    expect(
+      files
+        .filter(({ text }) => /\bai_access_keys\b/u.test(text))
+        .map(({ file }) => file)
+        // The door inventory names the table among the credentials (Keycloak ticket 11).
+        .filter((file) => file !== "auth/DoorRules.ts")
+        .toSorted(),
+    ).toEqual(["ai/AccessKeys.ts", "persistence/Migrations/159_AiAccessKeys.ts"]);
   });
 
   it("reads AI usage over one WS RPC only, counts only: no HTTP, raw route or MCP door, tables read by AiUsage alone (spec 4 ticket 05)", () => {
@@ -667,10 +722,9 @@ describe("every door of the Hub declares its rule", () => {
     for (const content of ["prompt", "messages", "content", "text", "body", "key", "headers"]) {
       expect(fields).not.toContain(content);
     }
-    // The tables: written and read by AiUsage alone (and created by their migrations); GrantCaps
-    // sums a Grant's days for its caps (Grants 03); migration 145 reads once who used a migrated
-    // account where, for the Owner's review (Grants 02); migration 147 backfills the daily rows'
-    // uncached input from the per-request ones (Grants 05).
+    // The tables: AiUsage's alone, and their migrations'; GrantCaps sums a Grant's days (Grants
+    // 03); migration 145 reads who used a migrated account (Grants 02); 147 backfills uncached
+    // input (Grants 05); 159 adds the access key's column (access-keys 01).
     const readers = files
       .filter(({ text }) => /\bai_usage(_daily)?\b/u.test(text))
       .map(({ file }) => file);
@@ -681,6 +735,7 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/145_AiAccountAllowancesToGrants.ts",
       "persistence/Migrations/146_AiUsageGrant.ts",
       "persistence/Migrations/147_AiUsageUncachedInput.ts",
+      "persistence/Migrations/159_AiAccessKeys.ts",
     ]);
   });
 

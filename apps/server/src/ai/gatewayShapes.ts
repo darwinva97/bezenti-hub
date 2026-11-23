@@ -4,6 +4,7 @@
  * shape, and the tap a streamed answer goes through.
  */
 import {
+  ACCESS_KEY_PREFIX,
   AI_GATEWAY_KEY_PREFIX,
   AI_GATEWAY_ROUTE_PREFIX,
   type AiAccountId,
@@ -167,11 +168,20 @@ export const gatewayKeyOf = (
   return key.length === 0 ? { _tag: "missing" } : { _tag: "key", key };
 };
 
-/** A key of the right form: `t3gk_` and 43 base64url characters (32 bytes). */
+const isShapedWith = (prefix: string, key: string) =>
+  key.length === prefix.length + 43 &&
+  key.startsWith(prefix) &&
+  /^[A-Za-z0-9_-]+$/u.test(key.slice(prefix.length));
+
+/** An access key's form (access-keys ticket 01): `t3ak_` and 43 base64url characters. */
+export const isAccessKeyShaped = (key: string) => isShapedWith(ACCESS_KEY_PREFIX, key);
+
+/**
+ * A key of the right form: a gateway key (`t3gk_`) or an access key (`t3ak_`), each followed by
+ * 43 base64url characters (32 bytes). Anything else is refused without reading the database.
+ */
 export const isGatewayKeyShaped = (key: string) =>
-  key.length === AI_GATEWAY_KEY_PREFIX.length + 43 &&
-  key.startsWith(AI_GATEWAY_KEY_PREFIX) &&
-  /^[A-Za-z0-9_-]+$/u.test(key.slice(AI_GATEWAY_KEY_PREFIX.length));
+  isShapedWith(AI_GATEWAY_KEY_PREFIX, key) || isAccessKeyShaped(key);
 
 /** The model a client asked for: a plain name, or one pinned to an AI account by its prefix. */
 export type RequestedModel =
@@ -268,6 +278,7 @@ export const planRoute = (input: {
   readonly allowed: ReadonlyArray<RoutableAccount>;
   readonly chosenAccountId: string | null;
   /** A Thread key routes only to its Thread's account; a User key may pin any allowed one. */
+  /** An access key routes as a User key does (access-keys ticket 01). */
   readonly keyKind: "thread" | "user";
   readonly requested: RequestedModel;
   readonly serves: (accountId: AiAccountId, model: string) => boolean;

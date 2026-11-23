@@ -218,6 +218,30 @@ Space's Vault («Lent to this Space») and in its pickers as «Lent by <lender>�
 and an ended one, list the Secrets to rotate with **Replace…**. A group's loan's use (ticket 15,
 `VaultLoanUsage`: day, User, name, processes) opens from **View use** among the loans lent and
 from **Use** on a borrowed one for whoever runs the Space. The Owner's review of migrated
-Vault allowances sits in Settings → Vault (`MigratedVaultLoansReview`). Mobile and the command
-palette come later (Grants ticket 12); the Thread's «Secrets» panel already says which lent names
-are never delivered, on both.
+Vault allowances sits in Settings → Vault (`MigratedVaultLoansReview`). The Thread's «Secrets»
+panel says which lent names are never delivered, on web and mobile.
+
+Every client words and sorts a loan through `@t3tools/client-runtime/grants-view` (Grants ticket
+12; design `.scratch/grants/issues/12-design.md`): limits, states and ended reasons, the warnings,
+the lists' sections, the directory's counts and a pasted link's token. Nothing of it is copied into
+an app.
+
+- **Waiting loans:** `SpaceSummary.pendingGrants` counts a Space's `pending` loans, only for whoever
+  holds `grant.decide` there (absent otherwise). It refreshes with the Space directory: opening the
+  selector, a fresh shell snapshot, and after the client decides a loan; no push of its own. Web and
+  desktop show it beside each Space in the selector, on its trigger and as «Loans waiting for you»;
+  mobile in its Space menu.
+- **Palette** (web, desktop): «Lend a resource...» (AI account, Vault group or machine: the Settings
+  page whose rows carry **Lend…**), «Loans waiting for you» and «Loans you gave» (Settings → Machines,
+  `#grants`). No default shortcut.
+- **Desktop:** a lending link is made on the Hub's public URL, else the address the app reaches the
+  Hub on (`readHubLinkOrigin`), never the app's own origin. `t3code://grants/offer#token=…`, and a
+  link on the Hub's address, open the app's `/grants/offer` (`promptLinkAppPath`, token in the
+  fragment only).
+- **Mobile** (`apps/mobile/src/features/grants/`): Settings → Loans lists waiting, borrowed, ended
+  and lent loans with the same warnings: accept (over HTTP, as web), reject, give back, take back,
+  cancel and use. A machine's loan or link needs the strong factor, which mobile does not ask: it
+  says to accept or apply it on web or desktop. «Apply a lending link» takes a pasted link, kept in
+  memory only. The AI account strip names a lent account «<name> · from <lender>» with its cap use
+  (`aiAccountPickerLabel`); the User's machines show a lent one's warning
+  (`environmentUseDescription`). Giving a loan with limits stays on web and desktop.

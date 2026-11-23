@@ -21,6 +21,7 @@
 - [Remote access](./user/remote-access.md)
 - [Publish the Hub on your domain](./user/public-hub.md)
 - [Guest links](./user/guest-links.md)
+- [Lending resources](./user/lending.md)
 - [Outside agents (MCP)](./user/outside-agents.md)
 - [Running in the background](./user/background-service.md)
 - [Updating T3 Code](./user/updating.md)

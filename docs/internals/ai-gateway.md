@@ -113,9 +113,8 @@ version, `updated` or `failed`, reason) and `ai_gateway.rollback` (`rolled-back`
   `AllowedAiAccounts` (`HubWithEnvironments.aiAccountPicker.test.ts`).
 - **WS `aiGatewayKeys.*`:** the caller's own keys (`AiGatewayKeys.localCli.test.ts`).
   `aiUsage.summary`: counts only (`AiUsage.test.ts`).
-- **WS `accessKeys.list|create|revoke|modelOptions`:** a Space's access keys, for whoever manages
-  the Space and the Owner, from a person's own session only (`AccessKeys.test.ts`,
-  `AccessKeys.models.test.ts`, `AccessKeys.accounts.test.ts`).
+- **WS `accessKeys.list|create|update|revoke|modelOptions`:** a Space's access keys, for whoever
+  manages the Space and the Owner, from a person's own session only (`AccessKeys*.test.ts`).
 - **Raw `/api/ai/*`:** a gateway key, checked per request against `AllowedAiAccounts` for its turn
   owner and Space (`AiGatewayRoute*.test.ts`), in `DoorRules.RAW_ROUTE_RULES` and
   `AMBIENT_COOKIE_RULES`.
@@ -652,6 +651,23 @@ accounts and for a Personal space below its note.
     then the month, the week, the day. A refused request reaches no account and counts nothing.
   - **List and form:** each cap's used, cap, what is left and reset (local time); the form takes
     caps or «No token limit».
+- **Changes** (access-keys ticket 06): WS `accessKeys.update {keyId, label?, validity?, models?,
+  accounts?, limits?, unlimited?}` (`access:write`, `accessKey.manage`, a person's own session).
+  - The key itself never changes, so its holder keeps the setup; every change applies from the
+    next request (`authorize` reads the row each time).
+  - **Renew or extend:** a new expiry, at most 366 days from the change; an expired key works
+    again. Never a revoked one (`invalid`: revoking is for good, a new key is made). Renewing does
+    not reset the total: the form shows «Used X of Y total» and lets the issuer raise it.
+  - **Caps, models, accounts, label:** checked as at create. Lowering a cap below what is used
+    refuses the next request; raising it serves again.
+  - **Who:** `accessKey.manage`: not in an archived or frozen Space (`forbidden`; revoking stays
+    possible), not the Owner in another User's Personal space; a key outside the actor's view is
+    `not-found`.
+  - **Consistency:** read and written in one write transaction, guarded by `updated_at` («This key
+    changed meanwhile»); the same values change nothing and audit nothing.
+  - **Audit** `access_key.update`: `space`, `changed` (the fields, by name), the new `expiresAt`
+    and `limits`, `via: renew` when only the expiry changed.
+  - **Web:** «Renew» and «Edit» on each live key (expired ones stay listed 30 days with «Renew»).
 - **Load:** the same limits as any gateway key, with no limit of its own (the Owner's decision):
   16 requests in flight per key; the per-User pools take `ak:<keyId>` as the key's subject.
 - **Usage** (access-keys ticket 04):

@@ -41,15 +41,22 @@ export function AiUsageTab({
 }) {
   const [range, setRange] = useState<(typeof RANGES)[number]["value"]>("30");
   const [grouping, setGrouping] = useState<UsageGrouping>("day");
+  // One access key's usage only (access-keys ticket 04); null: everything the session sees.
+  const [accessKeyId, setAccessKeyId] = useState<string | null>(null);
   const [today] = useState(() => new Date());
   const days = RANGES.find((item) => item.value === range)?.days ?? 30;
   const query = useEnvironmentQuery(
     aiGatewayEnvironment.usageSummary({
       environmentId,
-      input: { fromDay: dayBefore(today, days) },
+      input: {
+        fromDay: dayBefore(today, days),
+        ...(accessKeyId === null ? {} : { accessKeyId }),
+      },
     }),
   );
   const summary = query.data;
+  // The keys the summary names; while one is chosen, «Everyone» goes back to all of them.
+  const keyOptions = summary?.labels.accessKeys ?? [];
   const groups = summary === null ? [] : groupUsage(summary, grouping);
   const groupingLabel = USAGE_GROUPINGS.find(([value]) => value === grouping)?.[1] ?? "Day";
   return (
@@ -84,6 +91,33 @@ export function AiUsageTab({
                 ))}
               </SelectPopup>
             </Select>
+            {keyOptions.length === 0 ? null : (
+              <Select
+                items={[
+                  { value: "", label: "Everyone" },
+                  ...keyOptions.map((key) => ({
+                    value: key.id,
+                    label: `Access key: ${key.label}`,
+                  })),
+                ]}
+                value={accessKeyId ?? ""}
+                onValueChange={(value) =>
+                  setAccessKeyId(value === null || value === "" ? null : value)
+                }
+              >
+                <SelectTrigger aria-label="Access key">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="">Everyone</SelectItem>
+                  {keyOptions.map((key) => (
+                    <SelectItem key={key.id} value={key.id}>
+                      Access key: {key.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            )}
             <ToggleGroup
               aria-label="Group usage by"
               value={[grouping]}

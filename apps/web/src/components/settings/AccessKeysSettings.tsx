@@ -16,6 +16,7 @@ import {
   type SpaceId,
 } from "@t3tools/contracts";
 import { accessKeySetup, gatewayOrigin, sendsKeyInClear } from "@t3tools/shared/aiGatewayAccessKey";
+import { formatTokens } from "@t3tools/client-runtime/ai-usage-view";
 import { useAtomValue } from "@effect/atom-react";
 import * as Redacted from "effect/Redacted";
 import { useEffect, useEffectEvent, useState } from "react";
@@ -128,6 +129,27 @@ const usableModels = (options: AccessKeyModelOptions | null, key: AccessKey) =>
   catalogOf(reachedBy(options, key.accounts)).filter((model) =>
     accessKeyModelAllowed(key.models, model),
   );
+
+/**
+ * What a key used (access-keys ticket 04), as its caps count tokens; cache reads apart, and the
+ * requests with no usage said with their estimate, never as zero.
+ */
+const usageText = (usage: AccessKey["usage"]) => {
+  if (usage === undefined) return null;
+  const parts = [
+    `Today ${formatTokens(usage.day)}`,
+    `this week ${formatTokens(usage.week)}`,
+    `this month ${formatTokens(usage.month)}`,
+    `in total ${formatTokens(usage.total)} tokens`,
+  ];
+  if (usage.cacheReadTokens > 0) parts.push(`${formatTokens(usage.cacheReadTokens)} cache read`);
+  if (usage.unknownRequests > 0) {
+    parts.push(
+      `${usage.unknownRequests} without usage (≈${formatTokens(usage.estimatedTokens)} estimated)`,
+    );
+  }
+  return parts.join(" · ");
+};
 
 /** A key's models as the list says them. */
 const modelsText = (entries: ReadonlyArray<string>) =>
@@ -325,6 +347,11 @@ function AccessKeysPanel({
                   <span className="font-mono text-xs text-muted-foreground">…{key.hint}</span>
                 </span>
                 <span className="text-xs text-muted-foreground">{modelsText(key.models)}</span>
+                {usageText(key.usage) === null ? null : (
+                  <span className="text-xs text-muted-foreground" aria-label="Usage">
+                    {usageText(key.usage)}
+                  </span>
+                )}
                 <span className="text-xs text-muted-foreground">
                   {key.reaches === null
                     ? "All of this Space's AI accounts"

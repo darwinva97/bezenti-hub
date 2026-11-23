@@ -58,6 +58,7 @@ export function formatTokens(count: number): string {
 /** The summary's rows added up by one dimension; days newest first, the rest by most requests. */
 export function groupUsage(summary: AiUsageSummary, by: UsageGrouping): ReadonlyArray<UsageGroup> {
   const users = new Map(summary.labels.users.map((user) => [user.id, user.name]));
+  const accessKeys = new Map((summary.labels.accessKeys ?? []).map((key) => [key.id, key.label]));
   const spaces = new Map(summary.labels.spaces.map((space) => [space.id, space.name]));
   const accounts = new Map(summary.labels.accounts.map((account) => [account.id, account]));
   const groups = new Map<string, UsageGroup>();
@@ -66,7 +67,13 @@ export function groupUsage(summary: AiUsageSummary, by: UsageGrouping): Readonly
       by === "day"
         ? [row.day, row.day]
         : by === "user"
-          ? [row.userId, users.get(row.userId) ?? "Removed User"]
+          ? row.userId === null
+            ? // An access key's requests are its Space's: the key stands beside the Users.
+              [
+                `access-key:${row.accessKeyId ?? ""}`,
+                `Access key: ${accessKeys.get(row.accessKeyId ?? "") ?? "removed"}`,
+              ]
+            : [row.userId, users.get(row.userId) ?? "Removed User"]
           : by === "space"
             ? [
                 row.spaceId,
@@ -115,6 +122,9 @@ export function usageNotes(totals: AiUsageTotals): ReadonlyArray<string> {
     notes.push(
       `${totals.unknownRequests} ${totals.unknownRequests === 1 ? "request" : "requests"} without token counts`,
     );
+  }
+  if ((totals.estimatedTokens ?? 0) > 0) {
+    notes.push(`≈${formatTokens(totals.estimatedTokens ?? 0)} tokens estimated for access keys`);
   }
   if (totals.failedRequests > 0) {
     notes.push(`${totals.failedRequests} failed`);

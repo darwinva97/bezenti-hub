@@ -158,3 +158,33 @@ describe("formatting", () => {
     expect(dayBefore(new Date("2026-11-13T10:00:00Z"), 1)).toBe("2026-11-13");
   });
 });
+
+describe("access keys in the usage view (access-keys ticket 04)", () => {
+  it("groups an access key's rows beside the Users, under its label, and says its estimate", () => {
+    const withKey = {
+      ...summary,
+      rows: [
+        ...summary.rows,
+        {
+          day: "2026-11-02",
+          userId: null,
+          accessKeyId: "ak_1",
+          spaceId: "acme",
+          accountId: "a1",
+          model: "m",
+          ...totals(3, 30, 3),
+          estimatedTokens: 40,
+          estimatedUsd: null,
+        },
+      ],
+      labels: { ...summary.labels, accessKeys: [{ id: "ak_1", label: "Partner" }] },
+    } as unknown as AiUsageSummary;
+    const byUser = groupUsage(withKey, "user");
+    expect(byUser.find((group) => group.key === "access-key:ak_1")?.label).toBe(
+      "Access key: Partner",
+    );
+    expect(usageNotes({ ...totals(3), estimatedTokens: 40 })).toContain(
+      "≈40 tokens estimated for access keys",
+    );
+  });
+});

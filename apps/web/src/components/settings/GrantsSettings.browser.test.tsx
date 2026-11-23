@@ -4,7 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
-import { GrantsSettings, groupLentLoans, LendMachineDialog } from "./GrantsSettings";
+import { GrantsSettings, LendMachineDialog } from "./GrantsSettings";
 
 const loans = vi.hoisted(() => ({
   given: [] as unknown[],
@@ -123,20 +123,6 @@ const grant = (id: string, resourceId: string, name: string, space: string): Gra
     aiAccount: { provider: "claude", type: "api-key" },
     can: { cancel: false, revoke: true, decide: false, return: false, setLimits: true },
   }) as unknown as Grant;
-
-it("groups the loans of one resource into a single header with one line per recipient", () => {
-  const groups = groupLentLoans([
-    grant("g1", "acct-1", "Claude (me@example.com)", "Zeta"),
-    grant("g2", "acct-2", "Codex", "Beta"),
-    grant("g3", "acct-1", "Claude (me@example.com)", "Alpha"),
-    grant("g4", "acct-1", "Claude (me@example.com)", "Beta"),
-  ]);
-  expect(groups.map((entry) => [entry.name, entry.loans.length])).toEqual([
-    ["Claude (me@example.com)", 3],
-    ["Codex", 1],
-  ]);
-  expect(groups[0]?.loans.map((entry) => entry.target?.name)).toEqual(["Alpha", "Beta", "Zeta"]);
-});
 
 it("shows three loans of one account as one group with three recipient lines", async () => {
   loans.given = [

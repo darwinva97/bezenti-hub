@@ -63,6 +63,10 @@
       "types": "./src/aiAccountPicker.ts",
       "default": "./src/aiAccountPicker.ts"
     },
+    "./grants-view": {
+      "types": "./src/grantsView.ts",
+      "default": "./src/grantsView.ts"
+    },
     "./ai-usage-view": {
       "types": "./src/aiUsageView.ts",
       "default": "./src/aiUsageView.ts"

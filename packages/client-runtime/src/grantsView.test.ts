@@ -1,18 +1,23 @@
 import type { Grant, GrantOfferPreview, SandboxHostReport, SpaceId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { expect, it } from "vite-plus/test";
 
 import {
-  endedText,
+  grantOfferTokenOf,
+  groupLentLoans,
   hostLimitsNotice,
   limitsText,
   offerLinkOf,
   offerSpaceLabel,
   offerStatusText,
   offerWarnings,
+  pendingGrantsOf,
   quotaShareText,
+  receivedSections,
   recipientLabel,
+  stateText,
   vaultLendWarning,
-} from "./grantText";
+} from "./grantsView.ts";
 
 const host = (overrides: Partial<SandboxHostReport> = {}): SandboxHostReport => ({
   ready: true,
@@ -159,13 +164,103 @@ it("says a lent Vault group has no limits and warns that the Space's agents read
 
 it("says when and why a loan ended, the day in local time (Grants 11)", () => {
   const endedAt = "2026-11-20T10:00:00.000Z";
-  const day = new Date(endedAt).toLocaleDateString();
-  expect(endedText({ endReason: "resource-gone", endedAt })).toBe(`Ended ${day} (it was deleted)`);
-  expect(endedText({ endReason: "target-gone", endedAt })).toBe(
+  const day = DateTime.toDate(DateTime.makeUnsafe(endedAt)).toLocaleDateString();
+  expect(stateText({ state: "ended", endReason: "resource-gone", endedAt })).toBe(
+    `Ended ${day} (it was deleted)`,
+  );
+  expect(stateText({ state: "ended", endReason: "target-gone", endedAt })).toBe(
     `Ended ${day} (the Space was deleted)`,
   );
-  expect(endedText({ endReason: "lender-gone", endedAt })).toBe(
+  expect(stateText({ state: "ended", endReason: "lender-gone", endedAt })).toBe(
     `Ended ${day} (its lender was removed)`,
   );
-  expect(endedText({ endReason: "returned", endedAt: null })).toBe("Ended (given back)");
+  expect(stateText({ state: "ended", endReason: "returned", endedAt: null })).toBe(
+    "Ended (given back)",
+  );
+});
+
+const loan = (
+  id: string,
+  resourceId: string,
+  name: string,
+  space: string,
+  overrides: Partial<Grant> = {},
+): Grant =>
+  ({
+    id,
+    resource: { kind: "ai-account", id: resourceId, name },
+    lender: { kind: "user", id: "user-me", name: "Me" },
+    target: { spaceId: `space-${space}`, kind: "organization", name: space },
+    state: "active",
+    endReason: null,
+    limits: { kind: "ai-account", tokens: null, requests: null },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    decidedAt: null,
+    endedAt: null,
+    aiAccount: { provider: "claude", type: "api-key" },
+    can: { cancel: false, revoke: true, decide: false, return: false, setLimits: true },
+    ...overrides,
+  }) as unknown as Grant;
+
+it("groups the loans of one resource into a single header with one line per recipient", () => {
+  const groups = groupLentLoans([
+    loan("g1", "acct-1", "Claude (me@example.com)", "Zeta"),
+    loan("g2", "acct-2", "Codex", "Beta"),
+    loan("g3", "acct-1", "Claude (me@example.com)", "Alpha"),
+    loan("g4", "acct-1", "Claude (me@example.com)", "Beta"),
+  ]);
+  expect(groups.map((entry) => [entry.name, entry.loans.length])).toEqual([
+    ["Claude (me@example.com)", 3],
+    ["Codex", 1],
+  ]);
+  expect(groups[0]?.loans.map((entry) => entry.target?.name)).toEqual(["Alpha", "Beta", "Zeta"]);
+});
+
+it("sorts what a Space received: waiting only for whoever decides, in use, ended (Grants 12)", () => {
+  const sections = receivedSections([
+    loan("w1", "a", "A", "Acme", {
+      state: "pending",
+      can: { cancel: false, revoke: false, decide: true, return: false, setLimits: false },
+    }),
+    loan("w2", "b", "B", "Acme", { state: "pending" }),
+    loan("u1", "c", "C", "Acme"),
+    loan("e1", "d", "D", "Acme", { state: "ended", endReason: "lender-gone" }),
+  ]);
+  expect(sections.waiting.map((grant) => grant.id)).toEqual(["w1"]);
+  expect(sections.borrowed.map((grant) => grant.id)).toEqual(["u1"]);
+  expect(sections.ended.map((grant) => grant.id)).toEqual(["e1"]);
+});
+
+it("counts the loans waiting for the viewer per Space and in all (Grants 12)", () => {
+  const space = (id: string, pendingGrants?: number) => ({
+    id: id as SpaceId,
+    kind: "organization" as const,
+    name: id,
+    role: "admin" as const,
+    isOwn: false,
+    canCreateThreads: true,
+    canInvite: true,
+    ...(pendingGrants === undefined ? {} : { pendingGrants }),
+  });
+  const counted = pendingGrantsOf({
+    userId: "ana" as never,
+    personalSpaceId: "personal:ana" as SpaceId,
+    canCreateOrganization: true,
+    spaces: [space("acme", 2), space("globex"), space("initech", 1)],
+  });
+  expect([...counted.bySpace.entries()]).toEqual([
+    ["acme", 2],
+    ["initech", 1],
+  ]);
+  expect(counted.total).toBe(3);
+  expect(pendingGrantsOf(null).total).toBe(0);
+});
+
+it("reads a lending link's token from the Hub's address, the app's scheme or bare", () => {
+  const token = "Zx9_abcDEF-0123456789abcdefghijklmnopqrstu";
+  expect(grantOfferTokenOf(`https://hub.example/grants/offer#token=${token}`)).toBe(token);
+  expect(grantOfferTokenOf(`  t3code://grants/offer#token=${token} `)).toBe(token);
+  expect(grantOfferTokenOf(token)).toBe(token);
+  expect(grantOfferTokenOf("https://hub.example/grants/offer?token=nope")).toBeNull();
+  expect(grantOfferTokenOf("hello")).toBeNull();
 });

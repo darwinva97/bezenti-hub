@@ -38,18 +38,25 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { emptyStepUp, lacksStrongFactor, StepUpFields, toStepUp } from "./AccountSettingsSection";
 import {
-  capUseText,
-  endedText,
-  gib,
+  endingWarning,
+  groupLenderSays,
+  groupLentLoans,
   hostLimitsNotice,
+  lenderSees,
   lenderSeesEverything,
+  lentCountText,
   limitsText,
+  loanDescription,
+  loanStatusParts,
+  nounOf,
   offerLinkOf,
   offerStatusText,
+  receivedSections,
   recipientLabel,
   spaceLabel,
-  subscriptionTermsWarning,
-} from "./grantText";
+  stateText,
+  targetLabel,
+} from "@t3tools/client-runtime/grants-view";
 import { ChangeCapsDialog } from "./LendAiAccountDialog";
 import { LoanUsage } from "./LoanUsage";
 import { BY_LINK, BY_LINK_LABEL, OfferLinkField } from "./OfferLinkField";
@@ -65,32 +72,6 @@ const LENDER_RISKS = [
   "Their traffic leaves from this machine's address and can reach your network.",
   "Disk is measured every minute, not capped: a Sandbox can go over its limit between two checks.",
 ];
-
-const targetLabel = (grant: Grant, fallback: string) =>
-  grant.target === null ? fallback : spaceLabel(grant.target);
-
-/** What a loan lends, in words. */
-const nounOf = (grant: Grant) =>
-  grant.resource.kind === "ai-account"
-    ? "AI account"
-    : grant.resource.kind === "vault-group"
-      ? "Vault group"
-      : "machine";
-
-/**
- * Grants ticket 07: what the borrower is told of a lent Vault group: it is its lender's, read-only
- * here, and what it never brings.
- */
-const groupLenderSays = (lender: string) =>
-  `${lender} can change what it holds at any time. It reaches your Threads once chosen as a default or by a Project. Names that change how tools run never come from it, and nothing of it reaches a machine lent to this Space.`;
-
-/** What the borrower is told of what the lender sees, by kind. */
-const lenderSees = (grant: Grant) =>
-  grant.resource.kind === "ai-account"
-    ? `${grant.lender.name ?? "Its lender"} sees how much each person here uses it, never prompts or Threads.${grant.aiAccount?.type === "subscription" ? ` ${subscriptionTermsWarning(grant.aiAccount.provider)}` : ""}`
-    : grant.resource.kind === "vault-group"
-      ? groupLenderSays(grant.lender.name ?? "Its lender")
-      : lenderSeesEverything(grant.lender.name ?? "Its lender");
 
 /** Where the lender replaces a lent group's Secrets: their own Vault, or their Organization's. */
 const vaultSettingsOf = (grant: Grant) =>
@@ -456,104 +437,6 @@ export function LendMachineDialog({
   );
 }
 
-const STATE_LABELS: Record<Grant["state"], string> = {
-  offered: "Offered",
-  pending: "Waiting for the Space",
-  active: "Lent",
-  rejected: "Rejected",
-  cancelled: "Cancelled",
-  ended: "Ended",
-};
-
-/** A loan's state in words; an ended one with its day and why (Grants ticket 11). */
-const stateText = (grant: Grant) =>
-  grant.state === "ended" ? endedText(grant) : STATE_LABELS[grant.state];
-
-/** What an active loan adds to its description: cap use and, for a machine, its Sandbox and disk. */
-const loanStatusParts = (grant: Grant) => {
-  const parts: string[] = [];
-  const caps = grant.aiAccount?.caps;
-  if (caps !== undefined && grant.state === "active") {
-    if (caps.tokens !== null) parts.push(capUseText("tokens", caps.tokens));
-    if (caps.requests !== null) parts.push(capUseText("requests", caps.requests));
-  }
-  const machine = grant.machine;
-  if (machine !== undefined && grant.state === "active") {
-    if (machine.sandboxState !== null) {
-      parts.push(
-        `Sandbox ${machine.sandboxState}${machine.sandboxMessage === null ? "" : `: ${machine.sandboxMessage}`}`,
-      );
-    }
-    if (machine.diskUsedBytes !== null) parts.push(`${gib(machine.diskUsedBytes)} disk used`);
-    if (machine.host !== null && !machine.host.ready) {
-      parts.push(`The machine cannot run it now: ${machine.host.reason ?? "unknown"}`);
-    }
-  }
-  return parts;
-};
-
-/** One loan's limits, Sandbox state and disk, as both sides see them. */
-const loanDescription = (grant: Grant, side: "given" | "received") => {
-  const where =
-    side === "given"
-      ? `to ${targetLabel(grant, "a Space")}`
-      : `by ${grant.lender.name ?? "another User"}`;
-  const parts = [`${stateText(grant)} ${where}`, limitsText(grant.limits)];
-  parts.push(...loanStatusParts(grant));
-  return parts.join(" · ");
-};
-
-/** The loans of one lent resource (an AI account or a machine), with who it is lent to. */
-export interface LentGroup {
-  readonly key: string;
-  readonly name: string;
-  readonly kind: Grant["resource"]["kind"];
-  readonly provider: string;
-  readonly loans: ReadonlyArray<Grant>;
-}
-
-const lentName = (grant: Grant) => grant.resource.name ?? `Your ${nounOf(grant)}`;
-
-/**
- * The loans a User made, one group per lent resource (keyed by its id, never by its name), sorted
- * by kind, provider and name; a group's loans by recipient.
- */
-export function groupLentLoans(grants: ReadonlyArray<Grant>): ReadonlyArray<LentGroup> {
-  const byResource = new Map<string, Grant[]>();
-  for (const grant of grants) {
-    const key = `${grant.resource.kind}:${grant.resource.id}`;
-    byResource.set(key, [...(byResource.get(key) ?? []), grant]);
-  }
-  return [...byResource.entries()]
-    .flatMap(([key, loans]) => {
-      const first = loans[0];
-      return first === undefined
-        ? []
-        : [
-            {
-              key,
-              name: lentName(first),
-              kind: first.resource.kind,
-              provider: first.aiAccount?.provider ?? "",
-              loans: loans.toSorted((a, b) => recipientLabel(a).localeCompare(recipientLabel(b))),
-            },
-          ];
-    })
-    .toSorted(
-      (a, b) =>
-        a.kind.localeCompare(b.kind) ||
-        a.provider.localeCompare(b.provider) ||
-        a.name.localeCompare(b.name),
-    );
-}
-
-/** A group's header count: the Spaces it went to, and its lending links still open. */
-const lentCountText = (group: LentGroup) => {
-  const spaces = group.loans.filter((grant) => grant.target !== null).length;
-  const open = group.loans.filter((grant) => grant.offer?.status === "open").length;
-  return `lent to ${spaces}${open === 0 ? "" : ` · ${open} open link${open === 1 ? "" : "s"}`}`;
-};
-
 /** Groups start open while the User has few loans, closed when there are many. */
 const OPEN_GROUPS_UP_TO = 6;
 
@@ -707,10 +590,8 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
     if (done._tag !== "Success") throw squashAtomCommandFailure(done);
   };
 
-  const waiting = (received ?? []).filter((grant) => grant.state === "pending" && grant.can.decide);
-  const borrowed = (received ?? []).filter((grant) => grant.state === "active");
-  // Grants ticket 11: what ended, by whom or by itself, and when.
-  const endedHere = (received ?? []).filter((grant) => grant.state === "ended");
+  // Waiting for a decision, in use, and ended (Grants ticket 11: by whom or by itself, and when).
+  const { waiting, borrowed, ended: endedHere } = receivedSections(received ?? []);
   if (given === null && received === null && error === null) return null;
   if ((given ?? []).length === 0 && (received ?? []).length === 0 && error === null) return null;
 
@@ -1050,15 +931,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
                 {ending.can.revoke ? "Take back" : "Give back"}{" "}
                 {ending.resource.name ?? `this ${nounOf(ending)}`}?
               </DialogTitle>
-              <DialogDescription>
-                {ending.resource.kind === "ai-account"
-                  ? `The Threads of ${targetLabel(ending, "the Space")} that use it are refused from their next request and need another AI account; requests already running finish.`
-                  : ending.resource.kind === "vault-group"
-                    ? ending.can.revoke
-                      ? `The Threads of ${targetLabel(ending, "the Space")} stop receiving it from their next turn, terminal or script; processes already running keep what they got.`
-                      : `Your Threads stop receiving it from their next turn, terminal or script. ${ending.lender.name ?? "Its lender"} will be asked to rotate its Secrets.`
-                    : `The Threads of ${targetLabel(ending, "the Space")} on it stop: running turns get up to two minutes to save a checkpoint, and changes made by hand since the last turn may be lost. Its Sandbox and files are then deleted from the machine.`}
-              </DialogDescription>
+              <DialogDescription>{endingWarning(ending)}</DialogDescription>
             </DialogHeader>
             {ending.resource.kind === "vault-group" && ending.can.revoke ? (
               <DialogPanel>

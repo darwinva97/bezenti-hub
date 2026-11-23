@@ -44,6 +44,11 @@ export const SpaceSummary = Schema.Struct({
    * from. Optional so older servers decode.
    */
   frozen: Schema.optional(Schema.Boolean),
+  /**
+   * Grants ticket 12: loans waiting here for the viewer to accept or reject, only to whoever
+   * decides (`grant.decide`); absent when none. Optional so older servers decode.
+   */
+  pendingGrants: Schema.optional(Schema.Int),
 });
 export type SpaceSummary = typeof SpaceSummary.Type;
 

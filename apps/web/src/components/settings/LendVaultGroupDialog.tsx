@@ -28,7 +28,7 @@ import {
 } from "../ui/dialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { emptyStepUp, lacksStrongFactor, StepUpFields, toStepUp } from "./AccountSettingsSection";
-import { spaceLabel, vaultLendWarning } from "./grantText";
+import { spaceLabel, vaultLendWarning } from "@t3tools/client-runtime/grants-view";
 
 type StepUpState = ReturnType<typeof emptyStepUp>;
 

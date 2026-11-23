@@ -14,7 +14,7 @@ import { aiGatewayEnvironment } from "../../state/aiGateway";
 import { useEnvironmentQuery } from "../../state/query";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { quotaShareText } from "./grantText";
+import { quotaShareText } from "@t3tools/client-runtime/grants-view";
 
 /** The groupings that make sense for one loan (its account is one). */
 const GROUPINGS = USAGE_GROUPINGS.filter(([value]) => value !== "account");

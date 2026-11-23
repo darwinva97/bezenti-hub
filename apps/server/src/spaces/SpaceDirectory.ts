@@ -968,9 +968,34 @@ const make = Effect.gen(function* () {
         };
       }),
     ];
+    // Grants ticket 12: loans waiting where the viewer decides on them, and only there.
+    const deciding = new Map<string, AccessPolicy.SpaceResource>([
+      [personalSpaceId, personal],
+      ...organizations.map((row) => [row.spaceId, toResource(row)] as const),
+    ]);
+    const decides = (spaceId: string) => {
+      const target = deciding.get(spaceId);
+      return (
+        target !== undefined &&
+        allows(principal, "grant.decide", { kind: "grant", lender: null, target })
+      );
+    };
+    const ids = spaces.map((space) => space.id).filter(decides);
+    const pending =
+      ids.length === 0
+        ? []
+        : yield* sql<{ readonly spaceId: string; readonly n: number }>`
+            SELECT target_id AS "spaceId", COUNT(*) AS n FROM grants
+            WHERE state = 'pending' AND target_kind = 'space' AND ${sql.in("target_id", ids)}
+            GROUP BY target_id
+          `.pipe(Effect.mapError(storageError));
+    const waiting = new Map(pending.map((row) => [row.spaceId, row.n]));
     return {
       userId,
-      spaces,
+      spaces: spaces.map((space) => {
+        const n = waiting.get(space.id) ?? 0;
+        return n > 0 ? { ...space, pendingGrants: n } : space;
+      }),
       personalSpaceId,
       canCreateOrganization: allows(principal, "organization.create", AccessPolicy.installation),
       isOwner: principal.isOwner,

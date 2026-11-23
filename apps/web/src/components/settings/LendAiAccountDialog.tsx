@@ -27,7 +27,11 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { offerLinkOf, spaceLabel, subscriptionTermsWarning } from "./grantText";
+import {
+  offerLinkOf,
+  spaceLabel,
+  subscriptionTermsWarning,
+} from "@t3tools/client-runtime/grants-view";
 import { BY_LINK, BY_LINK_LABEL, OfferLinkField } from "./OfferLinkField";
 
 const PERIODS: ReadonlyArray<readonly [GrantCapPeriod, string]> = [

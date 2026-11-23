@@ -1107,3 +1107,52 @@ describe("Grants of Vault groups", () => {
       }),
   );
 });
+
+// Grants ticket 12: the Space directory tells whoever decides how many loans wait there.
+describe("Grants waiting in the Space directory", () => {
+  it.effect("only whoever decides on a Space's loans is told how many wait there", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      // Adam runs Acme with a strong factor of his own (an Admin without one acts as a Member).
+      yield* h.server.sql`
+        INSERT INTO user_passkeys (credential_id, user_id, public_key, sign_count, transports,
+          rp_id, created_at)
+        VALUES ('adam-key', ${h.adam.id}, 'key', 0, '[]', '127.0.0.1', ${at})
+      `;
+      const spaces = Context.get(h.server.services, SpaceDirectory.SpaceDirectory);
+      yield* spaces.membershipsChanged([h.adam.id, h.ana.id, h.linus.id]);
+      const vps = yield* h.machine("ana-vps", h.ana.id);
+      const toAcme = yield* h.give(h.ana.cookie, vps, h.acmeId);
+      assert.equal(toAcme.body.state, "pending", JSON.stringify(toAcme.body));
+      const box = yield* h.machine("owner-box", h.ownerId);
+      const grecias = `personal:${h.grecia.id}`;
+      const toGrecia = yield* h.give(h.owner, box, grecias);
+      assert.equal(toGrecia.body.state, "pending", JSON.stringify(toGrecia.body));
+
+      const waitingFor = (userId: UserId) =>
+        spaces
+          .view(userId)
+          .pipe(
+            Effect.map((view) =>
+              Object.fromEntries(
+                view.spaces.flatMap((space) =>
+                  space.pendingGrants === undefined ? [] : [[space.id, space.pendingGrants]],
+                ),
+              ),
+            ),
+          );
+      assert.deepEqual(yield* waitingFor(h.adam.id), { [h.acmeId]: 1 });
+      assert.deepEqual(yield* waitingFor(h.ownerId), { [h.acmeId]: 1 });
+      assert.deepEqual(yield* waitingFor(h.grecia.id), { [grecias]: 1 });
+      // A Member, a Guest and the lender herself decide nothing there: not told.
+      assert.deepEqual(yield* waitingFor(h.ana.id), {});
+      assert.deepEqual(yield* waitingFor(h.linus.id), {});
+
+      // Decided: no longer waiting.
+      yield* h.grants
+        .reject({ grantId: GrantId.make(toAcme.body.id as string) })
+        .pipe(CommandActor.actAs(h.adam.id));
+      assert.deepEqual(yield* waitingFor(h.adam.id), {});
+    }),
+  );
+});

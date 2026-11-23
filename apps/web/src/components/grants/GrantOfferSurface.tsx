@@ -17,7 +17,12 @@ import {
   toStepUp,
 } from "../settings/AccountSettingsSection";
 import { StrongFactorNotice } from "../settings/StrongFactorNotice";
-import { limitsText, offerSpaceLabel, offerWarnings, spaceLabel } from "../settings/grantText";
+import {
+  limitsText,
+  offerSpaceLabel,
+  offerWarnings,
+  spaceLabel,
+} from "@t3tools/client-runtime/grants-view";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";

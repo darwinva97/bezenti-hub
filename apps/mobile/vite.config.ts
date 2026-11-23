@@ -46,6 +46,8 @@ const reactTests = [
   "src/features/vaults/VaultsList.test.tsx",
   "src/features/ai-accounts/AiAccounts.test.tsx",
   "src/features/ai-accounts/ThreadAiAccountStrip.test.tsx",
+  "src/features/grants/LoansList.test.tsx",
+  "src/features/grants/ApplyLoanLink.test.tsx",
   "src/features/threads/SecretRequestCard.test.tsx",
   "src/features/threads/ThreadScreenHost.test.tsx",
 ];

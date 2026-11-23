@@ -75,6 +75,7 @@ const SETTINGS_SEARCH_TERMS = {
     "quota",
   ],
   SettingsVaults: ["vaults", "secrets", "api keys", "tokens", "environment variables"],
+  SettingsLoans: ["loans", "grants", "lend", "borrow", "lending link", "accept", "give back"],
   SettingsEnvironmentSourceControl: [
     "git",
     "pull requests",

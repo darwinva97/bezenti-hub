@@ -95,6 +95,8 @@ import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsD
 import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
 import { SettingsVaultsRouteScreen } from "./features/settings/SettingsVaultsRouteScreen";
 import { SettingsAiAccountsRouteScreen } from "./features/settings/SettingsAiAccountsRouteScreen";
+import { SettingsLoansRouteScreen } from "./features/grants/SettingsLoansRouteScreen";
+import { SettingsLoanLinkRouteScreen } from "./features/grants/SettingsLoanLinkRouteScreen";
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsFollowUpRouteScreen } from "./features/settings/SettingsFollowUpRouteScreen";
@@ -304,6 +306,16 @@ const SETTINGS_SCREENS = {
     screen: SettingsVaultsRouteScreen,
     linking: "settings/user/vaults",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Vaults" },
+  }),
+  SettingsLoans: createNativeStackScreen({
+    screen: SettingsLoansRouteScreen,
+    linking: "settings/user/loans",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Loans" },
+  }),
+  SettingsLoanLink: createNativeStackScreen({
+    screen: SettingsLoanLinkRouteScreen,
+    linking: "settings/user/loans/link",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Apply a lending link" },
   }),
   SettingsEnvironmentMaintenance: createNativeStackScreen({
     screen: SettingsEnvironmentMaintenanceRouteScreen,

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-/** Shared react-native stand-ins for the Vault component tests (no Expo web). */
+/** Shared react-native stand-ins for component tests (no Expo web). */
 export const nativeMocks = {
   reactNative: () => ({
     View: ({
@@ -70,6 +70,29 @@ export const nativeMocks = {
   listSection: () => ({
     ListSection: ({ title, children }: { title?: string; children?: ReactNode }) => (
       <section aria-label={title}>{children}</section>
+    ),
+  }),
+  choiceRow: () => ({
+    ListChoiceRow: ({
+      label,
+      selected,
+      disabled,
+      onPress,
+    }: {
+      label: string;
+      selected: boolean;
+      disabled?: boolean;
+      onPress: () => void;
+    }) => (
+      <button
+        role="radio"
+        aria-checked={selected}
+        aria-label={label}
+        disabled={disabled}
+        onClick={onPress}
+      >
+        {label}
+      </button>
     ),
   }),
   toggleRow: () => ({

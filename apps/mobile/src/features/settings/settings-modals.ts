@@ -91,6 +91,12 @@ const PAGES: Readonly<Record<SettingsModalId, readonly SettingsModalPage[]>> = {
       icon: { ios: "key", android: "lock" },
       needsServer: true,
     },
+    {
+      target: "SettingsLoans",
+      label: "Loans",
+      icon: "arrow.left.arrow.right",
+      needsServer: true,
+    },
     { target: "SettingsEnvironments", label: "Machines", icon: "desktopcomputer" },
     { target: "SettingsAbout", label: "About", icon: "info.circle", sectionId: "about" },
   ],

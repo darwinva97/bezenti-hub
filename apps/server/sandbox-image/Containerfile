@@ -1,18 +1,24 @@
 # The base image of every Sandbox (docs/internals/sandboxes.md, «Base image»): Debian, Node, git,
 # ripgrep, common build tools, the AI CLIs of the providers T3 Code runs, and the T3 server of the
-# Hub's own version. `t3 sandbox image build` (or Settings → Environments) prepares the context and
-# builds it with rootless Podman 3.4 or newer; nothing here needs BuildKit.
+# Hub's own version, plus the document skills and the office tools they run (LibreOffice, Poppler,
+# pandoc, Tesseract, their Python and Node libraries). `t3 sandbox image build` (or Settings →
+# Environments) prepares the context and builds it with rootless Podman 3.4 or newer; nothing here
+# needs BuildKit.
 #
 # The context the Hub prepares:
 #   clis/     the providers' CLIs: package.json and its package-lock.json (this directory's clis/),
 #             only those two files.
+#   office/   the document skills' libraries: package.json, package-lock.json and requirements.txt
+#             (Python, with hashes), only those three files.
+#   skills/   the document skills (this directory's skills/), installed for every provider.
 #   server/   the T3 server of the Hub's version, without its node_modules: the release tree a
 #             `t3` executable runs from, or a bundle built from a checkout (`dist/bin.mjs`).
 #   modules/  that server's runtime node_modules, for Linux on this machine's architecture.
 #   extras/   files laid out under /opt/t3 (a checkout's dev Replay agent); may be empty.
 #
 # Everything is pinned: Node by version and SHASUMS256, the CLIs with their whole dependency tree
-# by clis/package-lock.json (with integrity hashes). How to bump each: docs/internals/sandboxes.md.
+# by clis/package-lock.json (with integrity hashes), the office libraries by office/'s lockfiles
+# (Debian's packages, as above, come from bookworm). How to bump each: docs/internals/sandboxes.md.
 
 FROM docker.io/library/debian:bookworm-slim
 
@@ -21,7 +27,10 @@ ARG NODE_VERSION=26.12.1
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
-    NPM_CONFIG_UPDATE_NOTIFIER=false
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NODE_PATH=/opt/t3/office/node_modules \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -43,6 +52,36 @@ RUN set -eu; \
       --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/LICENSE' --exclude='*/doc'; \
     rm "${file}"; \
     node --version; npm --version
+
+# The tools and libraries the document skills (skills/) run, which they say are preinstalled:
+# LibreOffice without its GUI (conversions, recalculating formulas), Poppler and qpdf (PDF pages),
+# pandoc, Tesseract with English and Spanish (OCR), and fonts metric-compatible with Office's
+# (Liberation for Arial and Times, Carlito for Calibri, Caladea for Cambria) so documents keep their
+# layout. Python's are installed system-wide from office/requirements.txt, every file checked by its
+# hash; PIP_BREAK_SYSTEM_PACKAGES lets an agent's own `pip install` fall back to ~/.local. Node's
+# are office/package-lock.json, none with an install script; NODE_PATH lets `require` find them.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libreoffice-calc-nogui libreoffice-impress-nogui libreoffice-writer-nogui \
+      pandoc poppler-utils qpdf tesseract-ocr tesseract-ocr-spa python3-pip python-is-python3 \
+      fonts-crosextra-caladea fonts-crosextra-carlito fonts-dejavu-core fonts-liberation2 fonts-noto-core \
+ && rm -rf /var/lib/apt/lists/*
+COPY office/package.json office/package-lock.json office/requirements.txt /opt/t3/office/
+RUN set -eu; \
+    cd /opt/t3/office; \
+    pip install --no-cache-dir --no-deps --require-hashes --only-binary=:all: -r requirements.txt; \
+    npm ci --omit=dev --ignore-scripts --no-audit --no-fund; \
+    npm cache clean --force; rm -rf /root/.npm /root/.cache; \
+    soffice --version; pandoc --version | head -n 1; pdftoppm -v; qpdf --version | head -n 1; \
+    tesseract --list-langs; markitdown --help > /dev/null; \
+    python -c "import docx, openpyxl, pandas, pdfplumber, pypdf, pptx, reportlab"; \
+    node -e "require('docx'); require('pptxgenjs'); require('sharp')"
+
+# The document skills, for every provider: Claude Code reads its managed skills from
+# /etc/claude-code/.claude/skills whatever its config dir; Codex, OpenCode and Pi read ~/.agents/skills
+# and Grok ~/.grok/skills, which the Sandbox's start links to these (the home is a volume).
+COPY skills/ /opt/t3/skills/
+RUN mkdir -p /etc/claude-code/.claude && ln -s /opt/t3/skills /etc/claude-code/.claude/skills
 
 # The CLIs from the lockfile, every package checked against its integrity hash, with no install
 # script run. Then only the two whose postinstall is needed, rebuilt by name: Claude Code and

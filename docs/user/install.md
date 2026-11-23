@@ -958,6 +958,13 @@ only that Space's Threads run in it; another Space's Sandbox never shows in the
 picker. A Sandbox reaches only its own Space's repositories on the Hub. Turns,
 checkpoints, terminals and moves work as on a joined machine.
 
+Agents in a Sandbox can create, read and edit Word, PowerPoint, Excel and PDF
+files without installing anything: ask for a report, a deck or a spreadsheet
+and the agent writes the file in the Project, and can turn it into a PDF. The
+Sandbox has no desktop, so it cannot open Office or other apps with a window.
+Sandboxes made from an older image get this once the Owner builds the image
+again.
+
 To run Sandboxes, the Hub's machine needs:
 
 - **Rootless Podman** 3.4 or newer with `slirp4netns`, and subuid/subgid ranges

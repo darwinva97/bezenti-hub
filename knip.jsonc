@@ -59,6 +59,8 @@
         // graphqlgen reads its config.
         "graphql.config.ts",
       ],
+      // The Sandbox image's vendored skills, run inside the image, never imported.
+      "ignore": ["sandbox-image/**"],
       // The generated operations export every selection's class.
       "ignoreIssues": { "**/*.graphql.ts": ["exports", "types", "namespaceMembers"] },
       // Keep the transitive Effect runtime pinned for standalone npm installs.

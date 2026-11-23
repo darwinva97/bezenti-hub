@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { discoverClaudeSkills } from "./ClaudeSkills.ts";
 import { planClaudeSkillDispatch } from "./ClaudeSkillDispatch.ts";
@@ -499,6 +500,30 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
           description: "User deploy.",
         },
       ]);
+
+      // Managed skills (the Sandbox image's document skills) come first and win over the user's.
+      const programData = path.join(tempDir, "program-data");
+      const managedSkills = path.join(programData, "ClaudeCode", ".claude", "skills");
+      yield* writeSkill(
+        managedSkills,
+        "deploy",
+        ["---", "name: deploy", "description: Managed deploy.", "---"].join("\n"),
+      );
+      yield* writeSkill(
+        managedSkills,
+        "docx",
+        ["---", "name: docx", "description: Word documents.", "---"].join("\n"),
+      );
+      const withManaged = yield* discoverClaudeSkills({ homePath: configDir }, workspace, {
+        PROGRAMDATA: programData,
+      }).pipe(Effect.provideService(HostProcess.Platform, "win32"));
+      assert.deepEqual(
+        withManaged.map((skill) => [skill.name, skill.path, skill.description]),
+        [
+          ["deploy", path.join(managedSkills, "deploy", "SKILL.md"), "Managed deploy."],
+          ["docx", path.join(managedSkills, "docx", "SKILL.md"), "Word documents."],
+        ],
+      );
     }),
   );
 

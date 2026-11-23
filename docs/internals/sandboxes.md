@@ -396,15 +396,41 @@ packages the lockfile marks `hasInstallScript` fetches anything at build time.
 `clis/package.json` says the same as npm's `allowScripts` policy (Claude Code and OpenCode
 allowed, the other three denied), which npm 12 requires for the rebuild to run their scripts; npm
 refuses `--allow-scripts` on a project's `rebuild` (`EALLOWSCRIPTS`). Only `Containerfile`,
-`clis/package.json` and `clis/package-lock.json` go into the build context (and the release
-archive), so nothing else left in that directory (a stray `clis/node_modules`, an `.npmrc`) ends up in
-a layer.
+`clis/package.json`, `clis/package-lock.json`, the three `office/` lockfiles and `skills/` go into
+the build context (and the release archive), so nothing else left in that directory (a stray
+`clis/node_modules`, an `.npmrc`) ends up in a layer.
 
 To bump: Node, its `ARG` and this table. A CLI, its version in `clis/package.json`, then in that
 directory `npm install --package-lock-only --ignore-scripts` (with the repository's Node), check
 whether its install scripts changed (`npm view <pkg>@<version> scripts`, for every package the
 new lockfile marks `hasInstallScript`), update `allowScripts`, the paragraph above and this table,
 and rebuild.
+
+### Documents
+
+Agents in a Sandbox work with Word, PowerPoint, Excel and PDF files out of the box, through
+Anthropic's `docx`, `pptx`, `xlsx` and `pdf` skills, copied unchanged (Apache 2.0) into
+[sandbox-image/skills](../../apps/server/sandbox-image/skills/README.md), which names the commit.
+The skills say their tools are preinstalled and tell the model not to install them, so the image
+carries all of them: LibreOffice without its GUI, Poppler, qpdf, pandoc and Tesseract (English and
+Spanish) from Debian, fonts metric-compatible with Office's (without them converted documents lose
+their layout), the Python libraries of
+[office/requirements.txt](../../apps/server/sandbox-image/office/requirements.txt) installed
+system-wide with `--require-hashes`, and the Node ones of `office/package-lock.json` under
+`/opt/t3/office`, found through `NODE_PATH`. `PIP_BREAK_SYSTEM_PACKAGES` makes an agent's own
+`pip install` land in `~/.local` instead of failing.
+
+Every provider CLI looks for skills somewhere else, and the home is a volume the image cannot fill.
+Claude Code reads managed skills from `/etc/claude-code/.claude/skills` whatever `CLAUDE_CONFIG_DIR`
+a Thread's provider home sets, so the image links it to `/opt/t3/skills`. Codex, OpenCode and Pi read
+`~/.agents/skills`, Grok `~/.grok/skills`: the Sandbox's first process (the entry script in
+[PodmanSandboxRuntime](../../apps/server/src/sandboxes/PodmanSandboxRuntime.ts)) links each image
+skill into both on every start, leaving alone a skill of the same name the home already has.
+
+To bump: the skills, copy the four folders from a newer commit and change the README. Python's,
+edit `office/requirements.in` and lock with `uv pip compile requirements.in --python-version 3.11
+--python-platform x86_64-manylinux_2_36 --only-binary :all: --generate-hashes --no-header -o
+requirements.txt` (the same versions must resolve for `aarch64`). Node's, as the CLIs'.
 
 **Building.** `t3 sandbox image build` on the Hub's machine, or **Build image** in Settings →
 Environments («Sandbox image», the Owner's), builds it with the Hub's rootless Podman, one build at

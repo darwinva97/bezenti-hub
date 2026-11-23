@@ -114,6 +114,23 @@ describe.skipIf(!rootlessPodmanAvailable || process.env.T3CODE_TEST_SANDBOX_IMAG
           assert.include(tools.stdout, "v26.");
           assert.include(tools.stdout, "(Claude Code)");
           assert.include(tools.stdout, "codex-cli");
+          // The document skills' tools, and Claude Code's managed copy of the skills.
+          const office = podmanResult(
+            [
+              "run",
+              "--rm",
+              "--entrypoint",
+              "sh",
+              IMAGE,
+              "-c",
+              "soffice --version && pandoc --version && pdftoppm -v && qpdf --version && tesseract --list-langs && markitdown --help && ls /etc/claude-code/.claude/skills/",
+            ],
+            300_000,
+          );
+          assert.equal(office.exitCode, 0, office.stderr);
+          assert.include(office.stdout, "LibreOffice");
+          assert.include(office.stdout, "spa");
+          for (const skill of ["docx", "pdf", "pptx", "xlsx"]) assert.include(office.stdout, skill);
 
           // A Hub whose Sandboxes run the image's own server: no checkout mounted.
           const hub = yield* makeHub({
@@ -152,6 +169,25 @@ describe.skipIf(!rootlessPodmanAvailable || process.env.T3CODE_TEST_SANDBOX_IMAG
             (row) => row.spaceId === acme,
           );
           assert.equal(recorded?.imageVersion, built.version);
+
+          // Codex, OpenCode, Pi and Grok find the skills in the home, and a skill turns a document the
+          // agent wrote with the preinstalled libraries into a PDF, as a non-root user.
+          assert.equal(
+            execIn(container, "readlink ~/.agents/skills/docx ~/.grok/skills/pptx"),
+            "/opt/t3/skills/docx\n/opt/t3/skills/pptx",
+          );
+          assert.include(
+            execIn(
+              container,
+              [
+                'cd "$(mktemp -d)"',
+                `node -e 'const d = require("docx"); d.Packer.toBuffer(new d.Document({ sections: [{ children: [new d.Paragraph("Hola desde el Sandbox")] }] })).then((b) => require("fs").writeFileSync("hola.docx", b))'`,
+                "python /opt/t3/skills/docx/scripts/office/soffice.py --headless --convert-to pdf hola.docx > /dev/null",
+                "pdftotext hola.pdf -",
+              ].join(" && "),
+            ),
+            "Hola desde el Sandbox",
+          );
 
           // Provider logins live in the Sandbox's home, as each CLI keeps them.
           execIn(

@@ -172,6 +172,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "ai_account.login": "Signed in to a subscription AI account",
   "ai_gateway_key.create": "Created an AI gateway key",
   "ai_gateway_key.revoke": "Revoked an AI gateway key",
+  "access_key.create": "Created an access key",
+  "access_key.revoke": "Revoked an access key",
   "secret_provider.create": "Connected a secret provider",
   "secret_provider.update": "Changed a secret provider",
   "secret_provider.delete": "Removed a secret provider",

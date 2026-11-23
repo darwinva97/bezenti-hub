@@ -618,6 +618,9 @@ it.effect(
         // (ticket 10: local CLI keys, revoked by their User, the Owner or a lost Space)
         "ai_gateway_key.create",
         "ai_gateway_key.revoke",
+        // ai/AccessKeys.test.ts (access-keys ticket 01: made and revoked by a Space's managers)
+        "access_key.create",
+        "access_key.revoke",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

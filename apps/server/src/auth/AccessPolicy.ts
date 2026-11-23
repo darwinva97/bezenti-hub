@@ -310,6 +310,18 @@ export type Action =
    * User's own usage needs no action: it is theirs.
    */
   | "aiUsage.viewSpace"
+  /**
+   * Make (and, later, change) a Space's access keys (access-keys ticket 01), decided on the Space:
+   * an open Organization's Admins and the Owner; a Personal space's User (the Owner in their own,
+   * never in another User's: those AI accounts are that User's). Nothing in an archived or frozen
+   * Space.
+   */
+  | "accessKey.manage"
+  /**
+   * See and revoke a Space's access keys: whoever may manage them, also while the Space is
+   * archived or frozen, and the Owner in every Space.
+   */
+  | "accessKey.view"
   // Grants (`GrantResource`; see `decideGrant`).
   /** Lend one's resource to a Space; decided on the resource's owner and the destination. */
   | "grant.give"
@@ -851,6 +863,29 @@ const decideAiAccount = (
   return managed;
 };
 
+/**
+ * A Space's access keys (access-keys ticket 01) are the Space's, given by whoever runs its AI
+ * accounts: an Organization's Admins and the Owner, a Personal space's User. The Owner sees and
+ * revokes every key, yet makes none in another User's Personal space (no bypass on what is theirs).
+ * Revoking stays possible in an archived or frozen Space; making, not.
+ */
+const decideAccessKey = (
+  principal: Principal,
+  action: "accessKey.manage" | "accessKey.view",
+  space: SpaceResource,
+): Decision => {
+  if (action === "accessKey.view" && principal.isOwner) return allow;
+  const runs = principal.isOwner
+    ? othersPersonalSpace(principal, space)
+      ? deny("personal-space-read-only")
+      : allow
+    : runsSpace(principal, space);
+  if (runs._tag === "Deny" || action === "accessKey.view") return runs;
+  if (space.archived) return deny("space-archived");
+  if (space.frozen) return deny("space-frozen");
+  return allow;
+};
+
 const GRANT_ACTIONS: ReadonlySet<Action> = new Set([
   "grant.give",
   "grant.offer",
@@ -991,6 +1026,11 @@ export function decide(principal: Principal, action: Action, resource: Resource)
     return resource.kind === "organization"
       ? inOrganization(principal, resource, ADMIN_ONLY)
       : deny("owner-only");
+  }
+  if (action === "accessKey.manage" || action === "accessKey.view") {
+    return isSpace(resource)
+      ? decideAccessKey(principal, action, resource)
+      : deny("wrong-resource");
   }
   if (action === "environment.dedicate") {
     return isSpace(resource) ? decideDedicate(principal, resource) : deny("wrong-resource");

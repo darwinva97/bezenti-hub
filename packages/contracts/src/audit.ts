@@ -79,6 +79,9 @@ export const AuditAction = Schema.Literals([
   // with each provider session and are not audited one by one).
   "ai_gateway_key.create",
   "ai_gateway_key.revoke",
+  // Access-keys ticket 01: a Space's access key made or revoked (by a person, or by the Hub).
+  "access_key.create",
+  "access_key.revoke",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -113,6 +116,7 @@ export const AuditTargetKind = Schema.Literals([
   "environment",
   "ai_account",
   "ai_gateway_key",
+  "access_key",
   "secret_provider",
   "provider_scope",
   "grant",
@@ -343,6 +347,14 @@ export const AUDIT_DETAIL_KEYS = {
   "ai_gateway_key.create": ["kind", "space"],
   /** Why: `revoked` by a person (its User or the Owner); `space-lost` or `user-inactive` by the Hub. */
   "ai_gateway_key.revoke": ["kind", "space", "reason"],
+  /**
+   * The key's Space and expiry, and what it may use: `limits` (`none` until caps exist), `models`
+   * (`all` or how many), `accounts` (`all` or how many), whether it reaches a `subscription`.
+   * Never the key, its hash or its hint.
+   */
+  "access_key.create": ["space", "expiresAt", "limits", "models", "accounts", "subscription"],
+  /** Why: `revoked` by a person; `space-gone` by the Hub (`via` the removal that took it). */
+  "access_key.revoke": ["space", "reason", "via"],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

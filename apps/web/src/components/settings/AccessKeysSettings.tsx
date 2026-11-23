@@ -3,8 +3,10 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  ACCESS_KEY_MAX_CAP,
   type AccessKey,
   type AccessKeyAccountOption,
+  type AccessKeyLimits,
   type AccessKeyListResult,
   type AccessKeyModelOptions,
   type AccessKeyValidity,
@@ -149,6 +151,52 @@ const usageText = (usage: AccessKey["usage"]) => {
     );
   }
   return parts.join(" · ");
+};
+
+const CAP_LABELS: ReadonlyArray<readonly [keyof AccessKeyLimits, string]> = [
+  ["total", "Total"],
+  ["day", "Per day"],
+  ["week", "Per week"],
+  ["month", "Per month"],
+];
+
+/**
+ * Each cap of a key as the list says it (access-keys ticket 05): used of how much, what is left,
+ * and when its period resets, in local time; the total never resets by itself.
+ */
+const capsText = (key: AccessKey): ReadonlyArray<string> =>
+  CAP_LABELS.flatMap(([kind, label]) => {
+    const amount = key.limits[kind];
+    if (amount === null) return [];
+    const used = key.usage?.[kind] ?? 0;
+    const left = Math.max(0, amount - used);
+    const reset =
+      kind === "total" || key.usage === undefined
+        ? ""
+        : ` · resets ${formatWhen(key.usage.resets[kind])}`;
+    return [
+      `${label}: ${formatTokens(used)} of ${formatTokens(amount)} · ${formatTokens(left)} left${reset}`,
+    ];
+  });
+
+/** The form's caps: whole numbers of tokens, empty for none; null when one is not valid. */
+const limitsOf = (
+  caps: Readonly<Record<keyof AccessKeyLimits, string>>,
+): AccessKeyLimits | null => {
+  const limits: Record<keyof AccessKeyLimits, number | null> = {
+    total: null,
+    day: null,
+    week: null,
+    month: null,
+  };
+  for (const [kind] of CAP_LABELS) {
+    const text = caps[kind].trim();
+    if (text === "") continue;
+    const amount = Number(text);
+    if (!Number.isInteger(amount) || amount < 1 || amount > ACCESS_KEY_MAX_CAP) return null;
+    limits[kind] = amount;
+  }
+  return limits;
 };
 
 /** A key's models as the list says them. */
@@ -347,6 +395,15 @@ function AccessKeysPanel({
                   <span className="font-mono text-xs text-muted-foreground">…{key.hint}</span>
                 </span>
                 <span className="text-xs text-muted-foreground">{modelsText(key.models)}</span>
+                {capsText(key).length === 0 ? (
+                  <span className="text-xs text-muted-foreground">No token limit</span>
+                ) : (
+                  capsText(key).map((line) => (
+                    <span key={line} className="text-xs text-muted-foreground">
+                      {line}
+                    </span>
+                  ))
+                )}
                 {usageText(key.usage) === null ? null : (
                   <span className="text-xs text-muted-foreground" aria-label="Usage">
                     {usageText(key.usage)}
@@ -739,6 +796,17 @@ function NewAccessKeyForm(props: {
       : reached.some((account) => account.type === "subscription");
   const [allModels, setAllModels] = useState(false);
   const [entries, setEntries] = useState<ReadonlyArray<string>>([]);
+  const [caps, setCaps] = useState<Readonly<Record<keyof AccessKeyLimits, string>>>({
+    total: "",
+    day: "",
+    week: "",
+    month: "",
+  });
+  const [unlimited, setUnlimited] = useState(false);
+  const limits = unlimited ? null : limitsOf(caps);
+  // At least one cap, or «No token limit» chosen: an uncapped key is a decision, never a default.
+  const capsReady =
+    unlimited || (limits !== null && CAP_LABELS.some(([kind]) => limits[kind] !== null));
   const [mode, setMode] = useState<"days" | "until">("days");
   const [days, setDays] = useState(String(DEFAULT_DAYS));
   const [until, setUntil] = useState("");
@@ -757,6 +825,7 @@ function NewAccessKeyForm(props: {
     label.trim().length > 0 &&
     validity !== null &&
     models.length > 0 &&
+    capsReady &&
     (allAccounts || chosenAccounts.length > 0);
   return (
     <form
@@ -776,6 +845,7 @@ function NewAccessKeyForm(props: {
               validity,
               models,
               ...(allAccounts ? {} : { accounts: chosenAccounts }),
+              ...(unlimited || limits === null ? { unlimited: true } : { limits }),
             },
           })
           .then((result) => {
@@ -785,6 +855,8 @@ function NewAccessKeyForm(props: {
               setAllModels(false);
               setAllAccounts(true);
               setChosenAccounts([]);
+              setCaps({ total: "", day: "", week: "", month: "" });
+              setUnlimited(false);
               props.onMade(result.value.created, Redacted.value(result.value.key));
             } else {
               setError(errorMessageOf(squashAtomCommandFailure(result), "Could not make the key."));
@@ -846,6 +918,33 @@ function NewAccessKeyForm(props: {
           />
         </label>
       )}
+      <fieldset className="flex w-full flex-wrap items-end gap-2 text-xs">
+        <legend className="mb-1 font-medium">Token caps</legend>
+        {CAP_LABELS.map(([kind, label]) => (
+          <label key={kind} className="flex flex-col gap-1 font-medium sm:w-32">
+            {label}
+            <Input
+              aria-label={`${label} tokens`}
+              nativeInput
+              type="number"
+              min={1}
+              disabled={pending || unlimited}
+              placeholder="No cap"
+              value={caps[kind]}
+              onChange={(event) => setCaps({ ...caps, [kind]: event.currentTarget.value })}
+            />
+          </label>
+        ))}
+        <label className="flex items-center gap-2">
+          <Checkbox
+            aria-label="No token limit"
+            checked={unlimited}
+            disabled={pending}
+            onCheckedChange={(checked) => setUnlimited(checked === true)}
+          />
+          No token limit
+        </label>
+      </fieldset>
       <AccountPicker
         accounts={props.accounts}
         all={allAccounts}

@@ -542,7 +542,7 @@ accounts and for a Personal space below its note.
   - `key_id` (`ak_<24 hex>`), `key_hash` (SHA-256, unique), `key_hint` (the last 4 characters);
   - `space_id`, `label` (who it is for, 80 characters), `created_by`;
   - `models_json` (names, `prefix*` patterns, `["*"]`: every model), `accounts_json` (NULL:
-    every AI account the Space owns, now and later), `limits_json` (no caps yet);
+    every AI account the Space owns, now and later), `limits_json` (token caps, below);
   - `expires_at` (always set), `last_used_at` (at most once a minute), `revoked_*`.
   - Rows are never deleted: they are the usage's and the audit's history.
 - **Key:** `t3ak_` + 32 random bytes, base64url, of its own prefix so a leaked one is recognisable
@@ -628,6 +628,30 @@ accounts and for a Personal space below its note.
     still has it; the list strikes through «No longer in this Space». The form offers «All of this
     Space's AI accounts» (the default) or a choice from `modelOptions`, warns when what it reaches
     holds a subscription (ADR 0005), and its model catalog follows the chosen accounts.
+- **Token caps** (access-keys ticket 05, `ai/AccessKeyCaps.ts`):
+  - **Shape:** `{ total, day, week, month }`, each a whole number of tokens from 1 to 10¹² or
+    null, in any combination. At least one at create, unless «No token limit» is chosen
+    explicitly (`unlimited: true`; caps and `unlimited` together are refused). Audited `limits`:
+    `none` or `total=…,day=…,week=…,month=…` (`-`: no cap of that kind).
+  - **What counts:** as a Grant's caps: input not read from the cache + output + cache writes, plus
+    the estimate of answers with no usage; cache reads never (Claude Code's are huge and cheap).
+    Days, ISO weeks (from Monday) and months in UTC (`GrantCaps.periodOf`); the total since the key
+    was made, renewals included. Used = its daily rows + what the usage log has not written yet
+    (`unwritten` of `access-key:<id>`), so a cap never counts less than was used.
+  - **When:** at the start of each request, after the model check, before anything is sent;
+    never mid-answer. A request admitted below a cap finishes and counts whole: only those already
+    in flight when it is reached can pass it, bounded only by the general limit of 16 in flight
+    per gateway key (the Owner decided no limit of the key's own). Lowering a cap below what is
+    used refuses the next request.
+  - **Answers:** the total reached: 403 «This access key used its total token limit (10,000,000).
+    Ask whoever gave it to you to raise it.» (it does not come back by itself). A period: 429 «This
+    access key reached its daily token limit (2,000,000); it resets 2026-11-24 00:00 UTC.»
+    (`weekly`, `monthly`) with `retry-after` (seconds to the reset), `x-should-retry: false`
+    (Anthropic's and OpenAI's SDKs, so Claude Code, do not retry it) and, in the OpenAI shape,
+    `code: "insufficient_quota"` (what Codex treats as quota spent). Several at once: the total,
+    then the month, the week, the day. A refused request reaches no account and counts nothing.
+  - **List and form:** each cap's used, cap, what is left and reset (local time); the form takes
+    caps or «No token limit».
 - **Load:** the same limits as any gateway key, with no limit of its own (the Owner's decision):
   16 requests in flight per key; the per-User pools take `ak:<keyId>` as the key's subject.
 - **Usage** (access-keys ticket 04):

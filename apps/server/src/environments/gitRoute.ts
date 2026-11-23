@@ -217,6 +217,9 @@ const makeHandler = Effect.fnUntraced(function* (deps: {
     if (Option.isNone(deps.packUploads)) return null;
     const [segment, uploadId, action, ...extra] = endpoint.split("/");
     if (segment !== HubPackUploads.PACK_UPLOADS_SEGMENT || extra.length > 0) return null;
+    if (uploadId === HubPackUploads.KNOWN_TIPS_SEGMENT && action === undefined) {
+      return request.method === "POST" ? { uploadId, action: "known" as const } : null;
+    }
     if (uploadId === undefined || !HubPackUploads.PACK_UPLOAD_ID.test(uploadId)) return null;
     if (action === undefined) {
       return request.method === "GET"
@@ -556,6 +559,7 @@ const makeHandler = Effect.fnUntraced(function* (deps: {
 const ZERO_OBJECT_ID = "0".repeat(40);
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
 const decodeApply = Schema.decodeUnknownEffect(HubPackUploads.PackApplyRequest);
+const decodeKnown = Schema.decodeUnknownEffect(HubPackUploads.KnownTipsRequest);
 
 /**
  * A large upload in parts (`HubPackUploads`): its status, a part, or applying it. The machine was
@@ -574,13 +578,26 @@ const handlePack = Effect.fnUntraced(function* (input: {
   readonly granted: ReadonlyArray<string>;
   readonly pack: {
     readonly uploadId: string;
-    readonly action: "status" | "append" | "apply";
+    readonly action: "status" | "append" | "apply" | "known";
   };
 }) {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const { uploads, owner, key, pack } = input;
   const json = (body: HubPackUploads.PackUploadStatus, status = 200) =>
     HttpServerResponse.json(body, { status });
+  if (pack.action === "known") {
+    const body = yield* request.json.pipe(Effect.flatMap(decodeKnown), Effect.option);
+    if (
+      Option.isNone(body) ||
+      body.value.oids.length > HubPackUploads.KNOWN_TIPS_MAX ||
+      body.value.oids.some((oid) => !OBJECT_ID.test(oid))
+    ) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+    return yield* HttpServerResponse.json({
+      known: yield* uploads.knownTips(key, body.value.oids),
+    });
+  }
   if (pack.action === "status") {
     return yield* json(yield* uploads.status(owner, key, pack.uploadId));
   }

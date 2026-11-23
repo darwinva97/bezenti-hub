@@ -448,6 +448,7 @@ const startEnvironment = Effect.fn("HubWithEnvironments.startEnvironment")(funct
   readonly packUploads?: {
     readonly partBytes?: number;
     readonly smartPushMaxBytes?: number;
+    readonly resendMaxBytes?: number;
   };
 }) {
   const scope = yield* Effect.scope;
@@ -963,6 +964,7 @@ export const makeHub = Effect.fn("HubWithEnvironments.makeHub")(function* (
     readonly packUploads?: {
       readonly partBytes?: number;
       readonly smartPushMaxBytes?: number;
+      readonly resendMaxBytes?: number;
     };
   }) {
     const joined = yield* joinMachine(

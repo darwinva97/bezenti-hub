@@ -22,6 +22,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
 import * as HubRepository from "../checkpointing/HubRepository.ts";
+import * as HubRepositoryMaintenance from "../checkpointing/HubRepositoryMaintenance.ts";
 import * as HubRepositoryUploadIssues from "../checkpointing/HubRepositoryUploadIssues.ts";
 import { addMember } from "../auth/UserAuth.testkit.ts";
 import * as RemoteEnvironments from "../environment/RemoteEnvironments.ts";
@@ -721,6 +722,113 @@ describe("Hub repository", () => {
         fs.readDirectory(uploadsFolder),
       ).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
       assert.deepEqual(left, []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("a machine's uploads carry only what the Hub lacks, across its Threads", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("claudeAgent");
+      const hub = yield* makeHub();
+      // Every upload goes in parts, so each lands as a pack of its own, as large ones do.
+      const laptop = yield* hub.join({
+        name: "Laptop",
+        adapters: idleAdapters(instanceId),
+        packUploads: { partBytes: 64 * 1024, smartPushMaxBytes: 0, resendMaxBytes: 64 * 1024 },
+      });
+      const projectId = ProjectId.make("project:resend");
+      const { workspaceRoot } = yield* seedProject(hub.server, {
+        projectId,
+        title: "Resend",
+        defaultModelSelection: null,
+      });
+      // A large file the checkout never committed: every checkpoint holds it, HEAD does not.
+      const large = 300 * 1024;
+      yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
+        fs.writeFile(`${workspaceRoot}/large.bin`, noise(large)),
+      ).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
+      const repositories = hub.service(HubRepository.HubRepositories);
+      const repository = `${repositories.root}/${repositories.directoryOf({ projectId })}`;
+      const hubGit = (args: ReadonlyArray<string>) =>
+        git(repositories.root, ["--git-dir", repository, ...args]);
+      const hubBytes = hubGit(["count-objects", "-v"]).pipe(
+        Effect.map(({ stdout }) => {
+          const kib = (key: string) =>
+            Number.parseInt(new RegExp(`^${key}: (\\d+)$`, "mu").exec(stdout)?.[1] ?? "0", 10);
+          return (kib("size-pack") + kib("size")) * 1024;
+        }),
+      );
+
+      /** A Thread on the laptop whose one turn's checkpoint (a child of HEAD) is uploaded. */
+      const turn = Effect.fn(function* (name: string) {
+        const threadId = ThreadId.make(`thread:${name}`);
+        yield* hub.service(Orchestrator.OrchestratorV2).dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`command:${name}`),
+          threadId,
+          projectId,
+          title: name,
+          modelSelection: { instanceId, model: "claude-sonnet-4-6" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeEnvironmentId: laptop.environmentId,
+        });
+        const ref = yield* checkpointRefForScopeOrdinal({
+          scopeId: CheckpointScopeId.make(`scope:${name}`),
+          ordinalWithinScope: 1,
+        }).pipe(Effect.provide(NodeCrypto.layer));
+        yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.writeFileString(`${workspaceRoot}/turn.txt`, `${name}\n`),
+        ).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
+        // As a capture makes it: the files in an index of their own, committed on HEAD.
+        const env = { GIT_INDEX_FILE: `${workspaceRoot}/.git/t3-test-index` };
+        yield* git(workspaceRoot, ["read-tree", "HEAD"], { env });
+        yield* git(workspaceRoot, ["add", "-A", "--", "."], { env });
+        const tree = (yield* git(workspaceRoot, ["write-tree"], { env })).stdout.trim();
+        const commit = (yield* git(workspaceRoot, [
+          "-c",
+          "user.email=hub@example.com",
+          "-c",
+          "user.name=Hub",
+          "commit-tree",
+          tree,
+          "-p",
+          "HEAD",
+          "-m",
+          name,
+        ])).stdout.trim();
+        yield* git(workspaceRoot, ["update-ref", ref, commit]);
+        yield* seedCheckpoints(hub, threadId, 1, { name, cwd: workspaceRoot, refs: [ref] });
+        yield* hub.service(CheckpointUploadService.CheckpointUploads).request(threadId);
+        yield* awaitUploaded(hub, threadId, 1);
+        return threadId;
+      });
+
+      const first = yield* turn("resend-a");
+      const afterFirst = yield* hubBytes;
+      assert.isAbove(afterFirst, large);
+      // A second Thread while the first is still the laptop's: the Hub shows it that checkpoint,
+      // whose parent is not the new one's.
+      const second = yield* turn("resend-b");
+      // A third once neither is the laptop's: the Hub shows it none, but has them.
+      yield* hub.server.sql`
+        UPDATE orchestration_v2_projection_threads SET active_environment_id = NULL
+        WHERE thread_id IN (${first}, ${second})
+      `.pipe(Effect.orDie);
+      yield* turn("resend-c");
+      // Each later upload carried its commit, tree and turn file: not the large file again.
+      assert.isBelow((yield* hubBytes) - afterFirst, large / 2);
+
+      // Compacted, the repository is a pack or two, and every Thread's checkpoint is whole.
+      const maintenance = hub.service(HubRepositoryMaintenance.HubRepositoryMaintenance);
+      assert.notEqual((yield* maintenance.compact(repository))._tag, "noRoom");
+      const packs = (yield* hubGit(["count-objects", "-v"])).stdout.match(/^packs: (\d+)$/mu);
+      assert.isAtMost(Number(packs?.[1]), 2);
+      const fsck = yield* hubGit(["fsck", "--connectivity-only"]);
+      assert.equal(fsck.exitCode, 0, fsck.stderr);
     }).pipe(Effect.scoped),
   );
 

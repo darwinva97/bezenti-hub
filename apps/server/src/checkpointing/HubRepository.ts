@@ -324,17 +324,38 @@ const smartPush = (
  */
 export const SMART_PUSH_MAX_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Past this many bytes that `git push` would send again (objects the Hub has), an upload goes in
+ * parts instead, with only what the Hub lacks.
+ */
+export const RESEND_MAX_BYTES = 8 * 1024 * 1024;
+/** How many of the checkout's latest `refs/t3/` commits an upload asks the Hub about. */
+const KNOWN_CANDIDATES = 64;
+
 /** Uploads large pushes in parts; only a machine that reaches the Hub over HTTP has one. */
 export interface PackUploader {
   /** Above this many bytes (estimated) an upload goes in parts: `SMART_PUSH_MAX_BYTES`. */
   readonly smartPushMaxBytes: number;
+  /** Above this many bytes `git push` would send again, it goes in parts: `RESEND_MAX_BYTES`. */
+  readonly resendMaxBytes: number;
   readonly upload: (input: {
     readonly cwd: string;
     readonly remote: HubRemote;
     readonly refs: ReadonlyArray<string>;
-    /** Commits the Hub advertised to this machine that it also has: what the upload leaves out. */
+    /**
+     * Commits the Hub has, every object they reach included, that the checkout also has: the
+     * upload leaves out everything they reach, their trees and files too.
+     */
     readonly remoteTips: ReadonlyArray<string>;
   }) => Effect.Effect<void, VcsError, VcsProcess.VcsProcess>;
+  /**
+   * Which of `candidates` are tips of the Hub repository (of any Thread or machine); null when the
+   * Hub cannot say (one from before it could, or a failed request).
+   */
+  readonly knownTips: (input: {
+    readonly remote: HubRemote;
+    readonly candidates: ReadonlyArray<string>;
+  }) => Effect.Effect<ReadonlyArray<string> | null>;
 }
 
 /**
@@ -376,29 +397,65 @@ const remoteTipsPresent = Effect.fn("HubRepository.remoteTipsPresent")(function*
 
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
 
-/** `git rev-list` arguments on stdin: the tips, then what to leave out. */
-const revisionsInput = (tips: ReadonlyArray<string>, exclude: ReadonlyArray<string>) =>
-  `${[...tips, ...(exclude.length === 0 ? [] : ["--not", ...exclude])].join("\n")}\n`;
+/**
+ * Revisions on stdin: the tips, then `^` lines (git before 2.40 refuses `--not` there). git leaves
+ * out an excluded commit's files only through the new commits' parents, and a checkpoint's parent
+ * is HEAD, not the last checkpoint: `wholeTrees` excludes each excluded commit's tree too.
+ */
+export const revisionsInput = (
+  tips: ReadonlyArray<string>,
+  exclude: ReadonlyArray<string>,
+  wholeTrees = true,
+) =>
+  `${[
+    ...tips,
+    ...exclude.map((oid) => `^${oid}`),
+    ...(wholeTrees ? exclude.map((oid) => `^${oid}^{tree}`) : []),
+  ].join("\n")}\n`;
 
 /**
- * About how many bytes an upload of `refs` carries: the size on disk of the objects the Hub lacks.
- * Null when this git cannot say (before 2.31).
+ * About how many bytes an upload of `refs` carries: the size on disk of the objects not reached
+ * from `exclude` (as `git push` leaves them out without `wholeTrees`). Null when this git cannot
+ * say (before 2.31).
  */
 const estimateUploadBytes = Effect.fn("HubRepository.estimateUploadBytes")(function* (
   vcs: VcsProcess.VcsProcess["Service"],
   cwd: string,
   refs: ReadonlyArray<string>,
-  remoteTips: ReadonlyArray<string>,
+  exclude: ReadonlyArray<string>,
+  wholeTrees: boolean,
 ) {
   const counted = yield* gitRead(vcs, {
     operation: "HubRepository.estimateUpload",
     cwd,
     args: ["rev-list", "--objects", "--disk-usage", "--stdin"],
-    stdin: revisionsInput(refs, remoteTips),
+    stdin: revisionsInput(refs, exclude, wholeTrees),
     absent: [],
   }).pipe(Effect.orElseSucceed(() => null));
   const bytes = counted === null ? Number.NaN : Number.parseInt(counted, 10);
   return Number.isFinite(bytes) ? bytes : null;
+});
+
+/** The checkout's latest `refs/t3/` commits (its checkpoints, any Thread's), but `skip`. */
+const recentCheckpointTips = Effect.fn("HubRepository.recentCheckpointTips")(function* (
+  vcs: VcsProcess.VcsProcess["Service"],
+  cwd: string,
+  skip: ReadonlySet<string>,
+) {
+  const listed = yield* gitRead(vcs, {
+    operation: "HubRepository.recentTips",
+    cwd,
+    args: [
+      "for-each-ref",
+      "--sort=-creatordate",
+      `--count=${KNOWN_CANDIDATES * 2}`,
+      "--format=%(objectname)",
+      "refs/t3/",
+    ],
+  }).pipe(Effect.orElseSucceed(() => null));
+  return [
+    ...new Set((listed ?? "").split("\n").filter((oid) => OBJECT_ID.test(oid) && !skip.has(oid))),
+  ].slice(0, KNOWN_CANDIDATES);
 });
 
 /**
@@ -419,15 +476,42 @@ export const pushRefs = Effect.fn("HubRepository.pushRefs")(function* (input: {
     return yield* smartPush(vcs, input);
   }
   const remoteTips = yield* remoteTipsPresent(vcs, input.cwd, input.remote);
-  const estimated = yield* estimateUploadBytes(vcs, input.cwd, input.refs, remoteTips);
+  // What `git push` would send: it leaves out less than the Hub has (`revisionsInput`).
+  const estimated = yield* estimateUploadBytes(vcs, input.cwd, input.refs, remoteTips, false);
   yield* Effect.annotateCurrentSpan({ "hubRepository.estimatedBytes": estimated ?? -1 });
+  let bases = remoteTips;
+  let needed = estimated;
+  let hubTakesParts = false;
+  if (estimated !== null && estimated > uploader.resendMaxBytes) {
+    // Much to send: what the Hub has besides what it shows this machine (the checkout's other
+    // Threads' checkpoints) and the trees of all of it are left out of an upload in parts.
+    const newOids = yield* gitRead(vcs, {
+      operation: "HubRepository.recentTips",
+      cwd: input.cwd,
+      args: ["for-each-ref", "--format=%(objectname)", ...input.refs],
+    }).pipe(Effect.orElseSucceed(() => null));
+    const candidates = yield* recentCheckpointTips(
+      vcs,
+      input.cwd,
+      new Set([...remoteTips, ...(newOids ?? "").split("\n")]),
+    );
+    const known = yield* uploader.knownTips({ remote: input.remote, candidates });
+    hubTakesParts = known !== null;
+    bases = [...remoteTips, ...(known ?? [])];
+    needed = yield* estimateUploadBytes(vcs, input.cwd, input.refs, bases, true);
+    yield* Effect.annotateCurrentSpan({ "hubRepository.neededBytes": needed ?? -1 });
+  }
   const inParts = uploader.upload({
     cwd: input.cwd,
     remote: input.remote,
     refs: input.refs,
-    remoteTips,
+    remoteTips: bases,
   });
-  if (estimated !== null && estimated > uploader.smartPushMaxBytes) {
+  const resent = estimated !== null && needed !== null ? estimated - needed : 0;
+  if (
+    (estimated !== null && estimated > uploader.smartPushMaxBytes) ||
+    (hubTakesParts && resent > uploader.resendMaxBytes)
+  ) {
     yield* Effect.annotateCurrentSpan({ "hubRepository.transport": "parts" });
     return yield* inParts;
   }

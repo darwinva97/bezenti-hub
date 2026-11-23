@@ -28,6 +28,13 @@ import * as HubRepositoryMaintenance from "./HubRepositoryMaintenance.ts";
 
 /** The path segment after a repository's: `/api/git/<repo>/packs/<uploadId>`. */
 export const PACK_UPLOADS_SEGMENT = "packs";
+/** `/api/git/<repo>/packs/known`: which of the commits a machine names are tips the Hub has. */
+export const KNOWN_TIPS_SEGMENT = "known";
+/** The most commits one `known` request may name. */
+export const KNOWN_TIPS_MAX = 64;
+
+export const KnownTipsRequest = Schema.Struct({ oids: Schema.Array(Schema.String) });
+export const KnownTipsResponse = Schema.Struct({ known: Schema.Array(Schema.String) });
 /** The most one part may carry: under a proxy's request limit, with room to spare. */
 const PACK_PART_MAX_BYTES = 64 * 1024 * 1024;
 /** An upload's id: hex, chosen by the machine from what it uploads (so a retry resumes it). */
@@ -134,6 +141,14 @@ export class HubPackUploads extends Context.Service<
       request: PackApplyRequest,
       access: PackApplyAccess,
     ) => Effect.Effect<PackUploadStatus>;
+    /**
+     * The commits among `oids` that a ref of the repository points at, whoever's ref it is: an
+     * upload leaves out all they reach. It tells a machine only of commits it already has.
+     */
+    readonly knownTips: (
+      key: HubRepository.HubRepositoryKey,
+      oids: ReadonlyArray<string>,
+    ) => Effect.Effect<ReadonlyArray<string>>;
   }
 >()("t3/checkpointing/HubPackUploads") {}
 
@@ -423,6 +438,32 @@ export const layer = Layer.effect(
       Effect.forkIn(scope),
     );
 
-    return HubPackUploads.of({ status: statusOf, append, apply });
+    // Tips only, never any object the repository holds: a ref is set only once every object it
+    // reaches is there, and nothing a ref reaches is ever dropped.
+    const knownTips = Effect.fn("HubPackUploads.knownTips")(function* (
+      key: HubRepository.HubRepositoryKey,
+      oids: ReadonlyArray<string>,
+    ) {
+      const asked = [...new Set(oids)]
+        .filter((oid) => /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u.test(oid))
+        .slice(0, KNOWN_TIPS_MAX);
+      if (asked.length === 0) return [];
+      const repository = yield* repositories.ensure(key).pipe(Effect.orDie);
+      const listed = yield* HubRepository.gitIn(vcs, {
+        operation: "HubPackUploads.knownTips",
+        cwd: repositories.root,
+        args: [
+          "--git-dir",
+          repository,
+          "for-each-ref",
+          "--format=%(objectname)",
+          ...asked.map((oid) => `--points-at=${oid}`),
+        ],
+      }).pipe(Effect.orElseSucceed(() => ({ stdout: "" })));
+      const pointed = new Set(listed.stdout.split("\n").map((line) => line.trim()));
+      return asked.filter((oid) => pointed.has(oid));
+    });
+
+    return HubPackUploads.of({ status: statusOf, append, apply, knownTips });
   }),
 );

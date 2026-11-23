@@ -183,7 +183,11 @@ export interface EnvironmentAgentInput {
   /** The Environment credential, for the Hub repository; without it nothing is uploaded. */
   readonly credential: string | undefined;
   /** Sizes of large uploads to the Hub repository in parts (tests make them small). */
-  readonly packUploads?: { readonly partBytes?: number; readonly smartPushMaxBytes?: number };
+  readonly packUploads?: {
+    readonly partBytes?: number;
+    readonly smartPushMaxBytes?: number;
+    readonly resendMaxBytes?: number;
+  };
 }
 
 export const make = Effect.fn("EnvironmentAgent.make")(function* (input: EnvironmentAgentInput) {

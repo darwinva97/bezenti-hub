@@ -40,6 +40,7 @@ const STALE_PACK_MS = 24 * 60 * 60_000;
 const UPLOADS_FOLDER = "t3-hub-uploads";
 
 const decodeStatus = Schema.decodeUnknownEffect(HubPackUploads.PackUploadStatus);
+const decodeKnown = Schema.decodeUnknownEffect(HubPackUploads.KnownTipsResponse);
 
 const failure = (cwd: string, detail: string) =>
   new VcsProcessExitError({
@@ -59,6 +60,8 @@ export interface PackUploaderOptions {
   readonly partBytes?: number;
   /** Above this many bytes an upload goes in parts (tests make it small). */
   readonly smartPushMaxBytes?: number;
+  /** Above this many bytes `git push` would send again, an upload goes in parts (tests). */
+  readonly resendMaxBytes?: number;
 }
 
 /** Large uploads in parts, for a machine that reaches its Hub over HTTP. */
@@ -126,7 +129,8 @@ export const makePackUploader = (options: PackUploaderOptions): HubRepository.Pa
     const packFile = joinPath(folder, `${uploadId}.pack`);
     if (!(yield* fileSystem.exists(packFile))) {
       // Not thin: the Hub indexes it as it is, with no objects of its own to complete it.
-      // Only the pack is sent: no reverse index beside it.
+      // Only the pack is sent: no reverse index beside it. Nothing the Hub's tips reach goes,
+      // their trees included.
       const written = yield* git(
         [
           "-c",
@@ -136,7 +140,10 @@ export const makePackUploader = (options: PackUploaderOptions): HubRepository.Pa
           "--quiet",
           joinPath(folder, `${uploadId}-new`),
         ],
-        `${[...updates.map((update) => update.newOid), ...(input.remoteTips.length === 0 ? [] : ["--not", ...input.remoteTips])].join("\n")}\n`,
+        HubRepository.revisionsInput(
+          updates.map((update) => update.newOid),
+          input.remoteTips,
+        ),
       );
       const hash = written.stdout.trim().split(/\s+/u).at(-1) ?? "";
       const made = joinPath(folder, `${uploadId}-new-${hash}.pack`);
@@ -335,8 +342,39 @@ export const makePackUploader = (options: PackUploaderOptions): HubRepository.Pa
     }
     yield* fileSystem.remove(packFile, { force: true }).pipe(Effect.ignore);
   });
+  const knownTips: HubRepository.PackUploader["knownTips"] = ({ remote, candidates }) => {
+    const credential = remote.credential;
+    if (credential === undefined) return Effect.succeed(null);
+    const asked = new Set(candidates.slice(0, HubPackUploads.KNOWN_TIPS_MAX));
+    return HttpClient.HttpClient.pipe(
+      Effect.flatMap((client) =>
+        client.execute(
+          HttpClientRequest.bearerToken(
+            HttpClientRequest.post(
+              `${remote.url.replace(/\/+$/u, "")}/${HubPackUploads.PACK_UPLOADS_SEGMENT}/${HubPackUploads.KNOWN_TIPS_SEGMENT}`,
+            ).pipe(HttpClientRequest.bodyJsonUnsafe({ oids: [...asked] })),
+            credential,
+          ),
+        ),
+      ),
+      // A Hub from before answers 404: it takes no parts either.
+      Effect.flatMap((response) =>
+        response.status === 200
+          ? response.json.pipe(Effect.flatMap(decodeKnown))
+          : Effect.succeed(null),
+      ),
+      Effect.map((answer) =>
+        answer === null ? null : answer.known.filter((oid) => asked.has(oid)),
+      ),
+      Effect.timeout(Duration.minutes(1)),
+      Effect.provide(http),
+      Effect.orElseSucceed(() => null),
+    );
+  };
   return {
     smartPushMaxBytes: options.smartPushMaxBytes ?? HubRepository.SMART_PUSH_MAX_BYTES,
+    resendMaxBytes: options.resendMaxBytes ?? HubRepository.RESEND_MAX_BYTES,
+    knownTips,
     // A file this machine could not read or write fails the upload like git would.
     upload: (input) =>
       upload(input).pipe(

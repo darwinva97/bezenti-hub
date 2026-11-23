@@ -799,8 +799,26 @@ describe("no door takes the Hub's cookies from a preview's own origin", () => {
       "preview/hubPreviewRoute.ts: PREVIEW_COOKIE_NAME",
       "preview/hubPreviewRoute.ts: PREVIEW_ORIGIN_COOKIE_NAME",
     ]);
-    // Every module that sets or clears a Hub cookie asks whether the request is a preview's.
-    for (const file of ["auth/http.ts", "guest/http.ts"]) {
+    // Every module that sets or clears a cookie, found by what it writes (never a hand list,
+    // Keycloak ticket 11): a Hub cookie's asks whether the request is a preview's first.
+    const setters = files
+      .filter(({ text }) =>
+        /Cookies\.(set|setAll|unsafeSet|expireCookie)\(|\.(setCookie|setCookies|expireCookie|mergeCookies)\(|["']set-cookie["']/iu.test(
+          text,
+        ),
+      )
+      .map(({ file }) => file);
+    const ASKS = "fromPreviewOrigin";
+    const cookieSetters: Readonly<Record<string, string>> = {
+      "auth/http.ts": ASKS,
+      "auth/keycloakSignInHttp.ts": ASKS,
+      "guest/http.ts": ASKS,
+      "preview/hubPreviewRoute.ts": "a preview's own cookie, on its address's path or host",
+      "device/DeviceHubProxy.ts": "drops an upstream's set-cookie; sets none",
+    };
+    expect(setters.toSorted()).toEqual(Object.keys(cookieSetters).toSorted());
+    for (const [file, how] of Object.entries(cookieSetters)) {
+      if (how !== ASKS) continue;
       expect(files.find((entry) => entry.file === file)?.text, file).toMatch(/fromPreviewOrigin/);
     }
     const cookieDoors = Object.entries(AMBIENT_COOKIE_RULES).filter(([door]) =>

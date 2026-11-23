@@ -21,6 +21,7 @@ import * as HttpEffect from "effect/http/HttpEffect";
 import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
+import { fromPreviewOrigin } from "../preview/PreviewOrigin.ts";
 import {
   annotateEnvironmentRequest,
   appendCredentialResponseHeaders,
@@ -95,6 +96,10 @@ export const layerApi = HttpApiBuilder.group(
         "start",
         Effect.fn("environment.keycloakSignIn.start")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
+          // A page on a preview's own origin starts no flow and gets no cookie (ticket 11: every
+          // module that sets a Hub cookie asks first; KeycloakSignIn.start refuses its Origin too).
+          if (yield* fromPreviewOrigin)
+            return yield* failEnvironmentInvalidRequest("invalid_origin");
           const request = yield* HttpServerRequest.HttpServerRequest;
           const started = yield* keycloakSignIn.start(request, args.payload).pipe(
             Effect.catchTags({
@@ -184,6 +189,9 @@ export const layerCallbackRoute = HttpRouter.use((router) =>
     yield* router.add("GET", KEYCLOAK_CALLBACK_PATH, (request) =>
       Effect.gen(function* () {
         const outcome = yield* keycloakSignIn.callback(request);
+        // Nothing is set or cleared for a page on a preview's own origin (no session either:
+        // appendSessionCookie refuses it), as for every Hub cookie.
+        const preview = yield* fromPreviewOrigin;
         const expireFlow = Cookies.expireCookie(
           Cookies.empty,
           outcome.secure
@@ -204,7 +212,7 @@ export const layerCallbackRoute = HttpRouter.use((router) =>
           status: 303,
           headers: { "cache-control": "no-store", "referrer-policy": "no-referrer" },
         });
-        return Result.isSuccess(expireFlow)
+        return Result.isSuccess(expireFlow) && !preview
           ? HttpServerResponse.mergeCookies(response, expireFlow.success)
           : response;
       }),

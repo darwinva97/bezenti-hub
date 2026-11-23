@@ -54,6 +54,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as CheckpointDiffQuery from "../checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as HubPackUploads from "../checkpointing/HubPackUploads.ts";
+import * as HubRepositoryMaintenance from "../checkpointing/HubRepositoryMaintenance.ts";
 import * as HubRepository from "../checkpointing/HubRepository.ts";
 import * as ServerConfig from "../config.ts";
 import type { PreviewOriginPattern } from "../preview/PreviewOrigin.ts";
@@ -255,7 +256,12 @@ const layerHubOrchestration = CheckpointDiffQuery.layer.pipe(
       resolveLink: () => Effect.die("unused title link"),
     }),
   ),
-  Layer.provideMerge(HubPackUploads.layer.pipe(Layer.provideMerge(HubRepository.layer))),
+  Layer.provideMerge(
+    HubPackUploads.layer.pipe(
+      Layer.provideMerge(HubRepositoryMaintenance.layer),
+      Layer.provideMerge(HubRepository.layer),
+    ),
+  ),
   Layer.provideMerge(VcsProcess.layer),
 );
 
@@ -439,7 +445,10 @@ const startEnvironment = Effect.fn("HubWithEnvironments.startEnvironment")(funct
   /** Its Secret files' root (a tmpfs folder); without one it takes none (contract 16). */
   readonly secretFilesRoot?: SecretFilesRoot;
   /** Sizes of its large uploads to the Hub repository in parts. */
-  readonly packUploads?: { readonly partBytes?: number; readonly smartPushMaxBytes?: number };
+  readonly packUploads?: {
+    readonly partBytes?: number;
+    readonly smartPushMaxBytes?: number;
+  };
 }) {
   const scope = yield* Effect.scope;
   const ptySpawns: Array<PtySpawn> = [];
@@ -951,7 +960,10 @@ export const makeHub = Effect.fn("HubWithEnvironments.makeHub")(function* (
     /** Where it writes Secret files (a tmpfs folder); none by default. */
     readonly secretFilesRoot?: SecretFilesRoot;
     /** Sizes of its large uploads to the Hub repository in parts. */
-    readonly packUploads?: { readonly partBytes?: number; readonly smartPushMaxBytes?: number };
+    readonly packUploads?: {
+      readonly partBytes?: number;
+      readonly smartPushMaxBytes?: number;
+    };
   }) {
     const joined = yield* joinMachine(
       server,

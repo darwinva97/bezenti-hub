@@ -23,6 +23,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as RemoteEnvironments from "../environment/RemoteEnvironments.ts";
 import * as HubPackUploads from "../checkpointing/HubPackUploads.ts";
 import * as HubRepository from "../checkpointing/HubRepository.ts";
+import * as HubRepositoryMaintenance from "../checkpointing/HubRepositoryMaintenance.ts";
 import { checkpointRefForScopeOrdinal } from "../orchestration-v2/CheckpointService.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { requestUrl } from "../requestUrl.ts";
@@ -187,6 +188,7 @@ const checkUpdates = (
 const makeHandler = Effect.fnUntraced(function* (deps: {
   readonly repositories: HubRepository.HubRepositories["Service"];
   readonly packUploads: Option.Option<HubPackUploads.HubPackUploads["Service"]>;
+  readonly maintenance: Option.Option<HubRepositoryMaintenance.HubRepositoryMaintenance["Service"]>;
   readonly registry: EnvironmentRegistry.EnvironmentRegistry["Service"];
   readonly spaces: SpaceDirectory.SpaceDirectory["Service"];
   readonly visibility: SpaceVisibility.SpaceVisibility["Service"];
@@ -338,7 +340,13 @@ const makeHandler = Effect.fnUntraced(function* (deps: {
   ) {
     return HttpServerResponse.text("Forbidden", { status: 403 });
   }
-  yield* deps.repositories.ensure(key.value);
+  const repository = yield* deps.repositories.ensure(key.value);
+  const pushing = service === "git-receive-pack" && request.method === "POST";
+  // Nothing lands while the state volume is almost full: a full disk would stop the database.
+  if ((pushing || pack?.action === "append") && Option.isSome(deps.maintenance)) {
+    const refusal = yield* deps.maintenance.value.uploadRefusal(Number(contentLength) || 0);
+    if (refusal !== undefined) return HttpServerResponse.text(refusal, { status: 507 });
+  }
   if (pack !== null && Option.isSome(deps.packUploads)) {
     return yield* handlePack({
       uploads: deps.packUploads.value,
@@ -524,6 +532,12 @@ const makeHandler = Effect.fnUntraced(function* (deps: {
       // Broken, never cut short as if complete: the machine sees the request fail.
       Stream.interruptWhen(projectMoved),
       Stream.ensuring(Scope.close(scope, Exit.void)),
+      // Each push lands as a pack or loose objects of its own.
+      Stream.ensuring(
+        pushing && Option.isSome(deps.maintenance)
+          ? deps.maintenance.value.compactSoon(repository)
+          : Effect.void,
+      ),
     );
     const { "content-type": responseType, ...headers } = head.headers;
     return HttpServerResponse.stream(responseBody, {
@@ -558,7 +572,10 @@ const handlePack = Effect.fnUntraced(function* (input: {
   readonly moveEpoch: number;
   readonly writable: ReadonlyArray<string>;
   readonly granted: ReadonlyArray<string>;
-  readonly pack: { readonly uploadId: string; readonly action: "status" | "append" | "apply" };
+  readonly pack: {
+    readonly uploadId: string;
+    readonly action: "status" | "append" | "apply";
+  };
 }) {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const { uploads, owner, key, pack } = input;
@@ -715,6 +732,7 @@ export const layer = HttpRouter.use((router) =>
     const handler = makeHandler({
       repositories: repositories.value,
       packUploads: yield* Effect.serviceOption(HubPackUploads.HubPackUploads),
+      maintenance: yield* Effect.serviceOption(HubRepositoryMaintenance.HubRepositoryMaintenance),
       registry: yield* EnvironmentRegistry.EnvironmentRegistry,
       spaces: yield* SpaceDirectory.SpaceDirectory,
       visibility: yield* SpaceVisibility.SpaceVisibility,

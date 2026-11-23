@@ -24,6 +24,7 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as HubRepository from "./HubRepository.ts";
+import * as HubRepositoryMaintenance from "./HubRepositoryMaintenance.ts";
 
 /** The path segment after a repository's: `/api/git/<repo>/packs/<uploadId>`. */
 export const PACK_UPLOADS_SEGMENT = "packs";
@@ -146,6 +147,7 @@ export const layer = Layer.effect(
     const path = yield* Path.Path;
     const vcs = yield* VcsProcess.VcsProcess;
     const repositories = yield* HubRepository.HubRepositories;
+    const maintenance = yield* HubRepositoryMaintenance.HubRepositoryMaintenance;
     const scope = yield* Effect.scope;
     const root = path.join(config.stateDir, "hub-repository-uploads");
 
@@ -354,7 +356,7 @@ export const layer = Layer.effect(
             const running = { state: "applying" as const };
             jobs.set(file, running);
             yield* Effect.raceFirst(
-              applyStaged(repository, file, request.updates),
+              maintenance.exclusive(repository)(applyStaged(repository, file, request.updates)),
               access.lost,
             ).pipe(
               Effect.exit,
@@ -363,6 +365,7 @@ export const layer = Layer.effect(
                   const endedAt = yield* Clock.currentTimeMillis;
                   if (Exit.isSuccess(exit)) {
                     jobs.set(file, { state: "done", endedAt });
+                    yield* maintenance.compactSoon(repository);
                   } else {
                     const error = detailOf(Cause.squash(exit.cause));
                     jobs.set(file, { state: "failed", error, endedAt });

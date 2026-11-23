@@ -12,6 +12,7 @@ import * as ServerConfig from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as HubPackUploads from "./HubPackUploads.ts";
 import * as HubRepository from "./HubRepository.ts";
+import * as HubRepositoryMaintenance from "./HubRepositoryMaintenance.ts";
 
 const ok = (stdout: string): VcsProcess.VcsProcessOutput => ({
   exitCode: 0 as VcsProcess.VcsProcessOutput["exitCode"],
@@ -68,6 +69,7 @@ it.effect("applying an upload hands rev-list its tips as arguments, as git 2.39 
       // Built in this test's scope: the apply runs on the layer's, which must outlive the call.
       const uploads = yield* Layer.build(
         HubPackUploads.layer.pipe(
+          Layer.provide(HubRepositoryMaintenance.layer),
           Layer.provide(Layer.succeed(VcsProcess.VcsProcess, fake)),
           Layer.provide(Layer.succeed(HubRepository.HubRepositories, repositories)),
           Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-hub-packs-" })),

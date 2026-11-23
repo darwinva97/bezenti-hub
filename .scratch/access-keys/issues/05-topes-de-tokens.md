@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Tipo:** AFK (el número de peticiones en curso sigue la recomendación de la pregunta abierta 3; cambiarlo es una constante)
+**Tipo:** AFK (pregunta abierta 3 decidida: sin límite propio de peticiones en curso; rige el general de 16 por gateway key)
 
 Spec: ../spec.md
 
@@ -18,7 +18,7 @@ Spec: ../spec.md
   - [ ] una petición nueva tras alcanzar el tope diario da 429 con el mensaje y `retry-after`; al día siguiente (UTC) vuelve a pasar;
   - [ ] semana ISO y mes igual; el total da 403 y no vuelve con el cambio de día;
   - [ ] total y diario a la vez: gana el total;
-  - [ ] una petición en curso cuando se alcanza el tope termina y cuenta entera; con 4 en paralelo, el exceso es como mucho de esas 4;
+  - [ ] una petición en curso cuando se alcanza el tope termina y cuenta entera; el exceso queda en las peticiones que ya estaban en curso;
   - [ ] lo que el writer no ha escrito ya cuenta (`unwritten`);
   - [ ] las lecturas de caché no cuentan; una respuesta cortada cuenta su estimación.
 - [ ] Docs: «Access keys» → topes y por qué se pueden pasar.

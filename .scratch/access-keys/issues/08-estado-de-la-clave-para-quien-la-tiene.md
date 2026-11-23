@@ -6,7 +6,7 @@
 
 **Status:** needs-triage
 
-**Tipo:** HITL: necesita la decisión de la pregunta abierta 5 (si se hace y qué devuelve).
+**Tipo:** AFK (pregunta abierta 5 decidida el 2026-11-23: sí, como describe la spec).
 
 Spec: ../spec.md
 

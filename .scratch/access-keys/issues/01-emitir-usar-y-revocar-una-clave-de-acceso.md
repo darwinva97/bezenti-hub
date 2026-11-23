@@ -16,7 +16,7 @@ Spec: ../spec.md
 - [ ] `ai/AccessKeys.ts`: `create`, `list`, `revoke` y sus gemelas `*ForSession` (solo la sesión de una persona: nunca un agente, el shell ni una sesión limitada a un Space). Crear: la comprobación del Space y el insert en una transacción de escritura; 50 vivas por Space.
 - [ ] `AllowedAiAccounts.forSpace(spaceId)`: las cuentas propias del Space, sin condición de User; solo de gateway.
 - [ ] `AiGatewayKeys.authorize`: con `t3ak_`, lee `ai_access_keys` y su Space; revocada o desconocida → 401; caducada → 403 con la fecha UTC; Space archivado, congelado o de un User deshabilitado → 403; sin cuentas → 403; `GatewayCaller` con `kind: "access"`, `userId: null`, `accessKeyId`. `last_used_at` como mucho una vez por minuto. `isGatewayKeyShaped` acepta los dos prefijos.
-- [ ] `AiGatewayProxy` y `AiGatewayActivity`: sujeto de colas `ak:<id>`; 4 peticiones en curso por access key; `GatewayRequestRecord.accessKeyId`, `userId: null`. `AiUsage` escribe `user_id = ''` y `access_key_id`.
+- [ ] `AiGatewayProxy` y `AiGatewayActivity`: sujeto de colas `ak:<id>`; el mismo límite general de peticiones en curso que cualquier gateway key (16), sin uno propio; `GatewayRequestRecord.accessKeyId`, `userId: null`. `AiUsage` escribe `user_id = ''` y `access_key_id`.
 - [ ] Auditoría `access_key.create` y `access_key.revoke` (allow-list de detalle en `audit.ts`).
 - [ ] WS `accessKeys.list|create|revoke` en `RPC_SPACE_ACCESS` y `clientRpcPermissions`.
 - [ ] `@t3tools/shared/aiGatewayAccessKey`: setup de Claude Code, Codex y «Other clients» (con marcador cuando no hay clave), con su test.

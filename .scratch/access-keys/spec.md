@@ -134,7 +134,7 @@ El Owner y los Admins quieren dar acceso a las AI accounts de un Space a persona
 - **Total:** todo lo que la clave usó desde que se creó, renovaciones incluidas. Renovar no lo pone a cero: para dar más, se sube el total (lo que el emisor ve al renovar: «Used 8.1M of 10M total»).
 - **Usado** = filas de `ai_usage_daily` de la clave (columna `access_key_id`, abajo) del periodo + lo que `AiGatewayActivity` registró y el writer aún no escribió (`unwritten`, hoy por Grant; pasa a ser por sujeto de tope: `grant:<id>` o `access-key:<id>`), así que un tope nunca cuenta de menos.
 - **Respuestas sin uso conocido** (cortadas antes del último evento, o sin `usage`): para una access key cuentan con una **estimación**, nunca 0: el mayor entre lo que el tap llegó a leer (p. ej. la entrada de `message_start` de Anthropic) y `ceil(bytes del cuerpo de la petición / 4)` de entrada + `ceil(bytes de respuesta entregados / 4)` de salida. Sin esto, alguien de fuera podría cortar cada respuesta justo antes del evento final (donde OpenAI y Anthropic ponen la salida) y nunca gastar tope. La estimación se guarda aparte (`estimated_tokens` en `ai_usage_daily`), la petición sigue contando como `unknown_requests` y el uso la muestra como «≈». Los Grants siguen contando 0 (pregunta abierta 4). Una petición fallida (estado ≥ 400) no lleva tokens; una rechazada por el Hub (carga, tope, modelo) no llegó a ninguna cuenta y no cuenta nada.
-- **Cuándo se mira:** al empezar cada petición, después del modelo y de las cuentas, nunca a mitad de respuesta. Una petición admitida por debajo del tope termina y cuenta entera: solo las que ya estaban en curso cuando se alcanzó pueden pasarlo. Ese exceso se acota con un máximo de **4 peticiones en curso por access key** (hoy 16 por clave): no es un límite por minuto (decisión 3), sino de simultaneidad (pregunta abierta 3). Bajar un tope por debajo de lo usado rechaza la siguiente.
+- **Cuándo se mira:** al empezar cada petición, después del modelo y de las cuentas, nunca a mitad de respuesta. Una petición admitida por debajo del tope termina y cuenta entera: solo las que ya estaban en curso cuando se alcanzó pueden pasarlo. Ese exceso lo acota solo el límite general de peticiones en curso que ya tiene cada gateway key (16): las access keys no tienen uno propio (pregunta abierta 3, decidida: sin límite propio). Bajar un tope por debajo de lo usado rechaza la siguiente.
 - **Un tope de clave y un tope de Grant son independientes:** cuando una clave llegue a cuentas prestadas (ticket 09), una petición tiene que caber en los dos.
 
 ### Lo que recibe el cliente
@@ -237,7 +237,7 @@ Siempre en la forma de la ruta (`errorBody`, como hoy), con el estado de abajo; 
 
 ## Out of Scope
 
-- **Límite de peticiones por minuto** por clave (decisión 3). Solo el de simultaneidad que acota el exceso de un tope.
+- **Límite de peticiones por minuto** por clave (decisión 3), ni uno propio de peticiones en curso (pregunta abierta 3): solo el general de cada gateway key.
 - **Topes en USD:** el coste se estima y se muestra (`aiPrices.ts`), nunca se aplica.
 - **Credenciales directas:** una access key nunca llega a una AI account `direct`.
 - **Enviar la clave** por correo u otro canal desde el Hub, o que quien la recibe se dé de alta: el emisor la copia y la manda por su canal.
@@ -266,7 +266,9 @@ Siempre en la forma de la ruta (`errorBody`, como hoy), con el estado de abajo; 
 
   2 y 3 pueden ir en paralelo tras 1; 8, 9 y 10 en paralelo tras 6.
 
-## Preguntas abiertas
+## Preguntas abiertas (decididas por el Owner el 2026-11-23)
+
+Decisiones: 1 → no en esta versión (ticket 09 queda para después, con el permiso del prestador); 2 → sí; 3 → **sin límite propio** de peticiones en curso para las access keys: rige el mismo límite general que ya tiene cada gateway key (16), y el exceso sobre un tope queda acotado solo por eso; 4 → sí, estimación por bytes solo para access keys; 5 → sí, ticket 08 se construye.
 
 1. **¿Una access key llega a AI accounts prestadas al Space por un Grant?** Quien presta confió en un Space y en su gente, no en quien reciba una clave; y los topes del Grant y los de la clave se sumarían en una sola petición. Recomendación: no en esta versión (solo las cuentas propias del Space); el ticket 09 añade a los límites de un Grant de AI account un permiso `accessKeys` (por defecto `false`, también en los Grants que ya existen) que solo el prestador cambia, y entonces la petición debe caber en los dos topes.
 2. **¿Puede el User de un Personal space emitir access keys para sus propias cuentas?** El Owner pidió «el Owner o un Admin del Space». Recomendación: sí, el User de un Personal space es quien lo gestiona (como decide los Grants que recibe) y las cuentas son suyas, que ya puede prestar; y el Owner no emite en el Personal space de otro User (no tiene bypass sobre lo ajeno, como en los Grants), aunque sí ve y revoca cualquier clave.

@@ -6,7 +6,7 @@
 
 **Status:** needs-triage
 
-**Tipo:** HITL: necesita la decisión de la pregunta abierta 1 (si se hace, y si el permiso es por Grant y por defecto apagado).
+**Tipo:** Diferido (pregunta abierta 1 decidida el 2026-11-23: no en esta versión; se hará más adelante con el permiso del prestador).
 
 Spec: ../spec.md
 

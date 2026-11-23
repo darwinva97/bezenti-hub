@@ -39,6 +39,15 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
@@ -107,6 +116,7 @@ function useAccessKeyCommands() {
     list: useAtomCommand(aiGatewayEnvironment.listAccessKeys, "list the access keys"),
     create: useAtomCommand(aiGatewayEnvironment.createAccessKey, "make an access key"),
     revoke: useAtomCommand(aiGatewayEnvironment.revokeAccessKey, "revoke an access key"),
+    update: useAtomCommand(aiGatewayEnvironment.updateAccessKey, "change an access key"),
     options: useAtomCommand(
       aiGatewayEnvironment.accessKeyModelOptions,
       "read what a key may reach",
@@ -250,6 +260,13 @@ function AccessKeysPanel({
   const [revokePending, setRevokePending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [options, setOptions] = useState<AccessKeyModelOptions | null>(null);
+  const [editing, setEditing] = useState<{
+    readonly key: AccessKey;
+    readonly mode: "renew" | "edit";
+  } | null>(null);
+  const mayUpdate = useAtomValue(
+    aiGatewayEnvironment.updateAccessKey.permissionAtom(environmentId),
+  );
   const { copyToClipboard, isCopied } = useCopyToClipboard<string>({
     onError: (cause) => setError(errorMessageOf(cause, "Could not copy it.")),
   });
@@ -463,6 +480,26 @@ function AccessKeysPanel({
                   {isCopied && copied === key.keyId ? "Copied" : "Copy setup"}
                 </Button>
               )}
+              {mayUpdate && canManage && key.revokedAt === null ? (
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    aria-label={`Renew ${key.label}`}
+                    onClick={() => setEditing({ key, mode: "renew" })}
+                  >
+                    Renew
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    aria-label={`Edit ${key.label}`}
+                    onClick={() => setEditing({ key, mode: "edit" })}
+                  >
+                    Edit
+                  </Button>
+                </>
+              ) : null}
               {mayRevoke && key.revokedAt === null ? (
                 <Button
                   size="sm"
@@ -476,6 +513,17 @@ function AccessKeysPanel({
             </li>
           ))}
         </ul>
+      )}
+      {editing === null ? null : (
+        <EditAccessKeyDialog
+          accessKey={editing.key}
+          mode={editing.mode}
+          environmentId={environmentId}
+          accounts={options?.accounts ?? []}
+          update={commands.update}
+          onClose={() => setEditing(null)}
+          onChanged={() => void load()}
+        />
       )}
       <AlertDialog
         open={revoking !== null}
@@ -774,6 +822,243 @@ function AccountPicker(props: {
   );
 }
 
+type CapsText = Readonly<Record<keyof AccessKeyLimits, string>>;
+
+/** The caps' text fields, from a key's caps (empty: none). */
+const capsTextOf = (limits: AccessKeyLimits): CapsText => ({
+  total: limits.total === null ? "" : String(limits.total),
+  day: limits.day === null ? "" : String(limits.day),
+  week: limits.week === null ? "" : String(limits.week),
+  month: limits.month === null ? "" : String(limits.month),
+});
+
+/** Token caps (access-keys ticket 05): any of the four, or «No token limit» chosen explicitly. */
+function CapsFields(props: {
+  readonly caps: CapsText;
+  readonly unlimited: boolean;
+  readonly disabled: boolean;
+  readonly only?: ReadonlyArray<keyof AccessKeyLimits>;
+  readonly onCaps: (caps: CapsText) => void;
+  readonly onUnlimited: (unlimited: boolean) => void;
+}) {
+  return (
+    <fieldset className="flex w-full flex-wrap items-end gap-2 text-xs">
+      <legend className="mb-1 font-medium">Token caps</legend>
+      {CAP_LABELS.filter(([kind]) => props.only === undefined || props.only.includes(kind)).map(
+        ([kind, label]) => (
+          <label key={kind} className="flex flex-col gap-1 font-medium sm:w-32">
+            {label}
+            <Input
+              aria-label={`${label} tokens`}
+              nativeInput
+              type="number"
+              min={1}
+              disabled={props.disabled || props.unlimited}
+              placeholder="No cap"
+              value={props.caps[kind]}
+              onChange={(event) =>
+                props.onCaps({ ...props.caps, [kind]: event.currentTarget.value })
+              }
+            />
+          </label>
+        ),
+      )}
+      {props.only === undefined ? (
+        <label className="flex items-center gap-2">
+          <Checkbox
+            aria-label="No token limit"
+            checked={props.unlimited}
+            disabled={props.disabled}
+            onCheckedChange={(checked) => props.onUnlimited(checked === true)}
+          />
+          No token limit
+        </label>
+      ) : null}
+    </fieldset>
+  );
+}
+
+/**
+ * «Renew» and «Edit» (access-keys ticket 06): a new validity, with the total used and the option
+ * to raise it; or caps, models, accounts and label. The key itself never changes.
+ */
+function EditAccessKeyDialog(props: {
+  readonly accessKey: AccessKey;
+  readonly mode: "renew" | "edit";
+  readonly environmentId: EnvironmentId;
+  readonly accounts: ReadonlyArray<AccessKeyAccountOption>;
+  readonly update: ReturnType<typeof useAccessKeyCommands>["update"];
+  readonly onClose: () => void;
+  readonly onChanged: () => void;
+}) {
+  const key = props.accessKey;
+  const [label, setLabel] = useState(key.label);
+  const [allModels, setAllModels] = useState(accessKeyAllowsAllModels(key.models));
+  const [entries, setEntries] = useState<ReadonlyArray<string>>(
+    accessKeyAllowsAllModels(key.models) ? [] : key.models,
+  );
+  const [allAccounts, setAllAccounts] = useState(key.accounts === null);
+  const [chosen, setChosen] = useState<ReadonlyArray<AiAccountId>>(key.accounts ?? []);
+  const [caps, setCaps] = useState<CapsText>(capsTextOf(key.limits));
+  const noCaps = CAP_LABELS.every(([kind]) => key.limits[kind] === null);
+  const [unlimited, setUnlimited] = useState(noCaps);
+  const [days, setDays] = useState(String(DEFAULT_DAYS));
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const limits = unlimited ? null : limitsOf(caps);
+  const models: ReadonlyArray<string> = allModels ? ["*"] : entries;
+  const reached = allAccounts
+    ? props.accounts
+    : props.accounts.filter((account) => chosen.includes(account.id));
+  const renewDays = Number(days);
+  const renewReady = Number.isInteger(renewDays) && renewDays >= 1 && renewDays <= 366;
+  const capsReady =
+    unlimited || (limits !== null && CAP_LABELS.some(([kind]) => limits[kind] !== null));
+  const ready =
+    props.mode === "renew"
+      ? renewReady && limits !== null
+      : label.trim().length > 0 &&
+        models.length > 0 &&
+        capsReady &&
+        (allAccounts || chosen.length > 0);
+  const submit = () => {
+    const input =
+      props.mode === "renew"
+        ? {
+            keyId: key.keyId,
+            validity: { days: renewDays },
+            ...(limits === null || noCaps ? {} : { limits }),
+          }
+        : {
+            keyId: key.keyId,
+            label: label.trim(),
+            models,
+            accounts: allAccounts ? null : chosen,
+            ...(unlimited || limits === null ? { unlimited: true } : { limits }),
+          };
+    setPending(true);
+    setError(null);
+    void props
+      .update({ environmentId: props.environmentId, input })
+      .then((result) => {
+        if (result._tag === "Success") {
+          props.onChanged();
+          props.onClose();
+        } else {
+          setError(errorMessageOf(squashAtomCommandFailure(result), "Could not change the key."));
+        }
+      })
+      .finally(() => setPending(false));
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !pending) props.onClose();
+      }}
+    >
+      <DialogPopup className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>
+            {props.mode === "renew" ? `Renew «${key.label}»` : `Edit «${key.label}»`}
+          </DialogTitle>
+          <DialogDescription>
+            The key stays the same: whoever holds it keeps their setup. Changes apply from their
+            next request.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <div className="flex flex-col gap-3 text-sm">
+            {props.mode === "renew" ? (
+              <>
+                <label className="flex flex-col gap-1 text-xs font-medium sm:w-40">
+                  Valid for days from now (1 to 366)
+                  <Input
+                    aria-label="Days"
+                    nativeInput
+                    type="number"
+                    min={1}
+                    max={366}
+                    disabled={pending}
+                    value={days}
+                    onChange={(event) => setDays(event.currentTarget.value)}
+                  />
+                </label>
+                {key.limits.total === null ? null : (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Used {formatTokens(key.usage?.total ?? 0)} of {formatTokens(key.limits.total)}{" "}
+                      total. Renewing does not reset it: raise the total to give more.
+                    </p>
+                    <CapsFields
+                      caps={caps}
+                      unlimited={false}
+                      disabled={pending}
+                      only={["total"]}
+                      onCaps={setCaps}
+                      onUnlimited={setUnlimited}
+                    />
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <label className="flex flex-col gap-1 text-xs font-medium">
+                  Who it is for
+                  <Input
+                    aria-label="Who it is for"
+                    nativeInput
+                    disabled={pending}
+                    maxLength={80}
+                    value={label}
+                    onChange={(event) => setLabel(event.currentTarget.value)}
+                  />
+                </label>
+                <CapsFields
+                  caps={caps}
+                  unlimited={unlimited}
+                  disabled={pending}
+                  onCaps={setCaps}
+                  onUnlimited={setUnlimited}
+                />
+                <AccountPicker
+                  accounts={props.accounts}
+                  all={allAccounts}
+                  chosen={chosen}
+                  disabled={pending}
+                  onAll={setAllAccounts}
+                  onChosen={setChosen}
+                />
+                <ModelPicker
+                  catalog={catalogOf(reached)}
+                  all={allModels}
+                  entries={entries}
+                  disabled={pending}
+                  onAll={setAllModels}
+                  onEntries={setEntries}
+                />
+              </>
+            )}
+            {error === null ? null : (
+              <span className="text-xs text-destructive" role="alert">
+                {error}
+              </span>
+            )}
+          </div>
+        </DialogPanel>
+        <DialogFooter variant="bare">
+          <Button variant="outline" disabled={pending} onClick={props.onClose}>
+            Cancel
+          </Button>
+          <Button disabled={pending || !ready} onClick={submit}>
+            {props.mode === "renew" ? "Renew key" : "Save changes"}
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 function NewAccessKeyForm(props: {
   readonly environmentId: EnvironmentId;
   readonly spaceId: SpaceId;
@@ -918,33 +1203,13 @@ function NewAccessKeyForm(props: {
           />
         </label>
       )}
-      <fieldset className="flex w-full flex-wrap items-end gap-2 text-xs">
-        <legend className="mb-1 font-medium">Token caps</legend>
-        {CAP_LABELS.map(([kind, label]) => (
-          <label key={kind} className="flex flex-col gap-1 font-medium sm:w-32">
-            {label}
-            <Input
-              aria-label={`${label} tokens`}
-              nativeInput
-              type="number"
-              min={1}
-              disabled={pending || unlimited}
-              placeholder="No cap"
-              value={caps[kind]}
-              onChange={(event) => setCaps({ ...caps, [kind]: event.currentTarget.value })}
-            />
-          </label>
-        ))}
-        <label className="flex items-center gap-2">
-          <Checkbox
-            aria-label="No token limit"
-            checked={unlimited}
-            disabled={pending}
-            onCheckedChange={(checked) => setUnlimited(checked === true)}
-          />
-          No token limit
-        </label>
-      </fieldset>
+      <CapsFields
+        caps={caps}
+        unlimited={unlimited}
+        disabled={pending}
+        onCaps={setCaps}
+        onUnlimited={setUnlimited}
+      />
       <AccountPicker
         accounts={props.accounts}
         all={allAccounts}

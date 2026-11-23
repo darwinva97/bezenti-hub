@@ -106,6 +106,11 @@ export function createAiGatewayEnvironmentAtoms<R, E>(
       tag: WS_METHODS.accessKeysRevoke,
     }),
     // What a key of the Space may reach: its own gateway accounts and their models (the form).
+    // Renew, extend, or change a key's caps, models, accounts or label (access-keys ticket 06).
+    updateAccessKey: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:access-keys:update",
+      tag: WS_METHODS.accessKeysUpdate,
+    }),
     accessKeyModelOptions: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:access-keys:model-options",
       tag: WS_METHODS.accessKeysModelOptions,

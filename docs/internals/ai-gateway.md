@@ -630,9 +630,26 @@ accounts and for a Personal space below its note.
     holds a subscription (ADR 0005), and its model catalog follows the chosen accounts.
 - **Load:** the same limits as any gateway key, with no limit of its own (the Owner's decision):
   16 requests in flight per key; the per-User pools take `ak:<keyId>` as the key's subject.
-- **Usage:** `ai_usage` rows with `user_id = ''` and `access_key_id` (migration 159); the daily
-  summary keeps them under `user_id = ''`. Settings → AI accounts → Usage leaves those rows out
-  until access-keys ticket 04 shows them as «Access key: <label>».
+- **Usage** (access-keys ticket 04):
+  - **Rows:** `ai_usage` with `user_id = ''` and `access_key_id` (migration 159); the daily summary
+    keys each access key apart (`ai_usage_daily.access_key_id`, '' for the rest, migration 160,
+    which also summed ticket 01's keyless rows again per key from `ai_usage`).
+  - **Answers with no usage** (cut before their last event, or with no `usage`), access keys
+    only: `estimated_tokens` = the larger of what the tap had read (input not read from the cache
+    - output + cache writes, e.g. Anthropic's `message_start`) and `ceil(request bytes / 4) +
+      ceil(delivered bytes / 4)`. The request still counts in `unknown_requests`; a failed one
+      (≥ 400) or one the Hub refused counts nothing. Without it, someone could cut every answer just
+      before its last event (where OpenAI and Anthropic put the output) and never spend a cap.
+      Grants keep counting 0.
+  - **Who sees it** (`AiUsage.summary`): whoever has `accessKey.view` in its Space: the Owner, an
+    Organization's Admins (who see the whole Space anyway), a Personal space's User for their own
+    keys; never a Member. Rows have `userId: null` and `accessKeyId`; the labels name the keys
+    («Access key: <label>» beside the Users), a filter `accessKeyId` only narrows, and the totals
+    carry `estimatedTokens` («≈»).
+  - **In the list** (`AccessKeyCaps.usageOf`): per key, tokens as caps count them today, this ISO
+    week, this month (UTC) and since it was made, plus what the usage log has not written yet
+    (`AiGatewayActivity.unwritten` is now per cap subject: `grant:<id>`, `access-key:<id>`); cache
+    reads, requests with no usage and their estimate said apart, never as zero.
 - **Setup** (`@t3tools/shared/aiGatewayAccessKey`, the Hub's public URL, else the address the
   client reaches it on): Claude Code `env.ANTHROPIC_BASE_URL` and `env.ANTHROPIC_AUTH_TOKEN`; Codex
   `model_provider = "t3"` with the key in the shell line, never in `config.toml`; other clients,

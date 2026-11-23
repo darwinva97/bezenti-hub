@@ -1005,13 +1005,19 @@ const make = Effect.gen(function* () {
     `).pipe(Effect.catch(storage("read your Space's loans")));
     const { grants } = yield* summaries(rows, who);
     const known = yield* targetsOf(rows);
-    // Waiting ones only for whoever decides; active ones for whoever works there.
+    // Waiting ones only for whoever decides; active ones for whoever works there; ended ones, the
+    // history, for whoever runs the Space (Grants ticket 13: not its Members).
     return {
       grants: grants.filter((grant, index) => {
         const row = rows[index];
         const target = row?.targetId == null ? undefined : known.get(row.targetId as SpaceId);
         if (row === undefined || target === undefined) return false;
-        const action = grant.state === "pending" ? "grant.decide" : "grant.viewReceived";
+        const action =
+          grant.state === "pending"
+            ? "grant.decide"
+            : grant.state === "ended"
+              ? "grant.return"
+              : "grant.viewReceived";
         return AccessPolicy.isAllowed(
           AccessPolicy.decide(who.principal, action, resourceOf(row, target.resource, known)),
         );

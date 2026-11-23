@@ -68,8 +68,8 @@ Names: `grants.resource_name`, `lender_name` and `target_name` (migration 162) a
 live rows on every change of a loan's state; the lists read the live name first, then the kept one,
 so an ended loan of a deleted group, a purged AI account or a deleted Organization is still named.
 A loan whose Space is gone is decided on its lender's side only (as a link with no destination), so
-its lender still sees it. `grants.listReceived` lists `ended` loans too, to whoever sees active
-ones there. Migration 162 also ended the live loans of resources earlier Hubs deleted without ending
+its lender still sees it. `grants.listReceived` lists `ended` loans too, to whoever runs the
+Space (`grant.return`: its Admins, a Personal space's User), never its Members or Guests. Migration 162 also ended the live loans of resources earlier Hubs deleted without ending
 them, and cancelled their links.
 
 Leaving the destination Organization ends nothing: the lender still takes it back, the Space still

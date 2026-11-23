@@ -36,7 +36,7 @@ import { type Hub, makeHub } from "./HubWithEnvironments.testkit.ts";
 
 const NO_CAP = { kind: "ai-account", tokens: null, requests: null } as const;
 
-/** Acme (Adam its Admin, Mia a Member, Ana a Member) and Globex, run by the Owner. */
+/** Acme (Adam its Admin, Mia and Ana Members) and Globex, run by the Owner. */
 const cast = Effect.fn(function* (hub: Hub) {
   const owner = yield* ownerIdOf(hub);
   const acme = yield* createOrganization(hub, "Acme");
@@ -49,6 +49,12 @@ const cast = Effect.fn(function* (hub: Hub) {
     yield* addMember(hub.server, { id, displayName: id[0]?.toUpperCase() + id.slice(1) });
     yield* joinOrganization(hub.server, acme, id, role);
   }
+  // Adam runs Acme with a strong factor of his own (an Admin without one acts as a Member).
+  yield* hub.server.sql`
+    INSERT INTO user_passkeys (credential_id, user_id, public_key, sign_count, transports, rp_id,
+      created_at)
+    VALUES ('adam-key', 'adam', 'key', 0, '[]', '127.0.0.1', '2026-01-01T00:00:00.000Z')
+  `;
   yield* hub
     .service(SpaceDirectory.SpaceDirectory)
     .membershipsChanged([UserId.make("adam"), UserId.make("mia"), UserId.make("ana")]);
@@ -251,7 +257,9 @@ describe("Hub con Environments: loans end by themselves (Grants 11)", () => {
           ended: true,
         };
         assert.deepEqual(shown(yield* given(hub, people.ana), grantId), expected);
-        assert.deepEqual(shown(yield* received(hub, people.mia, people.acme), grantId), expected);
+        assert.deepEqual(shown(yield* received(hub, people.adam, people.acme), grantId), expected);
+        // Grants ticket 13: an ended loan is history for whoever runs the Space, not its Members.
+        assert.isUndefined(shown(yield* received(hub, people.mia, people.acme), grantId));
       }).pipe(Effect.scoped),
   );
 
@@ -285,7 +293,7 @@ describe("Hub con Environments: loans end by themselves (Grants 11)", () => {
           dropped.map((row) => row.space),
           [people.acme],
         );
-        assert.deepEqual(shown(yield* received(hub, people.mia, people.acme), grantId), {
+        assert.deepEqual(shown(yield* received(hub, people.adam, people.acme), grantId), {
           resource: "Ana tools",
           lender: "Ana",
           target: "Acme",
@@ -381,7 +389,7 @@ describe("Hub con Environments: loans end by themselves (Grants 11)", () => {
         assert.deepEqual(yield* auditsOf(hub, grantId), [
           ["grant.end", "lender-gone", "system", "organization.delete"],
         ]);
-        assert.deepEqual(shown(yield* received(hub, people.mia, people.acme), grantId), {
+        assert.deepEqual(shown(yield* received(hub, people.adam, people.acme), grantId), {
           resource: "Globex Claude",
           lender: "Globex",
           target: "Acme",

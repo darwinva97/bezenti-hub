@@ -25,6 +25,7 @@ import {
   type AddProjectRemoteSource,
   type AddProjectRemoteSourceReadiness,
 } from "@t3tools/client-runtime/operations/projects";
+import { pendingGrantsOf } from "@t3tools/client-runtime/grants-view";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
@@ -63,6 +64,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  HandshakeIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -553,6 +555,8 @@ function OpenCommandPaletteDialog(props: {
   const currentSpaceName = useCurrentSpace(
     (state) => state.view?.spaces.find((space) => space.id === state.currentSpaceId)?.name ?? null,
   );
+  // Grants ticket 12: loans waiting for the User's decision, as the Space directory counts them.
+  const waitingLoanCount = useCurrentSpace((state) => pendingGrantsOf(state.view).total);
   const contextualProjectRef = resolveThreadActionProjectRef({
     activeDraftThread,
     activeThread: activeThread ?? undefined,
@@ -1667,6 +1671,85 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  // Grants ticket 12: lending starts on each resource's row; loans are decided in «Loans».
+  const openUserSettings = (section: "ai-accounts" | "vault" | "machines", hash?: string) =>
+    navigate({
+      to: "/settings/user/$section",
+      params: { section },
+      ...(hash === undefined ? {} : { hash }),
+    });
+  actionItems.push({
+    kind: "submenu",
+    value: "action:lend-resource",
+    searchTerms: ["lend", "loan", "grant", "share", "ai account", "vault group", "machine"],
+    title: "Lend a resource...",
+    icon: <HandshakeIcon className={ITEM_ICON_CLASS} />,
+    addonIcon: <HandshakeIcon className={ADDON_ICON_CLASS} />,
+    groups: [
+      {
+        value: "lend-resource",
+        label: "Lend",
+        items: [
+          {
+            kind: "action",
+            value: "action:lend-ai-account",
+            searchTerms: ["lend", "ai account", "api key", "subscription"],
+            title: "Lend an AI account",
+            description: "Settings: AI accounts, «Lend…» on its row",
+            icon: <HandshakeIcon className={ITEM_ICON_CLASS} />,
+            run: async () => {
+              await openUserSettings("ai-accounts");
+            },
+          },
+          {
+            kind: "action",
+            value: "action:lend-vault-group",
+            searchTerms: ["lend", "vault", "group", "secrets"],
+            title: "Lend a Vault group",
+            description: "Settings: Vault, «Lend…» on its row",
+            icon: <HandshakeIcon className={ITEM_ICON_CLASS} />,
+            run: async () => {
+              await openUserSettings("vault");
+            },
+          },
+          {
+            kind: "action",
+            value: "action:lend-machine",
+            searchTerms: ["lend", "machine", "environment", "sandbox"],
+            title: "Lend a machine",
+            description: "Settings: Machines, «Lend…» on its row",
+            icon: <HandshakeIcon className={ITEM_ICON_CLASS} />,
+            run: async () => {
+              await openUserSettings("machines");
+            },
+          },
+        ],
+      },
+    ],
+  });
+  actionItems.push({
+    kind: "action",
+    value: "action:loans-waiting",
+    searchTerms: ["loans", "waiting", "accept", "reject", "grants", "pending"],
+    title: "Loans waiting for you",
+    description:
+      waitingLoanCount === 0 ? "None waiting" : `${waitingLoanCount} waiting to accept or reject`,
+    icon: <HandshakeIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await openUserSettings("machines", "grants");
+    },
+  });
+  actionItems.push({
+    kind: "action",
+    value: "action:loans-given",
+    searchTerms: ["loans", "given", "lent", "take back", "grants", "usage"],
+    title: "Loans you gave",
+    icon: <HandshakeIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await openUserSettings("machines", "grants");
+    },
+  });
 
   if (isOwner) {
     actionItems.push({

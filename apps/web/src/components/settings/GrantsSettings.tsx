@@ -18,7 +18,9 @@ import { Fragment, useEffect, useEffectEvent, useState } from "react";
 
 import { acceptGrant, giveGrant } from "../../environments/primary/grants";
 import { fetchAccount } from "../../environments/primary/userAccounts";
+import { readHubLinkOrigin } from "../../hubLinks";
 import { errorMessageOf } from "../../lib/errorMessage";
+import { loadSpaces } from "../../state/currentSpace";
 import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { grantsEnvironment } from "../../state/grants";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -244,7 +246,7 @@ export function LendMachineDialog({
           input: { resource: { kind: "environment", environmentId: machine.id }, limits },
         });
         if (made._tag !== "Success") throw squashAtomCommandFailure(made);
-        setLink(offerLinkOf(made.value, window.location.origin));
+        setLink(offerLinkOf(made.value, readHubLinkOrigin() ?? window.location.origin));
       } catch (cause) {
         setError(errorMessageOf(cause, "The link was not made."));
       } finally {
@@ -558,6 +560,8 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
       setAcceptingGroup(null);
       setEnding(null);
       await reload();
+      // Grants ticket 12: the Space selector's count of loans waiting follows the decision.
+      void loadSpaces(environmentId);
     } catch (cause) {
       setError(errorMessageOf(cause, "That change did not go through."));
     } finally {

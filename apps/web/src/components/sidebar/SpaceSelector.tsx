@@ -1,8 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
+import { pendingGrantsOf } from "@t3tools/client-runtime/grants-view";
 import type { SpaceId } from "@t3tools/contracts";
 import {
   BuildingIcon,
   ChevronsUpDownIcon,
+  HandshakeIcon,
   PlusIcon,
   RefreshCwIcon,
   ServerCogIcon,
@@ -24,6 +26,7 @@ import {
   useCurrentSpace,
   useShellGeneration,
 } from "../../state/currentSpace";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -48,6 +51,20 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+
+/** Grants ticket 12: loans waiting for the viewer's decision, beside a Space or the selector. */
+function WaitingLoans({ count }: { readonly count: number }) {
+  if (count === 0) return null;
+  return (
+    <Badge
+      aria-label={`${count} loan${count === 1 ? "" : "s"} waiting for you`}
+      size="sm"
+      variant="warning"
+    >
+      {count}
+    </Badge>
+  );
+}
 
 /** Picks the Space that new Projects and Threads on this Installation go to. */
 export function SpaceSelector() {
@@ -96,6 +113,7 @@ export function SpaceSelector() {
   // Only the Owner lists archived Organizations, to restore or delete them.
   const archivedOrganizations = view.spaces.filter((space) => space.archived === true);
   const othersPersonal = view.spaces.filter((space) => space.kind === "personal" && !space.isOwn);
+  const waitingLoans = pendingGrantsOf(view);
   const notice =
     current === undefined
       ? "Nothing to work in yet. The Owner can turn on your Personal space or invite you to an Organization."
@@ -130,6 +148,7 @@ export function SpaceSelector() {
           <MenuTrigger render={<SidebarMenuButton aria-label="Switch Space" />}>
             <CurrentIcon />
             <span className="min-w-0 flex-1 truncate">{current?.name ?? "No Space"}</span>
+            <WaitingLoans count={waitingLoans.total} />
             <ChevronsUpDownIcon />
           </MenuTrigger>
           <MenuPopup align="start" side="top">
@@ -141,7 +160,8 @@ export function SpaceSelector() {
               >
                 {ownSpaces.map((space) => (
                   <MenuRadioItem key={space.id} value={space.id} closeOnClick>
-                    {space.name}
+                    <span className="min-w-0 flex-1 truncate">{space.name}</span>
+                    <WaitingLoans count={waitingLoans.bySpace.get(space.id) ?? 0} />
                   </MenuRadioItem>
                 ))}
               </MenuRadioGroup>
@@ -188,6 +208,24 @@ export function SpaceSelector() {
                 <MenuItem onClick={reload}>
                   <RefreshCwIcon />
                   Couldn't refresh Spaces. Retry
+                </MenuItem>
+              </>
+            ) : null}
+            {waitingLoans.total > 0 ? (
+              <>
+                <MenuSeparator />
+                <MenuItem
+                  onClick={() =>
+                    void navigate({
+                      to: "/settings/user/$section",
+                      params: { section: "machines" },
+                      hash: "grants",
+                    })
+                  }
+                >
+                  <HandshakeIcon />
+                  Loans waiting for you
+                  <WaitingLoans count={waitingLoans.total} />
                 </MenuItem>
               </>
             ) : null}

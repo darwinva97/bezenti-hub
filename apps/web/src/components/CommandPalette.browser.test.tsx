@@ -7,6 +7,7 @@ import { openCommandPalette } from "../commandPaletteBus";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { makeThreadFixture } from "../test-fixtures";
 import type { Project, Thread } from "../types";
+import { useCurrentSpace } from "../state/currentSpace";
 import { CommandPalette } from "./CommandPalette";
 
 const entities = vi.hoisted(() => ({
@@ -90,5 +91,41 @@ describe("CommandPalette open intents", () => {
     await page.getByRole("option", { name: /Acme/ }).first().click();
 
     await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/parent"));
+  });
+});
+
+describe("CommandPalette loans (Grants 12)", () => {
+  it("offers lending a resource and the loans, with how many wait for the User", async () => {
+    setup();
+    useCurrentSpace.setState({
+      view: {
+        userId: "adam" as never,
+        personalSpaceId: "personal:adam" as never,
+        canCreateOrganization: true,
+        spaces: [
+          {
+            id: "acme" as never,
+            kind: "organization",
+            name: "Acme",
+            role: "admin",
+            isOwn: false,
+            canCreateThreads: true,
+            canInvite: true,
+            pendingGrants: 2,
+          },
+        ],
+      },
+      currentSpaceId: "acme" as never,
+    });
+    await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+
+    openCommandPalette({ query: "loans" });
+    await expect.element(page.getByText("Loans waiting for you")).toBeVisible();
+    await expect.element(page.getByText("2 waiting to accept or reject")).toBeVisible();
+    await expect.element(page.getByText("Loans you gave")).toBeVisible();
+
+    openCommandPalette({ query: "lend" });
+    await expect.element(page.getByText("Lend a resource...")).toBeVisible();
+    useCurrentSpace.setState({ view: null, currentSpaceId: null });
   });
 });

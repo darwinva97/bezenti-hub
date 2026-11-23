@@ -193,6 +193,7 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "accessKeys.create": none("a new access key, shown once to who made it"),
   "accessKeys.revoke": none("the revoked access key: its label and dates, never a key"),
   "accessKeys.modelOptions": none("a Space's own AI accounts by name and the models they serve"),
+  "accessKeys.update": none("the changed access key: its label, limits and dates, never a key"),
   "aiGateway.status": none("the AI gateway's status"),
   "aiGateway.checkForUpdates": none("the AI gateway's status"),
   "aiGateway.update": none("the AI gateway's status"),

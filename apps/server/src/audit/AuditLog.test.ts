@@ -621,6 +621,8 @@ it.effect(
         // ai/AccessKeys.test.ts (access-keys ticket 01: made and revoked by a Space's managers)
         "access_key.create",
         "access_key.revoke",
+        // ai/AccessKeys.update.test.ts (access-keys ticket 06)
+        "access_key.update",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

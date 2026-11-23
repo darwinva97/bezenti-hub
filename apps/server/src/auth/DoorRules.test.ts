@@ -657,6 +657,7 @@ describe("every door of the Hub declares its rule", () => {
       "accessKeys.list",
       "accessKeys.modelOptions",
       "accessKeys.revoke",
+      "accessKeys.update",
     ]);
     // Decided in AccessKeys for the session's own person, by AccessPolicy on the key's Space.
     for (const rpc of keyRpcs) {

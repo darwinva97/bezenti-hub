@@ -57,6 +57,7 @@ import {
   AccessKeyModelOptions,
   AccessKeyModelOptionsInput,
   AccessKeyRevokeInput,
+  AccessKeyUpdateInput,
 } from "./accessKeys.ts";
 import {
   AiGatewayError,
@@ -760,6 +761,8 @@ export const WS_METHODS = {
   accessKeysRevoke: "accessKeys.revoke",
   // Access-keys ticket 02: the models the Space's own accounts serve, for the form.
   accessKeysModelOptions: "accessKeys.modelOptions",
+  // Access-keys ticket 06: renew, extend, change caps, models, accounts or label.
+  accessKeysUpdate: "accessKeys.update",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1454,6 +1457,11 @@ const WsAccessKeysCreateRpc = Rpc.make(WS_METHODS.accessKeysCreate, {
 });
 const WsAccessKeysRevokeRpc = Rpc.make(WS_METHODS.accessKeysRevoke, {
   payload: AccessKeyRevokeInput,
+  success: AccessKey,
+  error: AccessKeyErrors,
+});
+const WsAccessKeysUpdateRpc = Rpc.make(WS_METHODS.accessKeysUpdate, {
+  payload: AccessKeyUpdateInput,
   success: AccessKey,
   error: AccessKeyErrors,
 });
@@ -2584,6 +2592,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAccessKeysCreateRpc,
   WsAccessKeysRevokeRpc,
   WsAccessKeysModelOptionsRpc,
+  WsAccessKeysUpdateRpc,
   WsProjectCloneStartRpc,
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,

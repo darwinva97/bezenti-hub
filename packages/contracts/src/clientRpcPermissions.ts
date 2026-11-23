@@ -66,6 +66,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // A Space's access keys (access-keys ticket 01): a credential to the Hub's AI gateway.
   [WS_METHODS.accessKeysCreate]: AuthAccessWriteScope,
   [WS_METHODS.accessKeysRevoke]: AuthAccessWriteScope,
+  [WS_METHODS.accessKeysUpdate]: AuthAccessWriteScope,
   [WS_METHODS.projectCloneStart]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneCancel]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneRetry]: AuthSourceControlWriteScope,

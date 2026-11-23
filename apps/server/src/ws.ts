@@ -3000,6 +3000,7 @@ export const layerWsRpc = (
         [WS_METHODS.accessKeysCreate]: (input) => accessKeys.createForSession(input),
         [WS_METHODS.accessKeysRevoke]: (input) => accessKeys.revokeForSession(input),
         [WS_METHODS.accessKeysModelOptions]: (input) => accessKeys.modelOptionsForSession(input),
+        [WS_METHODS.accessKeysUpdate]: (input) => accessKeys.updateForSession(input),
         [WS_METHODS.projectCloneStart]: (input) =>
           requireCloneDestination(input.destinationPath, { asProject: true }).pipe(
             Effect.andThen(

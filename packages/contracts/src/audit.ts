@@ -82,6 +82,8 @@ export const AuditAction = Schema.Literals([
   // Access-keys ticket 01: a Space's access key made or revoked (by a person, or by the Hub).
   "access_key.create",
   "access_key.revoke",
+  // Access-keys ticket 06: renewed, extended, or its caps, models, accounts or label changed.
+  "access_key.update",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -355,6 +357,8 @@ export const AUDIT_DETAIL_KEYS = {
   "access_key.create": ["space", "expiresAt", "limits", "models", "accounts", "subscription"],
   /** Why: `revoked` by a person; `space-gone` by the Hub (`via` the removal that took it). */
   "access_key.revoke": ["space", "reason", "via"],
+  /** Which fields changed (`changed`), the new expiry and caps; `via: renew` for only the expiry. */
+  "access_key.update": ["space", "changed", "expiresAt", "limits", "via"],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

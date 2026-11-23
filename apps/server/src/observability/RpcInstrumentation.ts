@@ -180,6 +180,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.accessKeysCreate]: "server",
   [WS_METHODS.accessKeysRevoke]: "server",
   [WS_METHODS.accessKeysModelOptions]: "server",
+  [WS_METHODS.accessKeysUpdate]: "server",
   [WS_METHODS.aiAccountsPicker]: "server",
   [WS_METHODS.threadSetAiAccount]: "server",
   [WS_METHODS.aiAccountsCreate]: "server",

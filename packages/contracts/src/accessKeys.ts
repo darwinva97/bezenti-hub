@@ -223,6 +223,30 @@ export type AccessKeyListResult = typeof AccessKeyListResult.Type;
 
 export const AccessKeyRevokeInput = Schema.Struct({ keyId: TrimmedNonEmptyString });
 
+/**
+ * Access-keys ticket 06: renew or extend a key (an expired one too), change its caps, models,
+ * accounts or label; from the next request, with the same key. Only what is given changes.
+ */
+export const AccessKeyUpdateInput = Schema.Struct({
+  keyId: TrimmedNonEmptyString,
+  label: Schema.optionalKey(AccessKeyLabel),
+  /** A new expiry from now, at most 366 days. */
+  validity: Schema.optionalKey(AccessKeyValidity),
+  models: Schema.optionalKey(AccessKeyModels),
+  /** Null: every account the Space owns; a list: those. */
+  accounts: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Array(AiAccountId).check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(ACCESS_KEY_MAX_ACCOUNTS),
+      ),
+    ),
+  ),
+  limits: Schema.optionalKey(AccessKeyLimits),
+  unlimited: Schema.optionalKey(Schema.Boolean),
+});
+export type AccessKeyUpdateInput = typeof AccessKeyUpdateInput.Type;
+
 export const AccessKeyModelOptionsInput = Schema.Struct({ spaceId: SpaceId });
 export type AccessKeyModelOptionsInput = typeof AccessKeyModelOptionsInput.Type;
 

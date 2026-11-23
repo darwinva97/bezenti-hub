@@ -25,6 +25,7 @@ import {
   type AccessKeyModelOptionsInput,
   type AccessKeyReach,
   type AccessKeyRevokeInput,
+  type AccessKeyUpdateInput,
   type AccessKeyValidity,
   accessKeyModelEntryValid,
   AiAccountId,
@@ -329,6 +330,16 @@ export class AccessKeys extends Context.Service<
     readonly modelOptionsForSession: (
       input: AccessKeyModelOptionsInput,
     ) => Effect.Effect<AccessKeyModelOptions, AccessKeyError>;
+    /**
+     * Renews, extends or changes a key (access-keys ticket 06): whoever may make keys in its Space
+     * (`accessKey.manage`); never a revoked one. From the next request, with the same key.
+     */
+    readonly update: (
+      input: AccessKeyUpdateInput & { readonly actorUserId: UserId },
+    ) => Effect.Effect<AccessKey, AccessKeyError>;
+    readonly updateForSession: (
+      input: AccessKeyUpdateInput,
+    ) => Effect.Effect<AccessKey, AccessKeyError>;
   }
 >()("t3/ai/AccessKeys") {}
 
@@ -675,6 +686,158 @@ const make = Effect.gen(function* () {
     } satisfies AccessKeyListResult;
   });
 
+  /**
+   * Changes a key from what this transaction read (the Hub's SQLite client begins writing
+   * transactions `IMMEDIATE`), guarded by its `updated_at` too: never from a stale copy.
+   */
+  const update = Effect.fn("AccessKeys.update")(function* (
+    input: AccessKeyUpdateInput & { readonly actorUserId: UserId },
+  ) {
+    const label = input.label === undefined ? undefined : yield* checkedLabel(input.label);
+    const models = input.models === undefined ? undefined : checkedModels(input.models);
+    if (models !== undefined && models._tag === "refused") {
+      return yield* fail(
+        "invalid",
+        `Choose «All models», or 1 to ${ACCESS_KEY_MAX_MODELS} model names or patterns ending in a single *.`,
+      );
+    }
+    const limits =
+      input.limits === undefined && input.unlimited === undefined
+        ? undefined
+        : checkedLimits(input.limits, input.unlimited);
+    if (limits !== undefined && limits._tag === "refused") {
+      return yield* fail("invalid", limits.message);
+    }
+    const chosen =
+      input.accounts === undefined
+        ? undefined
+        : input.accounts === null
+          ? null
+          : [...new Set(input.accounts)];
+    if (chosen !== undefined && chosen !== null && chosen.length === 0) {
+      return yield* fail(
+        "invalid",
+        "Choose all of this Space's AI accounts, or at least one of them.",
+      );
+    }
+    const now = yield* DateTime.now;
+    const expiry = input.validity === undefined ? undefined : expiryOf(input.validity, now);
+    if (expiry !== undefined && expiry._tag === "refused") {
+      return yield* fail("invalid", expiry.message);
+    }
+    const at = DateTime.formatIso(now);
+    const outcome = yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const found = yield* sql<KeyRow & { readonly updatedAt: string }>`
+            SELECT ${sql.literal(KEY_COLUMNS)}, updated_at AS "updatedAt" FROM ai_access_keys
+            WHERE key_id = ${input.keyId}
+          `;
+          const row = found[0];
+          if (row === undefined) return { _tag: "not-found" } as const;
+          const principal = yield* spaces.principalOf(input.actorUserId);
+          const space = (yield* spaces.spacesById([SpaceId.make(row.spaceId)])).get(
+            SpaceId.make(row.spaceId),
+          );
+          if (
+            space === undefined ||
+            !AccessPolicy.isAllowed(
+              AccessPolicy.decide(principal, "accessKey.view", space.resource),
+            )
+          ) {
+            return space === undefined && principal.isOwner
+              ? ({ _tag: "denied", reason: "space-gone" } as const)
+              : ({ _tag: "not-found" } as const);
+          }
+          const decision = AccessPolicy.decide(principal, "accessKey.manage", space.resource);
+          if (decision._tag === "Deny") return { _tag: "denied", reason: decision.reason } as const;
+          if (row.revokedAt !== null) return { _tag: "revoked" } as const;
+          const current = limitsOf(row);
+          let nextAccountsJson = row.accountsJson;
+          if (chosen !== undefined) {
+            if (chosen !== null) {
+              const own = new Set<string>(
+                (yield* allowedAccounts.forSpace(SpaceId.make(row.spaceId)))
+                  .filter((account) => account.type !== "direct")
+                  .map((account) => account.id),
+              );
+              if (!chosen.every((id) => own.has(id))) return { _tag: "not-own" } as const;
+            }
+            nextAccountsJson = chosen === null ? null : jsonOf(chosen);
+          }
+          const next = {
+            label: label ?? row.label,
+            expiresAt: expiry?.expiresAt ?? row.expiresAt,
+            modelsJson: models === undefined ? row.modelsJson : jsonOf(models.models),
+            accountsJson: nextAccountsJson,
+            limits: limits === undefined ? current.limits : limits.limits,
+          };
+          const nextLimitsJson = jsonOf(next.limits);
+          const changed = [
+            ...(next.label === row.label ? [] : ["label"]),
+            ...(next.expiresAt === row.expiresAt ? [] : ["expiresAt"]),
+            ...(next.modelsJson === row.modelsJson ? [] : ["models"]),
+            ...(next.accountsJson === row.accountsJson ? [] : ["accounts"]),
+            ...(nextLimitsJson === jsonOf(current.limits) ? [] : ["limits"]),
+          ];
+          if (changed.length === 0) return { _tag: "unchanged" } as const;
+          const written = yield* sql<{ readonly keyId: string }>`
+            UPDATE ai_access_keys SET label = ${next.label}, expires_at = ${next.expiresAt},
+              models_json = ${next.modelsJson}, accounts_json = ${next.accountsJson},
+              limits_json = ${nextLimitsJson}, updated_at = ${at}
+            WHERE key_id = ${row.keyId} AND updated_at = ${row.updatedAt}
+              AND revoked_at IS NULL
+            RETURNING key_id AS "keyId"
+          `;
+          if (written.length === 0) return { _tag: "conflict" } as const;
+          yield* audit.record({
+            actor: AuditLog.userActor(input.actorUserId),
+            action: "access_key.update",
+            spaceId: SpaceId.make(row.spaceId),
+            target: { kind: "access_key", id: row.keyId, name: next.label },
+            detail: {
+              space: row.spaceId,
+              changed: changed.join(","),
+              expiresAt: next.expiresAt,
+              limits: limitsText(next.limits),
+              ...(changed.length === 1 && changed[0] === "expiresAt" ? { via: "renew" } : {}),
+            },
+          });
+          return { _tag: "changed" } as const;
+        }),
+      )
+      .pipe(Effect.catch(storage("change the access key")));
+    switch (outcome._tag) {
+      case "not-found":
+        return yield* fail("not-found", NO_SUCH_KEY);
+      case "denied":
+        return yield* fail(
+          "forbidden",
+          outcome.reason === "space-archived" || outcome.reason === "space-frozen"
+            ? "This Space is archived: its access keys can be revoked, not changed."
+            : "You cannot change this Space's access keys.",
+        );
+      case "revoked":
+        return yield* fail("invalid", "A revoked key is not renewed or changed: make a new one.");
+      case "not-own":
+        return yield* fail(
+          "invalid",
+          "Choose AI accounts this Space owns that go through the AI gateway (not a direct one, nor one lent to it).",
+        );
+      case "conflict":
+        return yield* fail("invalid", "This key changed meanwhile. Try again.");
+      case "unchanged":
+      case "changed": {
+        const rows = yield* sql<KeyRow>`
+          SELECT ${sql.literal(KEY_COLUMNS)} FROM ai_access_keys WHERE key_id = ${input.keyId}
+        `.pipe(Effect.catch(storage("read the access key")));
+        const [key] = yield* withUsage(yield* shown(rows));
+        if (key === undefined) return yield* fail("not-found", NO_SUCH_KEY);
+        return key;
+      }
+    }
+  });
+
   const revoke = Effect.fn("AccessKeys.revoke")(function* (
     input: AccessKeyRevokeInput & { readonly actorUserId: UserId },
   ) {
@@ -781,6 +944,12 @@ const make = Effect.gen(function* () {
       input: AccessKeyRevokeInput,
     ) {
       return yield* revoke({ ...input, actorUserId: yield* sessionUser });
+    }),
+    update,
+    updateForSession: Effect.fn("AccessKeys.updateForSession")(function* (
+      input: AccessKeyUpdateInput,
+    ) {
+      return yield* update({ ...input, actorUserId: yield* sessionUser });
     }),
     modelOptions,
     modelOptionsForSession: Effect.fn("AccessKeys.modelOptionsForSession")(function* (

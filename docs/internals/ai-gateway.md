@@ -115,7 +115,7 @@ version, `updated` or `failed`, reason) and `ai_gateway.rollback` (`rolled-back`
   `aiUsage.summary`: counts only (`AiUsage.test.ts`).
 - **WS `accessKeys.list|create|revoke|modelOptions`:** a Space's access keys, for whoever manages
   the Space and the Owner, from a person's own session only (`AccessKeys.test.ts`,
-  `AccessKeys.models.test.ts`).
+  `AccessKeys.models.test.ts`, `AccessKeys.accounts.test.ts`).
 - **Raw `/api/ai/*`:** a gateway key, checked per request against `AllowedAiAccounts` for its turn
   owner and Space (`AiGatewayRoute*.test.ts`), in `DoorRules.RAW_ROUTE_RULES` and
   `AMBIENT_COOKIE_RULES`.
@@ -581,7 +581,7 @@ accounts and for a Personal space below its note.
   4. no AI account: 403 «No AI account this access key may use is available now.»
   - The accounts are `AllowedAiAccounts.forSpace`: the Space's own enabled ones in its order, no
     User's condition, never one lent by a Grant (the lender trusted the Space's people, not a
-    key's holder) and never a `direct` one.
+    key's holder) and never a `direct` one; with a list, only those of it (below).
   - The caller is `kind: "access"`, `userId: null`, `accessKeyId`. It routes as a User key does
     (`planRoute`): `acct-<id>/` pins only an account the key reaches (403 otherwise).
 - **Models** (access-keys ticket 02):
@@ -611,6 +611,23 @@ accounts and for a Personal space below its note.
     first, Claude ones first; the main model Sonnet's, else Opus's), so its background model never
     asks for a refused one; Codex gets `model` (an OpenAI one if allowed). Nothing is pinned when
     no model is known. Audited `models`: `all` or the number of entries.
+- **AI accounts it reaches** (access-keys ticket 03):
+  - **All, or a list:** `accounts_json` NULL reaches every AI account the Space owns, those it adds
+    later included; a list reaches those accounts only. At create each id must be a gateway
+    account (`api-key`, `subscription`) the Space owns: a lent, `direct`, other Space's or unknown
+    account is `invalid`. 1 to 100, duplicates fold. Audited `accounts`: `all` or the count;
+    `subscription` says whether what the key reaches holds one.
+  - **Per request:** `forSpace` (the Space's own, enabled, non-`direct` accounts) ∩ the list. An
+    account the Space no longer has (disabled, deleted, given to another owner) stops counting
+    without touching the key, and counts again if it comes back; none left: 403 «No AI account
+    this access key may use is available now.»
+  - **Routing:** within that reach only. `acct-<id>/` outside it: 403 «This access key may not use
+    that AI account.»; failover only among the key's accounts of the same provider (a key with
+    only A answers A's 429, never B).
+  - **List and form:** `AccessKey.reaches` names each account of a list and whether the Space
+    still has it; the list strikes through «No longer in this Space». The form offers «All of this
+    Space's AI accounts» (the default) or a choice from `modelOptions`, warns when what it reaches
+    holds a subscription (ADR 0005), and its model catalog follows the chosen accounts.
 - **Load:** the same limits as any gateway key, with no limit of its own (the Owner's decision):
   16 requests in flight per key; the per-User pools take `ak:<keyId>` as the key's subject.
 - **Usage:** `ai_usage` rows with `user_id = ''` and `access_key_id` (migration 159); the daily

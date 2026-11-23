@@ -145,4 +145,20 @@ describe("link round trips", () => {
     expect(promptLinkAppPath("https://evil.test/new?prompt=hi", HUB)).toBeNull();
     expect(promptLinkAppPath("t3code://app/index.html")).toBeNull();
   });
+
+  it("opens a lending link in the app from its scheme or the Hub's address, token in the fragment (Grants 12)", () => {
+    const token = "Zx9_abcDEF-0123456789abcdefghijklmnopqrstu";
+    expect(promptLinkAppPath(`t3code://grants/offer#token=${token}`)).toBe(
+      `/grants/offer#token=${token}`,
+    );
+    expect(promptLinkAppPath(`https://hub.example.com/grants/offer#token=${token}`, HUB)).toBe(
+      `/grants/offer#token=${token}`,
+    );
+    // Another Hub's link, a token in the query or anything else in the fragment: not opened here.
+    expect(promptLinkAppPath(`https://evil.test/grants/offer#token=${token}`, HUB)).toBeNull();
+    expect(
+      promptLinkAppPath(`https://hub.example.com/grants/offer?token=${token}`, HUB),
+    ).toBeNull();
+    expect(promptLinkAppPath("t3code://grants/offer#token=<script>")).toBeNull();
+  });
 });

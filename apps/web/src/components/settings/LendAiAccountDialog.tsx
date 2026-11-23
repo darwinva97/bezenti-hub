@@ -10,6 +10,7 @@ import type {
 import { useEffect, useEffectEvent, useState } from "react";
 
 import { giveGrant } from "../../environments/primary/grants";
+import { readHubLinkOrigin } from "../../hubLinks";
 import { errorMessageOf } from "../../lib/errorMessage";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { grantsEnvironment } from "../../state/grants";
@@ -234,7 +235,7 @@ export function LendAiAccountDialog({
       input: { resource: { kind: "ai-account", aiAccountId: account.id }, limits: caps },
     });
     if (made._tag !== "Success") throw squashAtomCommandFailure(made);
-    setLink(offerLinkOf(made.value, window.location.origin));
+    setLink(offerLinkOf(made.value, readHubLinkOrigin() ?? window.location.origin));
     setDone("Link made. Copy it now: it is not shown again.");
   };
 

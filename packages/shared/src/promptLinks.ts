@@ -183,6 +183,13 @@ export function buildNewThreadLink(input: {
 const APP_SCHEME = /^t3code(?:-[a-z]+)?:$/;
 const THREAD_PATH = /^\/([^/]+)\/([^/]+)\/?$/;
 
+/** A lending link's page (Grants ticket 12): its token stays in the fragment, never a query. */
+const GRANT_OFFER_PATH = "/grants/offer";
+const grantOfferPath = (url: URL) =>
+  /^#token=[A-Za-z0-9_-]+$/.test(url.hash) && url.search === ""
+    ? `${GRANT_OFFER_PATH}${url.hash}`
+    : null;
+
 /** The app route a `t3code://` link, or a link on the Hub at `hubOrigin`, opens. */
 export function promptLinkAppPath(value: string, hubOrigin?: string): string | null {
   if (!URL.canParse(value)) return null;
@@ -191,12 +198,14 @@ export function promptLinkAppPath(value: string, hubOrigin?: string): string | n
     if (url.host === "new" && (url.pathname === "" || url.pathname === "/")) {
       return `/new${url.search}`;
     }
+    if (url.host === "grants" && url.pathname === "/offer") return grantOfferPath(url);
     const thread = url.host === "threads" ? THREAD_PATH.exec(url.pathname) : null;
     return thread ? `/${thread[1]}/${thread[2]}${url.search}` : null;
   }
   if (hubOrigin === undefined || !URL.canParse(hubOrigin)) return null;
   if (url.origin !== new URL(hubOrigin).origin) return null;
   if (url.pathname === "/new") return `/new${url.search}`;
+  if (url.pathname === GRANT_OFFER_PATH) return grantOfferPath(url);
   // The web app's own thread route is a link only with a prompt, so reloading a tab never asks.
   const thread = url.pathname.startsWith("/threads/")
     ? THREAD_PATH.exec(url.pathname.slice("/threads".length))

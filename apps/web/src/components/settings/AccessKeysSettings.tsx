@@ -4,9 +4,11 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   type AccessKey,
+  type AccessKeyAccountOption,
   type AccessKeyListResult,
   type AccessKeyModelOptions,
   type AccessKeyValidity,
+  type AiAccountId,
   accessKeyAllowsAllModels,
   accessKeyModelAllowed,
   accessKeyModelEntryValid,
@@ -109,14 +111,23 @@ function useAccessKeyCommands() {
   };
 }
 
-/** The models the Space's accounts serve, once each, in their order. */
-const catalogOf = (options: AccessKeyModelOptions | null) => [
-  ...new Set((options?.accounts ?? []).flatMap((account) => account.models)),
+/** The models these accounts serve, once each, in their order. */
+const catalogOf = (accounts: ReadonlyArray<AccessKeyAccountOption>) => [
+  ...new Set(accounts.flatMap((account) => account.models)),
 ];
 
-/** What a key's setup pins: the models it may use that the Space's accounts serve. */
-const usableModels = (options: AccessKeyModelOptions | null, entries: ReadonlyArray<string>) =>
-  catalogOf(options).filter((model) => accessKeyModelAllowed(entries, model));
+/** The Space's accounts a key reaches: all of them (null), or those of its list still there. */
+const reachedBy = (
+  options: AccessKeyModelOptions | null,
+  accounts: ReadonlyArray<AiAccountId> | null,
+) =>
+  (options?.accounts ?? []).filter((account) => accounts === null || accounts.includes(account.id));
+
+/** What a key's setup pins: the models it may use that the accounts it reaches serve. */
+const usableModels = (options: AccessKeyModelOptions | null, key: AccessKey) =>
+  catalogOf(reachedBy(options, key.accounts)).filter((model) =>
+    accessKeyModelAllowed(key.models, model),
+  );
 
 /** A key's models as the list says them. */
 const modelsText = (entries: ReadonlyArray<string>) =>
@@ -266,16 +277,12 @@ function AccessKeysPanel({
           )
         }
       />
-      {space?.subscription === true ? (
-        <p className="mx-4 mb-2 text-xs text-warning-foreground" role="note">
-          {SUBSCRIPTION_WARNING}
-        </p>
-      ) : null}
       {mayCreate && space?.canManage === true ? (
         <NewAccessKeyForm
           environmentId={environmentId}
           spaceId={spaceId}
-          catalog={catalogOf(options)}
+          accounts={options?.accounts ?? []}
+          spaceHasSubscription={space.subscription}
           create={commands.create}
           onMade={(key, secret) => {
             setMade({ key, secret });
@@ -287,7 +294,7 @@ function AccessKeysPanel({
         <NewKeyPanel
           made={made}
           origin={origin}
-          models={usableModels(options, made.key.models)}
+          models={usableModels(options, made.key)}
           onDone={() => setMade(null)}
           onError={(message) => setError(message)}
         />
@@ -319,6 +326,22 @@ function AccessKeysPanel({
                 </span>
                 <span className="text-xs text-muted-foreground">{modelsText(key.models)}</span>
                 <span className="text-xs text-muted-foreground">
+                  {key.reaches === null
+                    ? "All of this Space's AI accounts"
+                    : key.reaches.map((reach, index) => (
+                        <span key={reach.id}>
+                          {index === 0 ? "" : ", "}
+                          {reach.inSpace ? (
+                            (reach.name ?? reach.id)
+                          ) : (
+                            <span className="line-through">
+                              {reach.name ?? reach.id} (No longer in this Space)
+                            </span>
+                          )}
+                        </span>
+                      ))}
+                </span>
+                <span className="text-xs text-muted-foreground">
                   {[
                     `By ${key.createdByName ?? key.createdBy}`,
                     key.revokedAt === null ? null : `Revoked ${formatWhen(key.revokedAt)}`,
@@ -348,7 +371,7 @@ function AccessKeysPanel({
                     // The key is never shown again: the setup holds a placeholder for it.
                     setCopied(key.keyId);
                     copyToClipboard(
-                      accessKeySetup(origin, null, usableModels(options, key.models)).claudeCode,
+                      accessKeySetup(origin, null, usableModels(options, key)).claudeCode,
                       key.keyId,
                     );
                   }}
@@ -613,15 +636,80 @@ function ModelPicker(props: {
   );
 }
 
+/**
+ * The AI accounts a key reaches (access-keys ticket 03): all of the Space's own, now and later, by
+ * default, or a list of them.
+ */
+function AccountPicker(props: {
+  readonly accounts: ReadonlyArray<AccessKeyAccountOption>;
+  readonly all: boolean;
+  readonly chosen: ReadonlyArray<AiAccountId>;
+  readonly disabled: boolean;
+  readonly onAll: (all: boolean) => void;
+  readonly onChosen: (chosen: ReadonlyArray<AiAccountId>) => void;
+}) {
+  return (
+    <div className="flex w-full flex-col gap-2 text-xs">
+      <div className="flex flex-col gap-1 font-medium">
+        AI accounts
+        <ToggleGroup
+          aria-label="AI accounts"
+          value={[props.all ? "all" : "choose"]}
+          onValueChange={(next) => {
+            const value = next[0];
+            if (value === "all" || value === "choose") props.onAll(value === "all");
+          }}
+        >
+          <Toggle value="all">All of this Space's AI accounts</Toggle>
+          <Toggle value="choose">Choose accounts</Toggle>
+        </ToggleGroup>
+      </div>
+      {props.all ? null : (
+        <div className="flex flex-wrap items-center gap-3">
+          {props.accounts.map((account) => (
+            <label key={account.id} className="flex items-center gap-1">
+              <Checkbox
+                aria-label={account.name}
+                checked={props.chosen.includes(account.id)}
+                disabled={props.disabled}
+                onCheckedChange={(checked) =>
+                  props.onChosen(
+                    checked === true
+                      ? [...props.chosen, account.id]
+                      : props.chosen.filter((id) => id !== account.id),
+                  )
+                }
+              />
+              {account.name}
+              {account.type === "subscription" ? " (subscription)" : ""}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NewAccessKeyForm(props: {
   readonly environmentId: EnvironmentId;
   readonly spaceId: SpaceId;
-  /** The models the Space's accounts serve. */
-  readonly catalog: ReadonlyArray<string>;
+  /** The Space's own gateway accounts, with the models each serves. */
+  readonly accounts: ReadonlyArray<AccessKeyAccountOption>;
+  /** Before the accounts are read: whether the Space holds a subscription. */
+  readonly spaceHasSubscription: boolean;
   readonly create: ReturnType<typeof useAccessKeyCommands>["create"];
   readonly onMade: (key: AccessKey, secret: string) => void;
 }) {
   const [label, setLabel] = useState("");
+  const [allAccounts, setAllAccounts] = useState(true);
+  const [chosenAccounts, setChosenAccounts] = useState<ReadonlyArray<AiAccountId>>([]);
+  const reached = allAccounts
+    ? props.accounts
+    : props.accounts.filter((account) => chosenAccounts.includes(account.id));
+  const subscription =
+    props.accounts.length === 0
+      ? props.spaceHasSubscription
+      : reached.some((account) => account.type === "subscription");
   const [allModels, setAllModels] = useState(false);
   const [entries, setEntries] = useState<ReadonlyArray<string>>([]);
   const [mode, setMode] = useState<"days" | "until">("days");
@@ -638,7 +726,11 @@ function NewAccessKeyForm(props: {
     return end === null ? null : { until: end };
   })();
   const models: ReadonlyArray<string> = allModels ? ["*"] : entries;
-  const ready = label.trim().length > 0 && validity !== null && models.length > 0;
+  const ready =
+    label.trim().length > 0 &&
+    validity !== null &&
+    models.length > 0 &&
+    (allAccounts || chosenAccounts.length > 0);
   return (
     <form
       aria-label="Create an access key"
@@ -651,13 +743,21 @@ function NewAccessKeyForm(props: {
         void props
           .create({
             environmentId: props.environmentId,
-            input: { spaceId: props.spaceId, label: label.trim(), validity, models },
+            input: {
+              spaceId: props.spaceId,
+              label: label.trim(),
+              validity,
+              models,
+              ...(allAccounts ? {} : { accounts: chosenAccounts }),
+            },
           })
           .then((result) => {
             if (result._tag === "Success") {
               setLabel("");
               setEntries([]);
               setAllModels(false);
+              setAllAccounts(true);
+              setChosenAccounts([]);
               props.onMade(result.value.created, Redacted.value(result.value.key));
             } else {
               setError(errorMessageOf(squashAtomCommandFailure(result), "Could not make the key."));
@@ -719,8 +819,21 @@ function NewAccessKeyForm(props: {
           />
         </label>
       )}
+      <AccountPicker
+        accounts={props.accounts}
+        all={allAccounts}
+        chosen={chosenAccounts}
+        disabled={pending}
+        onAll={setAllAccounts}
+        onChosen={setChosenAccounts}
+      />
+      {subscription ? (
+        <p className="w-full text-xs text-warning-foreground" role="note">
+          {SUBSCRIPTION_WARNING}
+        </p>
+      ) : null}
       <ModelPicker
-        catalog={props.catalog}
+        catalog={catalogOf(reached)}
         all={allModels}
         entries={entries}
         disabled={pending}

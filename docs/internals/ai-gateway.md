@@ -113,8 +113,9 @@ version, `updated` or `failed`, reason) and `ai_gateway.rollback` (`rolled-back`
   `AllowedAiAccounts` (`HubWithEnvironments.aiAccountPicker.test.ts`).
 - **WS `aiGatewayKeys.*`:** the caller's own keys (`AiGatewayKeys.localCli.test.ts`).
   `aiUsage.summary`: counts only (`AiUsage.test.ts`).
-- **WS `accessKeys.list|create|revoke`:** a Space's access keys, for whoever manages the Space and
-  the Owner, from a person's own session only (`AccessKeys.test.ts`).
+- **WS `accessKeys.list|create|revoke|modelOptions`:** a Space's access keys, for whoever manages
+  the Space and the Owner, from a person's own session only (`AccessKeys.test.ts`,
+  `AccessKeys.models.test.ts`).
 - **Raw `/api/ai/*`:** a gateway key, checked per request against `AllowedAiAccounts` for its turn
   owner and Space (`AiGatewayRoute*.test.ts`), in `DoorRules.RAW_ROUTE_RULES` and
   `AMBIENT_COOKIE_RULES`.
@@ -540,8 +541,8 @@ accounts and for a Personal space below its note.
 - **Table** (`ai/AccessKeys.ts`, migration 159 `ai_access_keys`, the only file that names it):
   - `key_id` (`ak_<24 hex>`), `key_hash` (SHA-256, unique), `key_hint` (the last 4 characters);
   - `space_id`, `label` (who it is for, 80 characters), `created_by`;
-  - `models_json` (`["*"]`), `accounts_json` (NULL: every AI account the Space owns, now and
-    later), `limits_json` (no caps yet);
+  - `models_json` (names, `prefix*` patterns, `["*"]`: every model), `accounts_json` (NULL:
+    every AI account the Space owns, now and later), `limits_json` (no caps yet);
   - `expires_at` (always set), `last_used_at` (at most once a minute), `revoked_*`.
   - Rows are never deleted: they are the usage's and the audit's history.
 - **Key:** `t3ak_` + 32 random bytes, base64url, of its own prefix so a leaked one is recognisable
@@ -583,6 +584,33 @@ accounts and for a Personal space below its note.
     key's holder) and never a `direct` one.
   - The caller is `kind: "access"`, `userId: null`, `accessKeyId`. It routes as a User key does
     (`planRoute`): `acct-<id>/` pins only an account the key reaches (403 otherwise).
+- **Models** (access-keys ticket 02):
+  - **Entries:** an exact name, a `prefix*` pattern (one `*`, at the end), or `*` alone («All
+    models», an explicit choice in the form). 1 to 50 entries, each up to 256 characters, no
+    spaces or control characters; duplicates fold without case and `*` among others becomes
+    `["*"]`.
+  - **Comparison** (`accessKeyModelAllowed`, contracts, shared by the server, the web and the
+    setup): without case, without the `acct-<id>/` prefix and a trailing `[…]` such as `[1m]`;
+    an exact name admits only itself (a dated version needs a pattern). An entry of the wrong
+    form admits nothing.
+  - **No aliases on the Hub:** the gateway never turns `sonnet` into a model or swaps one model
+    for another.
+  - **At the gateway:** checked after `authorize` and before `planRoute`, so a model the key may
+    not use reaches no account: 403 «This access key may not use claude-opus-5-5. It may use:
+    claude-sonnet-5-5.» (the allowed models its accounts serve, at most 10 and «…»; its entries
+    when none is served). Anthropic `permission_error`, OpenAI `permission_error` with
+    `code: "model_not_allowed"`, Gemini `PERMISSION_DENIED`. Allowed but served by no account: the
+    404 of `planRoute`.
+  - **`/v1/models`** (every shape): the catalogs of the key's accounts filtered by its entries; a
+    pattern is expanded, never listed.
+  - **Form:** WS `accessKeys.modelOptions {spaceId}` (`accessKey.manage`) answers the Space's own
+    gateway accounts with the models each serves; the form offers them by family, «Add pattern»
+    and «All models». The list shows each key's models.
+  - **Setup:** Claude Code's `ANTHROPIC_MODEL` and `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`
+    are pinned to models the key may use that the Space's accounts serve (the family's, else the
+    first, Claude ones first; the main model Sonnet's, else Opus's), so its background model never
+    asks for a refused one; Codex gets `model` (an OpenAI one if allowed). Nothing is pinned when
+    no model is known. Audited `models`: `all` or the number of entries.
 - **Load:** the same limits as any gateway key, with no limit of its own (the Owner's decision):
   16 requests in flight per key; the per-User pools take `ak:<keyId>` as the key's subject.
 - **Usage:** `ai_usage` rows with `user_id = ''` and `access_key_id` (migration 159); the daily

@@ -419,16 +419,44 @@ const openaiErrorType = (status: number) =>
           ? "server_error"
           : "invalid_request_error";
 
-/** An error as the client's own SDK expects it. */
-export const errorBody = (shape: GatewayShape, status: number, message: string) => {
+/**
+ * An error as the client's own SDK expects it; `code` is OpenAI's machine code (`model_not_allowed`,
+ * access-keys ticket 02), null otherwise.
+ */
+export const errorBody = (
+  shape: GatewayShape,
+  status: number,
+  message: string,
+  code: string | null = null,
+) => {
   switch (shape) {
     case "openai":
-      return { error: { message, type: openaiErrorType(status), code: null } };
+      return { error: { message, type: openaiErrorType(status), code } };
     case "anthropic":
       return { type: "error", error: { type: anthropicErrorType(status), message } };
     case "gemini":
       return { error: { code: status, message, status: googleStatus(status) } };
   }
+};
+
+/** At most this many names in an access key's «It may use: …». */
+const NAMED_MODELS = 10;
+
+/**
+ * Access-keys ticket 02: why an access key may not use a model, naming what it may use (the
+ * allowed models its accounts serve, else its entries), at most ten and «…».
+ */
+export const modelNotAllowedMessage = (
+  requested: string,
+  usable: ReadonlyArray<string>,
+  entries: ReadonlyArray<string>,
+) => {
+  const named = [...new Set(usable.length > 0 ? usable : entries)].toSorted();
+  const list =
+    named.length > NAMED_MODELS
+      ? `${named.slice(0, NAMED_MODELS).join(", ")}, …`
+      : named.join(", ");
+  return `This access key may not use ${requested}. It may use: ${list}.`;
 };
 
 /** The words a client sees when every allowed account of the provider is out of quota. */

@@ -7,6 +7,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import {
+  ACCESS_KEY_MAX_MODELS,
   ACCESS_KEY_MAX_PER_SPACE,
   ACCESS_KEY_MAX_VALIDITY_DAYS,
   ACCESS_KEY_NO_LIMITS,
@@ -18,8 +19,11 @@ import {
   AccessKeyLimits,
   type AccessKeyListInput,
   type AccessKeyListResult,
+  type AccessKeyModelOptions,
+  type AccessKeyModelOptionsInput,
   type AccessKeyRevokeInput,
   type AccessKeyValidity,
+  accessKeyModelEntryValid,
   AiAccountId,
   SpaceId,
   UserId,
@@ -38,6 +42,7 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as AiAccounts from "./AiAccounts.ts";
 import * as AllowedAiAccounts from "./AllowedAiAccounts.ts";
 
 export { AccessKeyError };
@@ -46,9 +51,39 @@ const DAY_MS = 86_400_000;
 const MAX_LABEL_LENGTH = 80;
 /** A key that ended this long ago no longer counts as live, nor shows by default. */
 const ENDED_SHOWN_DAYS = 30;
-/** Every model, until access-keys ticket 02 lets the issuer choose; no caps until ticket 05. */
-const ALL_MODELS_JSON = '["*"]';
+/** No caps until access-keys ticket 05. */
 const NO_LIMITS_JSON = JSON.stringify(ACCESS_KEY_NO_LIMITS);
+const jsonOf = (value: ReadonlyArray<string>) => JSON.stringify(value);
+
+/**
+ * A key's model list as stored (access-keys ticket 02): 1 to 50 well-formed entries, each once
+ * (without case); `*` among others is «All models», `["*"]`.
+ */
+const checkedModels = (
+  raw: ReadonlyArray<string>,
+):
+  | { readonly _tag: "models"; readonly models: ReadonlyArray<string> }
+  | { readonly _tag: "refused" } => {
+  const entries = raw.map((entry) => entry.trim());
+  if (
+    entries.length === 0 ||
+    entries.length > ACCESS_KEY_MAX_MODELS ||
+    !entries.every(accessKeyModelEntryValid)
+  ) {
+    return { _tag: "refused" };
+  }
+  if (entries.includes("*")) return { _tag: "models", models: ["*"] };
+  const seen = new Set<string>();
+  return {
+    _tag: "models",
+    models: entries.filter((entry) => {
+      const key = entry.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }),
+  };
+};
 const NOT_YOURS =
   "Access keys are made, listed and revoked by a person in Space settings, not by an agent.";
 const NO_SUCH_KEY = "No such access key.";
@@ -223,6 +258,16 @@ export class AccessKeys extends Context.Service<
     readonly revokeForSession: (
       input: AccessKeyRevokeInput,
     ) => Effect.Effect<AccessKey, AccessKeyError>;
+    /**
+     * What a key of the Space may reach, for the form (access-keys ticket 02): the Space's own
+     * gateway accounts and the models each serves. Whoever may make keys there.
+     */
+    readonly modelOptions: (
+      input: AccessKeyModelOptionsInput & { readonly actorUserId: UserId },
+    ) => Effect.Effect<AccessKeyModelOptions, AccessKeyError>;
+    readonly modelOptionsForSession: (
+      input: AccessKeyModelOptionsInput,
+    ) => Effect.Effect<AccessKeyModelOptions, AccessKeyError>;
   }
 >()("t3/ai/AccessKeys") {}
 
@@ -270,6 +315,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const spaces = yield* SpaceDirectory.SpaceDirectory;
   const allowedAccounts = yield* AllowedAiAccounts.AllowedAiAccounts;
+  const aiAccounts = yield* AiAccounts.AiAccounts;
   const audit = yield* AuditLog.AuditLog;
 
   const storage = (what: string) => (cause: unknown) =>
@@ -333,6 +379,13 @@ const make = Effect.gen(function* () {
     input: AccessKeyCreateInput & { readonly actorUserId: UserId },
   ) {
     const label = yield* checkedLabel(input.label);
+    const models = checkedModels(input.models);
+    if (models._tag === "refused") {
+      return yield* fail(
+        "invalid",
+        `Choose «All models», or 1 to ${ACCESS_KEY_MAX_MODELS} model names or patterns ending in a single *.`,
+      );
+    }
     const now = yield* DateTime.now;
     const expiry = expiryOf(input.validity, now);
     if (expiry._tag === "refused") return yield* fail("invalid", expiry.message);
@@ -348,7 +401,7 @@ const make = Effect.gen(function* () {
       hint: key.slice(-4),
       createdBy: input.actorUserId,
       createdAt: at,
-      modelsJson: ALL_MODELS_JSON,
+      modelsJson: jsonOf(models.models),
       accountsJson: null,
       expiresAt,
       limitsJson: NO_LIMITS_JSON,
@@ -385,7 +438,7 @@ const make = Effect.gen(function* () {
               space: input.spaceId,
               expiresAt,
               limits: "none",
-              models: "all",
+              models: models.models.includes("*") ? "all" : models.models.length,
               accounts: "all",
               subscription,
             },
@@ -532,6 +585,40 @@ const make = Effect.gen(function* () {
     return now;
   });
 
+  const modelOptions = Effect.fn("AccessKeys.modelOptions")(function* (
+    input: AccessKeyModelOptionsInput & { readonly actorUserId: UserId },
+  ) {
+    const principal = yield* principalFor(input.actorUserId);
+    const space = (yield* spaces
+      .spacesById([input.spaceId])
+      .pipe(Effect.catch(storage("read the Space")))).get(input.spaceId);
+    if (
+      space === undefined ||
+      !AccessPolicy.isAllowed(AccessPolicy.decide(principal, "accessKey.manage", space.resource))
+    ) {
+      return yield* fail("forbidden", "You cannot make access keys in this Space.");
+    }
+    const own = yield* allowedAccounts
+      .forSpace(input.spaceId)
+      .pipe(Effect.catch(storage("read the Space's AI accounts")));
+    const accounts = yield* Effect.forEach(
+      own.filter((account) => account.type !== "direct"),
+      (account) =>
+        aiAccounts.modelsOf(account.id).pipe(
+          Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+          Effect.map((served) => ({
+            id: account.id,
+            name: account.name,
+            provider: account.provider,
+            type: account.type,
+            models: [...served],
+          })),
+        ),
+      { concurrency: "unbounded" },
+    );
+    return { accounts } satisfies AccessKeyModelOptions;
+  });
+
   /** The person behind a WS session: never an agent, the Hub's shell or a one-Space session. */
   const sessionUser = Effect.gen(function* () {
     const actor = yield* CommandActor.resolve;
@@ -557,6 +644,12 @@ const make = Effect.gen(function* () {
       input: AccessKeyRevokeInput,
     ) {
       return yield* revoke({ ...input, actorUserId: yield* sessionUser });
+    }),
+    modelOptions,
+    modelOptionsForSession: Effect.fn("AccessKeys.modelOptionsForSession")(function* (
+      input: AccessKeyModelOptionsInput,
+    ) {
+      return yield* modelOptions({ ...input, actorUserId: yield* sessionUser });
     }),
   });
 });

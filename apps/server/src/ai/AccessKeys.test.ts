@@ -37,6 +37,7 @@ const CHAT = "/api/ai/openai/v1/chat/completions";
 const GEMINI = "/api/ai/gemini/v1beta/models/gemini-3-pro:generateContent";
 const personalOf = (userId: UserId) => SpaceId.make(`personal:${userId}`);
 const WEEK = { days: 7 } as const;
+const ALL = ["*"];
 
 /** Acme's own AI accounts, added by Ada: Claude, OpenAI (Codex) and Gemini API keys. */
 const acmeOwn = Effect.fn(function* (setup: Hub) {
@@ -63,7 +64,7 @@ const acmeOwn = Effect.fn(function* (setup: Hub) {
 /** Ada makes a key for Acme; the key's value, for the test's own requests. */
 const adaKey = Effect.fn(function* (setup: Hub, label = "Partner") {
   const made = yield* setup.accessKeys
-    .createForSession({ spaceId: setup.acmeId, label, validity: WEEK })
+    .createForSession({ spaceId: setup.acmeId, label, validity: WEEK, models: ALL })
     .pipe(CommandActor.actAs(setup.people.admin));
   return { ...made, value: Redacted.value(made.key) };
 });
@@ -331,7 +332,7 @@ it.live.skipIf(!posix || platform === undefined)(
       assert.include(refused.text, "This access key's Space is archived.");
       // Archived: nobody makes a key, the Owner included; the Owner still lists and could revoke.
       const blocked = yield* setup.accessKeys
-        .createForSession({ spaceId: setup.acmeId, label: "Late", validity: WEEK })
+        .createForSession({ spaceId: setup.acmeId, label: "Late", validity: WEEK, models: ALL })
         .pipe(setup.asOwner, Effect.flip);
       assert.equal(blocked.reason, "forbidden");
       const listed = yield* setup.accessKeys
@@ -357,7 +358,12 @@ it.live.skipIf(!posix || platform === undefined)(
         })
         .pipe(asGrace)).id;
       const personal = yield* setup.accessKeys
-        .createForSession({ spaceId: personalOf(grace), label: "A friend", validity: WEEK })
+        .createForSession({
+          spaceId: personalOf(grace),
+          label: "A friend",
+          validity: WEEK,
+          models: ALL,
+        })
         .pipe(asGrace);
       const friend = Redacted.value(personal.key);
       assert.equal((yield* call(setup, MESSAGES, { key: friend, body: messages() })).status, 200);
@@ -395,7 +401,7 @@ it.live.skipIf(!posix || platform === undefined)(
       for (const outsider of [member, guest, globexMember]) {
         const as = CommandActor.actAs(outsider);
         const create = yield* setup.accessKeys
-          .createForSession({ spaceId: setup.acmeId, label: "Mine", validity: WEEK })
+          .createForSession({ spaceId: setup.acmeId, label: "Mine", validity: WEEK, models: ALL })
           .pipe(as, Effect.flip);
         assert.equal(create.reason, "forbidden", outsider);
         const list = yield* setup.accessKeys
@@ -417,7 +423,12 @@ it.live.skipIf(!posix || platform === undefined)(
         const as = CommandActor.actAsResolved(actor);
         for (const attempt of [
           setup.accessKeys
-            .createForSession({ spaceId: setup.acmeId, label: "Agent", validity: WEEK })
+            .createForSession({
+              spaceId: setup.acmeId,
+              label: "Agent",
+              validity: WEEK,
+              models: ALL,
+            })
             .pipe(Effect.asVoid),
           setup.accessKeys.listForSession({ spaceId: setup.acmeId }).pipe(Effect.asVoid),
           setup.accessKeys.revokeForSession({ keyId }).pipe(Effect.asVoid),
@@ -436,7 +447,12 @@ it.live.skipIf(!posix || platform === undefined)(
       );
       assert.isTrue(olgas.space?.canManage);
       const second = yield* setup.accessKeys
-        .createForSession({ spaceId: setup.acmeId, label: "Tester", validity: { days: 1 } })
+        .createForSession({
+          spaceId: setup.acmeId,
+          label: "Tester",
+          validity: { days: 1 },
+          models: ALL,
+        })
         .pipe(CommandActor.actAs(olga));
       // Olga revokes Ada's; the next request is refused.
       yield* setup.accessKeys.revokeForSession({ keyId }).pipe(CommandActor.actAs(olga));
@@ -447,10 +463,20 @@ it.live.skipIf(!posix || platform === undefined)(
 
       // Grace makes one in her own Personal space; the Owner revokes it but makes none there.
       const graces = yield* setup.accessKeys
-        .createForSession({ spaceId: personalOf(member), label: "Friend", validity: WEEK })
+        .createForSession({
+          spaceId: personalOf(member),
+          label: "Friend",
+          validity: WEEK,
+          models: ALL,
+        })
         .pipe(CommandActor.actAs(member));
       const ownerThere = yield* setup.accessKeys
-        .createForSession({ spaceId: personalOf(member), label: "Owner's", validity: WEEK })
+        .createForSession({
+          spaceId: personalOf(member),
+          label: "Owner's",
+          validity: WEEK,
+          models: ALL,
+        })
         .pipe(setup.asOwner, Effect.flip);
       assert.equal(ownerThere.reason, "forbidden");
       const gusThere = yield* setup.accessKeys
@@ -472,7 +498,7 @@ it.live.skipIf(!posix || platform === undefined)(
       );
       // The Owner makes one in Acme; Grace's own list holds only her Personal space's.
       yield* setup.accessKeys
-        .createForSession({ spaceId: setup.acmeId, label: "Owner's", validity: WEEK })
+        .createForSession({ spaceId: setup.acmeId, label: "Owner's", validity: WEEK, models: ALL })
         .pipe(setup.asOwner);
       const gracesList = yield* setup.accessKeys
         .listForSession({ includeEnded: true })
@@ -512,7 +538,9 @@ it.live.skipIf(!posix || platform === undefined)(
       const setup = yield* hub;
       const asAda = CommandActor.actAs(setup.people.admin);
       const create = (label: string, validity: { days: number } | { until: string }) =>
-        setup.accessKeys.createForSession({ spaceId: setup.acmeId, label, validity }).pipe(asAda);
+        setup.accessKeys
+          .createForSession({ spaceId: setup.acmeId, label, validity, models: ALL })
+          .pipe(asAda);
       const now = yield* Clock.currentTimeMillis;
       const iso = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
       for (const [label, validity] of [

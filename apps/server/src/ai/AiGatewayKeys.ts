@@ -56,6 +56,11 @@ export interface GatewayCaller {
   readonly userId: UserId | null;
   /** The access key's id (`ak_…`); null for a gateway key. */
   readonly accessKeyId: string | null;
+  /**
+   * The models an access key may use (names, `prefix*`, `*`; access-keys ticket 02); null for a
+   * gateway key, whose models are its accounts'.
+   */
+  readonly allowedModels: ReadonlyArray<string> | null;
   readonly spaceId: SpaceId;
   readonly threadId: ThreadId | null;
   /**
@@ -668,6 +673,7 @@ const make = Effect.gen(function* () {
       kind: "access",
       userId: null,
       accessKeyId: accessKey.keyId,
+      allowedModels: accessKey.models,
       spaceId: accessKey.spaceId,
       threadId: null,
       allowed,
@@ -795,6 +801,7 @@ const make = Effect.gen(function* () {
       kind: row.kind,
       userId,
       accessKeyId: null,
+      allowedModels: null,
       spaceId,
       threadId,
       allowed,

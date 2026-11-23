@@ -986,6 +986,7 @@ const AI_SWEPT_ELSEWHERE: Record<string, string> = {
   "ws:accessKeys.list": "AccessKeys.test.ts: a Space's keys, to who manages it and the Owner",
   "ws:accessKeys.create": "AccessKeys.test.ts: the key once, by a Space's Admin or its User",
   "ws:accessKeys.revoke": "AccessKeys.test.ts: a Space's managers and the Owner only",
+  "ws:accessKeys.modelOptions": "AccessKeys.models.test.ts: names and models, to who manages",
   "ws:aiGateway.status": "AiGateway.test.ts: the Installation's gateway, the Owner's",
   "ws:aiGateway.checkForUpdates": "AiGateway.test.ts",
   "ws:aiGateway.update": "AiGateway.test.ts",

@@ -103,6 +103,8 @@ export const RPC_REQUIRED_SCOPES = {
   // A Space's access keys (no key in the answer); making and revoking one is
   // CLIENT_GUARDED_RPC_SCOPES' (access:write).
   [WS_METHODS.accessKeysList]: AuthAccessReadScope,
+  // What a Space's keys may reach: account names and model names, never a credential.
+  [WS_METHODS.accessKeysModelOptions]: AuthAccessReadScope,
   // Asks GitHub for the newest release, as the Owner opens Settings → AI gateway.
   [WS_METHODS.aiGatewayCheckForUpdates]: AuthSettingsWriteScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,

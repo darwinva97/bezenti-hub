@@ -54,6 +54,8 @@ import {
   AccessKey,
   AccessKeyListInput,
   AccessKeyListResult,
+  AccessKeyModelOptions,
+  AccessKeyModelOptionsInput,
   AccessKeyRevokeInput,
 } from "./accessKeys.ts";
 import {
@@ -756,6 +758,8 @@ export const WS_METHODS = {
   accessKeysList: "accessKeys.list",
   accessKeysCreate: "accessKeys.create",
   accessKeysRevoke: "accessKeys.revoke",
+  // Access-keys ticket 02: the models the Space's own accounts serve, for the form.
+  accessKeysModelOptions: "accessKeys.modelOptions",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1451,6 +1455,11 @@ const WsAccessKeysCreateRpc = Rpc.make(WS_METHODS.accessKeysCreate, {
 const WsAccessKeysRevokeRpc = Rpc.make(WS_METHODS.accessKeysRevoke, {
   payload: AccessKeyRevokeInput,
   success: AccessKey,
+  error: AccessKeyErrors,
+});
+const WsAccessKeysModelOptionsRpc = Rpc.make(WS_METHODS.accessKeysModelOptions, {
+  payload: AccessKeyModelOptionsInput,
+  success: AccessKeyModelOptions,
   error: AccessKeyErrors,
 });
 const WsAiAccountsCreateRpc = Rpc.make(WS_METHODS.aiAccountsCreate, {
@@ -2574,6 +2583,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAccessKeysListRpc,
   WsAccessKeysCreateRpc,
   WsAccessKeysRevokeRpc,
+  WsAccessKeysModelOptionsRpc,
   WsProjectCloneStartRpc,
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,

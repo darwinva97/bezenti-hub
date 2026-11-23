@@ -655,6 +655,7 @@ describe("every door of the Hub declares its rule", () => {
     expect(keyRpcs.map((rpc) => rpc._tag).toSorted()).toEqual([
       "accessKeys.create",
       "accessKeys.list",
+      "accessKeys.modelOptions",
       "accessKeys.revoke",
     ]);
     // Decided in AccessKeys for the session's own person, by AccessPolicy on the key's Space.

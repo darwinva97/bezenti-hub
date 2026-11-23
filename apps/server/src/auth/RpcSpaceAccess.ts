@@ -100,7 +100,7 @@ const AI_GATEWAY_KEYS = {
 /** Access keys name a Space, never a Thread or Project: AccessKeys decides each. */
 const ACCESS_KEYS = {
   unscoped:
-    "Access keys: AccessKeys answers a person's own session only (never an agent, the Hub's shell or a one-Space session); AccessPolicy `accessKey.manage` on the Space to make one (an open Organization's Admins and the Owner, a Personal space's User), `accessKey.view` to list and revoke (also the Owner anywhere); another Space's key answers like a missing one; only `create` returns the key, once",
+    "Access keys: AccessKeys answers a person's own session only (never an agent, the Hub's shell or a one-Space session); AccessPolicy `accessKey.manage` on the Space to make one (an open Organization's Admins and the Owner, a Personal space's User), `accessKey.view` to list and revoke (also the Owner anywhere); `modelOptions` (the Space's own gateway accounts and their models) with `accessKey.manage`; another Space's key answers like a missing one; only `create` returns the key, once",
 };
 /** Grants name no Thread or Project: Grants decides each by AccessPolicy `grant.*`. */
 const GRANTS = {
@@ -166,6 +166,7 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.accessKeysList]: ACCESS_KEYS,
   [WS_METHODS.accessKeysCreate]: ACCESS_KEYS,
   [WS_METHODS.accessKeysRevoke]: ACCESS_KEYS,
+  [WS_METHODS.accessKeysModelOptions]: ACCESS_KEYS,
   // Spec 5 ticket 03. Allowances and a Space's defaults: AccessPolicy `vault.manage` and
   // `vault.choose` in Vaults. A Project's choices and a Thread's names: the named Project or
   // Thread must be visible first, then the same rules (EffectiveVaults for the Thread).

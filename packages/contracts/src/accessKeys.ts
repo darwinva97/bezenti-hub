@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { AiAccountId } from "./aiAccounts.ts";
+import { AiAccountId, AiAccountProvider, AiAccountType } from "./aiAccounts.ts";
 import { SpaceId, TrimmedNonEmptyString, UserId } from "./baseSchemas.ts";
 
 /**
@@ -51,6 +51,50 @@ export const AccessKeyValidity = Schema.Union([
 ]);
 export type AccessKeyValidity = typeof AccessKeyValidity.Type;
 
+/** At most this many model entries per key. */
+export const ACCESS_KEY_MAX_MODELS = 50;
+
+/** An exact name, a `prefix*` pattern, or `*` alone («All models»): never a space or a control. */
+const MODEL_ENTRY = /^(?:\*|[^\s*\u0000-\u001f]+\*?)$/u;
+
+/** Whether one entry of a key's model list has the right form. */
+export const accessKeyModelEntryValid = (entry: string) =>
+  entry.length >= 1 && entry.length <= 256 && MODEL_ENTRY.test(entry);
+
+export const AccessKeyModelEntry = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(256),
+  Schema.isPattern(MODEL_ENTRY),
+);
+
+/** The models a key may use: 1 to 50 entries; `["*"]` is «All models». */
+export const AccessKeyModels = Schema.Array(AccessKeyModelEntry).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(ACCESS_KEY_MAX_MODELS),
+);
+
+/** Whether a key's list is «All models». */
+export const accessKeyAllowsAllModels = (entries: ReadonlyArray<string>) => entries.includes("*");
+
+/**
+ * Whether a key with these entries may use `requested` (access-keys ticket 02). Without case; the
+ * requested name without an `acct-<id>/` prefix (the account rule decides that) and without a
+ * trailing `[…]` such as `[1m]`. An exact name admits only itself (a dated version needs a
+ * pattern); `prefix*` what starts so; `*` everything; an entry of the wrong form nothing.
+ */
+export const accessKeyModelAllowed = (entries: ReadonlyArray<string>, requested: string) => {
+  const model = requested
+    .replace(/^acct-[^/]+\//iu, "")
+    .replace(/\[[^\]]*\]$/u, "")
+    .toLowerCase();
+  return entries.some((entry) => {
+    if (!accessKeyModelEntryValid(entry)) return false;
+    const wanted = entry.toLowerCase();
+    if (wanted === "*") return true;
+    return wanted.endsWith("*") ? model.startsWith(wanted.slice(0, -1)) : model === wanted;
+  });
+};
+
 /** An access key as whoever manages its Space sees it: never the key, nor its hash. */
 export const AccessKey = Schema.Struct({
   keyId: TrimmedNonEmptyString,
@@ -80,6 +124,8 @@ export const AccessKeyCreateInput = Schema.Struct({
   spaceId: SpaceId,
   label: AccessKeyLabel,
   validity: AccessKeyValidity,
+  /** Exact names or `prefix*` patterns; `["*"]` only by choosing «All models». */
+  models: AccessKeyModels,
 });
 export type AccessKeyCreateInput = typeof AccessKeyCreateInput.Type;
 
@@ -115,6 +161,25 @@ export const AccessKeyListResult = Schema.Struct({
 export type AccessKeyListResult = typeof AccessKeyListResult.Type;
 
 export const AccessKeyRevokeInput = Schema.Struct({ keyId: TrimmedNonEmptyString });
+
+export const AccessKeyModelOptionsInput = Schema.Struct({ spaceId: SpaceId });
+export type AccessKeyModelOptionsInput = typeof AccessKeyModelOptionsInput.Type;
+
+/** One AI account the Space owns that a key may reach (gateway only), with what it serves. */
+export const AccessKeyAccountOption = Schema.Struct({
+  id: AiAccountId,
+  name: Schema.String,
+  provider: AiAccountProvider,
+  type: AiAccountType,
+  models: Schema.Array(Schema.String),
+});
+export type AccessKeyAccountOption = typeof AccessKeyAccountOption.Type;
+
+/** What the form offers: the Space's own gateway accounts, in its order, and their models. */
+export const AccessKeyModelOptions = Schema.Struct({
+  accounts: Schema.Array(AccessKeyAccountOption),
+});
+export type AccessKeyModelOptions = typeof AccessKeyModelOptions.Type;
 export type AccessKeyRevokeInput = typeof AccessKeyRevokeInput.Type;
 
 /** Why making, listing or revoking an access key failed, in words for its issuer; never a key. */

@@ -4,7 +4,7 @@
  * on 429 (or a lent account's reached cap, grants ticket 03) within one provider, stream the answer
  * through the tap and record it. docs: ai-gateway.md.
  */
-import type { AiAccountId } from "@t3tools/contracts";
+import { type AiAccountId, accessKeyModelAllowed } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -33,6 +33,7 @@ import {
   type GatewayRoute,
   type GatewayShape,
   modelListBody,
+  modelNotAllowedMessage,
   noQuotaMessage,
   parseJsonObject,
   parseRequestedModel,
@@ -117,10 +118,15 @@ export class AiGatewayProxy extends Context.Service<
   }
 >()("t3/ai/AiGatewayProxy") {}
 
-const refuse = (shape: GatewayShape, status: number, message: string): ProxyAnswer => ({
+const refuse = (
+  shape: GatewayShape,
+  status: number,
+  message: string,
+  code: string | null = null,
+): ProxyAnswer => ({
   _tag: "json",
   status,
-  body: errorBody(shape, status, message),
+  body: errorBody(shape, status, message, code),
 });
 
 class BodyRefused extends Schema.TaggedError<BodyRefused>()("BodyRefused", {
@@ -351,10 +357,16 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
         const models = yield* Effect.forEach(listed, (account) => modelsOf(account.id), {
           concurrency: "unbounded",
         });
+        // An access key lists only what it may use (a pattern is expanded, never listed).
+        const allowedModels = caller.allowedModels;
+        const usable =
+          allowedModels === null
+            ? models.flat()
+            : models.flat().filter((name) => accessKeyModelAllowed(allowedModels, name));
         return {
           _tag: "json",
           status: 200,
-          body: modelListBody(shape, models.flat()),
+          body: modelListBody(shape, usable),
         } satisfies ProxyAnswer;
       }
 
@@ -435,14 +447,14 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
        * A refusal after authentication is still a request: counted as failed, no tokens. A limit
        * (429) is shed load: it only adds to the daily summary, so a flood cannot fill the log.
        */
-      const refuseRecorded = (status: number, message: string) =>
+      const refuseRecorded = (status: number, message: string, code: string | null = null) =>
         record({
           account: lastAccount,
           status,
           failovers,
           usage: null,
           ...(status === 429 ? { shed: true as const } : {}),
-        }).pipe(Effect.as(refuse(shape, status, message)));
+        }).pipe(Effect.as(refuse(shape, status, message, code)));
       // A request that never got an answer is counted too, unless an answer recorded it: 499 when
       // the client left, 502 when the Hub itself failed (the client is answered 502).
       yield* Effect.addFinalizer((exit) =>
@@ -488,6 +500,23 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
           { concurrency: "unbounded" },
         ),
       );
+      // An access key's models are checked before any account is chosen (access-keys ticket 02):
+      // a model it may not use reaches no account, whoever serves it.
+      const allowedModels = caller.allowedModels;
+      if (
+        allowedModels !== null &&
+        requested._tag !== "invalid" &&
+        !accessKeyModelAllowed(allowedModels, requested.model)
+      ) {
+        const usable = [...served.values()]
+          .flatMap((models) => [...models])
+          .filter((name) => accessKeyModelAllowed(allowedModels, name));
+        return yield* refuseRecorded(
+          403,
+          modelNotAllowedMessage(requested.model, usable, allowedModels),
+          "model_not_allowed",
+        );
+      }
       const plan = planRoute({
         allowed,
         chosenAccountId: caller.chosenAccountId,

@@ -40,7 +40,11 @@ your passkey or authenticator code, on the web or desktop app.
 
 **What a machine's owner sees.** Whoever lends you a machine controls it and can see everything that
 runs on it: files, processes, the Secrets your turns receive and each thread's AI gateway key. Only
-accept machines of people you trust that much.
+accept machines of people you trust that much. Projects that never run there stay out of their
+reach.
+
+A loan is for the people of the Space: the Owner of the Hub uses what is lent to an organization only
+as one of its members.
 
 To apply a lending link, open it while signed in, or paste it in the mobile app (Settings → Loans →
 Apply a lending link), and choose which of your Spaces receives it. The desktop app opens lending
@@ -51,7 +55,8 @@ links for its Hub itself.
 The lender takes a loan back; the Space's Admins (or the Personal space's owner) give it back. Both
 are in **Loans**, on every app. A loan also ends by itself when the resource is deleted, when the
 Space is deleted, or when the lender's account or organization is removed; archiving the Space or
-the lender leaving it ends nothing. Ended loans stay listed with the day and the reason.
+the lender leaving it ends nothing. Ended loans stay listed with the day and the reason, for the
+lender and for whoever runs the Space.
 
 When a machine's loan ends, its threads stop (running turns get up to two minutes to save their
 work) and wait for you to move them to another environment; its Sandbox and files are deleted from

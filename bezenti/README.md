@@ -27,6 +27,7 @@ README de `darwinva97/infra-contabo`.
   pierde al reiniciar): `kubectl -n bezenti-hub exec deploy/bezenti-hub -- cat /tmp/t3-acceso`.
 - `Dockerfile.dockerignore`: lo que no entra en el contexto (`.git`, `.repos`, `node_modules`…).
 - `../.github/workflows/bezenti.yml`: el CI (ver su cabecera).
+- `../.github/workflows/bezenti-verify.yml`: la verificación de ramas (ver «Verificación de ramas en CI»).
 
 ## Versiones: Hub y VPS, siempre la misma
 
@@ -120,9 +121,54 @@ Para conectarla al Hub: Settings → Environments → This app → apagar **Loca
 con `claude.bezenti.com` y **Sign in in browser**. Para que el PC ejecute agentes del Hub: **Use this
 computer as an Environment** → **Join**.
 
+## Verificación de ramas en CI
+
+`.github/workflows/bezenti-verify.yml` hace en GitHub Actions el mismo recibo que la verificación local,
+para no cargar el PC y para que varias ramas se verifiquen a la vez. No publica ni despliega nada: eso sigue
+siendo `bezenti.yml`, solo en `main`.
+
+- **Cuándo**: en cada push a una rama que no sea `main` (`feat/…`, `fix/…`, `ui/…`, `ci/…`) y a mano
+  (Actions → bezenti-verify → «Run workflow», o `gh workflow run bezenti-verify.yml --ref <rama> -f base=<commit>`).
+  Un push nuevo a la misma rama cancela la ejecución anterior.
+- **Contra qué**: el diff entre el merge-base con `main` y el commit empujado (o contra `base`, si se da).
+- **Qué corre** (lo decide el trabajo `plan`, que lo deja en el resumen; `.github/scripts/bezenti-verify-plan.cjs`):
+  - lint: `vp lint` del repo entero (salvo si solo cambió Markdown);
+  - tipos: `effect-tsgo tsrs --noEmit` en cada paquete dueño de un archivo cambiado y en sus dependientes
+    (`ci-changes.cjs`); server, web, mobile y desktop en un runner cada uno, los demás en grupos. Se toleran
+    lo mismo que en local: los avisos (effect-tsgo sale con 2 solo por ellos) y el error conocido
+    `ThreadTabStrip.browser.test.tsx:134`;
+  - pruebas: las cambiadas, las de al lado de cada fuente cambiada (`foo.ts` → `foo.test.ts`,
+    `foo.*.test.ts(x)`) y, si cambió `apps/server/`, los barridos de puertas (`DoorRules`, `RpcAuthorization`,
+    `MaskedPaths`, `HubWithEnvironments.environmentDoors`, `AuditLog`). Por paquete, Node y navegador por
+    separado (`*.browser.test.tsx` con el Chromium de Playwright), en shards de ~1 minuto, con las opciones del
+    script `test` de cada paquete.
+- **Veredicto**: el trabajo `verdict` junta las líneas `PASS`/`FAIL` en el recibo, que termina en
+  `RESULT GREEN` o `RESULT RED`, y falla si algo falló o no llegó a comprobarse (un trabajo que murió antes deja
+  `FAIL … (no result: …)`). El recibo está en el resumen de la ejecución, con el principio de cada fallo, y en
+  el artefacto `bezenti-verify-receipt` (`receipt.txt` y `receipt-details.md`).
+- **Esperarlo desde una terminal**: el ayudante local `ci-receipt.sh <rama> <sha>` (fuera del repo, junto a la
+  verificación local) espera la ejecución de ese commit exacto consultando cada 30 s, imprime el recibo y los
+  fallos, y sale con 0 solo si es GREEN (`CI_RECEIPT_EVENT=workflow_dispatch` para una ejecución lanzada a
+  mano). A mano es lo mismo que:
+
+  ```bash
+  gh run list --workflow bezenti-verify.yml --branch <rama> --json databaseId,headSha,status,conclusion
+  gh run download <id> -n bezenti-verify-receipt && cat receipt.txt
+  ```
+
+- **Diferencias con la verificación local**: los tipos se comprueban también en los paquetes dependientes, no
+  solo en los que se nombran; corren también las pruebas de `scripts/`, `evals/` e `infra/`; en `apps/server`
+  se salta la prueba «refuses a second run to the same machine», que falla en Linux con o sin cambios
+  (`localhost` resuelve antes a `::1`; `bezenti.yml` hace lo mismo). `ubuntu-latest` ya es Ubuntu 26.04 y el
+  Playwright del repo aún no la reconoce: Chromium usa sus binarios de 24.04 (`PLAYWRIGHT_HOST_PLATFORM_OVERRIDE`).
+- **Tiempos**: ~1,5 min si solo hay lint; ~2,5 min con server, web y los barridos de puertas.
+
+El plan reutiliza `readWorkspace` y `decide` de `.github/scripts/ci-changes.cjs`, que es del original: si un
+merge de Eijun lo cambia, comprobar que el plan sigue eligiendo lo mismo.
+
 ## Workflows del original
 
 Están **desactivados** en este fork (Actions → cada workflow → «Disable workflow», o `gh workflow disable`):
 usan runners de Blacksmith que aquí no existen y se quedarían en cola para siempre. Solo corren `bezenti`,
-`bezenti-android` y `bezenti-desktop` (este llama a `release-desktop.yml`, que sigue desactivado).
+`bezenti-verify`, `bezenti-android` y `bezenti-desktop` (este llama a `release-desktop.yml`, que sigue desactivado).
 Si un merge de Eijun añade workflows nuevos, desactivarlos también.

@@ -187,6 +187,57 @@ it("lists an Organization's own machines and its Sandbox in Space settings, each
   }
 });
 
+it("shows a machine's CPU, memory and disk as separate meters of what is used", async () => {
+  resetHub();
+  hub.list = [
+    machine("env-acme", "Acme build box", {
+      mode: "dedicated",
+      ownerUserId: null,
+      spaceId: ACME,
+      resources: {
+        hostResources: {
+          cpuCount: 8,
+          cpuUtilization: 0.25,
+          availableMemoryBytes: 21_900_000_000,
+          totalMemoryBytes: 25_200_000_000,
+        },
+        disk: { availableBytes: 128_300_000_000, totalBytes: 316_800_000_000 },
+      },
+    } as unknown as Partial<HubEnvironmentSummary>),
+  ];
+  using _spaces = showSpaces([space(ACME, {})], ACME);
+  const router = createFrameRouter(`/settings/space/${ACME}/machines`);
+  const stopTracking = startMainAppLocationTracking(router);
+  await using _screen = await render(<RouterProvider router={router} />, { router: false });
+  try {
+    const cpu = page.getByRole("meter", { name: "CPU" });
+    await expect.element(cpu).toHaveAttribute("aria-valuenow", "25");
+    // Used, not free: 3.3 of 25.2 GB of memory, 188.5 of 316.8 GB of disk.
+    await expect
+      .element(page.getByRole("meter", { name: "Memory" }))
+      .toHaveAttribute("aria-valuetext", "3.3 of 25.2 GB used");
+    await expect
+      .element(page.getByRole("meter", { name: "Disk" }))
+      .toHaveAttribute("aria-valuetext", "188.5 of 316.8 GB used");
+    await expect
+      .element(page.getByRole("meter", { name: "Disk" }))
+      .toHaveAttribute("aria-valuenow", "60");
+    // What changes the machine is in its menu: the Owner renames and removes it there.
+    // The modal's inert layer takes pointer events in this frame: press it as a keyboard would.
+    (
+      page.getByRole("button", { name: "Actions for Acme build box" }).element() as HTMLElement
+    ).click();
+    await expect
+      .element(page.getByRole("menuitem", { name: "Rename Acme build box" }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("menuitem", { name: "Remove Acme build box" }))
+      .toBeVisible();
+  } finally {
+    stopTracking();
+  }
+});
+
 it("gives a Member of the Organization the list without a page to open", async () => {
   resetHub(false);
   using _spaces = showSpaces([space(ACME, { role: "member", canInvite: false })], ACME);
@@ -198,6 +249,7 @@ it("gives a Member of the Organization the list without a page to open", async (
     expect(page.getByRole("link", { name: /^Open / }).elements()).toHaveLength(0);
     expect(page.getByRole("link", { name: /Platform → Sandboxes/ }).elements()).toHaveLength(0);
     expect(page.getByRole("button", { name: /^Rename/ }).elements()).toHaveLength(0);
+    expect(page.getByRole("button", { name: /^Actions for/ }).elements()).toHaveLength(0);
   } finally {
     stopTracking();
   }

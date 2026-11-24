@@ -5,6 +5,7 @@ import {
 } from "@t3tools/client-runtime/environment/hub-environments";
 import { type HubEnvironmentSummary, isListedMachine, type SpaceId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
+import { EllipsisIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useState } from "react";
 
 import { usePrimaryActsForInstallation, usePrimarySessionState } from "../../environments/primary";
@@ -15,6 +16,7 @@ import {
   renameHubEnvironment,
 } from "../../environments/primary/hubEnvironments";
 import { errorMessageOf } from "../../lib/errorMessage";
+import { cn } from "../../lib/utils";
 import { useCurrentSpace } from "../../state/currentSpace";
 import { useProjects } from "../../state/entities";
 import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
@@ -32,6 +34,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { LendMachineDialog } from "./GrantsSettings";
 import { machineInScope, sandboxOfScope, type OwnedResourceScope } from "./ownedResourceScope";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -42,6 +45,56 @@ import { UsedBySelect } from "./UsedBySelect";
 const REFRESH_MS = 5_000;
 
 const gigabytes = (bytes: number) => `${(bytes / 1_000_000_000).toFixed(1)} GB`;
+
+/** A store's share in use, and «12.3 of 25.2 GB used»: what fills up is what the bar shows. */
+const usedOf = (totalBytes: number, availableBytes: number) => {
+  const usedBytes = Math.max(0, totalBytes - availableBytes);
+  return {
+    used: totalBytes > 0 ? usedBytes / totalBytes : null,
+    detail: `${(usedBytes / 1_000_000_000).toFixed(1)} of ${gigabytes(totalBytes)} used`,
+  };
+};
+
+/** One labelled resource: its name, a thin bar with its percent, and what the bar measures. */
+function ResourceMeter(props: {
+  readonly label: string;
+  /** The share in use, 0 to 1; null when the machine does not say. */
+  readonly used: number | null;
+  readonly detail: string;
+}) {
+  const percent =
+    props.used === null ? null : Math.min(100, Math.max(0, Math.round(props.used * 100)));
+  return (
+    <span className="flex min-w-0 flex-col gap-1">
+      <span className="flex items-baseline justify-between gap-2">
+        <span className="font-medium text-foreground">{props.label}</span>
+        {percent === null ? null : <span className="tabular-nums">{percent}%</span>}
+      </span>
+      {percent === null ? (
+        <span aria-hidden="true" className="block h-1 rounded-full bg-muted" />
+      ) : (
+        <span
+          role="meter"
+          aria-label={props.label}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+          aria-valuetext={props.detail}
+          className="block h-1 overflow-hidden rounded-full bg-muted"
+        >
+          <span
+            className={cn(
+              "block h-full rounded-full",
+              percent >= 90 ? "bg-warning" : "bg-muted-foreground/70",
+            )}
+            style={{ width: `${percent}%` }}
+          />
+        </span>
+      )}
+      <span className="truncate tabular-nums">{props.detail}</span>
+    </span>
+  );
+}
 
 function describe(
   environment: HubEnvironmentSummary,
@@ -79,26 +132,34 @@ function describe(
     <>
       {parts.filter((part) => part !== null).join(" · ")}
       {resources !== null ? (
-        <>
-          <br />
-          {`${resources.hostResources.cpuCount} CPUs${
-            resources.hostResources.cpuUtilization === null
-              ? ""
-              : ` (${Math.round(resources.hostResources.cpuUtilization * 100)}% busy)`
-          } · ${gigabytes(resources.hostResources.availableMemoryBytes)} of ${gigabytes(
-            resources.hostResources.totalMemoryBytes,
-          )} memory free${
-            resources.disk === null
-              ? ""
-              : ` · ${gigabytes(resources.disk.availableBytes)} of ${gigabytes(resources.disk.totalBytes)} disk free`
-          }`}
-        </>
+        // Three labelled meters, each «used of total»: memory and disk never read as one figure.
+        <span className="mt-2 grid max-w-lg grid-cols-3 gap-4" role="group" aria-label="Resources">
+          <ResourceMeter
+            label="CPU"
+            used={resources.hostResources.cpuUtilization}
+            detail={`${resources.hostResources.cpuCount} CPUs${
+              resources.hostResources.cpuUtilization === null
+                ? ""
+                : ` · ${Math.round(resources.hostResources.cpuUtilization * 100)}% busy`
+            }`}
+          />
+          <ResourceMeter
+            label="Memory"
+            {...usedOf(
+              resources.hostResources.totalMemoryBytes,
+              resources.hostResources.availableMemoryBytes,
+            )}
+          />
+          {resources.disk === null ? null : (
+            <ResourceMeter
+              label="Disk"
+              {...usedOf(resources.disk.totalBytes, resources.disk.availableBytes)}
+            />
+          )}
+        </span>
       ) : null}
       {providers.length > 0 ? (
-        <>
-          <br />
-          {`Providers: ${providers.join(", ")}`}
-        </>
+        <span className="mt-2 block">{`Providers: ${providers.join(", ")}`}</span>
       ) : null}
       {(environment.uploadIssues ?? []).map((issue) => (
         <span
@@ -386,62 +447,68 @@ export function HubEnvironmentsSettings({ scope }: { readonly scope?: OwnedResou
                 control={
                   (canOpen && scope !== undefined) ||
                   (manages(environment) && environment.kind !== "sandbox") ? (
-                    <div className="flex gap-1">
+                    <div className="flex items-center gap-1">
                       {canOpen ? machinePage(environment) : null}
-                      {manages(environment) &&
-                      environment.kind !== "sandbox" &&
-                      lends(environment) ? (
-                        <Button
-                          aria-label={`Lend ${environment.name} to another Space`}
-                          size="xs"
-                          variant="outline"
-                          onClick={() => setLending(environment)}
-                        >
-                          Lend…
-                        </Button>
-                      ) : null}
-                      {manages(environment) &&
-                      environment.kind !== "sandbox" &&
-                      changesUse(environment) ? (
-                        <Button
-                          aria-label={`Change who uses ${environment.name}`}
-                          size="xs"
-                          variant="outline"
-                          onClick={() => {
-                            setModeError(null);
-                            setChangingMode({
-                              environment,
-                              use:
-                                environment.mode === "dedicated" && environment.spaceId
-                                  ? environment.spaceId
-                                  : "personal",
-                            });
-                          }}
-                        >
-                          Change use
-                        </Button>
-                      ) : null}
+                      {/* What changes the machine sits in its «⋯» menu, each as before. */}
                       {manages(environment) && environment.kind !== "sandbox" ? (
-                        <Button
-                          aria-label={`Rename ${environment.name}`}
-                          size="xs"
-                          variant="outline"
-                          onClick={() =>
-                            setRenaming({ id: environment.id, name: environment.name })
-                          }
-                        >
-                          Rename
-                        </Button>
-                      ) : null}
-                      {manages(environment) && environment.kind === "external" ? (
-                        <Button
-                          aria-label={`Remove ${environment.name}`}
-                          size="xs"
-                          variant="destructive-outline"
-                          onClick={() => setRemoving(environment)}
-                        >
-                          Remove
-                        </Button>
+                        <Menu>
+                          <MenuTrigger
+                            render={
+                              <Button
+                                aria-label={`Actions for ${environment.name}`}
+                                size="icon-xs"
+                                type="button"
+                                variant="ghost"
+                              />
+                            }
+                          >
+                            <EllipsisIcon />
+                          </MenuTrigger>
+                          <MenuPopup align="end" sideOffset={6}>
+                            {lends(environment) ? (
+                              <MenuItem
+                                aria-label={`Lend ${environment.name} to another Space`}
+                                onClick={() => setLending(environment)}
+                              >
+                                Lend…
+                              </MenuItem>
+                            ) : null}
+                            {changesUse(environment) ? (
+                              <MenuItem
+                                aria-label={`Change who uses ${environment.name}`}
+                                onClick={() => {
+                                  setModeError(null);
+                                  setChangingMode({
+                                    environment,
+                                    use:
+                                      environment.mode === "dedicated" && environment.spaceId
+                                        ? environment.spaceId
+                                        : "personal",
+                                  });
+                                }}
+                              >
+                                Change use…
+                              </MenuItem>
+                            ) : null}
+                            <MenuItem
+                              aria-label={`Rename ${environment.name}`}
+                              onClick={() =>
+                                setRenaming({ id: environment.id, name: environment.name })
+                              }
+                            >
+                              Rename…
+                            </MenuItem>
+                            {environment.kind === "external" ? (
+                              <MenuItem
+                                aria-label={`Remove ${environment.name}`}
+                                variant="destructive"
+                                onClick={() => setRemoving(environment)}
+                              >
+                                Remove…
+                              </MenuItem>
+                            ) : null}
+                          </MenuPopup>
+                        </Menu>
                       ) : null}
                     </div>
                   ) : null

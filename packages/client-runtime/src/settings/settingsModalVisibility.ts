@@ -26,7 +26,11 @@ export interface SpaceSettingsSubject {
 const ORGANIZATION_ONLY_SPACE_SECTIONS: ReadonlySet<string> = new Set(["members", "invitations"]);
 
 /** The Space sections that belong to a User's own Space, not to one the Owner only reads. */
-const OWN_SPACE_ONLY_SECTIONS: ReadonlySet<string> = new Set(["scheduled-tasks", "archive"]);
+const OWN_SPACE_ONLY_SECTIONS: ReadonlySet<string> = new Set([
+  "scheduled-tasks",
+  "makita",
+  "archive",
+]);
 
 function isSpaceSectionAllowed(sectionId: string, space: SpaceSettingsSubject | null): boolean {
   if (space === null) return false;

@@ -145,6 +145,9 @@ const SpaceScheduledTasksSection = lazySection(() =>
 const SpaceArchiveSection = lazySection(() =>
   import("./ArchivedThreadsPanel").then((module) => ({ default: module.ArchivedThreadsPanel })),
 );
+const SpaceMakitaSection = lazySection(() =>
+  import("./MakitaSpaceSettings").then((module) => ({ default: module.SpaceMakitaSection })),
+);
 
 const PlatformUsersSection = lazySection(() =>
   import("./PlatformUsersSection").then((module) => ({ default: module.PlatformUsersSection })),
@@ -315,6 +318,14 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       label: "Scheduled tasks",
       icon: CalendarClockIcon,
       component: SpaceScheduledTasksSection,
+      group: 2,
+    },
+    // Makita, the GitHub bot teammate: the Space's configurations (Makita ticket 03).
+    {
+      id: "makita",
+      label: "Makita",
+      icon: BotMessageSquareIcon,
+      component: SpaceMakitaSection,
       group: 2,
     },
     {

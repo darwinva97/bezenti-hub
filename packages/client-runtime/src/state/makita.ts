@@ -5,8 +5,8 @@ import { createEnvironmentRpcCommand } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 /**
- * Makita, the GitHub bot teammate: its account and who may use it (the Owner's, Platform → Makita).
- * No answer carries its token; only `setAccount` sends one, once.
+ * Makita, the GitHub bot teammate: its account and who may use it (the Owner's, Platform → Makita),
+ * and a Space's configurations. No answer carries its token; only `setAccount` sends one, once.
  */
 export function createMakitaEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
@@ -40,6 +40,31 @@ export function createMakitaEnvironmentAtoms<R, E>(
     revokePermission: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:makita:permissions-revoke",
       tag: WS_METHODS.makitaPermissionsRevoke,
+    }),
+    // A Space's configurations (Space settings → Makita).
+    listConfigs: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:configs-list",
+      tag: WS_METHODS.makitaConfigsList,
+    }),
+    createConfig: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:configs-create",
+      tag: WS_METHODS.makitaConfigsCreate,
+    }),
+    updateConfig: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:configs-update",
+      tag: WS_METHODS.makitaConfigsUpdate,
+    }),
+    deleteConfig: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:configs-delete",
+      tag: WS_METHODS.makitaConfigsDelete,
+    }),
+    pauseConfig: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:configs-pause",
+      tag: WS_METHODS.makitaConfigsPause,
+    }),
+    resumeConfig: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:configs-resume",
+      tag: WS_METHODS.makitaConfigsResume,
     }),
   };
 }

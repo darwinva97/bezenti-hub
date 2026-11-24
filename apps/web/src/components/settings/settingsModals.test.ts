@@ -350,7 +350,7 @@ describe("Space settings sections", () => {
 
   it("gives an Organization its Members, and its Invitations to who may invite", () => {
     // The Owner and an Admin may invite; a Member and a Guest read the list and leave.
-    const shared = ["vault", "ai-accounts", "machines", "scheduled-tasks", "archive"];
+    const shared = ["vault", "ai-accounts", "machines", "scheduled-tasks", "makita", "archive"];
     expect(ids(ORGANIZATION_ADMIN, OWNER_IN_BROWSER)).toEqual([
       "general",
       "members",
@@ -363,7 +363,13 @@ describe("Space settings sections", () => {
 
   it("gives a Personal space no Members or Invitations, to its User and to the Owner reading it", () => {
     const resources = ["vault", "ai-accounts", "machines"];
-    expect(ids(OWN_PERSONAL)).toEqual(["general", ...resources, "scheduled-tasks", "archive"]);
+    expect(ids(OWN_PERSONAL)).toEqual([
+      "general",
+      ...resources,
+      "scheduled-tasks",
+      "makita",
+      "archive",
+    ]);
     expect(ids(OTHERS_PERSONAL, OWNER_IN_BROWSER)).toEqual(["general", ...resources]);
   });
 
@@ -378,6 +384,10 @@ describe("Space settings sections", () => {
     ["archive", OWN_PERSONAL, true],
     // The Owner reads only General and the resource sections of another User's Personal space.
     ["scheduled-tasks", OTHERS_PERSONAL, false],
+    // Makita ticket 03: a Space's configurations, in an Organization or one's own Personal space.
+    ["makita", ORGANIZATION_MEMBER, true],
+    ["makita", OWN_PERSONAL, true],
+    ["makita", OTHERS_PERSONAL, false],
     ["archive", OTHERS_PERSONAL, false],
     ["vault", OTHERS_PERSONAL, true],
     ["members", OWN_PERSONAL, false],

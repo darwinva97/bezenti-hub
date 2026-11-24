@@ -21,6 +21,7 @@ import { accessKeySetup, gatewayOrigin, sendsKeyInClear } from "@t3tools/shared/
 import { formatTokens } from "@t3tools/client-runtime/ai-usage-view";
 import { useAtomValue } from "@effect/atom-react";
 import * as Redacted from "effect/Redacted";
+import { EllipsisIcon, PlusIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useState } from "react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -38,6 +39,7 @@ import {
   AlertDialogPopup,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -50,9 +52,12 @@ import {
 } from "../ui/dialog";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { ChipsMultiSelect } from "./ChipsMultiSelect";
+import { InfoTip } from "./InfoTip";
+import { SettingsSection } from "./settingsLayout";
 
 type Tool = "claude-code" | "codex" | "other";
 const TOOLS: ReadonlyArray<readonly [Tool, string]> = [
@@ -270,6 +275,7 @@ function AccessKeysPanel({
   const [made, setMade] = useState<{ readonly key: AccessKey; readonly secret: string } | null>(
     null,
   );
+  const [creating, setCreating] = useState(false);
   const [revoking, setRevoking] = useState<AccessKey | null>(null);
   const [revokePending, setRevokePending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -360,185 +366,133 @@ function AccessKeysPanel({
 
   if (hidden) return null;
   const space = listed?.space ?? null;
+  const mayMake = mayCreate && spaceId !== undefined && space?.canManage === true;
+  const description =
+    spaceId === undefined
+      ? "The access keys of every Space, with the state of their Space. Each Space's own settings make and change them; you may revoke any here."
+      : "Give someone this Space's AI accounts for their own agent, with or without a Hub account: they paste the setup into Claude Code, Codex or another client. Each key is valid until a date you choose and its use counts on the key. A key is shown once, when you make it.";
   return (
-    <SettingsSection id="access-keys" title="Access keys">
-      <SettingsRow
-        title={
-          spaceId === undefined ? "Every Space's access keys" : "Keys for people outside this Space"
-        }
-        description={
-          spaceId === undefined
-            ? "The access keys of every Space, with the state of their Space. Each Space's own settings make and change them; you may revoke any here."
-            : "Give someone this Space's AI accounts for their own agent, with or without a Hub account: they paste the setup into Claude Code, Codex or another client. Each key is valid until a date you choose and its use counts on the key. A key is shown once, when you make it."
-        }
-        status={
-          error === null ? null : (
-            <span className="text-destructive" role="alert">
-              {error}
-            </span>
-          )
-        }
-      />
-      {mayCreate && spaceId !== undefined && space?.canManage === true ? (
-        <NewAccessKeyForm
-          environmentId={environmentId}
-          spaceId={spaceId}
-          accounts={options?.accounts ?? []}
-          spaceHasSubscription={space.subscription}
-          create={commands.create}
-          onMade={(key, secret) => {
-            setMade({ key, secret });
-            void load();
-          }}
-        />
-      ) : null}
-      {made === null ? null : (
-        <NewKeyPanel
-          made={made}
-          origin={origin}
-          models={usableModels(options, made.key)}
-          onDone={() => setMade(null)}
-          onError={(message) => setError(message)}
-        />
+    <SettingsSection
+      id="access-keys"
+      title="Access keys"
+      titleAction={
+        <InfoTip
+          label={
+            spaceId === undefined
+              ? "About every Space's access keys"
+              : "About keys for people outside this Space"
+          }
+        >
+          {description}
+        </InfoTip>
+      }
+      headerAction={
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Checkbox
+              aria-label="Show ended keys"
+              checked={showEnded}
+              onCheckedChange={(checked) => setShowEnded(checked === true)}
+            />
+            Show ended
+          </label>
+          {mayMake ? (
+            <Button size="xs" onClick={() => setCreating(true)}>
+              <PlusIcon />
+              New access key
+            </Button>
+          ) : null}
+        </div>
+      }
+    >
+      {error === null ? null : (
+        <p className="px-4 py-3 text-xs text-destructive" role="alert">
+          {error}
+        </p>
       )}
-      <div className="flex items-center gap-2 px-4 pb-2 text-xs">
-        <label className="flex items-center gap-2">
-          <Checkbox
-            aria-label="Show ended keys"
-            checked={showEnded}
-            onCheckedChange={(checked) => setShowEnded(checked === true)}
-          />
-          Show ended keys
-        </label>
-      </div>
-      {listed === null ? null : listed.keys.length === 0 ? (
-        <p className="px-4 pb-4 text-sm text-muted-foreground">No access key yet.</p>
+      {listed === null ? (
+        <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p>
+      ) : listed.keys.length === 0 ? (
+        <p className="px-4 py-3 text-sm text-muted-foreground">No access key yet.</p>
       ) : (
-        <ul aria-label="Access keys" className="flex flex-col gap-2 px-4 pb-4">
+        <ul aria-label="Access keys" className="divide-y divide-border/50">
           {listed.keys.map((key) => (
-            <li
+            <AccessKeyRow
               key={key.keyId}
-              aria-label={key.label}
-              className="flex flex-col gap-2 rounded-md border border-border p-3 text-sm sm:flex-row sm:items-center"
-            >
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate font-medium">
-                  {key.label}{" "}
-                  <span className="font-mono text-xs text-muted-foreground">…{key.hint}</span>
-                </span>
-                {spaceId === undefined ? (
-                  <span className="text-xs text-muted-foreground">
-                    {[
-                      key.spaceName ?? "A Space that no longer exists",
-                      key.spaceState === undefined ? null : SPACE_STATES[key.spaceState],
-                    ]
-                      .filter((part) => part !== null)
-                      .join(" · ")}
-                  </span>
-                ) : null}
-                <span className="text-xs text-muted-foreground">{modelsText(key.models)}</span>
-                {capsText(key).length === 0 ? (
-                  <span className="text-xs text-muted-foreground">No token limit</span>
-                ) : (
-                  capsText(key).map((line) => (
-                    <span key={line} className="text-xs text-muted-foreground">
-                      {line}
-                    </span>
-                  ))
-                )}
-                {usageText(key.usage) === null ? null : (
-                  <span className="text-xs text-muted-foreground" aria-label="Usage">
-                    {usageText(key.usage)}
-                  </span>
-                )}
-                <span className="text-xs text-muted-foreground">
-                  {key.reaches === null
-                    ? "All of this Space's AI accounts"
-                    : key.reaches.map((reach, index) => (
-                        <span key={reach.id}>
-                          {index === 0 ? "" : ", "}
-                          {reach.inSpace ? (
-                            (reach.name ?? reach.id)
-                          ) : (
-                            <span className="line-through">
-                              {reach.name ?? reach.id} (No longer in this Space)
-                            </span>
-                          )}
-                        </span>
-                      ))}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {[
-                    `By ${key.createdByName ?? key.createdBy}`,
-                    key.revokedAt === null ? null : `Revoked ${formatWhen(key.revokedAt)}`,
-                    `Last used ${formatWhen(key.lastUsedAt)}`,
-                  ]
-                    .filter((part) => part !== null)
-                    .join(" · ")}
-                  {key.revokedAt === null ? (
-                    <>
-                      {" · "}
-                      <Tooltip>
-                        <TooltipTrigger render={<span>{expiryText(key.expiresAt, now)}</span>} />
-                        <TooltipPopup>
-                          {`${key.expiresAt.slice(0, 16).replace("T", " ")} UTC`}
-                        </TooltipPopup>
-                      </Tooltip>
-                    </>
-                  ) : null}
-                </span>
-              </div>
-              {origin === null || key.revokedAt !== null ? null : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  aria-label={`Copy setup for ${key.label}`}
-                  onClick={() => {
-                    // The key is never shown again: the setup holds a placeholder for it.
-                    setCopied(key.keyId);
-                    copyToClipboard(
-                      accessKeySetup(origin, null, usableModels(options, key)).claudeCode,
-                      key.keyId,
-                    );
-                  }}
-                >
-                  {isCopied && copied === key.keyId ? "Copied" : "Copy setup"}
-                </Button>
-              )}
-              {mayUpdate && canManage && key.revokedAt === null ? (
-                <>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    aria-label={`Renew ${key.label}`}
-                    onClick={() => setEditing({ key, mode: "renew" })}
-                  >
-                    Renew
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    aria-label={`Edit ${key.label}`}
-                    onClick={() => setEditing({ key, mode: "edit" })}
-                  >
-                    Edit
-                  </Button>
-                </>
-              ) : null}
-              {mayRevoke && key.revokedAt === null ? (
-                <Button
-                  size="sm"
-                  variant="destructive-outline"
-                  aria-label={`Revoke ${key.label}`}
-                  onClick={() => setRevoking(key)}
-                >
-                  Revoke
-                </Button>
-              ) : null}
-            </li>
+              accessKey={key}
+              allSpaces={spaceId === undefined}
+              now={now}
+              copy={
+                origin === null || key.revokedAt !== null
+                  ? null
+                  : {
+                      copied: isCopied && copied === key.keyId,
+                      onCopy: () => {
+                        // The key is never shown again: the setup holds a placeholder for it.
+                        setCopied(key.keyId);
+                        copyToClipboard(
+                          accessKeySetup(origin, null, usableModels(options, key)).claudeCode,
+                          key.keyId,
+                        );
+                      },
+                    }
+              }
+              onRenew={
+                mayUpdate && canManage && key.revokedAt === null
+                  ? () => setEditing({ key, mode: "renew" })
+                  : null
+              }
+              onEdit={
+                mayUpdate && canManage && key.revokedAt === null
+                  ? () => setEditing({ key, mode: "edit" })
+                  : null
+              }
+              onRevoke={mayRevoke && key.revokedAt === null ? () => setRevoking(key) : null}
+            />
           ))}
         </ul>
       )}
+      {/* «New access key», then the key once, in one dialog: it closes only by «Done». */}
+      {mayMake || made !== null ? (
+        <Dialog
+          open={creating || made !== null}
+          disablePointerDismissal={made !== null}
+          onOpenChange={(open) => {
+            if (!open && made === null) setCreating(false);
+          }}
+        >
+          <DialogPopup className="max-w-2xl" showCloseButton={made === null}>
+            {made === null ? (
+              spaceId === undefined || space === null ? null : (
+                <NewAccessKeyForm
+                  environmentId={environmentId}
+                  spaceId={spaceId}
+                  description={description}
+                  accounts={options?.accounts ?? []}
+                  spaceHasSubscription={space.subscription}
+                  create={commands.create}
+                  onCancel={() => setCreating(false)}
+                  onMade={(key, secret) => {
+                    setMade({ key, secret });
+                    void load();
+                  }}
+                />
+              )
+            ) : (
+              <NewKeyPanel
+                made={made}
+                origin={origin}
+                models={usableModels(options, made.key)}
+                onDone={() => {
+                  setMade(null);
+                  setCreating(false);
+                }}
+                onError={(message) => setError(message)}
+              />
+            )}
+          </DialogPopup>
+        </Dialog>
+      ) : null}
       {editing === null ? null : (
         <EditAccessKeyDialog
           accessKey={editing.key}
@@ -587,6 +541,144 @@ function AccessKeysPanel({
   );
 }
 
+/**
+ * One key, dense: its label and hint with its expiry; what it reaches; its caps; its use; who
+ * made it. «Copy setup» stays at hand, the rest in its «⋯» menu.
+ */
+function AccessKeyRow(props: {
+  readonly accessKey: AccessKey;
+  /** The Owner's list of every Space: say each key's Space. */
+  readonly allSpaces: boolean;
+  readonly now: number;
+  readonly copy: { readonly copied: boolean; readonly onCopy: () => void } | null;
+  readonly onRenew: (() => void) | null;
+  readonly onEdit: (() => void) | null;
+  readonly onRevoke: (() => void) | null;
+}) {
+  const key = props.accessKey;
+  const caps = capsText(key);
+  const usage = usageText(key.usage);
+  const expired = key.revokedAt === null && Date.parse(key.expiresAt) <= props.now;
+  const hasMenu = props.onRenew !== null || props.onEdit !== null || props.onRevoke !== null;
+  return (
+    <li
+      aria-label={key.label}
+      className="flex flex-col gap-2 px-3 py-2.5 text-sm sm:flex-row sm:items-center sm:gap-4 sm:px-4"
+    >
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="truncate font-medium">{key.label}</span>
+          <span className="font-mono text-xs text-muted-foreground">…{key.hint}</span>
+          {key.revokedAt === null ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={<Badge variant={expired ? "error" : "secondary"} size="sm" />}
+              >
+                {expiryText(key.expiresAt, props.now)}
+              </TooltipTrigger>
+              <TooltipPopup>{`${key.expiresAt.slice(0, 16).replace("T", " ")} UTC`}</TooltipPopup>
+            </Tooltip>
+          ) : (
+            <Badge variant="error" size="sm">
+              Revoked {formatWhen(key.revokedAt)}
+            </Badge>
+          )}
+          {props.allSpaces ? (
+            <span className="text-xs text-muted-foreground">
+              {[
+                key.spaceName ?? "A Space that no longer exists",
+                key.spaceState === undefined ? null : SPACE_STATES[key.spaceState],
+              ]
+                .filter((part) => part !== null)
+                .join(" · ")}
+            </span>
+          ) : null}
+        </div>
+        <span className="text-xs text-muted-foreground">
+          {modelsText(key.models)}
+          {" · "}
+          {key.reaches === null
+            ? "All of this Space's AI accounts"
+            : key.reaches.map((reach, index) => (
+                <span key={reach.id}>
+                  {index === 0 ? "" : ", "}
+                  {reach.inSpace ? (
+                    (reach.name ?? reach.id)
+                  ) : (
+                    <span className="line-through">
+                      {reach.name ?? reach.id} (No longer in this Space)
+                    </span>
+                  )}
+                </span>
+              ))}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {caps.length === 0 ? "No token limit" : caps.join("; ")}
+        </span>
+        {usage === null ? null : (
+          <span className="text-xs text-muted-foreground" aria-label="Usage">
+            {usage}
+          </span>
+        )}
+        <span className="text-xs text-muted-foreground">
+          {`By ${key.createdByName ?? key.createdBy} · Last used ${formatWhen(key.lastUsedAt)}`}
+        </span>
+      </div>
+      {props.copy === null && !hasMenu ? null : (
+        <div className="flex shrink-0 items-center gap-1">
+          {props.copy === null ? null : (
+            <Button
+              size="xs"
+              variant="outline"
+              aria-label={`Copy setup for ${key.label}`}
+              onClick={props.copy.onCopy}
+            >
+              {props.copy.copied ? "Copied" : "Copy setup"}
+            </Button>
+          )}
+          {hasMenu ? (
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    aria-label={`Actions for ${key.label}`}
+                    size="icon-xs"
+                    type="button"
+                    variant="ghost"
+                  />
+                }
+              >
+                <EllipsisIcon />
+              </MenuTrigger>
+              <MenuPopup align="end" sideOffset={6}>
+                {props.onRenew === null ? null : (
+                  <MenuItem aria-label={`Renew ${key.label}`} onClick={props.onRenew}>
+                    Renew…
+                  </MenuItem>
+                )}
+                {props.onEdit === null ? null : (
+                  <MenuItem aria-label={`Edit ${key.label}`} onClick={props.onEdit}>
+                    Edit…
+                  </MenuItem>
+                )}
+                {props.onRevoke === null ? null : (
+                  <MenuItem
+                    aria-label={`Revoke ${key.label}`}
+                    variant="destructive"
+                    onClick={props.onRevoke}
+                  >
+                    Revoke…
+                  </MenuItem>
+                )}
+              </MenuPopup>
+            </Menu>
+          ) : null}
+        </div>
+      )}
+    </li>
+  );
+}
+
 /** The key, once, with its setup for each client. */
 function NewKeyPanel(props: {
   readonly made: { readonly key: AccessKey; readonly secret: string };
@@ -617,80 +709,88 @@ function NewKeyPanel(props: {
           : setup.other;
   const shell = tool === "codex" ? (setup?.codexShell ?? null) : null;
   return (
-    <section
-      aria-label="New access key"
-      className="mx-4 mb-4 flex flex-col gap-2 rounded-md border border-border p-3 text-sm"
-    >
-      <p className="font-medium">
-        Copy «{made.key.label}» now: it is not shown again. Anyone with it uses{" "}
-        {made.key.spaceName ?? "this Space"}'s AI accounts until {formatWhen(made.key.expiresAt)}.
-      </p>
-      {origin !== null && sendsKeyInClear(origin) ? (
-        <p className="text-xs text-destructive" role="alert">
-          {IN_CLEAR_WARNING}
-        </p>
-      ) : null}
-      <code aria-label="Key" className="break-all rounded bg-muted px-2 py-1 font-mono text-xs">
-        {made.secret}
-      </code>
-      <ToggleGroup
-        aria-label="Setup for"
-        value={[tool]}
-        onValueChange={(next) => {
-          const value = next[0];
-          if (value === "claude-code" || value === "codex" || value === "other") setTool(value);
-        }}
-      >
-        {TOOLS.map(([value, label]) => (
-          <Toggle key={value} value={value}>
-            {label}
-          </Toggle>
-        ))}
-      </ToggleGroup>
-      {file === null ? null : (
-        <>
-          <p className="text-xs text-muted-foreground">{SETUP_HINTS[tool]}</p>
-          <pre
-            aria-label="Setup"
-            className="overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-xs"
-          >
-            {file}
-          </pre>
-          {shell === null ? null : (
-            <pre
-              aria-label="Shell line"
-              className="overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-xs"
+    <>
+      <DialogHeader>
+        <DialogTitle>Copy «{made.key.label}» now</DialogTitle>
+        <DialogDescription>
+          It is not shown again. Anyone with it uses {made.key.spaceName ?? "this Space"}'s AI
+          accounts until {formatWhen(made.key.expiresAt)}.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogPanel>
+        <section aria-label="New access key" className="flex flex-col gap-3 text-sm">
+          {origin !== null && sendsKeyInClear(origin) ? (
+            <p className="text-xs text-destructive" role="alert">
+              {IN_CLEAR_WARNING}
+            </p>
+          ) : null}
+          <div className="flex items-start gap-2">
+            <code
+              aria-label="Key"
+              className="min-w-0 flex-1 break-all rounded bg-muted px-2 py-1 font-mono text-xs"
             >
-              {shell}
-            </pre>
+              {made.secret}
+            </code>
+            <Button size="xs" variant="outline" onClick={() => copy("key", made.secret)}>
+              {isCopied && copied === "key" ? "Copied" : "Copy key"}
+            </Button>
+          </div>
+          <ToggleGroup
+            aria-label="Setup for"
+            size="sm"
+            value={[tool]}
+            onValueChange={(next) => {
+              const value = next[0];
+              if (value === "claude-code" || value === "codex" || value === "other") setTool(value);
+            }}
+          >
+            {TOOLS.map(([value, label]) => (
+              <Toggle key={value} value={value}>
+                {label}
+              </Toggle>
+            ))}
+          </ToggleGroup>
+          {file === null ? null : (
+            <>
+              <p className="text-xs text-muted-foreground">{SETUP_HINTS[tool]}</p>
+              <pre
+                aria-label="Setup"
+                className="max-h-56 overflow-auto rounded bg-muted px-2 py-1 font-mono text-xs"
+              >
+                {file}
+              </pre>
+              {shell === null ? null : (
+                <pre
+                  aria-label="Shell line"
+                  className="overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-xs"
+                >
+                  {shell}
+                </pre>
+              )}
+            </>
           )}
-        </>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" onClick={() => copy("key", made.secret)}>
-          {isCopied && copied === "key" ? "Copied" : "Copy key"}
-        </Button>
+        </section>
+      </DialogPanel>
+      <DialogFooter>
         {file === null ? null : (
-          <Button size="sm" variant="outline" onClick={() => copy("setup", file)}>
+          <Button variant="outline" onClick={() => copy("setup", file)}>
             {isCopied && copied === "setup" ? "Copied" : "Copy setup"}
           </Button>
         )}
         {shell === null ? null : (
-          <Button size="sm" variant="outline" onClick={() => copy("shell", shell)}>
+          <Button variant="outline" onClick={() => copy("shell", shell)}>
             {isCopied && copied === "shell" ? "Copied" : "Copy shell line"}
           </Button>
         )}
-        <Button size="sm" variant="ghost" onClick={props.onDone}>
-          Done
-        </Button>
-      </div>
-    </section>
+        <Button onClick={props.onDone}>Done</Button>
+      </DialogFooter>
+    </>
   );
 }
 
 /**
  * The models a key may use (access-keys ticket 02): «All models» by an explicit choice, or the
- * Space's catalog by family, plus patterns typed with «Add pattern» (`claude-sonnet-*`).
+ * Space's catalog by family in a searchable multi-select, plus patterns typed there (`claude-sonnet-*`).
  */
 function ModelPicker(props: {
   readonly catalog: ReadonlyArray<string>;
@@ -700,21 +800,14 @@ function ModelPicker(props: {
   readonly onAll: (all: boolean) => void;
   readonly onEntries: (entries: ReadonlyArray<string>) => void;
 }) {
-  const [pattern, setPattern] = useState("");
   const families = [...new Set(props.catalog.map(familyOf))];
-  const typed = props.entries.filter((entry) => !props.catalog.includes(entry));
-  const toggle = (model: string, on: boolean) =>
-    props.onEntries(
-      on ? [...props.entries, model] : props.entries.filter((entry) => entry !== model),
-    );
-  const candidate = pattern.trim();
-  const valid = candidate !== "*" && accessKeyModelEntryValid(candidate);
   return (
-    <div className="flex w-full flex-col gap-2 text-xs">
-      <div className="flex flex-col gap-1 font-medium">
+    <div className="flex w-full flex-col gap-1.5 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2 font-medium">
         Models
         <ToggleGroup
           aria-label="Models"
+          size="sm"
           value={[props.all ? "all" : "choose"]}
           onValueChange={(next) => {
             const value = next[0];
@@ -726,68 +819,23 @@ function ModelPicker(props: {
         </ToggleGroup>
       </div>
       {props.all ? null : (
-        <>
-          {families.map((family) => (
-            <fieldset key={family} className="flex flex-wrap items-center gap-3">
-              <legend className="mb-1 font-medium text-muted-foreground">{family}</legend>
-              {props.catalog
-                .filter((model) => familyOf(model) === family)
-                .map((model) => (
-                  <label key={model} className="flex items-center gap-1">
-                    <Checkbox
-                      aria-label={model}
-                      checked={props.entries.includes(model)}
-                      disabled={props.disabled}
-                      onCheckedChange={(checked) => toggle(model, checked === true)}
-                    />
-                    {model}
-                  </label>
-                ))}
-            </fieldset>
-          ))}
-          {typed.length === 0 ? null : (
-            <div className="flex flex-wrap items-center gap-2">
-              {typed.map((entry) => (
-                <Button
-                  key={entry}
-                  size="xs"
-                  variant="outline"
-                  aria-label={`Remove ${entry}`}
-                  disabled={props.disabled}
-                  onClick={() => toggle(entry, false)}
-                >
-                  {entry} ×
-                </Button>
-              ))}
-            </div>
-          )}
-          <div className="flex items-end gap-2">
-            <label className="flex flex-col gap-1 font-medium sm:w-64">
-              Pattern or exact name
-              <Input
-                aria-label="Pattern"
-                nativeInput
-                disabled={props.disabled}
-                maxLength={256}
-                placeholder="claude-sonnet-*"
-                value={pattern}
-                onChange={(event) => setPattern(event.currentTarget.value)}
-              />
-            </label>
-            <Button
-              size="sm"
-              variant="outline"
-              type="button"
-              disabled={props.disabled || !valid || props.entries.includes(candidate)}
-              onClick={() => {
-                props.onEntries([...props.entries, candidate]);
-                setPattern("");
-              }}
-            >
-              Add pattern
-            </Button>
-          </div>
-        </>
+        <ChipsMultiSelect
+          label="Search models"
+          placeholder="Search models, or type a pattern such as claude-sonnet-*"
+          empty="No model matches."
+          groups={families.map((family) => ({
+            value: family,
+            items: props.catalog.filter((model) => familyOf(model) === family),
+          }))}
+          value={props.entries}
+          onValueChange={props.onEntries}
+          disabled={props.disabled}
+          create={{
+            // A pattern (`claude-sonnet-*`) or an exact name the catalog does not list yet.
+            accepts: (text) => text.length <= 256 && text !== "*" && accessKeyModelEntryValid(text),
+            label: (text) => `Add «${text}» as a pattern`,
+          }}
+        />
       )}
     </div>
   );
@@ -805,12 +853,18 @@ function AccountPicker(props: {
   readonly onAll: (all: boolean) => void;
   readonly onChosen: (chosen: ReadonlyArray<AiAccountId>) => void;
 }) {
+  const labelOf = (id: string) => {
+    const account = props.accounts.find((entry) => entry.id === id);
+    if (account === undefined) return id;
+    return account.type === "subscription" ? `${account.name} (subscription)` : account.name;
+  };
   return (
-    <div className="flex w-full flex-col gap-2 text-xs">
-      <div className="flex flex-col gap-1 font-medium">
+    <div className="flex w-full flex-col gap-1.5 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2 font-medium">
         AI accounts
         <ToggleGroup
           aria-label="AI accounts"
+          size="sm"
           value={[props.all ? "all" : "choose"]}
           onValueChange={(next) => {
             const value = next[0];
@@ -822,26 +876,16 @@ function AccountPicker(props: {
         </ToggleGroup>
       </div>
       {props.all ? null : (
-        <div className="flex flex-wrap items-center gap-3">
-          {props.accounts.map((account) => (
-            <label key={account.id} className="flex items-center gap-1">
-              <Checkbox
-                aria-label={account.name}
-                checked={props.chosen.includes(account.id)}
-                disabled={props.disabled}
-                onCheckedChange={(checked) =>
-                  props.onChosen(
-                    checked === true
-                      ? [...props.chosen, account.id]
-                      : props.chosen.filter((id) => id !== account.id),
-                  )
-                }
-              />
-              {account.name}
-              {account.type === "subscription" ? " (subscription)" : ""}
-            </label>
-          ))}
-        </div>
+        <ChipsMultiSelect
+          label="Search AI accounts"
+          placeholder="Search this Space's AI accounts"
+          empty="No AI account matches."
+          groups={[{ value: "", items: props.accounts.map((account) => account.id) }]}
+          labelOf={labelOf}
+          value={props.chosen}
+          onValueChange={(next) => props.onChosen(next as ReadonlyArray<AiAccountId>)}
+          disabled={props.disabled}
+        />
       )}
     </div>
   );
@@ -867,11 +911,11 @@ function CapsFields(props: {
   readonly onUnlimited: (unlimited: boolean) => void;
 }) {
   return (
-    <fieldset className="flex w-full flex-wrap items-end gap-2 text-xs">
+    <fieldset className="grid w-full grid-cols-2 items-end gap-2 text-xs sm:grid-cols-4">
       <legend className="mb-1 font-medium">Token caps</legend>
       {CAP_LABELS.filter(([kind]) => props.only === undefined || props.only.includes(kind)).map(
         ([kind, label]) => (
-          <label key={kind} className="flex flex-col gap-1 font-medium sm:w-32">
+          <label key={kind} className="flex flex-col gap-1 text-muted-foreground">
             {label}
             <Input
               aria-label={`${label} tokens`}
@@ -889,7 +933,7 @@ function CapsFields(props: {
         ),
       )}
       {props.only === undefined ? (
-        <label className="flex items-center gap-2">
+        <label className="col-span-full flex items-center gap-2">
           <Checkbox
             aria-label="No token limit"
             checked={props.unlimited}
@@ -1091,7 +1135,10 @@ function NewAccessKeyForm(props: {
   readonly accounts: ReadonlyArray<AccessKeyAccountOption>;
   /** Before the accounts are read: whether the Space holds a subscription. */
   readonly spaceHasSubscription: boolean;
+  /** What a key is, said once at the top of the dialog. */
+  readonly description: string;
   readonly create: ReturnType<typeof useAccessKeyCommands>["create"];
+  readonly onCancel: () => void;
   readonly onMade: (key: AccessKey, secret: string) => void;
 }) {
   const [label, setLabel] = useState("");
@@ -1140,7 +1187,7 @@ function NewAccessKeyForm(props: {
   return (
     <form
       aria-label="Create an access key"
-      className="flex flex-col gap-2 px-4 pb-4 sm:flex-row sm:flex-wrap sm:items-end"
+      className="contents"
       onSubmit={(event) => {
         event.preventDefault();
         if (validity === null) return;
@@ -1160,13 +1207,6 @@ function NewAccessKeyForm(props: {
           })
           .then((result) => {
             if (result._tag === "Success") {
-              setLabel("");
-              setEntries([]);
-              setAllModels(false);
-              setAllAccounts(true);
-              setChosenAccounts([]);
-              setCaps({ total: "", day: "", week: "", month: "" });
-              setUnlimited(false);
               props.onMade(result.value.created, Redacted.value(result.value.key));
             } else {
               setError(errorMessageOf(squashAtomCommandFailure(result), "Could not make the key."));
@@ -1175,97 +1215,116 @@ function NewAccessKeyForm(props: {
           .finally(() => setPending(false));
       }}
     >
-      <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
-        Who it is for
-        <Input
-          aria-label="Who it is for"
-          nativeInput
-          disabled={pending}
-          maxLength={80}
-          placeholder="A partner's name"
-          value={label}
-          onChange={(event) => setLabel(event.currentTarget.value)}
-        />
-      </label>
-      <div className="flex flex-col gap-1 text-xs font-medium">
-        Valid
-        <ToggleGroup
-          aria-label="Valid"
-          value={[mode]}
-          onValueChange={(next) => {
-            const value = next[0];
-            if (value === "days" || value === "until") setMode(value);
-          }}
-        >
-          <Toggle value="days">For days</Toggle>
-          <Toggle value="until">Until a date</Toggle>
-        </ToggleGroup>
-      </div>
-      {mode === "days" ? (
-        <label className="flex flex-col gap-1 text-xs font-medium sm:w-28">
-          Days (1 to 366)
-          <Input
-            aria-label="Days"
-            nativeInput
-            type="number"
-            min={1}
-            max={366}
+      <DialogHeader>
+        <DialogTitle>New access key</DialogTitle>
+        <DialogDescription>{props.description}</DialogDescription>
+      </DialogHeader>
+      <DialogPanel>
+        <div className="flex flex-col gap-4">
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <label className="flex flex-col gap-1 text-xs font-medium">
+              Who it is for
+              <Input
+                aria-label="Who it is for"
+                nativeInput
+                disabled={pending}
+                maxLength={80}
+                placeholder="A partner's name"
+                value={label}
+                onChange={(event) => setLabel(event.currentTarget.value)}
+              />
+            </label>
+            <div className="flex flex-col gap-1 text-xs font-medium">
+              Valid
+              <div className="flex items-center gap-2">
+                <ToggleGroup
+                  aria-label="Valid"
+                  size="sm"
+                  value={[mode]}
+                  onValueChange={(next) => {
+                    const value = next[0];
+                    if (value === "days" || value === "until") setMode(value);
+                  }}
+                >
+                  <Toggle value="days">For days</Toggle>
+                  <Toggle value="until">Until a date</Toggle>
+                </ToggleGroup>
+                {mode === "days" ? (
+                  <Input
+                    aria-label="Days"
+                    title="Days (1 to 366)"
+                    className="w-20"
+                    nativeInput
+                    type="number"
+                    min={1}
+                    max={366}
+                    disabled={pending}
+                    value={days}
+                    onChange={(event) => setDays(event.currentTarget.value)}
+                  />
+                ) : (
+                  <Input
+                    aria-label="Until"
+                    title="Until the end of"
+                    className="w-40"
+                    nativeInput
+                    type="date"
+                    disabled={pending}
+                    value={until}
+                    onChange={(event) => setUntil(event.currentTarget.value)}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+          <CapsFields
+            caps={caps}
+            unlimited={unlimited}
             disabled={pending}
-            value={days}
-            onChange={(event) => setDays(event.currentTarget.value)}
+            onCaps={setCaps}
+            onUnlimited={setUnlimited}
           />
-        </label>
-      ) : (
-        <label className="flex flex-col gap-1 text-xs font-medium sm:w-44">
-          Until the end of
-          <Input
-            aria-label="Until"
-            nativeInput
-            type="date"
+          <AccountPicker
+            accounts={props.accounts}
+            all={allAccounts}
+            chosen={chosenAccounts}
             disabled={pending}
-            value={until}
-            onChange={(event) => setUntil(event.currentTarget.value)}
+            onAll={setAllAccounts}
+            onChosen={setChosenAccounts}
           />
-        </label>
-      )}
-      <CapsFields
-        caps={caps}
-        unlimited={unlimited}
-        disabled={pending}
-        onCaps={setCaps}
-        onUnlimited={setUnlimited}
-      />
-      <AccountPicker
-        accounts={props.accounts}
-        all={allAccounts}
-        chosen={chosenAccounts}
-        disabled={pending}
-        onAll={setAllAccounts}
-        onChosen={setChosenAccounts}
-      />
-      {subscription ? (
-        <p className="w-full text-xs text-warning-foreground" role="note">
-          {SUBSCRIPTION_WARNING}
-        </p>
-      ) : null}
-      <ModelPicker
-        catalog={catalogOf(reached)}
-        all={allModels}
-        entries={entries}
-        disabled={pending}
-        onAll={setAllModels}
-        onEntries={setEntries}
-      />
-      <div className="flex items-center gap-2">
-        <Button disabled={pending || !ready} size="sm" type="submit">
-          Create key
-        </Button>
+          {subscription ? (
+            <p
+              className="flex items-center gap-1 text-xs text-warning-foreground"
+              role="note"
+              aria-label={SUBSCRIPTION_WARNING}
+            >
+              Reaches a subscription: sharing it outside this Space may break the provider's terms.
+              <InfoTip label="About sharing a subscription">{SUBSCRIPTION_WARNING}</InfoTip>
+            </p>
+          ) : null}
+          <ModelPicker
+            catalog={catalogOf(reached)}
+            all={allModels}
+            entries={entries}
+            disabled={pending}
+            onAll={setAllModels}
+            onEntries={setEntries}
+          />
+        </div>
+      </DialogPanel>
+      <DialogFooter>
         {error === null ? null : (
-          <span className="text-xs text-destructive" role="alert">
+          <span className="me-auto self-center text-xs text-destructive" role="alert">
             {error}
           </span>
         )}
-      </div>
+        <Button variant="outline" type="button" disabled={pending} onClick={props.onCancel}>
+          Cancel
+        </Button>
+        <Button disabled={pending || !ready} type="submit">
+          Create key
+        </Button>
+      </DialogFooter>
     </form>
   );
 }

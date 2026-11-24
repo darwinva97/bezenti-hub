@@ -1,4 +1,4 @@
-# 18: Móvil
+# 19: Móvil
 
 **What to build:** En la app móvil, quien tiene `makita.view` ve las configuraciones del Space, la actividad (lo que corre ahora) y el uso, y para una configuración o una tarea; crear y editar siguen en web y desktop. Ver spec, «Clientes».
 

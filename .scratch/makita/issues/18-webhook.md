@@ -1,16 +1,16 @@
-# 17: Webhook de GitHub (opcional)
+# 18: Webhook de GitHub (opcional)
 
 **What to build:** Si el Owner lo decide, `POST /api/makita/github` recibe los eventos de los repositorios donde un administrador configuró el webhook, verifica la firma HMAC y los pasa por el mismo normalizador que el poller; el sondeo sigue de respaldo. Ver spec, «Cómo llegan los eventos» (Webhook) y pregunta abierta 1.
 
-**Blocked by:** 09, y la decisión de la pregunta abierta 1, y el Bypass de Cloudflare Access que pida el dueño de infraestructura.
+**Blocked by:** 09, y que el Owner lo pida (pregunta abierta 1 decidida: sondeo), y el Bypass de Cloudflare Access que pida el dueño de infraestructura.
 
-**Status:** needs-info
+**Status:** needs-info (el Owner eligió sondeo el 2026-11-24; este ticket solo se construye si más adelante pide webhook)
 
 **Tipo:** HITL (necesita decisión y un cambio de infraestructura)
 
 **Tanda:** 4
 
-**Seguridad:** sensible (ruta pública). Nota de diseño `17-design.md` antes de construir.
+**Seguridad:** sensible (ruta pública). Nota de diseño `18-design.md` antes de construir.
 
 Spec: ../spec.md
 

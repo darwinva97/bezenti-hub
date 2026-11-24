@@ -1,16 +1,16 @@
-# 15: «Anyone» y desconocidos
+# 16: «Anyone» y desconocidos
 
 **What to build:** Una configuración se puede abrir a «Anyone» a sabiendas (aviso de la spec y casilla), y entonces las peticiones de quien no aprueba esperan `/makita ok` antes de empezar (salvo `approval = never`). La opción «Reply once to people who aren't allowed». Ver spec, «Quién lo pide y si puede», «Aprobación» (puerta de arranque) y preguntas abiertas 4 y 8.
 
-**Blocked by:** 14, 11, 08.
+**Blocked by:** 15, 11, 08.
 
 **Status:** needs-triage
 
-**Tipo:** AFK (preguntas abiertas 4 y 8)
+**Tipo:** AFK (pregunta abierta 4 sigue abierta; la 8 decidida: silencio por defecto)
 
 **Tanda:** 3
 
-**Seguridad:** sensible. Nota de diseño `15-design.md` antes de construir.
+**Seguridad:** sensible. Nota de diseño `16-design.md` antes de construir.
 
 Spec: ../spec.md
 

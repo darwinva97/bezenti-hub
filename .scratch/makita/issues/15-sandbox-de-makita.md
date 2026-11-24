@@ -1,4 +1,4 @@
-# 14: Sandbox de Makita
+# 15: Sandbox de Makita
 
 **What to build:** Un segundo Sandbox por Space, `sandbox:<spaceId>:makita`, solo para los Threads de Makita de ese Space: su propio contenedor, home y credencial, sin ningún Thread normal del Space y sin sus checkouts. Las configuraciones con `environment_id = null` pasan a él. Ver spec, «Amenazas de prompt injection» (riesgos que quedan) y pregunta abierta 4.
 
@@ -10,7 +10,7 @@
 
 **Tanda:** 3
 
-**Seguridad:** sensible (aislamiento). Nota de diseño `14-design.md` antes de construir.
+**Seguridad:** sensible (aislamiento). Nota de diseño `15-design.md` antes de construir.
 
 Spec: ../spec.md
 

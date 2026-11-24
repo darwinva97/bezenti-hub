@@ -14,7 +14,7 @@
 
 Spec: ../spec.md
 
-- [ ] Migración `makita_configs` (todas las columnas de la spec desde ya, con `callers_mode`, `capability` y `approval` limitados por el servicio en esta tanda) con test.
+- [ ] Migración `makita_configs` (todas las columnas de la spec desde ya, `may_land` incluida, con `callers_mode`, `capability`, `may_land` y `approval` limitados por el servicio en esta tanda) con test.
 - [ ] Contracts: `MakitaConfig`, `MakitaConfigInput`, `MakitaError`; `ModelSelection` reutilizada.
 - [ ] `makita/MakitaConfigs.ts`: `create|update|delete|pause|resume|list` y sus gemelas `*ForSession` (solo la sesión de una persona). Validaciones: AI account de gateway en `AllowedAiAccounts.for(creador, Space)` y `chooseAiAccount`; nunca `direct`; repositorios resueltos con `gitHubRepositoryResolution.ts` (sin remoto: fuera; ambiguo: «Pick the GitHub remote»); logins resueltos a id con `GET /users/{login}`; 20 vivas por Space.
 - [ ] La etiqueta: si falta en un repositorio, el Hub la crea con el token (auditado `makita.github.label`) o avisa.

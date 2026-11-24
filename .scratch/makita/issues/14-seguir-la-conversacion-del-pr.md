@@ -1,4 +1,4 @@
-# 13: Seguir la conversación del PR
+# 14: Seguir la conversación del PR
 
 **What to build:** En el PR de Makita, las reviews y los comentarios de personas permitidas despiertan al Thread sin mención, y el agente responde o empuja de nuevo; el guardia de bucles cuenta entre issue y PR. Ver spec, «Seguir la conversación».
 
@@ -10,7 +10,7 @@
 
 **Tanda:** 2
 
-**Seguridad:** sensible (más entrada no confiable). Nota de diseño `13-design.md` antes de construir.
+**Seguridad:** sensible (más entrada no confiable). Nota de diseño `14-design.md` antes de construir.
 
 Spec: ../spec.md
 

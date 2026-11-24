@@ -6,7 +6,7 @@
 
 **Status:** needs-triage
 
-**Tipo:** AFK (pregunta abierta 10: aprobadores por defecto)
+**Tipo:** AFK (pregunta abierta 10 decidida el 2026-11-24: solo el creador más una lista opcional)
 
 **Tanda:** 2
 

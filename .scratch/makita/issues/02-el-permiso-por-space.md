@@ -6,7 +6,7 @@
 
 **Status:** needs-triage
 
-**Tipo:** AFK (pregunta abierta 2: si el Owner prefiere toda la Installation, cambia la clave de la tabla, no el resto)
+**Tipo:** AFK (pregunta abierta 2 decidida el 2026-11-24: por User y Space)
 
 **Tanda:** 1
 

@@ -19,4 +19,4 @@ Spec: ../spec.md
 - [ ] `makita_ci_logs { job }`: cola del log hasta 64 KiB, enmarcada.
 - [ ] Bucle de CI (3 intentos), «no CI» a los 10 minutos, 90 minutos sin terminar; estados `waiting-ci` y `waiting-reply`.
 - [ ] Auditoría `makita.github.pull_request`.
-- [ ] Red-first: no hay herramienta de merge ni de aprobar; un cuerpo sin «Downsides» se rechaza; el cuarto RED no despierta al agente.
+- [ ] Red-first: el agente no tiene herramienta de merge ni de aprobar (el merge lo hace el Hub por orden, ticket 13); un cuerpo sin «Downsides» se rechaza; el cuarto RED no despierta al agente.

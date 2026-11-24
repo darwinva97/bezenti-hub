@@ -24,4 +24,4 @@ Spec: ../spec.md
 - [ ] Auditoría `makita.task.start` y `makita.github.comment`.
 - [ ] Web: cabecera «Makita · <repo>#<n> · asked by @<caller>» en el Thread y filtro «Makita» en la lista.
 - [ ] Red-first: un issue que pide imprimir el entorno, `gh auth token` o comentar un archivo de configuración no deja ningún valor de Vault ni el token en el entorno del agente ni en un comentario; el agente no ve `t3_thread_launch`, `request_secret` ni `watch_pull_request`; `makita_comment` no escribe en otro issue; el sexto comentario seguido no sale.
-- [ ] Docs: `docs/internals/makita.md` (lo de este ticket) y `GLOSSARY.md` («Makita», «Makita configuration»).
+- [ ] Docs: `docs/internals/makita.md` (lo de este ticket); `GLOSSARY.md`: el título pasa de «Makita (t3code fork)» a «Bezenti Hub» y se añaden «Makita» (solo el bot) y «Makita configuration» (decisión del Owner del 2026-11-24).

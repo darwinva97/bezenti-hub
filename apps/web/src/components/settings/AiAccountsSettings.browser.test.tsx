@@ -49,13 +49,15 @@ vi.mock("./LendAiAccountDialog", () => ({ LendAiAccountDialog: () => <p>lend dia
 /** A modal's inert layer takes pointer events in this frame: press it as a keyboard would. */
 const press = (locator: Locator) => (locator.element() as HTMLElement).click();
 
-const ME = { kind: "user", userId: "user-me" } as const;
+const ME = { kind: "user", userId: "user-me" } as AiAccountOwnerOption["owner"];
 const ACME = "space-acme" as SpaceId;
 
 function account(
   id: string,
   name: string,
-  shape: Partial<AiAccountSummary> & { readonly details?: Partial<AiAccountSummary["details"]> },
+  shape: Omit<Partial<AiAccountSummary>, "details"> & {
+    readonly details?: Partial<NonNullable<AiAccountSummary["details"]>> | null;
+  },
 ): AiAccountSummary {
   const { details, ...rest } = shape;
   return {

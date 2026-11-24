@@ -25,8 +25,9 @@ on:
 permissions:
   contents: read
 
+# Una ejecución por rama (y por `base` a mano): un push nuevo cancela la anterior.
 concurrency:
-  group: bezenti-verify-${{ github.ref }}
+  group: bezenti-verify-${{ github.ref }}-${{ inputs.base }}
   cancel-in-progress: true
 
 jobs:

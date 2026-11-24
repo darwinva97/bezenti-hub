@@ -47,7 +47,7 @@ lint)
     say "PASS lint ."
   else
     say "FAIL lint ."
-    grep -vE '^\s*$' "$log" | tail -n 80 | detail "lint ."
+    { grep -E '^::error|error' "$log" | grep -v '^::warning'; tail -n 2 "$log"; } | detail "lint ." 80
   fi
   show_log "vp lint" "$log"
   ;;

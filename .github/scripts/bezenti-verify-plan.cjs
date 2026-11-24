@@ -1,11 +1,7 @@
-// bezenti-verify: from a branch's diff, what its receipt checks (see bezenti/README.md,
-// «Verificación de ramas en CI»). Same selection as the local receipt:
-// - tests: the test files the diff changed, the tests beside each changed source file
-//   (foo.ts -> foo.test.ts, foo.*.test.ts(x)), and the door sweeps when apps/server changed;
-// - typecheck: the packages owning the changed files plus their dependents (ci-changes.cjs);
-// - lint: unless the diff only touches Markdown.
-// Usage: BASE=<sha> node .github/scripts/bezenti-verify-plan.cjs <out-dir>
-// Writes <out-dir>/expected.txt (one receipt item per line) and prints GITHUB_OUTPUT lines.
+// The local receipt's selection from a branch's diff (bezenti/README.md, «Verificación de ramas en CI»):
+// changed tests, tests beside each changed source (foo.ts -> foo.test.ts, foo.*.test.ts), door sweeps
+// when apps/server changed; typecheck of owners and dependents (ci-changes.cjs); lint unless only Markdown.
+// Usage: BASE=<sha> node .github/scripts/bezenti-verify-plan.cjs <out-dir>   (prints GITHUB_OUTPUT lines)
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");

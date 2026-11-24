@@ -489,13 +489,25 @@ const decideSpaceBound = (
   if (environment.workSpaceId !== space.id) return deny("other-space");
   if (space.archived) return deny("space-archived");
   if (space.frozen) return deny("space-frozen");
-  if (principal.isOwner) {
+  // Grants ticket 13: a machine lent to the Space is for its people; the Owner uses it only as one
+  // of them (their own Personal space, or a Membership).
+  if (principal.isOwner && (environment.mode !== "lent" || borrowsIn(principal, space))) {
     return othersPersonalSpace(principal, space) ? deny("personal-space-read-only") : allow;
   }
   return space.kind === "personal"
     ? inPersonalSpace(principal, space)
     : inOrganization(principal, space, ROLES_THAT_CREATE_PROJECTS);
 };
+
+/**
+ * Grants ticket 13: a loan is for the people of the Space it was lent to. The Owner works in any
+ * open Organization as its operator, yet borrows there only as one of its Members (or in their own
+ * Personal space): a lender trusted the Space's people, not the operator.
+ */
+export const borrowsIn = (principal: Principal, space: SpaceResource): boolean =>
+  !principal.isOwner ||
+  principal.roles.has(space.id) ||
+  (space.kind === "personal" && space.personalOwnerUserId === principal.userId);
 
 /** Renaming, removing or moving a machine dedicated to `space`: the Owner, or its open Admins. */
 const runsDedicatedMachine = (principal: Principal, space: SpaceResource): Decision => {

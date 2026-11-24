@@ -164,7 +164,16 @@ const make = Effect.gen(function* () {
   ) {
     const working = new Map<
       SpaceId,
-      { readonly name: string; readonly resource: AccessPolicy.SpaceResource }
+      {
+        readonly name: string;
+        readonly resource: AccessPolicy.SpaceResource;
+        /**
+         * Whether what Grants lend there reaches the User (`AccessPolicy.borrowsIn`); their own
+         * accounts lent there always do.
+         */
+        readonly borrows: boolean;
+        readonly userId: UserId;
+      }
     >();
     const asked = [...new Set(spaceIds)];
     if (asked.length === 0) return working;
@@ -178,7 +187,12 @@ const make = Effect.gen(function* () {
         space !== undefined &&
         AccessPolicy.isAllowed(AccessPolicy.decide(principal, "aiAccount.use", space.resource))
       ) {
-        working.set(spaceId, { name: space.name, resource: space.resource });
+        working.set(spaceId, {
+          name: space.name,
+          resource: space.resource,
+          borrows: AccessPolicy.borrowsIn(principal, space.resource),
+          userId,
+        });
       }
     }
     return working;
@@ -204,7 +218,14 @@ const make = Effect.gen(function* () {
    * Grant lends to it (unless `ownOnly`).
    */
   const accountsIn = Effect.fn("AllowedAiAccounts.accountsIn")(function* (
-    working: ReadonlyMap<SpaceId, { readonly resource: AccessPolicy.SpaceResource }>,
+    working: ReadonlyMap<
+      SpaceId,
+      {
+        readonly resource: AccessPolicy.SpaceResource;
+        readonly borrows?: boolean;
+        readonly userId?: UserId;
+      }
+    >,
     ownOnly = false,
   ) {
     const answer = new Map<SpaceId, ReadonlyArray<AllowedAiAccount>>();
@@ -270,8 +291,11 @@ const make = Effect.gen(function* () {
         seen.add(row.accountId);
         accounts.push(toAllowed(row));
       }
+      const entry = working.get(spaceId);
+      const borrows = entry?.borrows !== false;
       for (const row of lentRows) {
         if (row.targetId !== spaceId || seen.has(row.accountId)) continue;
+        if (!borrows && !(row.ownerKind === "user" && row.ownerId === entry?.userId)) continue;
         // Caps that cannot be read lend nothing: never an uncapped loan by mistake.
         const limits = decodeCaps(row.limitsJson);
         if (Option.isNone(limits)) continue;

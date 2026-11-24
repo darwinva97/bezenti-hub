@@ -35,7 +35,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { AI_CREDENTIAL_PREFIX_LENGTH } from "../ai/aiCredentialValue.ts";
 import * as ServerConfig from "../config.ts";
-import type * as AccessPolicy from "../auth/AccessPolicy.ts";
+import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as VaultReach from "./VaultReach.ts";
 
@@ -432,12 +432,22 @@ const make = Effect.gen(function* () {
     }
 
     // Grants ticket 07: the Space side alone (a group allowed to a User became a Grant to their
-    // Personal space, one of its defaults).
+    // Personal space, one of its defaults). Ticket 13: lent groups only for the Space's people,
+    // never the Owner from outside it.
+    const principal = yield* spaces
+      .principalOf(input.actingUserId)
+      .pipe(Effect.catch(storage("check what you may do")));
+    const borrows = AccessPolicy.borrowsIn(principal, space);
     const groups: ReadonlyArray<{
       readonly row: VaultReach.ReachRow;
       readonly source: VaultSource;
-    }> = yield* spaceSide(space.id, projectId).pipe(
+    }> = (yield* spaceSide(space.id, projectId).pipe(
       Effect.catch(storage("read the Thread's Vaults")),
+    )).filter(
+      (group) =>
+        borrows ||
+        group.row.grantId === null ||
+        (group.row.ownerKind === "user" && group.row.ownerId === input.actingUserId),
     );
     const withheld: Array<VaultThreadWithheld> = [];
     /** Why a lent group's entry never reaches a process here, if it does not. */

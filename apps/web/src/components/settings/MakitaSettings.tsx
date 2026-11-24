@@ -7,6 +7,11 @@ import {
   type MakitaAccountGetResult,
   type MakitaAccountView,
   type MakitaAccountWarning,
+  type MakitaPermission,
+  type MakitaPermissionCandidate,
+  type MakitaPermissionsListResult,
+  type SpaceId,
+  type UserId,
 } from "@t3tools/contracts";
 import * as Redacted from "effect/Redacted";
 import { useEffect, useEffectEvent, useState } from "react";
@@ -36,6 +41,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { InfoTip } from "./InfoTip";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 
@@ -73,13 +79,335 @@ function useMakitaAccountCommands() {
   };
 }
 
-/** Platform → Makita: the bot's GitHub account, «Stop all Makita work» (the Owner's). */
+/**
+ * Platform → Makita: the bot's GitHub account, «Stop all Makita work» and who may use Makita
+ * (the Owner's).
+ */
 export function PlatformMakitaSection() {
   const environmentId = usePrimaryEnvironmentId();
   return (
     <SettingsPageContainer>
-      {environmentId === null ? null : <MakitaAccountPanel environmentId={environmentId} />}
+      {environmentId === null ? null : (
+        <>
+          <MakitaAccountPanel environmentId={environmentId} />
+          <MakitaPermissionsPanel environmentId={environmentId} />
+        </>
+      )}
     </SettingsPageContainer>
+  );
+}
+
+type PermissionsAnswer = AtomCommandResult<MakitaPermissionsListResult, unknown>;
+
+const PERMISSION_STATES: Readonly<Record<MakitaPermission["state"], string | null>> = {
+  ok: null,
+  "not-a-member": "No effect: no longer in this Space",
+  guest: "No effect: a Guest there now",
+  "user-inactive": "No effect: the User is disabled",
+  "space-archived": "No effect while the Space is archived",
+  "space-frozen": "No effect: the Space is closed",
+  "space-gone": "No effect: the Space no longer exists",
+};
+
+const ROLE_LABEL: Readonly<Record<NonNullable<MakitaPermission["role"]>, string>> = {
+  admin: "Admin",
+  member: "Member",
+  guest: "Guest",
+  personal: "Personal space",
+};
+
+/** «Who may use Makita»: the Owner's grants per User and Space, given and taken back here. */
+function MakitaPermissionsPanel({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const list = useAtomCommand(makitaEnvironment.listPermissions, "read who may use Makita");
+  const grant = useAtomCommand(makitaEnvironment.grantPermission, "allow someone to use Makita");
+  const revoke = useAtomCommand(makitaEnvironment.revokePermission, "take back Makita");
+  const [listed, setListed] = useState<MakitaPermissionsListResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [granting, setGranting] = useState(false);
+  const [revoking, setRevoking] = useState<MakitaPermission | null>(null);
+  const [pending, setPending] = useState(false);
+
+  const show = (result: PermissionsAnswer, fallback: string) => {
+    if (result._tag === "Success") {
+      setListed(result.value);
+      setError(null);
+      return true;
+    }
+    setError(errorMessageOf(squashAtomCommandFailure(result), fallback));
+    return false;
+  };
+  const applyFirst = useEffectEvent((result: PermissionsAnswer) =>
+    show(result, "Could not read who may use Makita."),
+  );
+  const loadFirst = useEffectEvent((target: EnvironmentId) =>
+    list({ environmentId: target, input: {} }),
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads who may use Makita from the Hub when the section opens.
+  useEffect(() => {
+    let cancelled = false;
+    void loadFirst(environmentId).then((result) => {
+      if (!cancelled) applyFirst(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [environmentId]);
+
+  const takeBack = async (permission: MakitaPermission) => {
+    setPending(true);
+    show(
+      await revoke({
+        environmentId,
+        input: { userId: permission.userId, spaceId: permission.spaceId },
+      }),
+      "Could not revoke it.",
+    );
+    setPending(false);
+    setRevoking(null);
+  };
+
+  return (
+    <SettingsSection
+      id="makita-permissions"
+      title="Who may use Makita"
+      titleAction={
+        <InfoTip label="About who may use Makita">
+          Whoever you allow in a Space makes Makita configurations there: which repositories it
+          listens to, whom it answers and which of their AI accounts it spends. Only Admins and
+          Members of an Organization, or a User in their own Personal space. You may use Makita
+          everywhere.
+        </InfoTip>
+      }
+      headerAction={
+        listed === null || listed.candidates.length === 0 ? null : (
+          <Button size="xs" onClick={() => setGranting(true)}>
+            Grant…
+          </Button>
+        )
+      }
+    >
+      {error === null ? null : (
+        <p className="px-4 py-3 text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      {listed === null ? (
+        <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p>
+      ) : listed.permissions.length === 0 ? (
+        <p className="px-4 py-3 text-sm text-muted-foreground">Nobody but you yet.</p>
+      ) : (
+        <ul aria-label="Who may use Makita" className="divide-y divide-border/50">
+          {listed.permissions.map((permission) => {
+            const why = PERMISSION_STATES[permission.state];
+            const label = `${permission.userName ?? permission.userId} in ${permission.spaceName ?? permission.spaceId}`;
+            return (
+              <li
+                key={`${permission.userId} ${permission.spaceId}`}
+                aria-label={label}
+                className="flex flex-col gap-2 px-3 py-2.5 text-sm sm:flex-row sm:items-center sm:gap-4 sm:px-4"
+              >
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="truncate font-medium">
+                      {permission.userName ?? permission.userId}
+                    </span>
+                    <span className="text-muted-foreground">in</span>
+                    <span className="truncate">
+                      {permission.spaceName ?? "A Space that no longer exists"}
+                    </span>
+                    {permission.role === null ? null : (
+                      <Badge variant="secondary" size="sm">
+                        {ROLE_LABEL[permission.role]}
+                      </Badge>
+                    )}
+                    {why === null ? null : (
+                      <Badge variant="warning" size="sm">
+                        {why}
+                      </Badge>
+                    )}
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {`Allowed by ${permission.grantedByName ?? permission.grantedBy} on ${formatWhen(permission.grantedAt)}`}
+                  </span>
+                </div>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  aria-label={`Revoke ${label}`}
+                  onClick={() => setRevoking(permission)}
+                >
+                  Revoke
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {granting && listed !== null ? (
+        <GrantDialog
+          candidates={listed.candidates}
+          onClose={() => setGranting(false)}
+          onGrant={async (userId, spaceId) => {
+            const result = await grant({ environmentId, input: { userId, spaceId } });
+            if (result._tag === "Success") {
+              setListed(result.value);
+              setGranting(false);
+              return null;
+            }
+            return errorMessageOf(squashAtomCommandFailure(result), "Could not grant it.");
+          }}
+        />
+      ) : null}
+      <AlertDialog
+        open={revoking !== null}
+        onOpenChange={(open) => {
+          if (!open && !pending) setRevoking(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Revoke Makita for {revoking?.userName ?? "this User"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              They can no longer make Makita configurations in {revoking?.spaceName ?? "this Space"}
+              . You can grant it again later.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              disabled={pending}
+              render={<Button variant="outline" disabled={pending} />}
+            >
+              Cancel
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={pending || revoking === null}
+              onClick={() => {
+                if (revoking !== null) void takeBack(revoking);
+              }}
+            >
+              Revoke
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </SettingsSection>
+  );
+}
+
+/** Choose a User, then one of the Spaces where they may receive it. */
+function GrantDialog(props: {
+  readonly candidates: ReadonlyArray<MakitaPermissionCandidate>;
+  readonly onClose: () => void;
+  readonly onGrant: (userId: UserId, spaceId: SpaceId) => Promise<string | null>;
+}) {
+  const [userId, setUserId] = useState<string>("");
+  const [spaceId, setSpaceId] = useState<string>("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const candidate = props.candidates.find((entry) => entry.userId === userId) ?? null;
+  const space = candidate?.spaces.find((entry) => entry.spaceId === spaceId) ?? null;
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !pending) props.onClose();
+      }}
+    >
+      <DialogPopup className="max-w-lg">
+        <form
+          aria-label="Grant «may use Makita»"
+          className="contents"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (candidate === null || space === null) return;
+            setPending(true);
+            setError(null);
+            void props
+              .onGrant(candidate.userId, space.spaceId)
+              .then(setError)
+              .finally(() => setPending(false));
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Grant «may use Makita»</DialogTitle>
+            <DialogDescription>
+              They will make Makita configurations in that Space, spending AI accounts they may use
+              there.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            <div className="flex flex-col gap-3">
+              <label className="flex flex-col gap-1 text-xs font-medium">
+                User
+                <Select
+                  value={userId}
+                  disabled={pending}
+                  onValueChange={(next) => {
+                    setUserId(String(next ?? ""));
+                    setSpaceId("");
+                  }}
+                >
+                  <SelectTrigger aria-label="User">
+                    <SelectValue>{candidate?.name ?? "Choose a User"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {props.candidates.map((entry) => (
+                      <SelectItem key={entry.userId} value={entry.userId}>
+                        {entry.name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium">
+                Space
+                <Select
+                  value={spaceId}
+                  disabled={pending || candidate === null}
+                  onValueChange={(next) => setSpaceId(String(next ?? ""))}
+                >
+                  <SelectTrigger aria-label="Space">
+                    <SelectValue>
+                      {space === null
+                        ? "Choose a Space"
+                        : `${space.name} (${ROLE_LABEL[space.role]})`}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {(candidate?.spaces ?? []).map((entry) => (
+                      <SelectItem key={entry.spaceId} value={entry.spaceId}>
+                        {`${entry.name} (${ROLE_LABEL[entry.role]})`}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </label>
+              {error === null ? null : (
+                <p className="text-xs text-destructive" role="alert">
+                  {error}
+                </p>
+              )}
+            </div>
+          </DialogPanel>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => props.onClose()}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={pending || candidate === null || space === null}>
+              Grant
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogPopup>
+    </Dialog>
   );
 }
 

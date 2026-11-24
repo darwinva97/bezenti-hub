@@ -5,8 +5,8 @@ import { createEnvironmentRpcCommand } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 /**
- * Makita, the GitHub bot teammate: its account (the Owner's, Platform → Makita). No answer carries
- * its token; only `setAccount` sends one, once.
+ * Makita, the GitHub bot teammate: its account and who may use it (the Owner's, Platform → Makita).
+ * No answer carries its token; only `setAccount` sends one, once.
  */
 export function createMakitaEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
@@ -27,6 +27,19 @@ export function createMakitaEnvironmentAtoms<R, E>(
     resumeAll: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:makita:resume-all",
       tag: WS_METHODS.makitaAccountResumeAll,
+    }),
+    // «May use Makita» per User and Space (the Owner's).
+    listPermissions: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:permissions-list",
+      tag: WS_METHODS.makitaPermissionsList,
+    }),
+    grantPermission: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:permissions-grant",
+      tag: WS_METHODS.makitaPermissionsGrant,
+    }),
+    revokePermission: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:permissions-revoke",
+      tag: WS_METHODS.makitaPermissionsRevoke,
     }),
   };
 }

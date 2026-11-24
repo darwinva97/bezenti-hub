@@ -102,6 +102,11 @@ const ACCESS_KEYS = {
   unscoped:
     "Access keys: AccessKeys answers a person's own session only (never an agent, the Hub's shell or a one-Space session); AccessPolicy `accessKey.manage` on the Space to make or change one (an open Organization's Admins and the Owner, a Personal space's User), `accessKey.view` to list and revoke (also the Owner anywhere); `modelOptions` (the Space's own gateway accounts and their models) with `accessKey.manage`; another Space's key answers like a missing one; only `create` returns the key, once",
 };
+/** Makita's account is the Installation's: MakitaAccount answers the Owner's own session only. */
+const MAKITA_ACCOUNT = {
+  unscoped:
+    "Makita's account: MakitaAccount answers a person's own session only (never an agent, the Hub's shell or a one-Space session) and only the Owner (AccessPolicy `makita.manageAccount`); only `set` takes the token, no answer carries it",
+};
 /** Grants name no Thread or Project: Grants decides each by AccessPolicy `grant.*`. */
 const GRANTS = {
   unscoped:
@@ -168,6 +173,10 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.accessKeysRevoke]: ACCESS_KEYS,
   [WS_METHODS.accessKeysModelOptions]: ACCESS_KEYS,
   [WS_METHODS.accessKeysUpdate]: ACCESS_KEYS,
+  [WS_METHODS.makitaAccountGet]: MAKITA_ACCOUNT,
+  [WS_METHODS.makitaAccountSet]: MAKITA_ACCOUNT,
+  [WS_METHODS.makitaAccountPauseAll]: MAKITA_ACCOUNT,
+  [WS_METHODS.makitaAccountResumeAll]: MAKITA_ACCOUNT,
   // Spec 5 ticket 03. Allowances and a Space's defaults: AccessPolicy `vault.manage` and
   // `vault.choose` in Vaults. A Project's choices and a Thread's names: the named Project or
   // Thread must be visible first, then the same rules (EffectiveVaults for the Thread).

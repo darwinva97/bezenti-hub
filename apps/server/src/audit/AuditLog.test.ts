@@ -623,6 +623,10 @@ it.effect(
         "access_key.revoke",
         // ai/AccessKeys.update.test.ts (access-keys ticket 06)
         "access_key.update",
+        // makita/MakitaAccount.test.ts (Makita ticket 01: the bot's account and the switch)
+        "makita.account.update",
+        "makita.pause_all",
+        "makita.resume_all",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

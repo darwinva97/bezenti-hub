@@ -60,6 +60,12 @@ import {
   AccessKeyUpdateInput,
 } from "./accessKeys.ts";
 import {
+  MakitaAccountGetInput,
+  MakitaAccountGetResult,
+  MakitaAccountSetInput,
+  MakitaError,
+} from "./makita.ts";
+import {
   AiGatewayError,
   AiGatewayKeyCreateInput,
   AiGatewayKeyCreateResult,
@@ -763,6 +769,11 @@ export const WS_METHODS = {
   accessKeysModelOptions: "accessKeys.modelOptions",
   // Access-keys ticket 06: renew, extend, change caps, models, accounts or label.
   accessKeysUpdate: "accessKeys.update",
+  // Makita ticket 01: the bot's GitHub account and the Owner's «Stop all Makita work».
+  makitaAccountGet: "makita.account.get",
+  makitaAccountSet: "makita.account.set",
+  makitaAccountPauseAll: "makita.account.pauseAll",
+  makitaAccountResumeAll: "makita.account.resumeAll",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1469,6 +1480,28 @@ const WsAccessKeysModelOptionsRpc = Rpc.make(WS_METHODS.accessKeysModelOptions, 
   payload: AccessKeyModelOptionsInput,
   success: AccessKeyModelOptions,
   error: AccessKeyErrors,
+});
+// Makita: only `makita.account.set` takes a token (Redacted); no answer carries one.
+const MakitaErrors = Schema.Union([MakitaError, EnvironmentAuthorizationError]);
+const WsMakitaAccountGetRpc = Rpc.make(WS_METHODS.makitaAccountGet, {
+  payload: MakitaAccountGetInput,
+  success: MakitaAccountGetResult,
+  error: MakitaErrors,
+});
+const WsMakitaAccountSetRpc = Rpc.make(WS_METHODS.makitaAccountSet, {
+  payload: MakitaAccountSetInput,
+  success: MakitaAccountGetResult,
+  error: MakitaErrors,
+});
+const WsMakitaAccountPauseAllRpc = Rpc.make(WS_METHODS.makitaAccountPauseAll, {
+  payload: Schema.Struct({}),
+  success: MakitaAccountGetResult,
+  error: MakitaErrors,
+});
+const WsMakitaAccountResumeAllRpc = Rpc.make(WS_METHODS.makitaAccountResumeAll, {
+  payload: Schema.Struct({}),
+  success: MakitaAccountGetResult,
+  error: MakitaErrors,
 });
 const WsAiAccountsCreateRpc = Rpc.make(WS_METHODS.aiAccountsCreate, {
   payload: AiAccountCreateInput,
@@ -2593,6 +2626,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsAccessKeysRevokeRpc,
   WsAccessKeysModelOptionsRpc,
   WsAccessKeysUpdateRpc,
+  WsMakitaAccountGetRpc,
+  WsMakitaAccountSetRpc,
+  WsMakitaAccountPauseAllRpc,
+  WsMakitaAccountResumeAllRpc,
   WsProjectCloneStartRpc,
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,

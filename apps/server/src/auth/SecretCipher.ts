@@ -30,7 +30,9 @@ export type SealPurpose =
   /** A subscription AI account's OAuth token (spec 4 ticket 03): `secrets/ai-account-tokens/`. */
   | "ai-account-oauth-token"
   /** A value read from a Secret provider and delivered to a Thread, kept only to mask it. */
-  | "delivered-value";
+  | "delivered-value"
+  /** Makita's GitHub token (Makita ticket 01): `secrets/makita/`, read only by MakitaGitHub. */
+  | "makita-token";
 
 const hkdf = (key: Buffer, info: string, length: number) =>
   Buffer.from(NodeCrypto.hkdfSync("sha256", key, Buffer.alloc(0), info, length));

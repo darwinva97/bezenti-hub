@@ -709,6 +709,69 @@ describe("every door of the Hub declares its rule", () => {
     ]);
   });
 
+  it("keeps Makita's token in the Hub: WS doors of a person's session only, no answer carries it, its store read by MakitaGitHub alone, its tables makita/'s (Makita ticket 01)", () => {
+    const makitaRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
+      /^makita\./u.test(rpc._tag),
+    );
+    expect(makitaRpcs.map((rpc) => rpc._tag).toSorted()).toEqual([
+      "makita.account.get",
+      "makita.account.pauseAll",
+      "makita.account.resumeAll",
+      "makita.account.set",
+    ]);
+    // Each decided in makita/ for the session's own person, by AccessPolicy.
+    for (const rpc of makitaRpcs) {
+      expect(typeof spaceAccessForRpcMethod(rpc._tag), rpc._tag).toBe("object");
+    }
+    // No HTTP, raw route or MCP door (tickets 05+ add MCP tools with their own rules).
+    expect(
+      [
+        ...Object.keys(HTTP_ENDPOINT_RULES),
+        ...Object.keys(RAW_ROUTE_RULES),
+        ...rawRoutes,
+        ...endpoints,
+      ].filter((name) => /makita/iu.test(name)),
+    ).toEqual([]);
+    // No answer has a field that could carry the token; only `set` takes one.
+    for (const rpc of makitaRpcs) {
+      const fields = successFields(rpc.successSchema.ast);
+      for (const secret of ["token", "secret", "hash", "key", "value"]) {
+        expect(fields, rpc._tag).not.toContain(secret);
+      }
+      expect(successFields(rpc.payloadSchema.ast).has("token"), rpc._tag).toBe(
+        rpc._tag === "makita.account.set",
+      );
+    }
+    // The sealed token: written by MakitaAccount, read by MakitaGitHub, nothing else.
+    expect(
+      files
+        .filter(({ text }) => /\bMakitaTokenStore\b/u.test(text))
+        .map(({ file }) => file)
+        .toSorted(),
+    ).toEqual(["auth/ServerSecretStore.ts", "makita/MakitaAccount.ts", "makita/MakitaGitHub.ts"]);
+    expect(
+      files
+        .filter(({ text }) => /\btokens\s*\.get\(/u.test(text))
+        .filter(({ file }) => file.startsWith("makita/"))
+        .map(({ file }) => file),
+    ).toEqual(["makita/MakitaGitHub.ts"]);
+    // Makita's client never touches Source Control's credential nor its request policy.
+    for (const { file, text } of files.filter(({ file }) => file.startsWith("makita/"))) {
+      expect(text, file).not.toMatch(/GitHubCredentials|GitHubRest\b|PinnedGitHubCredential/u);
+    }
+    // The tables: named under makita/ and by their migrations (and the door inventory).
+    expect(
+      files
+        .filter(({ text }) => /\bmakita_account\b/u.test(text))
+        .map(({ file }) => file)
+        .filter((file) => !file.startsWith("makita/"))
+        .toSorted(),
+    ).toEqual(["persistence/Migrations/163_MakitaAccount.ts"]);
+    for (const { file, text } of toolModules) {
+      expect(text, file).not.toMatch(/MakitaAccount|MakitaTokenStore/u);
+    }
+  });
+
   it("reads AI usage over one WS RPC only, counts only: no HTTP, raw route or MCP door, tables read by AiUsage alone (spec 4 ticket 05)", () => {
     const usageRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
       /^aiUsage\./u.test(rpc._tag),

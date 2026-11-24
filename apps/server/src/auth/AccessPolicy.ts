@@ -322,6 +322,11 @@ export type Action =
    * archived or frozen, and the Owner in every Space.
    */
   | "accessKey.view"
+  /**
+   * Makita (Makita ticket 01): the bot's GitHub account, «Stop all Makita work» and who may use
+   * Makita. The Owner's alone, decided on the Installation.
+   */
+  | "makita.manageAccount"
   // Grants (`GrantResource`; see `decideGrant`).
   /** Lend one's resource to a Space; decided on the resource's owner and the destination. */
   | "grant.give"
@@ -353,7 +358,11 @@ const NON_CREATING: ReadonlySet<Action> = new Set([
   "admin.manage",
 ]);
 
-const OWNER_ONLY: ReadonlySet<Action> = new Set(["admin.manage", "installationPermission.manage"]);
+const OWNER_ONLY: ReadonlySet<Action> = new Set([
+  "admin.manage",
+  "installationPermission.manage",
+  "makita.manageAccount",
+]);
 
 /** Actions on one registered Environment, decided against an `EnvironmentResource`. */
 const ENVIRONMENT_ACTIONS: ReadonlySet<Action> = new Set([
@@ -1056,7 +1065,8 @@ export function decide(principal: Principal, action: Action, resource: Resource)
     action === "masterKey.backup" ||
     action === "secretProvider.manage" ||
     action === "signInSettings.manage" ||
-    action === "platformInvitation.manage"
+    action === "platformInvitation.manage" ||
+    action === "makita.manageAccount"
   ) {
     if (resource.kind !== "installation") return deny("wrong-resource");
     return principal.isOwner ? allow : deny("owner-only");

@@ -67,6 +67,10 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.accessKeysCreate]: AuthAccessWriteScope,
   [WS_METHODS.accessKeysRevoke]: AuthAccessWriteScope,
   [WS_METHODS.accessKeysUpdate]: AuthAccessWriteScope,
+  // Makita (Makita ticket 01): the bot's GitHub token and the Owner's switch, a Hub credential.
+  [WS_METHODS.makitaAccountSet]: AuthAccessWriteScope,
+  [WS_METHODS.makitaAccountPauseAll]: AuthAccessWriteScope,
+  [WS_METHODS.makitaAccountResumeAll]: AuthAccessWriteScope,
   [WS_METHODS.projectCloneStart]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneCancel]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneRetry]: AuthSourceControlWriteScope,

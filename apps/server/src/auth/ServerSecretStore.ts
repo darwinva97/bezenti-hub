@@ -223,6 +223,19 @@ export class DeliveredValueStore extends Context.Service<
   }
 >()("t3/auth/ServerSecretStore/DeliveredValueStore") {}
 
+/**
+ * Makita's GitHub token (Makita ticket 01): its own folder (`secrets/makita/`) and purpose, one
+ * entry. MakitaAccount writes it; MakitaGitHub alone reads it. Never in clear, never on a machine.
+ */
+export class MakitaTokenStore extends Context.Service<
+  MakitaTokenStore,
+  {
+    readonly get: (id: string) => Effect.Effect<Option.Option<Uint8Array>, SecretStoreError>;
+    readonly set: (id: string, value: Uint8Array) => Effect.Effect<void, SecretStoreError>;
+    readonly remove: (id: string) => Effect.Effect<void, SecretStoreError>;
+  }
+>()("t3/auth/ServerSecretStore/MakitaTokenStore") {}
+
 /** The master key the store opened with; none on a joined machine. */
 export class MasterKeyring extends Context.Service<
   MasterKeyring,
@@ -620,6 +633,16 @@ const makeWith = Effect.fn("ServerSecretStore.make")(function* (mode: StoreMode)
     remove: Effect.fn("DeliveredValueStore.remove")(deliveredStore.remove),
     list: deliveredStore.list,
   });
+  const makitaStore = sealedOnly(
+    MasterKeyFile.MAKITA_TOKEN_NAMESPACE,
+    "Makita token",
+    "Makita's GitHub token is kept only on a Hub, sealed with its master key.",
+  );
+  const makitaToken = MakitaTokenStore.of({
+    get: Effect.fn("MakitaTokenStore.get")(makitaStore.get),
+    set: Effect.fn("MakitaTokenStore.set")(makitaStore.set),
+    remove: Effect.fn("MakitaTokenStore.remove")(makitaStore.remove),
+  });
 
   return Context.make(
     ServerSecretStore,
@@ -636,6 +659,7 @@ const makeWith = Effect.fn("ServerSecretStore.make")(function* (mode: StoreMode)
     Context.add(AiAccountCredentialStore, aiAccountCredentials),
     Context.add(AiAccountTokenStore, aiAccountTokens),
     Context.add(DeliveredValueStore, deliveredValues),
+    Context.add(MakitaTokenStore, makitaToken),
     Context.add(
       MasterKeyring,
       MasterKeyring.of({

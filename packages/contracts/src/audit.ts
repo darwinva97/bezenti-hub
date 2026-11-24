@@ -84,6 +84,10 @@ export const AuditAction = Schema.Literals([
   "access_key.revoke",
   // Access-keys ticket 06: renewed, extended, or its caps, models, accounts or label changed.
   "access_key.update",
+  // Makita ticket 01: the bot's GitHub account registered or replaced, and the Owner's switch.
+  "makita.account.update",
+  "makita.pause_all",
+  "makita.resume_all",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -119,6 +123,7 @@ export const AuditTargetKind = Schema.Literals([
   "ai_account",
   "ai_gateway_key",
   "access_key",
+  "makita_account",
   "secret_provider",
   "provider_scope",
   "grant",
@@ -359,6 +364,14 @@ export const AUDIT_DETAIL_KEYS = {
   "access_key.revoke": ["space", "reason", "via"],
   /** Which fields changed (`changed`), the new expiry and caps; `via: renew` for only the expiry. */
   "access_key.update": ["space", "changed", "expiresAt", "limits", "via"],
+  /**
+   * Makita's GitHub account registered or replaced: its login, the token's kind and a classic
+   * token's scopes (joined by commas; `fine-grained` lists none). Never the token or any part of it.
+   */
+  "makita.account.update": ["login", "tokenKind", "scopes", "replaced"],
+  /** «Stop all Makita work» and its undoing, the Owner's. */
+  "makita.pause_all": [],
+  "makita.resume_all": [],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

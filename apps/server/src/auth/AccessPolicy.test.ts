@@ -1521,6 +1521,38 @@ const rows: ReadonlyArray<Row> = [
     organization,
     deny("wrong-resource"),
   ],
+  // Makita ticket 01: the bot's GitHub account, its token and «Stop all Makita work».
+  [
+    "Owner manages Makita's account",
+    owner,
+    "makita.manageAccount",
+    AccessPolicy.installation,
+    allow,
+  ],
+  ...(
+    [
+      ["an Admin", admin],
+      ["a Member", member],
+      ["a Guest", guest],
+      ["a User in no Organization", personalCreator],
+    ] as const
+  ).map(
+    ([who, principal]) =>
+      [
+        `${who} does not manage Makita's account`,
+        principal,
+        "makita.manageAccount",
+        AccessPolicy.installation,
+        deny("owner-only"),
+      ] as const,
+  ),
+  [
+    "Makita's account is the Installation's, not a Space's",
+    owner,
+    "makita.manageAccount",
+    organization,
+    deny("wrong-resource"),
+  ],
   // Keycloak sign-in, ticket 04: a Platform invitation makes a User whatever the Registration
   // mode, so it is the Owner's alone, as the mode is.
   [

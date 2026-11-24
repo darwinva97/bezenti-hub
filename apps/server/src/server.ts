@@ -230,6 +230,8 @@ import * as AiUsage from "./ai/AiUsage.ts";
 import * as AiGatewayKeyRevocation from "./ai/AiGatewayKeyRevocation.ts";
 import * as ProviderKeyMigration from "./ai/ProviderKeyMigration.ts";
 import * as AccessKeys from "./ai/AccessKeys.ts";
+import * as MakitaAccount from "./makita/MakitaAccount.ts";
+import * as MakitaGitHub from "./makita/MakitaGitHub.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as AiGatewayProxy from "./ai/AiGatewayProxy.ts";
 import * as AiGatewayRoute from "./ai/AiGatewayRoute.ts";
@@ -592,6 +594,14 @@ const layerAuth = Layer.mergeAll(
         Layer.provideMerge(AiGatewayKeys.layer),
         // A Space's access keys (access-keys ticket 01), checked by AiGatewayKeys.authorize.
         Layer.provideMerge(AccessKeys.layer),
+        // Makita (Makita ticket 01): the bot's GitHub account, with its own GitHub client that
+        // alone reads the sealed token (never Source Control's credential).
+        Layer.provideMerge(
+          MakitaAccount.layer.pipe(
+            Layer.provideMerge(MakitaGitHub.layer),
+            Layer.provide(FetchHttpClient.layer),
+          ),
+        ),
         // The usage log: counts what the gateway layer ends, off its path (spec 4 ticket 05).
         Layer.provideMerge(AiUsage.layer),
         Layer.provideMerge(AiGatewayActivity.layer),

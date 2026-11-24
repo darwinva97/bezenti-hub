@@ -269,6 +269,7 @@ import * as AiUsage from "./ai/AiUsage.ts";
 import { withHubAiAccountLimits } from "./usage/hubAiAccountLimits.ts";
 import { withHubGatewayUsage } from "./usage/hubGatewayUsage.ts";
 import * as AccessKeys from "./ai/AccessKeys.ts";
+import * as MakitaAccount from "./makita/MakitaAccount.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
@@ -1449,6 +1450,7 @@ export const layerWsRpc = (
       const withGatewayUsage = withHubGatewayUsage(usage, aiUsage);
       const aiGatewayKeys = yield* AiGatewayKeys.AiGatewayKeys;
       const accessKeys = yield* AccessKeys.AccessKeys;
+      const makitaAccount = yield* MakitaAccount.MakitaAccount;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const triage = yield* TriageService.TriageService;
@@ -3001,6 +3003,11 @@ export const layerWsRpc = (
         [WS_METHODS.accessKeysRevoke]: (input) => accessKeys.revokeForSession(input),
         [WS_METHODS.accessKeysModelOptions]: (input) => accessKeys.modelOptionsForSession(input),
         [WS_METHODS.accessKeysUpdate]: (input) => accessKeys.updateForSession(input),
+        // Makita's GitHub account and «Stop all Makita work»: the Owner's own session only.
+        [WS_METHODS.makitaAccountGet]: (input) => makitaAccount.getForSession(input),
+        [WS_METHODS.makitaAccountSet]: (input) => makitaAccount.setForSession(input),
+        [WS_METHODS.makitaAccountPauseAll]: () => makitaAccount.pauseAllForSession,
+        [WS_METHODS.makitaAccountResumeAll]: () => makitaAccount.resumeAllForSession,
         [WS_METHODS.projectCloneStart]: (input) =>
           requireCloneDestination(input.destinationPath, { asProject: true }).pipe(
             Effect.andThen(

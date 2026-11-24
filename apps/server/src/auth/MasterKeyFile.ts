@@ -146,6 +146,8 @@ export const STORE_NAMESPACES = [
   { dir: "ai-account-tokens", purpose: "ai-account-oauth-token" },
   // Values read from Secret providers and delivered to Threads, only to mask them there.
   { dir: "delivered-values", purpose: "delivered-value" },
+  // Makita's GitHub token (Makita ticket 01): written by MakitaAccount, read by MakitaGitHub.
+  { dir: "makita", purpose: "makita-token" },
 ] as const satisfies ReadonlyArray<{
   readonly dir: string;
   readonly purpose: SecretCipher.SealPurpose;
@@ -155,6 +157,7 @@ export const VAULT_VALUES_NAMESPACE: StoreNamespace = STORE_NAMESPACES[1];
 export const AI_ACCOUNT_CREDENTIALS_NAMESPACE: StoreNamespace = STORE_NAMESPACES[2];
 export const AI_ACCOUNT_TOKENS_NAMESPACE: StoreNamespace = STORE_NAMESPACES[3];
 export const DELIVERED_VALUES_NAMESPACE: StoreNamespace = STORE_NAMESPACES[4];
+export const MAKITA_TOKEN_NAMESPACE: StoreNamespace = STORE_NAMESPACES[5];
 
 interface Entry {
   /** Unique across folders: `<dir>/<name>`. */

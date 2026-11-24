@@ -1,0 +1,315 @@
+# Verificación de ramas de bezenti (solo en este fork). Ver bezenti/README.md, «Verificación de ramas en CI».
+#
+# En cada push a una rama que no sea main (y a mano): el mismo recibo que la verificación local, en la nube.
+# 1. plan       del diff contra el merge-base con main (o contra la entrada `base`): qué paquetes
+#               comprobar de tipos (los dueños de los cambios y sus dependientes), qué pruebas correr (las
+#               cambiadas, las que están junto a cada fuente cambiada y, si toca apps/server, los barridos de
+#               puertas) y si corre el lint. .github/scripts/bezenti-verify-plan.cjs
+# 2. lint, typecheck (por paquete o grupo) y test (por paquete, Node o navegador, repartido en shards)
+#               en paralelo. Cada trabajo deja sus líneas PASS/FAIL. .github/scripts/bezenti-verify.sh
+# 3. verdict    junta las líneas en el recibo, «RESULT GREEN» o «RESULT RED», en el resumen de la ejecución y
+#               en el artefacto `bezenti-verify-receipt`; falla si algo falló o no llegó a comprobarse.
+# No publica ni despliega nada: eso sigue siendo bezenti.yml, solo en main.
+name: bezenti-verify
+
+on:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Commit o rama contra la que comparar (vacío = merge-base con main)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bezenti-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      lint: ${{ steps.plan.outputs.lint }}
+      typecheck: ${{ steps.plan.outputs.typecheck }}
+      tests: ${{ steps.plan.outputs.tests }}
+      base: ${{ steps.plan.outputs.base }}
+      base_how: ${{ steps.plan.outputs.base_how }}
+    steps:
+      # Historia de la rama y de main sin contenidos (blob:none) para el merge-base; sin .repos.
+      - name: Checkout
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --filter=blob:none origin "$GITHUB_SHA" "+refs/heads/main:refs/remotes/origin/main"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout -q --detach "$GITHUB_SHA"
+
+      - name: Plan
+        id: plan
+        env:
+          BASE_INPUT: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_INPUT:-}" ]; then
+            if ! base=$(git rev-parse -q --verify "origin/${BASE_INPUT}^{commit}" || git rev-parse -q --verify "${BASE_INPUT}^{commit}"); then
+              git fetch -q --no-tags --filter=blob:none origin "$BASE_INPUT"
+              base=$(git rev-parse FETCH_HEAD)
+            fi
+            how="base ${BASE_INPUT}"
+          else
+            base=$(git merge-base origin/main HEAD)
+            how="merge-base with main"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "base_how=$how" >> "$GITHUB_OUTPUT"
+          BASE=$base node .github/scripts/bezenti-verify-plan.cjs "$RUNNER_TEMP/plan" | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "## Plan: ${base:0:10} ($how)..${GITHUB_SHA:0:10}"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/plan/expected.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: verify-plan
+          path: ${{ runner.temp }}/plan/
+          retention-days: 7
+
+  lint:
+    needs: plan
+    if: needs.plan.outputs.lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - name: Dependencies
+        uses: ./.github/actions/setup-ci-deps
+
+      - name: Lint
+        env:
+          RESULTS: ${{ runner.temp }}/out/results-lint.txt
+          DETAILS: ${{ runner.temp }}/out/details-lint.md
+        run: mkdir -p "$RUNNER_TEMP/out" && bash .github/scripts/bezenti-verify.sh lint
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: verify-lint
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  typecheck:
+    needs: plan
+    if: needs.plan.outputs.typecheck != '[]'
+    name: typecheck (${{ matrix.group.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.plan.outputs.typecheck) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - name: Dependencies
+        uses: ./.github/actions/setup-ci-deps
+
+      - name: Typecheck
+        env:
+          DIRS: ${{ matrix.group.dirs }}
+          RESULTS: ${{ runner.temp }}/out/results-typecheck-${{ matrix.group.id }}.txt
+          DETAILS: ${{ runner.temp }}/out/details-typecheck-${{ matrix.group.id }}.md
+        # Sin comillas: un argumento por carpeta de paquete.
+        run: mkdir -p "$RUNNER_TEMP/out" && bash .github/scripts/bezenti-verify.sh typecheck $DIRS
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: verify-typecheck-${{ matrix.group.id }}
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  test:
+    needs: plan
+    if: needs.plan.outputs.tests != '[]'
+    name: test (${{ matrix.shard.id }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.tests) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      # Las pruebas de escritorio compilan el ayudante de secretos del navegador; apt corre mientras se instalan las dependencias.
+      - name: Start installing desktop build libraries
+        if: matrix.shard.electron
+        run: |
+          (
+            set +e
+            sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+            echo "$?" > "$RUNNER_TEMP/apt-status"
+          ) > "$RUNNER_TEMP/apt.log" 2>&1 < /dev/null &
+
+      - name: Dependencies
+        uses: ./.github/actions/setup-ci-deps
+
+      # install.js de electron (lo corre ensure:electron) mira esta caché antes de descargar.
+      - name: Cache Electron download
+        if: matrix.shard.electron
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('node_modules/.pnpm/electron@*/node_modules/electron/package.json') }}
+
+      - name: Electron runtime and desktop build libraries
+        if: matrix.shard.electron
+        timeout-minutes: 5
+        run: |
+          vp run --filter @t3tools/desktop ensure:electron
+          until test -s "$RUNNER_TEMP/apt-status"; do sleep 1; done
+          cat "$RUNNER_TEMP/apt.log"
+          exit "$(cat "$RUNNER_TEMP/apt-status")"
+
+      - name: Resolve Playwright
+        id: playwright
+        if: matrix.shard.chromium
+        env:
+          PKG: ${{ matrix.shard.pkg }}
+        run: |
+          for cli in "$PKG/node_modules/playwright" "$PKG/node_modules/playwright-core" apps/web/node_modules/playwright; do
+            if [ -f "$cli/package.json" ]; then
+              echo "cli=$cli/cli.js" >> "$GITHUB_OUTPUT"
+              echo "version=$(node -p "require('./$cli/package.json').version")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "::error::No Playwright in $PKG"; exit 1
+
+      - name: Cache Chromium
+        id: chromium_cache
+        if: matrix.shard.chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
+
+      - name: Chromium
+        if: matrix.shard.chromium
+        env:
+          CLI: ${{ steps.playwright.outputs.cli }}
+          CACHED: ${{ steps.chromium_cache.outputs.cache-hit }}
+        run: |
+          if [ "$CACHED" != true ]; then node "$CLI" install --only-shell chromium; fi
+          browser=$(find "$HOME/.cache/ms-playwright" -name chrome-headless-shell -type f -print -quit)
+          test -n "$browser"
+          if ldd "$browser" | grep '=> not found'; then node "$CLI" install-deps chromium; fi
+
+      # Dependencias optimizadas de Vite: si no, las pruebas de navegador las rehacen en cada ejecución.
+      - name: Cache Vite dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ matrix.shard.pkg }}/node_modules/.vite
+          key: vite-deps-v1-${{ runner.os }}-${{ matrix.shard.id }}-${{ hashFiles('pnpm-lock.yaml', format('{0}/vite.config.ts', matrix.shard.pkg)) }}
+          restore-keys: |
+            vite-deps-v1-${{ runner.os }}-${{ matrix.shard.id }}-
+
+      - name: Test
+        env:
+          PKG: ${{ matrix.shard.pkg }}
+          FILES: ${{ matrix.shard.files }}
+          RESULTS: ${{ runner.temp }}/out/results-test-${{ matrix.shard.id }}.txt
+          DETAILS: ${{ runner.temp }}/out/details-test-${{ matrix.shard.id }}.md
+        # Sin comillas: un argumento por archivo de pruebas.
+        run: mkdir -p "$RUNNER_TEMP/out" && bash .github/scripts/bezenti-verify.sh test "$PKG" $FILES
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: verify-test-${{ matrix.shard.id }}
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  verdict:
+    needs: [plan, lint, typecheck, test]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /.github/scripts/
+          sparse-checkout-cone-mode: false
+
+      - name: Download results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: verify-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/results
+
+      - name: Verdict
+        env:
+          BRANCH: ${{ github.ref_name }}
+          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ needs.plan.outputs.base }}
+          BASE_HOW: ${{ needs.plan.outputs.base_how }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/receipt"
+          bash .github/scripts/bezenti-verify.sh verdict "$RUNNER_TEMP/results" "$RUNNER_TEMP/receipt/receipt.txt"
+
+      - name: Upload receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bezenti-verify-receipt
+          path: ${{ runner.temp }}/receipt/
+          if-no-files-found: ignore
+          retention-days: 30

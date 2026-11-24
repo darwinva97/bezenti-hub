@@ -61,6 +61,8 @@ function ResourceMeter(props: {
   /** The share in use, 0 to 1; null when the machine does not say. */
   readonly used: number | null;
   readonly detail: string;
+  /** What a screen reader says for the bar; the detail when absent. */
+  readonly valueText?: string;
 }) {
   const percent =
     props.used === null ? null : Math.min(100, Math.max(0, Math.round(props.used * 100)));
@@ -79,7 +81,7 @@ function ResourceMeter(props: {
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={percent}
-          aria-valuetext={props.detail}
+          aria-valuetext={props.valueText ?? props.detail}
           className="block h-1 overflow-hidden rounded-full bg-muted"
         >
           <span
@@ -91,7 +93,7 @@ function ResourceMeter(props: {
           />
         </span>
       )}
-      <span className="truncate tabular-nums">{props.detail}</span>
+      <span className="tabular-nums">{props.detail}</span>
     </span>
   );
 }
@@ -137,11 +139,10 @@ function describe(
           <ResourceMeter
             label="CPU"
             used={resources.hostResources.cpuUtilization}
-            detail={`${resources.hostResources.cpuCount} CPUs${
-              resources.hostResources.cpuUtilization === null
-                ? ""
-                : ` · ${Math.round(resources.hostResources.cpuUtilization * 100)}% busy`
-            }`}
+            detail={`${resources.hostResources.cpuCount} CPUs`}
+            valueText={`${resources.hostResources.cpuCount} CPUs, ${Math.round(
+              (resources.hostResources.cpuUtilization ?? 0) * 100,
+            )}% busy`}
           />
           <ResourceMeter
             label="Memory"

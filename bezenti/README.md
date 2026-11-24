@@ -8,7 +8,7 @@ el código de Eijun (más los arreglos de compilación de abajo).
 | Pieza            | Dónde                                                              | Qué                                                                                                                                     |
 | ---------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
 | Hub              | clúster k3s de `darwinva97/infra-contabo`, namespace `bezenti-hub` | `https://claude.bezenti.com` (temporal; luego `code.bezenti.com`). Guarda personas, permisos, hilos y secretos. **No ejecuta agentes.** |
-| Máquina dedicada | VPS `hub-vps` (72.60.66.80), usuario `t3`                          | Ejecuta el trabajo de la organización `bezenti` dentro de un Sandbox (Podman sin root).                                                 |
+| Máquina dedicada | la VPS personal (IP en las notas privadas), usuario `t3`           | Ejecuta el trabajo de la organización `bezenti` dentro de un Sandbox (Podman sin root).                                                 |
 
 Documentación completa del despliegue (red, Access, Owner, VPS, riesgos): sección «T3 Code Hub» del
 README de `darwinva97/infra-contabo`.
@@ -160,7 +160,7 @@ siendo `bezenti.yml`, solo en `main`.
   solo en los que se nombran; corren también las pruebas de `scripts/`, `evals/` e `infra/`; en `apps/server`
   se salta la prueba «refuses a second run to the same machine», que falla en Linux con o sin cambios
   (`localhost` resuelve antes a `::1`; `bezenti.yml` hace lo mismo). `ubuntu-latest` ya es Ubuntu 26.04 y el
-  Playwright del repo aún no la reconoce: Chromium usa sus binarios de 24.04 (`PLAYWRIGHT_HOST_PLATFORM_OVERRIDE`).
+  Playwright del repo aún no la reconoce: los trabajos de pruebas corren en `ubuntu-24.04`.
 - **Tiempos**: ~1,5 min si solo hay lint; ~2,5 min con server, web y los barridos de puertas.
 
 El plan reutiliza `readWorkspace` y `decide` de `.github/scripts/ci-changes.cjs`, que es del original: si un

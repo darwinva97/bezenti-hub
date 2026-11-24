@@ -791,12 +791,30 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Makes one. Values and GitHub logins are checked first (outside the transaction: GitHub is
-   * slow); `makita.use`, the live count and the insert are one write transaction.
+   * Makes one. `makita.use` first (so nobody else learns a Project's name or spends GitHub
+   * requests), then the values and logins (outside the transaction: GitHub is slow); `makita.use`
+   * again, the live count and the insert are one write transaction.
    */
   const create = Effect.fn("MakitaConfigs.create")(function* (
     input: MakitaConfigInput & { readonly actorUserId: UserId },
   ) {
+    const space = yield* spaceFor(input.spaceId);
+    const principal = yield* principalFor(input.actorUserId);
+    if (
+      space === undefined ||
+      !AccessPolicy.isAllowed(
+        AccessPolicy.decide(
+          principal,
+          "makita.use",
+          yield* makitaSpace(input.actorUserId, space.resource),
+        ),
+      )
+    ) {
+      return yield* fail(
+        "forbidden",
+        "You cannot use Makita in this Space. The Owner gives that permission.",
+      );
+    }
     const checked = checkedInput(input);
     if (checked._tag === "refused") return yield* fail("invalid", checked.message);
     const value = checked.value;

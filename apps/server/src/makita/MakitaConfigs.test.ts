@@ -265,10 +265,13 @@ it.live.skipIf(!posix || platform === undefined)(
     Effect.gen(function* () {
       const ctx = yield* ready;
       const { setup, projects: p, accounts } = ctx;
-      // Ada (Admin, no permission), an agent as Grace, a session limited to Acme.
+      // Ada (Admin, no permission), Linus (Guest), Gus (Globex), an agent as Grace, a session
+      // limited to Acme: refused before any Project is read or GitHub asked.
+      const asked = setup.github.requests.length;
       for (const as of [
         CommandActor.actAs(setup.people.admin),
         CommandActor.actAs(setup.people.guest),
+        CommandActor.actAs(setup.people.globexMember),
         CommandActor.actAsResolved({ _tag: "User", userId: setup.people.member, via: "agent" }),
         CommandActor.actAsResolved({
           _tag: "User",
@@ -277,10 +280,12 @@ it.live.skipIf(!posix || platform === undefined)(
         }),
       ]) {
         const refused = yield* setup.makitaConfigs
-          .createForSession(input(ctx))
+          .createForSession(input(ctx, { repos: { projects: [p.local] }, callers: ["octocat"] }))
           .pipe(as, Effect.flip);
         assert.equal(refused.reason, "forbidden");
+        assert.notInclude(refused.message, "Local");
       }
+      assert.equal(setup.github.requests.length, asked, "GitHub was asked for a refused caller");
       const selection = (aiAccountId: AiAccountId, instanceId = "claudeAgent") => ({
         modelSelection: {
           instanceId: ProviderInstanceId.make(instanceId),

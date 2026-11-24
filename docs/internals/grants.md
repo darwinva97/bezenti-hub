@@ -94,7 +94,14 @@ stays `active` and unused: its Sandbox runs no turn and takes no Thread (`spaceR
 - The destination's side (`decide`, `return`) is an Organization's Admins or a Personal space's
   User. `return` works in an archived Space too. Active Grants are seen by whoever works there (not
   Guests); waiting ones only by whoever decides.
-- A Grant someone sees from neither side answers like a missing one.
+- A Grant someone sees from neither side answers like a missing one; so does a resource that is not
+  on the caller's lending side when giving, linking or asking its targets (Grants ticket 13): only
+  its lender's side hears that an account is `direct`, a group archived, or why a machine cannot
+  host. A Member of the owning Organization is told no by the policy.
+- What is lent reaches the Space's people (`AccessPolicy.borrowsIn`, Grants ticket 13): the Owner,
+  who works in any open Organization as its operator, borrows there only as a Member (or in their
+  own Personal space), and still uses what they lent themselves. This holds for lent AI accounts
+  (`AllowedAiAccounts`), lent Vault groups (`EffectiveVaults`) and lent machines (`environment.use`).
 
 ## AI accounts
 
@@ -160,7 +167,8 @@ its owner's Space's fixed default. Giving one always needs a strong factor, pend
 Secrets reach the borrower's agents); accepting needs none, and may also make it the Space's last
 default (`useAsDefault`, audited `vault.choose` `via: grant.accept`; the same on a give that starts
 active). `VaultReach` reads, on every call, the Space's own groups and the named groups an `active`
-Grant lends there; a lent group is read-only there (names; Variables for Admins and Members), its
+Grant lends there while their lender may lend (Grants ticket 13: not while the User is disabled or
+removed, nor while the lending Organization is archived, frozen or gone); a lent group is read-only there (names; Variables for Admins and Members), its
 dangerous names never delivered, and nothing of it reaches a machine lent to the Space unless it is
 that machine's owner's own. Ending a loan drops that Space's default and its Projects' choices of
 the group in the same transaction (`VaultReachLoss.forgetLentReach`), and tells the lender which
@@ -192,6 +200,16 @@ are kept as history, like the Grant; a removed User's rows stay, as their AI usa
   allowed the change (`prepareGive`/`prepareAccept`/`prepareClaim`) and required again by the change itself, so
   the WS side can never make one active.
 - No MCP tool: lending is a person's decision of trust.
+- A lent Sandbox's credential (`lent:<grantId>`, minted for the lender's host by `/self`) is for its
+  borrowing Space only and reads, over the git route, only the repositories of the Threads it runs
+  (or is the target of a move to): the lender sees what runs on the machine, never the Space's
+  other Projects. It dies once its loan ended and `LENT_DRAIN_MS` passed, even if closing the
+  Sandbox failed.
+- `grants/GrantDoors.test.ts` calls every Grants door as the Owner, the Admin, Member and Guest of
+  two Organizations and a User in none, and fails on a door matching /grant/ that nobody calls; the
+  leak smoke (there and in `HubWithEnvironments.lent.test.ts`) finds no link token or lent Sandbox
+  credential in a log, span, audit entry, process argument or stored row. Review:
+  `.scratch/grants/issues/13-design.md`.
 
 ## Clients
 

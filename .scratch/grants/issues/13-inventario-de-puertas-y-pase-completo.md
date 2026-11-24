@@ -6,12 +6,12 @@ Spec: ../spec.md
 
 **Blocked by:** 01–12.
 
-**Status:** ready-for-agent
+**Status:** done except the live pass (design and holes: 13-design.md)
 
-- [ ] `DoorRules.ts` y `RPC_SPACE_ACCESS` declaran todas las puertas de Grants; el test de inventario falla si una nueva no declara su regla.
-- [ ] Barrido `grants/GrantDoors.test.ts`: Owner, Steward, Admin, Member y Guest de Acme y Globex, más Ana sin Organization, llaman a cada puerta de Grants. Nadie ve Grants pendientes ajenos, uso ajeno fuera de sus Grants, valores de Secrets prestados ni tokens de enlace.
-- [ ] Ninguna herramienta MCP da, acepta ni retira Grants, ni devuelve Grants ajenos (test).
-- [ ] Humo de fugas: tokens de enlace y credenciales de Sandbox prestado no aparecen en logs, spans ni `/proc/*/cmdline` del Hub ni del host.
-- [ ] Puertas inversas, una por una: dar ↔ cancelar o retirar; pendiente ↔ aceptar o rechazar; activo ↔ devolver; enlace ↔ cancelar; tope ↔ cambiar; máquina ↔ mover sus Threads.
-- [ ] Red-first para cada hueco encontrado.
-- [ ] Prueba real completa en WSL con Podman, en una sesión: AI account con tope, Vault group y máquina prestados a Acme; uso visto por Ana y por Acme; un enlace aplicado por Bob; retirar los tres; revisión de allowances migradas con datos copiados.
+- [x] `DoorRules.ts` y `RPC_SPACE_ACCESS` declaran todas las puertas de Grants; el test de inventario falla si una nueva no declara su regla.
+- [x] Barrido `grants/GrantDoors.test.ts`: Owner, Steward, Admin, Member y Guest de Acme y Globex, más Ana sin Organization, llaman a cada puerta de Grants. Nadie ve Grants pendientes ajenos, uso ajeno fuera de sus Grants, valores de Secrets prestados ni tokens de enlace. (Sin Steward: aún no existe, llega con plans-and-limits. El uso por Grant de `aiUsage.summary` se barre en `ai/AiUsage.grants.test.ts`.)
+- [x] Ninguna herramienta MCP da, acepta ni retira Grants, ni devuelve Grants ajenos (test).
+- [x] Humo de fugas: tokens de enlace y credenciales de Sandbox prestado no aparecen en logs, spans ni `/proc/*/cmdline` del Hub ni del host.
+- [x] Puertas inversas, una por una: dar ↔ cancelar o retirar; pendiente ↔ aceptar o rechazar; activo ↔ devolver; enlace ↔ cancelar; tope ↔ cambiar; máquina ↔ mover sus Threads.
+- [x] Red-first para cada hueco encontrado.
+- [ ] Prueba real completa (no hecha aquí: necesita un Hub con datos copiados, Podman y proveedores; queda para una persona) en WSL con Podman, en una sesión: AI account con tope, Vault group y máquina prestados a Acme; uso visto por Ana y por Acme; un enlace aplicado por Bob; retirar los tres; revisión de allowances migradas con datos copiados.

@@ -654,8 +654,31 @@ const make = Effect.gen(function* () {
   `;
 
   /** The machine to lend: a personal one, not removed; its owner is the lender. */
+  /**
+   * Grants ticket 13: someone else's resource answers as a missing one, before anything about it
+   * (whether it can be lent, its machine's report): only its lender's side hears why not.
+   */
+  const lenderSideOr = (
+    who: Caller | undefined,
+    lender: AccessPolicy.GrantLender,
+    missing: string,
+  ) => {
+    if (who === undefined) return Effect.void;
+    const decision = AccessPolicy.decide(who.principal, "grant.viewGiven", {
+      kind: "grant",
+      lender,
+      target: principalSpace(who),
+    });
+    // Not theirs at all: missing. A Member of the owning Organization sees it already, and is
+    // told no by the policy further on.
+    return decision._tag === "Deny" && decision.reason === "not-yours"
+      ? fail("not-found", missing)
+      : Effect.void;
+  };
+
   const lendableEnvironment = Effect.fn("Grants.lendableEnvironment")(function* (
     environmentId: string,
+    who?: Caller,
   ) {
     const [row] = yield* sql<{
       readonly kind: string;
@@ -667,6 +690,10 @@ const make = Effect.gen(function* () {
       WHERE environment_id = ${environmentId} AND revoked_at IS NULL
     `.pipe(Effect.catch(storage("read the machine")));
     if (row === undefined) return yield* fail("not-found", "That machine does not exist.");
+    // Someone's personal machine is lent by that User, and nobody else (the Owner included).
+    if (who !== undefined && row.ownerUserId !== null && row.ownerUserId !== who.userId) {
+      return yield* fail("not-found", "That machine does not exist.");
+    }
     if (row.kind !== "external" || row.mode !== "personal" || row.ownerUserId === null) {
       return yield* fail(
         "not-lendable",
@@ -687,7 +714,10 @@ const make = Effect.gen(function* () {
    * The AI account to lend: a live one its owner signs in or keys for the gateway. A direct one is
    * never lent: its credential goes to the agent and its use is not counted.
    */
-  const lendableAiAccount = Effect.fn("Grants.lendableAiAccount")(function* (accountId: string) {
+  const lendableAiAccount = Effect.fn("Grants.lendableAiAccount")(function* (
+    accountId: string,
+    who?: Caller,
+  ) {
     const [row] = yield* sql<{
       readonly name: string;
       readonly type: AiAccountType;
@@ -698,12 +728,6 @@ const make = Effect.gen(function* () {
       WHERE account_id = ${accountId} AND deleted_at IS NULL
     `.pipe(Effect.catch(storage("read the AI account")));
     if (row === undefined) return yield* fail("not-found", "That AI account does not exist.");
-    if (row.type === "direct") {
-      return yield* fail(
-        "not-lendable",
-        "A direct AI account cannot be lent: its credential would leave the Hub. Lend an API key or a subscription.",
-      );
-    }
     const lender: AccessPolicy.GrantLender =
       row.ownerKind === "user"
         ? { kind: "user", userId: row.ownerId as UserId }
@@ -713,6 +737,13 @@ const make = Effect.gen(function* () {
               (yield* targetsOf([{ targetId: row.ownerId }])).get(row.ownerId as SpaceId)
                 ?.resource ?? null,
           };
+    yield* lenderSideOr(who, lender, "That AI account does not exist.");
+    if (row.type === "direct") {
+      return yield* fail(
+        "not-lendable",
+        "A direct AI account cannot be lent: its credential would leave the Hub. Lend an API key or a subscription.",
+      );
+    }
     return {
       kind: "ai-account",
       resourceId: accountId,
@@ -727,7 +758,10 @@ const make = Effect.gen(function* () {
    * Grants ticket 07: the Vault group to lend: a named one, not archived. A `default` is its
    * owner's Space's fixed default and is never lent.
    */
-  const lendableVaultGroup = Effect.fn("Grants.lendableVaultGroup")(function* (groupId: string) {
+  const lendableVaultGroup = Effect.fn("Grants.lendableVaultGroup")(function* (
+    groupId: string,
+    who?: Caller,
+  ) {
     const [row] = yield* sql<{
       readonly name: string;
       readonly isDefault: number;
@@ -740,15 +774,6 @@ const make = Effect.gen(function* () {
       FROM vault_groups WHERE group_id = ${groupId}
     `.pipe(Effect.catch(storage("read the Vault group")));
     if (row === undefined) return yield* fail("not-found", "That Vault group does not exist.");
-    if (row.isDefault === 1) {
-      return yield* fail(
-        "not-lendable",
-        "A `default` group serves its own Space only: put what you lend in a named group.",
-      );
-    }
-    if (row.archivedAt !== null) {
-      return yield* fail("not-lendable", "This group is archived: restore it to lend it.");
-    }
     const lender: AccessPolicy.GrantLender =
       row.ownerKind === "user"
         ? { kind: "user", userId: row.ownerId as UserId }
@@ -758,6 +783,16 @@ const make = Effect.gen(function* () {
               (yield* targetsOf([{ targetId: row.ownerId }])).get(row.ownerId as SpaceId)
                 ?.resource ?? null,
           };
+    yield* lenderSideOr(who, lender, "That Vault group does not exist.");
+    if (row.isDefault === 1) {
+      return yield* fail(
+        "not-lendable",
+        "A `default` group serves its own Space only: put what you lend in a named group.",
+      );
+    }
+    if (row.archivedAt !== null) {
+      return yield* fail("not-lendable", "This group is archived: restore it to lend it.");
+    }
     return {
       kind: "vault-group",
       resourceId: groupId,
@@ -768,12 +803,13 @@ const make = Effect.gen(function* () {
     } satisfies Lendable;
   });
 
-  const lendable = (resource: GrantGiveInput["resource"]) =>
+  /** The resource as `who` (its lender's side) may lend it; anyone else is told it is missing. */
+  const lendable = (resource: GrantGiveInput["resource"], who: Caller) =>
     resource.kind === "environment"
-      ? lendableEnvironment(resource.environmentId)
+      ? lendableEnvironment(resource.environmentId, who)
       : resource.kind === "ai-account"
-        ? lendableAiAccount(resource.aiAccountId)
-        : lendableVaultGroup(resource.vaultGroupId);
+        ? lendableAiAccount(resource.aiAccountId, who)
+        : lendableVaultGroup(resource.vaultGroupId, who);
 
   /** Whether giving it needs a strong factor: an active machine's, any Vault group's. */
   const giveNeedsFactor = (kind: GrantResourceKind, startsActive: boolean) =>
@@ -837,7 +873,7 @@ const make = Effect.gen(function* () {
         "Lending to a Plan is not available yet: lend to a Space.",
       );
     }
-    const item = yield* lendable(input.resource);
+    const item = yield* lendable(input.resource, who);
     const problem = limitsProblem(item.kind, input.limits);
     if (problem !== undefined) return yield* fail("invalid-limits", problem);
     if (input.resource.kind === "environment") yield* hostReady(input.resource.environmentId);
@@ -1027,7 +1063,7 @@ const make = Effect.gen(function* () {
 
   const targets = Effect.fn("Grants.targets")(function* (input: GrantTargetsInput) {
     const who = yield* caller;
-    const item = yield* lendable(input.resource);
+    const item = yield* lendable(input.resource, who);
     const ids = yield* knownTargets(who).pipe(Effect.catch(storage("read the Spaces")));
     const known = yield* targetsOf(ids.map((row) => ({ targetId: row.spaceId })));
     const owners = yield* personalOwnersOf(ids.map((row) => ({ targetId: row.spaceId })));
@@ -1432,7 +1468,7 @@ const make = Effect.gen(function* () {
     yield* inTransaction(
       "make the lending link",
       Effect.gen(function* () {
-        const item = yield* lendable(input.resource);
+        const item = yield* lendable(input.resource, who);
         yield* denied(
           AccessPolicy.decide(who.principal, "grant.offer", offerResource(item.lender, who)),
         );

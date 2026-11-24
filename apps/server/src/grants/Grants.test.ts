@@ -280,8 +280,9 @@ describe("Grants", () => {
     Effect.gen(function* () {
       const h = yield* hub;
       const vps = yield* h.machine("ana-vps", h.ana.id);
-      // Adam runs Acme but the machine is Ana's; Ana is not in Globex.
-      assert.equal((yield* h.give(h.adam.cookie, vps, h.acmeId)).status, 403);
+      // Adam runs Acme but the machine is Ana's: to him it does not exist (Grants ticket 13).
+      // Ana is not in Globex.
+      assert.equal((yield* h.give(h.adam.cookie, vps, h.acmeId)).status, 404);
       assert.equal((yield* h.give(h.ana.cookie, vps, h.globexId)).status, 403);
       // Grecia shares no Space with Ana: her Personal space is not Ana's to name.
       assert.equal((yield* h.give(h.ana.cookie, vps, `personal:${h.grecia.id}`)).status, 403);
@@ -620,9 +621,10 @@ describe("Grants of AI accounts", () => {
     Effect.gen(function* () {
       const h = yield* hub;
       const key = yield* aiAccount(h, "ana-key", { kind: "user", id: h.ana.id });
-      // Not the Owner, not an Admin of the Space it goes to, not to her own Personal space.
-      assert.equal((yield* lendAi(h, h.owner, key, `personal:${h.grecia.id}`)).status, 403);
-      assert.equal((yield* lendAi(h, h.adam.cookie, key, h.acmeId)).status, 403);
+      // Not the Owner, not an Admin of the Space it goes to (to them it does not exist, Grants
+      // ticket 13), not to her own Personal space.
+      assert.equal((yield* lendAi(h, h.owner, key, `personal:${h.grecia.id}`)).status, 404);
+      assert.equal((yield* lendAi(h, h.adam.cookie, key, h.acmeId)).status, 404);
       assert.equal((yield* lendAi(h, h.ana.cookie, key, `personal:${h.ana.id}`)).status, 403);
       // Limits of another kind are refused.
       const machineLimits = yield* lendAi(h, h.ana.cookie, key, h.acmeId, LIMITS);
@@ -661,11 +663,11 @@ describe("Grants of AI accounts", () => {
         h.acmeId,
       );
       assert.isNull(targets.host);
-      // Someone else asking for her account's targets is refused.
+      // Someone else asking for her account's targets is told it does not exist.
       const theirs = yield* h.grants
         .targets({ resource: { kind: "ai-account", aiAccountId: key as never } })
         .pipe(CommandActor.actAs(h.linus.id), Effect.flip);
-      assert.equal(theirs.reason, "not-allowed");
+      assert.equal(theirs.reason, "not-found");
     }),
   );
 
@@ -901,11 +903,12 @@ describe("Grants of Vault groups", () => {
         (yield* lendGroup(h, h.ana.id, archived.id, h.acmeId).pipe(Effect.flip)).reason,
         "not-lendable",
       );
-      // Adam runs Acme, not Ana's Vault; the Owner does not lend it either.
+      // Adam runs Acme, not Ana's Vault; the Owner does not lend it either: to them it does not
+      // exist (Grants ticket 13).
       for (const who of [h.adam.id, h.ownerId]) {
         assert.equal(
           (yield* lendGroup(h, who, group, h.acmeId).pipe(Effect.flip)).reason,
-          "not-allowed",
+          "not-found",
         );
       }
       // Into her own Personal space: it is hers already.
@@ -1154,5 +1157,72 @@ describe("Grants waiting in the Space directory", () => {
         .pipe(CommandActor.actAs(h.adam.id));
       assert.deepEqual(yield* waitingFor(h.adam.id), {});
     }),
+  );
+});
+
+// Grants ticket 13: someone else's resource answers as a missing one, before anything about it.
+describe("Grants: nothing of someone else's resource before the policy", () => {
+  it.effect(
+    "whether another User's machine, account or group exists or why it cannot be lent stays theirs",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* hub;
+        const vps = yield* h.machine("ana-vps", h.ana.id);
+        yield* h.server.sql`
+        UPDATE environments SET sandbox_host_json = ${JSON.stringify({
+          ready: false,
+          reason: "ana-private-port-5432 listens on 0.0.0.0",
+          limitSupport: { cpus: true, memory: true, pids: true, note: null },
+          reachablePorts: [],
+          hostCpus: 4,
+          hostMemoryBytes: 8 * 1024 ** 3,
+          hostFreeBytes: null,
+          hostTotalBytes: null,
+        })}
+        WHERE environment_id = ${vps}
+      `;
+        const direct = yield* aiAccount(h, "ana-direct", { kind: "user", id: h.ana.id }, "direct");
+        const { group } = yield* anasGroup(h);
+        yield* Context.get(h.server.services, Vaults.Vaults)
+          .update({ vaultId: group, archived: true })
+          .pipe(CommandActor.actAs(h.ana.id));
+        const asGrecia = CommandActor.actAs(h.grecia.id);
+        const resources = [
+          { kind: "environment", environmentId: vps },
+          { kind: "ai-account", aiAccountId: direct },
+          { kind: "vault-group", vaultGroupId: group },
+        ] as const;
+        for (const resource of resources) {
+          const limits =
+            resource.kind === "environment"
+              ? LIMITS
+              : resource.kind === "ai-account"
+                ? NO_CAP
+                : VAULT_LIMITS;
+          const given = yield* h.grants
+            .prepareGive({
+              resource,
+              spaceId: SpaceId.make(`personal:${h.grecia.id}`),
+              limits,
+            } as never)
+            .pipe(asGrecia, Effect.flip);
+          assert.equal(given.reason, "not-found", `${resource.kind}: ${given.message}`);
+          assert.notInclude(given.message, "5432");
+          const targets = yield* h.grants
+            .targets({ resource } as never)
+            .pipe(asGrecia, Effect.flip);
+          assert.equal(targets.reason, "not-found", `${resource.kind}: ${targets.message}`);
+          const offered = yield* h.grants
+            .createOffer({ resource, limits } as never)
+            .pipe(asGrecia, Effect.flip);
+          assert.include(["not-found", "not-lendable"], offered.reason);
+          assert.notInclude(offered.message, "5432");
+        }
+        // Its owner still hears why.
+        const own = yield* h.grants
+          .prepareGive({ resource: resources[0], spaceId: h.acmeId, limits: LIMITS } as never)
+          .pipe(CommandActor.actAs(h.ana.id), Effect.flip);
+        assert.equal(own.reason, "host-not-ready");
+      }),
   );
 });

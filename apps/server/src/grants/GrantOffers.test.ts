@@ -447,12 +447,12 @@ describe("Lending links", () => {
           Effect.map((error) => error.reason),
         );
       // Not the Owner, nor an Admin, for Ana's; not a Member, a Guest or another Organization's
-      // Admin for Acme's.
-      assert.equal(yield* refused(h.ownerId, key), "not-allowed");
-      assert.equal(yield* refused(h.adam, key), "not-allowed");
+      // Admin for Acme's. Whoever it is not even near is told it does not exist (Grants 13).
+      assert.equal(yield* refused(h.ownerId, key), "not-found");
+      assert.equal(yield* refused(h.adam, key), "not-found");
       assert.equal(yield* refused(h.ana, acmes), "not-allowed");
       assert.equal(yield* refused(h.linus, acmes), "not-allowed");
-      assert.equal(yield* refused(h.gus, acmes), "not-allowed");
+      assert.equal(yield* refused(h.gus, acmes), "not-found");
       // Acme's Admins do, and any of them sees and cancels it; its Members do not see it.
       const acmeLink = yield* h.offer(h.adam, acmes);
       const ownerSees = yield* h.grants.listGiven.pipe(CommandActor.actAs(h.ownerId));
@@ -709,7 +709,7 @@ describe("Lending links of machines", () => {
         const vps = yield* machineOf(h, "ana-vps", h.ana);
         for (const who of [h.ownerId, h.adam]) {
           const refused = yield* machineOffer(h, who, vps).pipe(Effect.flip);
-          assert.equal(refused.reason, "not-allowed");
+          assert.equal(refused.reason, "not-found");
         }
         assert.equal(
           (yield* machineOffer(h, h.ana, dedicated).pipe(Effect.flip)).reason,

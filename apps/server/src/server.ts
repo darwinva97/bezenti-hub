@@ -232,6 +232,7 @@ import * as ProviderKeyMigration from "./ai/ProviderKeyMigration.ts";
 import * as AccessKeys from "./ai/AccessKeys.ts";
 import * as MakitaAccount from "./makita/MakitaAccount.ts";
 import * as MakitaGitHub from "./makita/MakitaGitHub.ts";
+import * as MakitaPermissions from "./makita/MakitaPermissions.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as AiGatewayProxy from "./ai/AiGatewayProxy.ts";
 import * as AiGatewayRoute from "./ai/AiGatewayRoute.ts";
@@ -597,7 +598,7 @@ const layerAuth = Layer.mergeAll(
         // Makita (Makita ticket 01): the bot's GitHub account, with its own GitHub client that
         // alone reads the sealed token (never Source Control's credential).
         Layer.provideMerge(
-          MakitaAccount.layer.pipe(
+          Layer.mergeAll(MakitaAccount.layer, MakitaPermissions.layer).pipe(
             Layer.provideMerge(MakitaGitHub.layer),
             Layer.provide(FetchHttpClient.layer),
           ),

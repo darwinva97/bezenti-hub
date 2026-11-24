@@ -152,7 +152,18 @@ export interface GrantResource {
   readonly targetKnown?: boolean;
 }
 
+/**
+ * A Space as Makita's permission sees it (Makita ticket 02): whether the acting User holds «may use
+ * Makita» there (the Owner's row, read by the caller).
+ */
+export interface MakitaSpaceResource {
+  readonly kind: "makita-space";
+  readonly space: SpaceResource;
+  readonly permitted: boolean;
+}
+
 export type Resource =
+  | MakitaSpaceResource
   | GrantResource
   | VaultResource
   | SpaceResource
@@ -327,6 +338,14 @@ export type Action =
    * Makita. The Owner's alone, decided on the Installation.
    */
   | "makita.manageAccount"
+  /**
+   * Make Makita configurations in a Space (Makita ticket 02), decided on a `MakitaSpaceResource`:
+   * the Owner without a row (never in another User's Personal space); anyone else needs the row
+   * and to still be an Admin or Member there (or its User, in their own Personal space). Open only.
+   */
+  | "makita.use"
+  /** See a Space's Makita configurations: `makita.use` there, its Admins and the Owner. */
+  | "makita.view"
   // Grants (`GrantResource`; see `decideGrant`).
   /** Lend one's resource to a Space; decided on the resource's owner and the destination. */
   | "grant.give"
@@ -434,6 +453,8 @@ export type DenyReason =
    * the Owner changes the mapping or the group instead.
    */
   | "managed-by-keycloak"
+  /** No «may use Makita» from the Owner in this Space (Makita ticket 02). */
+  | "makita-not-permitted"
   | "wrong-resource";
 
 export type Decision =
@@ -907,6 +928,36 @@ const decideAccessKey = (
   return allow;
 };
 
+/**
+ * Makita (Makita ticket 02). `makita.use`: the Owner anywhere but another User's Personal space,
+ * with no row; anyone else is still there (an Admin or Member, or their own Personal space's User)
+ * and holds the Owner's row. Only in an open Space. `makita.view` adds the Organization's Admins
+ * and the Owner everywhere, and keeps an archived or frozen Space's configurations in sight.
+ */
+const decideMakita = (
+  principal: Principal,
+  action: "makita.use" | "makita.view",
+  { space, permitted }: MakitaSpaceResource,
+): Decision => {
+  if (action === "makita.view") {
+    if (principal.isOwner) return allow;
+    if (space.kind === "organization" && principal.roles.get(space.id) === "admin") return allow;
+  }
+  const reach = principal.isOwner
+    ? othersPersonalSpace(principal, space)
+      ? deny("personal-space-read-only")
+      : allow
+    : space.kind === "personal"
+      ? inPersonalSpace(principal, space)
+      : inOrganization(principal, space, ROLES_THAT_CREATE_PROJECTS);
+  if (reach._tag === "Deny") return reach;
+  if (!principal.isOwner && !permitted) return deny("makita-not-permitted");
+  if (action === "makita.view") return allow;
+  if (space.archived) return deny("space-archived");
+  if (space.frozen) return deny("space-frozen");
+  return allow;
+};
+
 const GRANT_ACTIONS: ReadonlySet<Action> = new Set([
   "grant.give",
   "grant.offer",
@@ -993,6 +1044,11 @@ const decideGrant = (principal: Principal, action: Action, grant: GrantResource)
 
 export function decide(principal: Principal, action: Action, resource: Resource): Decision {
   if (principal.inactive === true) return deny("user-inactive");
+  if (action === "makita.use" || action === "makita.view" || resource.kind === "makita-space") {
+    return (action === "makita.use" || action === "makita.view") && resource.kind === "makita-space"
+      ? decideMakita(principal, action, resource)
+      : deny("wrong-resource");
+  }
   if (GRANT_ACTIONS.has(action) || resource.kind === "grant") {
     return GRANT_ACTIONS.has(action) && resource.kind === "grant"
       ? decideGrant(principal, action, resource)

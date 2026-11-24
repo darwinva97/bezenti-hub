@@ -24,6 +24,7 @@ import * as PairingGrantStore from "../auth/PairingGrantStore.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as ProjectMoveHooks from "../project/ProjectMoveHooks.ts";
 import * as AiAccountReachLoss from "../ai/AiAccountReachLoss.ts";
+import * as MakitaPermissions from "../makita/MakitaPermissions.ts";
 import type * as KeycloakLogins from "../auth/KeycloakLogins.ts";
 import * as UserIdentities from "../persistence/UserIdentities.ts";
 import * as VaultReachLoss from "../vaults/VaultReachLoss.ts";
@@ -142,6 +143,10 @@ const make = Effect.gen(function* () {
             // Every gateway key of theirs, and every AI account allowed to them or to their
             // Personal space, go in the same commit (spec 4 ticket 11).
             yield* AiAccountReachLoss.forgetUser(sql, actor, userId).pipe(
+              Effect.mapError(storageError),
+            );
+            // Their «may use Makita» in every Space (Makita ticket 02).
+            yield* MakitaPermissions.forgetUserWithin(sql, actor, userId).pipe(
               Effect.mapError(storageError),
             );
             // Their loans end (`lender-gone`), as do the loans to their Personal space

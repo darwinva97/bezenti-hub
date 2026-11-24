@@ -88,6 +88,9 @@ export const AuditAction = Schema.Literals([
   "makita.account.update",
   "makita.pause_all",
   "makita.resume_all",
+  // Makita ticket 02: «may use Makita» given or taken back per User and Space.
+  "makita.permission.grant",
+  "makita.permission.revoke",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -372,6 +375,10 @@ export const AUDIT_DETAIL_KEYS = {
   /** «Stop all Makita work» and its undoing, the Owner's. */
   "makita.pause_all": [],
   "makita.resume_all": [],
+  /** The Space and the User's Role there; the target is the User. */
+  "makita.permission.grant": ["space", "role"],
+  /** Why: `revoked` by the Owner; `user-removed` with the User's removal from the Hub. */
+  "makita.permission.revoke": ["space", "reason"],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

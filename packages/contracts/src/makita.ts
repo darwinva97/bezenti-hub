@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { UserId } from "./baseSchemas.ts";
+import { SpaceId, UserId } from "./baseSchemas.ts";
 
 /**
  * Makita (spec `makita`): the GitHub bot teammate. A normal GitHub account the Owner registers
@@ -77,6 +77,65 @@ export const MakitaAccountSetInput = Schema.Struct({
   token: Schema.RedactedFromValue(Schema.String),
 });
 export type MakitaAccountSetInput = typeof MakitaAccountSetInput.Type;
+
+/**
+ * Why a «may use Makita» takes no effect now (Makita ticket 02): `ok` it does; its User left the
+ * Organization or is only a Guest there, was disabled, or the Space is archived, frozen or gone.
+ */
+export const MakitaPermissionState = Schema.Literals([
+  "ok",
+  "not-a-member",
+  "guest",
+  "user-inactive",
+  "space-archived",
+  "space-frozen",
+  "space-gone",
+]);
+export type MakitaPermissionState = typeof MakitaPermissionState.Type;
+
+/** Where a User works in a Space, as the permission lists say it. */
+export const MakitaSpaceRole = Schema.Literals(["admin", "member", "guest", "personal"]);
+export type MakitaSpaceRole = typeof MakitaSpaceRole.Type;
+
+/** One «may use Makita»: a User in a Space, given by the Owner. */
+export const MakitaPermission = Schema.Struct({
+  userId: UserId,
+  userName: Schema.NullOr(Schema.String),
+  spaceId: SpaceId,
+  spaceName: Schema.NullOr(Schema.String),
+  spaceKind: Schema.NullOr(Schema.Literals(["organization", "personal"])),
+  /** Their Role there now; null when they are not in it any more. */
+  role: Schema.NullOr(MakitaSpaceRole),
+  grantedBy: UserId,
+  grantedByName: Schema.NullOr(Schema.String),
+  grantedAt: Schema.String,
+  state: MakitaPermissionState,
+});
+export type MakitaPermission = typeof MakitaPermission.Type;
+
+/** Someone the Owner may give «may use Makita», and the Spaces where it can be given. */
+export const MakitaPermissionCandidate = Schema.Struct({
+  userId: UserId,
+  name: Schema.String,
+  spaces: Schema.Array(
+    Schema.Struct({
+      spaceId: SpaceId,
+      name: Schema.String,
+      kind: Schema.Literals(["organization", "personal"]),
+      role: MakitaSpaceRole,
+    }),
+  ),
+});
+export type MakitaPermissionCandidate = typeof MakitaPermissionCandidate.Type;
+
+export const MakitaPermissionsListResult = Schema.Struct({
+  permissions: Schema.Array(MakitaPermission),
+  candidates: Schema.Array(MakitaPermissionCandidate),
+});
+export type MakitaPermissionsListResult = typeof MakitaPermissionsListResult.Type;
+
+export const MakitaPermissionInput = Schema.Struct({ userId: UserId, spaceId: SpaceId });
+export type MakitaPermissionInput = typeof MakitaPermissionInput.Type;
 
 /** Why a Makita door refused, in words for the person; never a token. */
 export class MakitaError extends Schema.TaggedError<MakitaError>()("MakitaError", {

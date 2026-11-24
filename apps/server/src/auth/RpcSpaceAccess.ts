@@ -107,6 +107,11 @@ const MAKITA_ACCOUNT = {
   unscoped:
     "Makita's account: MakitaAccount answers a person's own session only (never an agent, the Hub's shell or a one-Space session) and only the Owner (AccessPolicy `makita.manageAccount`); only `set` takes the token, no answer carries it",
 };
+/** «May use Makita» names Users and Spaces: MakitaPermissions answers the Owner's session only. */
+const MAKITA_PERMISSIONS = {
+  unscoped:
+    "«May use Makita»: MakitaPermissions answers a person's own session only (never an agent, the Hub's shell or a one-Space session) and only the Owner (AccessPolicy `makita.manageAccount`), who sees every User and Space anyway; given only to an Admin or Member of an open Organization, or to a User in their own Personal space",
+};
 /** Grants name no Thread or Project: Grants decides each by AccessPolicy `grant.*`. */
 const GRANTS = {
   unscoped:
@@ -177,6 +182,9 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.makitaAccountSet]: MAKITA_ACCOUNT,
   [WS_METHODS.makitaAccountPauseAll]: MAKITA_ACCOUNT,
   [WS_METHODS.makitaAccountResumeAll]: MAKITA_ACCOUNT,
+  [WS_METHODS.makitaPermissionsList]: MAKITA_PERMISSIONS,
+  [WS_METHODS.makitaPermissionsGrant]: MAKITA_PERMISSIONS,
+  [WS_METHODS.makitaPermissionsRevoke]: MAKITA_PERMISSIONS,
   // Spec 5 ticket 03. Allowances and a Space's defaults: AccessPolicy `vault.manage` and
   // `vault.choose` in Vaults. A Project's choices and a Thread's names: the named Project or
   // Thread must be visible first, then the same rules (EffectiveVaults for the Thread).

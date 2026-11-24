@@ -709,7 +709,7 @@ describe("every door of the Hub declares its rule", () => {
     ]);
   });
 
-  it("keeps Makita's token in the Hub: WS doors of a person's session only, no answer carries it, its store read by MakitaGitHub alone, its tables makita/'s (Makita ticket 01)", () => {
+  it("keeps Makita's token in the Hub: WS doors of a person's session only, no answer carries it, its store read by MakitaGitHub alone, its tables makita/'s (Makita tickets 01 and 02)", () => {
     const makitaRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
       /^makita\./u.test(rpc._tag),
     );
@@ -718,6 +718,9 @@ describe("every door of the Hub declares its rule", () => {
       "makita.account.pauseAll",
       "makita.account.resumeAll",
       "makita.account.set",
+      "makita.permissions.grant",
+      "makita.permissions.list",
+      "makita.permissions.revoke",
     ]);
     // Each decided in makita/ for the session's own person, by AccessPolicy.
     for (const rpc of makitaRpcs) {
@@ -759,16 +762,22 @@ describe("every door of the Hub declares its rule", () => {
     for (const { file, text } of files.filter(({ file }) => file.startsWith("makita/"))) {
       expect(text, file).not.toMatch(/GitHubCredentials|GitHubRest\b|PinnedGitHubCredential/u);
     }
-    // The tables: named under makita/ and by their migrations (and the door inventory).
-    expect(
-      files
-        .filter(({ text }) => /\bmakita_account\b/u.test(text))
-        .map(({ file }) => file)
-        .filter((file) => !file.startsWith("makita/"))
-        .toSorted(),
-    ).toEqual(["persistence/Migrations/163_MakitaAccount.ts"]);
+    // The tables: named under makita/ and by their migrations; removals call makita/'s functions.
+    for (const [table, migration] of [
+      ["makita_account", "163_MakitaAccount"],
+      ["makita_permissions", "164_MakitaPermissions"],
+    ] as const) {
+      expect(
+        files
+          .filter(({ text }) => new RegExp(`\\b${table}\\b`, "u").test(text))
+          .map(({ file }) => file)
+          .filter((file) => !file.startsWith("makita/"))
+          .toSorted(),
+        table,
+      ).toEqual([`persistence/Migrations/${migration}.ts`]);
+    }
     for (const { file, text } of toolModules) {
-      expect(text, file).not.toMatch(/MakitaAccount|MakitaTokenStore/u);
+      expect(text, file).not.toMatch(/MakitaAccount|MakitaTokenStore|MakitaPermissions/u);
     }
   });
 

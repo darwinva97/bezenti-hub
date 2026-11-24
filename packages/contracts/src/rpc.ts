@@ -64,6 +64,8 @@ import {
   MakitaAccountGetResult,
   MakitaAccountSetInput,
   MakitaError,
+  MakitaPermissionInput,
+  MakitaPermissionsListResult,
 } from "./makita.ts";
 import {
   AiGatewayError,
@@ -774,6 +776,10 @@ export const WS_METHODS = {
   makitaAccountSet: "makita.account.set",
   makitaAccountPauseAll: "makita.account.pauseAll",
   makitaAccountResumeAll: "makita.account.resumeAll",
+  // Makita ticket 02: «may use Makita» per User and Space, the Owner's.
+  makitaPermissionsList: "makita.permissions.list",
+  makitaPermissionsGrant: "makita.permissions.grant",
+  makitaPermissionsRevoke: "makita.permissions.revoke",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1501,6 +1507,21 @@ const WsMakitaAccountPauseAllRpc = Rpc.make(WS_METHODS.makitaAccountPauseAll, {
 const WsMakitaAccountResumeAllRpc = Rpc.make(WS_METHODS.makitaAccountResumeAll, {
   payload: Schema.Struct({}),
   success: MakitaAccountGetResult,
+  error: MakitaErrors,
+});
+const WsMakitaPermissionsListRpc = Rpc.make(WS_METHODS.makitaPermissionsList, {
+  payload: Schema.Struct({}),
+  success: MakitaPermissionsListResult,
+  error: MakitaErrors,
+});
+const WsMakitaPermissionsGrantRpc = Rpc.make(WS_METHODS.makitaPermissionsGrant, {
+  payload: MakitaPermissionInput,
+  success: MakitaPermissionsListResult,
+  error: MakitaErrors,
+});
+const WsMakitaPermissionsRevokeRpc = Rpc.make(WS_METHODS.makitaPermissionsRevoke, {
+  payload: MakitaPermissionInput,
+  success: MakitaPermissionsListResult,
   error: MakitaErrors,
 });
 const WsAiAccountsCreateRpc = Rpc.make(WS_METHODS.aiAccountsCreate, {
@@ -2630,6 +2651,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsMakitaAccountSetRpc,
   WsMakitaAccountPauseAllRpc,
   WsMakitaAccountResumeAllRpc,
+  WsMakitaPermissionsListRpc,
+  WsMakitaPermissionsGrantRpc,
+  WsMakitaPermissionsRevokeRpc,
   WsProjectCloneStartRpc,
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,

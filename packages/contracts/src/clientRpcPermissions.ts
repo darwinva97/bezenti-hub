@@ -71,6 +71,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.makitaAccountSet]: AuthAccessWriteScope,
   [WS_METHODS.makitaAccountPauseAll]: AuthAccessWriteScope,
   [WS_METHODS.makitaAccountResumeAll]: AuthAccessWriteScope,
+  // Makita ticket 02: who may make configurations that spend AI accounts and write on GitHub.
+  [WS_METHODS.makitaPermissionsGrant]: AuthAccessWriteScope,
+  [WS_METHODS.makitaPermissionsRevoke]: AuthAccessWriteScope,
   [WS_METHODS.projectCloneStart]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneCancel]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneRetry]: AuthSourceControlWriteScope,

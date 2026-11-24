@@ -178,6 +178,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "makita.account.update": "Registered Makita's GitHub account",
   "makita.pause_all": "Stopped all Makita work",
   "makita.resume_all": "Resumed Makita work",
+  "makita.permission.grant": "Allowed someone to use Makita",
+  "makita.permission.revoke": "Took back someone's use of Makita",
   "secret_provider.create": "Connected a secret provider",
   "secret_provider.update": "Changed a secret provider",
   "secret_provider.delete": "Removed a secret provider",

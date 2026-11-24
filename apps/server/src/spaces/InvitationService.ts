@@ -319,6 +319,7 @@ const DENIED_REASONS: Record<AccessPolicy.DenyReason, string> = {
   sandbox: ADMINS_INVITE,
   "other-space": ADMINS_INVITE,
   "managed-by-keycloak": ADMINS_INVITE,
+  "makita-not-permitted": ADMINS_INVITE,
 };
 
 const deniedReason = (reason: string) =>

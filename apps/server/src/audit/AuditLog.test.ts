@@ -627,6 +627,9 @@ it.effect(
         "makita.account.update",
         "makita.pause_all",
         "makita.resume_all",
+        // makita/MakitaPermissions.test.ts (Makita ticket 02: «may use Makita»)
+        "makita.permission.grant",
+        "makita.permission.revoke",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

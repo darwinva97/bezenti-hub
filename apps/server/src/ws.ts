@@ -270,6 +270,7 @@ import { withHubAiAccountLimits } from "./usage/hubAiAccountLimits.ts";
 import { withHubGatewayUsage } from "./usage/hubGatewayUsage.ts";
 import * as AccessKeys from "./ai/AccessKeys.ts";
 import * as MakitaAccount from "./makita/MakitaAccount.ts";
+import * as MakitaPermissions from "./makita/MakitaPermissions.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
@@ -1451,6 +1452,7 @@ export const layerWsRpc = (
       const aiGatewayKeys = yield* AiGatewayKeys.AiGatewayKeys;
       const accessKeys = yield* AccessKeys.AccessKeys;
       const makitaAccount = yield* MakitaAccount.MakitaAccount;
+      const makitaPermissions = yield* MakitaPermissions.MakitaPermissions;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const triage = yield* TriageService.TriageService;
@@ -3008,6 +3010,10 @@ export const layerWsRpc = (
         [WS_METHODS.makitaAccountSet]: (input) => makitaAccount.setForSession(input),
         [WS_METHODS.makitaAccountPauseAll]: () => makitaAccount.pauseAllForSession,
         [WS_METHODS.makitaAccountResumeAll]: () => makitaAccount.resumeAllForSession,
+        // «May use Makita» per User and Space: the Owner's own session only.
+        [WS_METHODS.makitaPermissionsList]: () => makitaPermissions.listForSession,
+        [WS_METHODS.makitaPermissionsGrant]: (input) => makitaPermissions.grantForSession(input),
+        [WS_METHODS.makitaPermissionsRevoke]: (input) => makitaPermissions.revokeForSession(input),
         [WS_METHODS.projectCloneStart]: (input) =>
           requireCloneDestination(input.destinationPath, { asProject: true }).pipe(
             Effect.andThen(

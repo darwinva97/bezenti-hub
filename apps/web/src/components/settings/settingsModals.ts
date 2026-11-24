@@ -1,6 +1,7 @@
 import {
   ArchiveIcon,
   BotIcon,
+  BotMessageSquareIcon,
   BoxIcon,
   FlaskConicalIcon,
   NetworkIcon,
@@ -174,6 +175,9 @@ const PlatformSandboxesSection = lazySection(() =>
 );
 const PlatformAiGatewaySection = lazySection(() =>
   import("./AiGatewaySettings").then((module) => ({ default: module.AiGatewaySettingsPanel })),
+);
+const PlatformMakitaSection = lazySection(() =>
+  import("./MakitaSettings").then((module) => ({ default: module.PlatformMakitaSection })),
 );
 const PlatformLabsSection = lazySection(() =>
   import("./LabsSettingsPanel").then((module) => ({ default: module.LabsSettingsPanel })),
@@ -402,6 +406,14 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       label: "Hub defaults",
       icon: SlidersHorizontalIcon,
       component: HubDefaultsSection,
+      group: 1,
+    },
+    // Makita, the GitHub bot teammate: its account and the switch (Makita ticket 01).
+    {
+      id: "makita",
+      label: "Makita",
+      icon: BotMessageSquareIcon,
+      component: PlatformMakitaSection,
       group: 1,
     },
     // Keycloak sign-in, ticket 01: who may get a User, and the Keycloak client.

@@ -273,6 +273,7 @@ describe("settings modal sections", () => {
         "sandboxes",
         "hub-machine",
         "hub-defaults",
+        "makita",
         "registration",
         "keycloak",
         "labs",

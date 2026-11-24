@@ -21,6 +21,14 @@ import type {
 } from "@t3tools/contracts";
 import * as Redacted from "effect/Redacted";
 import { useAtomValue } from "@effect/atom-react";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  ChevronRightIcon,
+  EllipsisIcon,
+  PlusIcon,
+  UploadIcon,
+} from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { errorMessageOf } from "../../lib/errorMessage";
@@ -28,18 +36,39 @@ import { aiGatewayEnvironment } from "../../state/aiGateway";
 import { useCurrentSpace } from "../../state/currentSpace";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { AccessKeysSection } from "./AccessKeysSettings";
 import { AiUsageTab } from "./AiUsageSettings";
+import { InfoTip } from "./InfoTip";
 import { LendAiAccountDialog } from "./LendAiAccountDialog";
 import { MigratedLoansReview } from "./MigratedLoansReview";
 import { LocalCliKeysSection } from "./LocalCliKeysSettings";
 import type { OwnedResourceScope } from "./ownedResourceScope";
-import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 
 /** Hidden as typed, and no password manager prompt: it is not a login. */
 const KEY_INPUT_PROPS = {
@@ -187,6 +216,7 @@ function AiAccountsPage({
   const [error, setError] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const [tab, setTab] = useState<AiAccountsTab>("accounts");
+  const [importing, setImporting] = useState(false);
   const manage = mayWrite;
   // An Organization's section lists only its AI accounts: no keys, usage or what is only usable.
   const organizationScope = scope?.kind === "organization" ? scope : null;
@@ -316,21 +346,20 @@ function AiAccountsPage({
   const accountItem = (account: AiAccountSummary, ownerOrder: ReadonlyArray<AiAccountSummary>) => {
     const live = ownerOrder.filter((entry) => entry.status !== "removing");
     return (
-      <li key={account.id}>
-        <AccountSection
-          environmentId={environmentId}
-          commands={commands}
-          account={account}
-          canManage={manage && account.canManage === true}
-          shared={account.owner === undefined ? true : sharedFor(account.owner)}
-          spaceName={spaceName}
-          first={live[0]?.id === account.id}
-          last={live.at(-1)?.id === account.id}
-          reordering={reordering}
-          onMove={(by) => move(account, by)}
-          onChanged={refresh}
-        />
-      </li>
+      <AccountRow
+        key={account.id}
+        environmentId={environmentId}
+        commands={commands}
+        account={account}
+        canManage={manage && account.canManage === true}
+        shared={account.owner === undefined ? true : sharedFor(account.owner)}
+        spaceName={spaceName}
+        first={live[0]?.id === account.id}
+        last={live.at(-1)?.id === account.id}
+        reordering={reordering}
+        onMove={(by) => move(account, by)}
+        onChanged={refresh}
+      />
     );
   };
   return (
@@ -338,22 +367,51 @@ function AiAccountsPage({
       {organizationScope === null ? (
         <AiAccountsTabs tab={tab} onTab={setTab} usage={canManage} />
       ) : null}
-      <SettingsSection id="ai-accounts" title="AI accounts">
-        <SettingsRow
-          title="AI accounts"
-          description="API keys and subscriptions the Hub's AI gateway uses for your agents, tried first to last. Yours are used only in your Personal space; an Organization's by whoever works there. A credential never leaves the Hub and is never shown again: replace it, or sign in again, to change it."
-          status={
-            error === null ? null : (
-              <span className="text-destructive" role="alert">
-                {error}
-              </span>
-            )
-          }
+      {/* What AI accounts are, in one line; the rest on demand. */}
+      <section
+        id="ai-accounts"
+        aria-label="AI accounts"
+        className="flex flex-col gap-1.5 px-3 sm:px-4"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            API keys and subscriptions your agents use through the Hub's AI gateway, tried first to
+            last.
+          </p>
+          {manage && canManage && organizationScope === null ? (
+            <Button size="xs" variant="outline" onClick={() => setImporting(true)}>
+              <UploadIcon />
+              Import from CLIProxyAPI…
+            </Button>
+          ) : null}
+        </div>
+        <Collapsible>
+          <CollapsibleTrigger className="flex w-fit items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+            <ChevronRightIcon aria-hidden className="size-3 [[data-panel-open]_&]:rotate-90" />
+            How this works
+          </CollapsibleTrigger>
+          <CollapsiblePanel>
+            <p className="max-w-2xl pt-1 text-xs text-muted-foreground">
+              Yours are used only in your Personal space; an Organization's by whoever works there.
+              A credential never leaves the Hub and is never shown again: replace it, or sign in
+              again, to change it.
+            </p>
+          </CollapsiblePanel>
+        </Collapsible>
+        {error === null ? null : (
+          <p className="text-xs text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+      </section>
+      {importing ? (
+        <ImportCliproxyDialog
+          environmentId={environmentId}
+          commands={commands}
+          onAdded={refresh}
+          onClose={() => setImporting(false)}
         />
-        {manage && canManage && organizationScope === null ? (
-          <ImportCliproxyForm environmentId={environmentId} commands={commands} onAdded={refresh} />
-        ) : null}
-      </SettingsSection>
+      ) : null}
       {/* Grants ticket 02: what the upgrade narrowed, until the Owner lends or dismisses each. */}
       {canManage && organizationScope === null ? (
         <MigratedLoansReview environmentId={environmentId} />
@@ -371,10 +429,15 @@ function AiAccountsPage({
             shared={sharedFor(option.owner)}
             onAdded={refresh}
           >
-            {accounts === null ? null : accountsOf(option.owner).length === 0 ? (
-              <p className="px-4 text-sm text-muted-foreground">No AI account yet.</p>
+            {accounts === null ? (
+              <p className="px-4 py-3 text-sm text-muted-foreground">Loading…</p>
+            ) : accountsOf(option.owner).length === 0 ? (
+              <p className="px-4 py-3 text-sm text-muted-foreground">No AI account yet.</p>
             ) : (
-              <ul aria-label={`AI accounts of ${option.name}`} className="flex flex-col gap-4">
+              <ul
+                aria-label={`AI accounts of ${option.name}`}
+                className="divide-y divide-border/50"
+              >
                 {accountsOf(option.owner).map((account) =>
                   accountItem(account, accountsOf(option.owner)),
                 )}
@@ -384,18 +447,23 @@ function AiAccountsPage({
         ))}
       {organizationScope !== null || usable.length === 0 ? null : (
         <SettingsSection id="ai-accounts-usable" title="AI accounts you may use">
-          <ul aria-label="AI accounts you may use" className="flex flex-col gap-4">
+          <ul aria-label="AI accounts you may use" className="divide-y divide-border/50">
             {usable.map((account) => accountItem(account, usable))}
           </ul>
         </SettingsSection>
       )}
       {organizationScope !== null || others.length === 0 ? null : (
-        <SettingsSection id="ai-accounts-others" title="Other people's AI accounts">
-          <SettingsRow
-            title="Name, provider, owner and status only"
-            description="Each person and Organization manages their own; you see that they exist."
-          />
-          <ul aria-label="Other people's AI accounts" className="flex flex-col gap-4">
+        <SettingsSection
+          id="ai-accounts-others"
+          title="Other people's AI accounts"
+          titleAction={
+            <InfoTip label="About other people's AI accounts">
+              Name, provider, owner and status only: each person and Organization manages their own;
+              you see that they exist.
+            </InfoTip>
+          }
+        >
+          <ul aria-label="Other people's AI accounts" className="divide-y divide-border/50">
             {others.map((account) => accountItem(account, others))}
           </ul>
         </SettingsSection>
@@ -419,44 +487,126 @@ function AiAccountOwnerSection(props: {
   readonly children: ReactNode;
 }) {
   const { option } = props;
+  const [adding, setAdding] = useState(false);
   const id = option.owner.kind === "user" ? "mine" : option.owner.spaceId;
+  const description = props.mine
+    ? "Used only by your own Threads in your Personal space; nobody else sees or uses them without a loan."
+    : `Used by everyone who works in ${option.name}. Its Admins add and change them.`;
   return (
-    <>
-      <SettingsSection id={`ai-accounts-owner-${id}`} title={props.mine ? "Mine" : option.name}>
-        <SettingsRow
-          title={props.mine ? "Your own AI accounts" : `${option.name}'s AI accounts`}
-          description={
-            props.mine
-              ? "Used only by your own Threads in your Personal space; nobody else sees or uses them without a loan."
-              : `Used by everyone who works in ${option.name}. Its Admins add and change them.`
-          }
-        />
-        {props.manage ? (
-          <>
-            <NewAccountForm
-              environmentId={props.environmentId}
-              commands={props.commands}
-              owner={option.owner}
-              onAdded={props.onAdded}
-            />
-            <NewSubscriptionForm
-              environmentId={props.environmentId}
-              commands={props.commands}
-              owner={option.owner}
-              shared={props.shared}
-              onAdded={props.onAdded}
-            />
-            <ImportVertexForm
-              environmentId={props.environmentId}
-              commands={props.commands}
-              owner={option.owner}
-              onAdded={props.onAdded}
-            />
-          </>
-        ) : null}
-      </SettingsSection>
+    <SettingsSection
+      id={`ai-accounts-owner-${id}`}
+      title={props.mine ? "Mine" : option.name}
+      titleAction={
+        <InfoTip
+          label={props.mine ? "About your own AI accounts" : `About ${option.name}'s AI accounts`}
+        >
+          {description}
+        </InfoTip>
+      }
+      headerAction={
+        props.manage ? (
+          <Button
+            size="xs"
+            aria-label={`Add AI account to ${props.mine ? "Mine" : option.name}`}
+            onClick={() => setAdding(true)}
+          >
+            <PlusIcon />
+            Add AI account
+          </Button>
+        ) : null
+      }
+    >
       {props.children}
-    </>
+      {adding ? (
+        <AddAiAccountDialog
+          environmentId={props.environmentId}
+          commands={props.commands}
+          owner={option.owner}
+          title={props.mine ? "Add one of your AI accounts" : `Add an AI account to ${option.name}`}
+          description={description}
+          shared={props.shared}
+          onAdded={props.onAdded}
+          onClose={() => setAdding(false)}
+        />
+      ) : null}
+    </SettingsSection>
+  );
+}
+
+type NewAccountKind = "api-key" | "subscription" | "vertex";
+
+/** «Add AI account»: an API key (or direct credential), a subscription, or a Vertex account. */
+function AddAiAccountDialog(props: {
+  readonly environmentId: EnvironmentId;
+  readonly commands: AccountCommands;
+  readonly owner: ResourceOwner;
+  readonly title: string;
+  readonly description: string;
+  readonly shared: boolean;
+  readonly onAdded: () => Promise<void>;
+  readonly onClose: () => void;
+}) {
+  const [kind, setKind] = useState<NewAccountKind>("api-key");
+  const added = async () => {
+    await props.onAdded();
+    props.onClose();
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) props.onClose();
+      }}
+    >
+      <DialogPopup className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{props.title}</DialogTitle>
+          <DialogDescription>{props.description}</DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <div className="flex flex-col gap-4">
+            <ToggleGroup
+              aria-label="Kind of AI account"
+              size="sm"
+              value={[kind]}
+              onValueChange={(next) => {
+                const value = next[0];
+                if (value === "api-key" || value === "subscription" || value === "vertex") {
+                  setKind(value);
+                }
+              }}
+            >
+              <Toggle value="api-key">API key</Toggle>
+              <Toggle value="subscription">Subscription</Toggle>
+              <Toggle value="vertex">Vertex service account</Toggle>
+            </ToggleGroup>
+            {kind === "api-key" ? (
+              <NewAccountForm
+                environmentId={props.environmentId}
+                commands={props.commands}
+                owner={props.owner}
+                onAdded={added}
+              />
+            ) : kind === "subscription" ? (
+              <NewSubscriptionForm
+                environmentId={props.environmentId}
+                commands={props.commands}
+                owner={props.owner}
+                shared={props.shared}
+                onAdded={added}
+              />
+            ) : (
+              <ImportVertexForm
+                environmentId={props.environmentId}
+                commands={props.commands}
+                owner={props.owner}
+                onAdded={added}
+              />
+            )}
+          </div>
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
   );
 }
 
@@ -524,7 +674,7 @@ function NewAccountForm(props: {
   return (
     <form
       aria-label="Add an API key"
-      className="flex flex-col gap-2 px-4 pb-4"
+      className="flex flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault();
         setPending(true);
@@ -553,8 +703,8 @@ function NewAccountForm(props: {
           .finally(() => setPending(false));
       }}
     >
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-xs font-medium sm:col-span-2">
           AI account name
           <Input
             aria-label="AI account name"
@@ -565,7 +715,7 @@ function NewAccountForm(props: {
             onChange={(event) => setName(event.currentTarget.value)}
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs font-medium sm:w-56">
+        <label className="flex flex-col gap-1 text-xs font-medium">
           Credential type
           <Select
             disabled={pending}
@@ -589,7 +739,7 @@ function NewAccountForm(props: {
             </SelectPopup>
           </Select>
         </label>
-        <label className="flex flex-col gap-1 text-xs font-medium sm:w-64">
+        <label className="flex flex-col gap-1 text-xs font-medium">
           Provider
           <Select
             disabled={pending}
@@ -844,8 +994,7 @@ function NewSubscriptionForm(props: {
   const [provider, setProvider] = useState<AiSubscriptionProvider>("claude");
   const subscriptionItems = SUBSCRIPTION_PROVIDERS.map(([value, label]) => ({ value, label }));
   return (
-    <section aria-label="Add subscription" className="flex flex-col gap-2 border-t px-4 py-4">
-      <h3 className="text-sm font-medium">Add subscription</h3>
+    <section aria-label="Add subscription" className="flex flex-col gap-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
         <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
           Subscription name
@@ -918,7 +1067,7 @@ function ImportVertexForm(props: {
   return (
     <form
       aria-label="Import a Vertex service account"
-      className="flex flex-col gap-2 border-t px-4 py-4"
+      className="flex flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault();
         setPending(true);
@@ -942,7 +1091,6 @@ function ImportVertexForm(props: {
           .finally(() => setPending(false));
       }}
     >
-      <h3 className="text-sm font-medium">Import a Vertex service account</h3>
       <label className="flex flex-col gap-1 text-xs font-medium">
         Vertex account name
         <Input
@@ -992,10 +1140,11 @@ const ONE_PROXY_NOTE =
  * Spec 4 ticket 15: another CLIProxyAPI's auth files (Claude, Codex, Antigravity), each a
  * subscription, disabled until the Owner checks who it is signed in as.
  */
-function ImportCliproxyForm(props: {
+function ImportCliproxyDialog(props: {
   readonly environmentId: EnvironmentId;
   readonly commands: AccountCommands;
   readonly onAdded: () => Promise<void>;
+  readonly onClose: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState(false);
@@ -1028,64 +1177,96 @@ function ImportCliproxyForm(props: {
     }
   };
   return (
-    <section
-      aria-label="Import from CLIProxyAPI"
-      className="flex flex-col gap-2 border-t px-4 py-4"
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !pending) props.onClose();
+      }}
     >
-      <h3 className="text-sm font-medium">Import from CLIProxyAPI</h3>
-      <p className="text-xs text-muted-foreground">
-        Pick the auth files of another CLIProxyAPI (its auth folder: claude-…, codex-…,
-        antigravity-….json). Each becomes a subscription, off until you check who it is signed in
-        as. {ONE_PROXY_NOTE}
-      </p>
-      <p className="text-xs text-muted-foreground">{TOS_WARNING}</p>
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".json,application/json"
-        multiple
-        hidden
-        aria-label="CLIProxyAPI auth files"
-        onChange={(event) => {
-          const picked = Array.from(event.currentTarget.files ?? []);
-          // The same files can be picked again.
-          event.currentTarget.value = "";
-          if (picked.length > 0) void importFiles(picked);
-        }}
-      />
-      <div className="flex items-center gap-2">
-        <Button
-          size="sm"
-          type="button"
-          disabled={pending}
-          onClick={() => inputRef.current?.click()}
-        >
-          Choose CLIProxyAPI auth files
-        </Button>
-        {error === null ? null : (
-          <span className="text-xs text-destructive" role="alert">
-            {error}
-          </span>
-        )}
-      </div>
-      {results.length === 0 ? null : (
-        <ul aria-label="Imported files" className="flex flex-col gap-1 text-xs">
-          {results.map((result) => (
-            <li key={`${result.fileName}:${result.accountId ?? result.reason ?? ""}`}>
-              <span className="font-mono">{result.fileName}</span>
-              {": "}
-              {result.outcome === "imported"
-                ? `imported as «${result.name}», off until you turn it on.`
-                : `skipped. ${result.reason ?? ""}`}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+      <DialogPopup className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Import from CLIProxyAPI</DialogTitle>
+          <DialogDescription>
+            Pick the auth files of another CLIProxyAPI (its auth folder: claude-…, codex-…,
+            antigravity-….json). Each becomes a subscription, off until you check who it is signed
+            in as.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <section aria-label="Import from CLIProxyAPI" className="flex flex-col gap-3">
+            <p className="text-xs text-muted-foreground">{ONE_PROXY_NOTE}</p>
+            <p className="text-xs text-warning-foreground" role="note">
+              {TOS_WARNING}
+            </p>
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".json,application/json"
+              multiple
+              hidden
+              aria-label="CLIProxyAPI auth files"
+              onChange={(event) => {
+                const picked = Array.from(event.currentTarget.files ?? []);
+                // The same files can be picked again.
+                event.currentTarget.value = "";
+                if (picked.length > 0) void importFiles(picked);
+              }}
+            />
+            {error === null ? null : (
+              <span className="text-xs text-destructive" role="alert">
+                {error}
+              </span>
+            )}
+            {results.length === 0 ? null : (
+              <ul aria-label="Imported files" className="flex flex-col gap-1 text-xs">
+                {results.map((result) => (
+                  <li key={`${result.fileName}:${result.accountId ?? result.reason ?? ""}`}>
+                    <span className="font-mono">{result.fileName}</span>
+                    {": "}
+                    {result.outcome === "imported"
+                      ? `imported as «${result.name}», off until you turn it on.`
+                      : `skipped. ${result.reason ?? ""}`}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </DialogPanel>
+        <DialogFooter>
+          <Button variant="outline" disabled={pending} onClick={props.onClose}>
+            {results.length === 0 ? "Cancel" : "Done"}
+          </Button>
+          <Button type="button" disabled={pending} onClick={() => inputRef.current?.click()}>
+            Choose CLIProxyAPI auth files
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
   );
 }
 
-function AccountSection(props: {
+const KIND_LABELS: Readonly<Record<AiAccountSummary["type"], string>> = {
+  subscription: "Subscription",
+  "api-key": "API key",
+  direct: "Direct",
+};
+
+/** A status in a colour: working, needing attention, or broken. */
+const statusVariant = (status: AiAccountSummary["status"]) =>
+  status === "working"
+    ? ("success" as const)
+    : status === "error" || status === "removing"
+      ? ("error" as const)
+      : status === "disabled"
+        ? ("secondary" as const)
+        : ("warning" as const);
+
+/**
+ * One AI account as one dense row: its name, kind and status; its provider, priority, key hint
+ * or sign-in and quota in one muted line; what it last said under it. Whoever manages it orders
+ * it in place and finds the rest in its «⋯» menu; changing it opens «Manage…».
+ */
+function AccountRow(props: {
   readonly environmentId: EnvironmentId;
   readonly commands: AccountCommands;
   readonly account: AiAccountSummary;
@@ -1105,9 +1286,9 @@ function AccountSection(props: {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [newKey, setNewKey] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [lending, setLending] = useState(false);
+  const [managing, setManaging] = useState(false);
 
   /** Runs a change; whatever it answered, the list is read again (a key may be still live). */
   const act = async (work: () => Promise<string | null>) => {
@@ -1131,190 +1312,302 @@ function AccountSection(props: {
         () => null,
       ),
     );
+  const remove = () =>
+    act(() =>
+      settle(commands.remove({ environmentId, input: { accountId: account.id } })).then((result) =>
+        result.gateway === "not-running"
+          ? "Deleted. The AI gateway is not running, so its key was live nowhere."
+          : null,
+      ),
+    );
 
+  const meta =
+    details === null
+      ? [
+          providerLabel(account.provider, account.type),
+          account.usableIn.length > 0
+            ? `Usable in ${account.usableIn.map(props.spaceName).join(", ")}`
+            : account.owner?.kind === "organization"
+              ? `${props.spaceName(account.owner.spaceId)}'s`
+              : "Another User's own",
+        ]
+      : [
+          providerLabel(account.provider, account.type),
+          removing ? null : `Priority ${account.priority}`,
+          details.keyHint === null ? null : `Key ending in …${details.keyHint}`,
+          details.signedInAs === undefined || details.signedInAs === null
+            ? null
+            : `Signed in as ${details.signedInAs}`,
+          quotaText(details)?.replace(/\.$/u, "") ?? null,
+          details.baseUrl === null ? null : `${details.baseUrl} (${details.models.join(", ")})`,
+        ];
+  const said =
+    error !== null ? (
+      <span className="text-destructive" role="alert">
+        {error}
+      </span>
+    ) : notice !== null ? (
+      <span role="status">{notice}</span>
+    ) : account.statusMessage === null ? null : (
+      <span>{account.statusMessage}</span>
+    );
+  const manages = props.canManage && details !== null;
   return (
-    <SettingsSection id={`ai-account-${account.id}`} title={account.name}>
-      <SettingsRow
-        title={providerLabel(account.provider, account.type)}
-        description={
-          details === null
-            ? account.usableIn.length > 0
-              ? `Usable in ${account.usableIn.map(props.spaceName).join(", ")}.`
-              : account.owner?.kind === "organization"
-                ? `${props.spaceName(account.owner.spaceId)}'s.`
-                : "Another User's own."
-            : [
-                removing ? null : `Priority ${account.priority}.`,
-                details.keyHint === null ? null : `Key ending in …${details.keyHint}.`,
-                details.signedInAs === undefined || details.signedInAs === null
-                  ? null
-                  : `Signed in as ${details.signedInAs}.`,
-                quotaText(details),
-                account.type === "subscription" ? tosOf(props.shared) : null,
-                details.baseUrl === null
-                  ? null
-                  : `${details.baseUrl} (${details.models.join(", ")}).`,
-              ]
-                .filter((part) => part !== null)
-                .join(" ")
-        }
-        control={
-          <span className="flex items-center gap-2">
-            <Badge
-              aria-label={`Status of ${account.name}`}
-              variant={
-                account.status === "error" || account.status === "removing"
-                  ? "destructive"
-                  : "secondary"
+    <li
+      aria-label={account.name}
+      className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-4 sm:px-4"
+    >
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="truncate text-sm font-medium">{account.name}</span>
+          <Badge variant="outline" size="sm">
+            {KIND_LABELS[account.type]}
+          </Badge>
+          <Badge
+            aria-label={`Status of ${account.name}`}
+            variant={statusVariant(account.status)}
+            size="sm"
+          >
+            {AI_ACCOUNT_STATUS_LABELS[account.status]}
+          </Badge>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {meta.filter((part) => part !== null).join(" · ")}
+        </p>
+        {said === null ? null : <p className="text-xs text-muted-foreground">{said}</p>}
+      </div>
+      {!manages ? null : removing ? (
+        <Button
+          size="xs"
+          variant="destructive"
+          disabled={pending}
+          aria-label={`Confirm delete ${account.name}`}
+          onClick={() => void remove()}
+        >
+          Try removing it again
+        </Button>
+      ) : (
+        <div className="flex shrink-0 items-center gap-1">
+          {account.disabled ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={pending}
+              aria-label={`Enable ${account.name}`}
+              onClick={() => void update({ disabled: false })}
+            >
+              Enable
+            </Button>
+          ) : null}
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            disabled={pending || props.reordering || props.first}
+            aria-label={`Move ${account.name} up`}
+            onClick={() => void props.onMove(-1)}
+          >
+            <ArrowUpIcon />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            disabled={pending || props.reordering || props.last}
+            aria-label={`Move ${account.name} down`}
+            onClick={() => void props.onMove(1)}
+          >
+            <ArrowDownIcon />
+          </Button>
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button
+                  aria-label={`Actions for ${account.name}`}
+                  size="icon-xs"
+                  type="button"
+                  variant="ghost"
+                />
               }
             >
-              {AI_ACCOUNT_STATUS_LABELS[account.status]}
-            </Badge>
-          </span>
-        }
-        status={
-          error !== null ? (
-            <span className="text-destructive" role="alert">
-              {error}
-            </span>
-          ) : notice !== null ? (
-            <span role="status">{notice}</span>
-          ) : account.statusMessage === null ? null : (
-            <span>{account.statusMessage}</span>
-          )
-        }
-      />
-      {props.canManage && details !== null ? (
-        <div className="flex flex-col gap-3 px-4 pb-4">
-          <div className="flex flex-wrap gap-2">
-            {removing ? null : (
-              <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={pending || props.reordering || props.first}
-                  aria-label={`Move ${account.name} up`}
-                  onClick={() => void props.onMove(-1)}
-                >
-                  Up
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={pending || props.reordering || props.last}
-                  aria-label={`Move ${account.name} down`}
-                  onClick={() => void props.onMove(1)}
-                >
-                  Down
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
+              <EllipsisIcon />
+            </MenuTrigger>
+            <MenuPopup align="end" sideOffset={6}>
+              <MenuItem aria-label={`Manage ${account.name}`} onClick={() => setManaging(true)}>
+                Manage…
+              </MenuItem>
+              {account.disabled ? null : (
+                <MenuItem
+                  aria-label={`Disable ${account.name}`}
                   disabled={pending}
-                  aria-label={`${account.disabled ? "Enable" : "Disable"} ${account.name}`}
-                  onClick={() => void update({ disabled: !account.disabled })}
+                  onClick={() => void update({ disabled: true })}
                 >
-                  {account.disabled ? "Enable" : "Disable"}
-                </Button>
-                {/* Grants 01: lent for the gateway only; a direct one's credential never leaves. */}
-                {account.type === "direct" ? null : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={pending}
-                    aria-label={`Lend ${account.name}`}
-                    onClick={() => setLending(true)}
-                  >
-                    Lend…
-                  </Button>
-                )}
-              </>
-            )}
-            {confirmDelete || removing ? (
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={pending}
-                aria-label={`Confirm delete ${account.name}`}
-                onClick={() =>
-                  void act(() =>
-                    settle(
-                      commands.remove({ environmentId, input: { accountId: account.id } }),
-                    ).then((result) =>
-                      result.gateway === "not-running"
-                        ? "Deleted. The AI gateway is not running, so its key was live nowhere."
-                        : null,
-                    ),
-                  )
-                }
-              >
-                {removing ? "Try removing it again" : "Delete for good"}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={pending}
+                  Disable
+                </MenuItem>
+              )}
+              {/* Grants 01: lent for the gateway only; a direct one's credential never leaves. */}
+              {account.type === "direct" ? null : (
+                <MenuItem aria-label={`Lend ${account.name}`} onClick={() => setLending(true)}>
+                  Lend…
+                </MenuItem>
+              )}
+              <MenuItem
                 aria-label={`Delete ${account.name}`}
+                variant="destructive"
                 onClick={() => setConfirmDelete(true)}
               >
-                Delete
-              </Button>
-            )}
-          </div>
-          {removing ? null : (
-            <>
-              <EditAccountForm
-                key={`${account.name}|${details.baseUrl}|${details.models.join(",")}`}
-                account={account}
-                details={details}
-                pending={pending}
-                onSave={(input) => update(input)}
-              />
-              {account.type === "subscription" && account.provider !== "vertex" ? (
+                Delete…
+              </MenuItem>
+            </MenuPopup>
+          </Menu>
+        </div>
+      )}
+      {managing && manages && !removing ? (
+        <ManageAccountDialog
+          environmentId={environmentId}
+          commands={commands}
+          account={account}
+          details={details}
+          shared={props.shared}
+          pending={pending}
+          said={said}
+          onUpdate={update}
+          onChanged={props.onChanged}
+          onClose={() => setManaging(false)}
+        />
+      ) : null}
+      <AlertDialog
+        open={confirmDelete}
+        onOpenChange={(open) => {
+          if (!open && !pending) setConfirmDelete(false);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete «{account.name}»?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This cannot be undone: to use it again, add it again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              disabled={pending}
+              render={<Button variant="outline" disabled={pending} />}
+            >
+              Cancel
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={pending}
+              aria-label={`Confirm delete ${account.name}`}
+              onClick={() => void remove().then(() => setConfirmDelete(false))}
+            >
+              Delete for good
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+      {lending ? <LendAiAccountDialog account={account} onClose={() => setLending(false)} /> : null}
+    </li>
+  );
+}
+
+/**
+ * «Manage…»: what changes an account, out of the list. Its name (an OpenAI-compatible one's base
+ * URL and models too), «Sign in again» for a subscription, «Replace credential» for an API key.
+ */
+function ManageAccountDialog(props: {
+  readonly environmentId: EnvironmentId;
+  readonly commands: AccountCommands;
+  readonly account: AiAccountSummary;
+  readonly details: AiAccountDetails;
+  readonly shared: boolean;
+  readonly pending: boolean;
+  /** What the account or the last change said, as the row says it. */
+  readonly said: ReactNode;
+  readonly onUpdate: (input: Omit<AiAccountUpdateInput, "accountId">) => Promise<boolean>;
+  readonly onChanged: () => Promise<void>;
+  readonly onClose: () => void;
+}) {
+  const { account, details } = props;
+  const [newKey, setNewKey] = useState("");
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !props.pending) props.onClose();
+      }}
+    >
+      <DialogPopup className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{account.name}</DialogTitle>
+          <DialogDescription>
+            {providerLabel(account.provider, account.type)} · {KIND_LABELS[account.type]}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <div className="flex flex-col gap-5">
+            {props.said === null ? null : <p className="text-xs">{props.said}</p>}
+            <EditAccountForm
+              key={`${account.name}|${details.baseUrl}|${details.models.join(",")}`}
+              account={account}
+              details={details}
+              pending={props.pending}
+              onSave={props.onUpdate}
+            />
+            {account.type === "subscription" && account.provider !== "vertex" ? (
+              <section aria-label="Sign in again" className="flex flex-col gap-2">
+                <p
+                  role="note"
+                  aria-label="Terms of service warning"
+                  className="text-xs text-warning-foreground"
+                >
+                  {tosOf(props.shared)}
+                </p>
                 <SignInFlow
-                  environmentId={environmentId}
-                  commands={commands}
+                  environmentId={props.environmentId}
+                  commands={props.commands}
                   label="Sign in again"
                   provider={account.provider as AiSubscriptionProvider}
                   target={{ accountId: account.id }}
-                  disabled={pending}
+                  disabled={props.pending}
                   onDone={props.onChanged}
                 />
-              ) : null}
-              {account.type !== "api-key" ? null : (
-                <form
-                  aria-label={`Replace credential of ${account.name}`}
-                  className="flex flex-col gap-2 sm:flex-row sm:items-end"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void update({ apiKey: Redacted.make(newKey.trim()) }).then((saved) => {
-                      if (saved) setNewKey("");
-                    });
-                  }}
+              </section>
+            ) : null}
+            {account.type !== "api-key" ? null : (
+              <form
+                aria-label={`Replace credential of ${account.name}`}
+                className="flex flex-col gap-2 sm:flex-row sm:items-end"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void props.onUpdate({ apiKey: Redacted.make(newKey.trim()) }).then((saved) => {
+                    if (saved) setNewKey("");
+                  });
+                }}
+              >
+                <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
+                  New API key
+                  <Input
+                    aria-label={`New API key for ${account.name}`}
+                    nativeInput
+                    disabled={props.pending}
+                    value={newKey}
+                    onChange={(event) => setNewKey(event.currentTarget.value)}
+                    {...KEY_INPUT_PROPS}
+                  />
+                </label>
+                <Button
+                  size="sm"
+                  type="submit"
+                  disabled={props.pending || newKey.trim().length === 0}
                 >
-                  <label className="flex flex-1 flex-col gap-1 text-xs font-medium">
-                    New API key
-                    <Input
-                      aria-label={`New API key for ${account.name}`}
-                      nativeInput
-                      disabled={pending}
-                      value={newKey}
-                      onChange={(event) => setNewKey(event.currentTarget.value)}
-                      {...KEY_INPUT_PROPS}
-                    />
-                  </label>
-                  <Button size="sm" type="submit" disabled={pending || newKey.trim().length === 0}>
-                    Replace credential
-                  </Button>
-                </form>
-              )}
-            </>
-          )}
-        </div>
-      ) : null}
-      {lending ? <LendAiAccountDialog account={account} onClose={() => setLending(false)} /> : null}
-    </SettingsSection>
+                  Replace credential
+                </Button>
+              </form>
+            )}
+          </div>
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
   );
 }
 

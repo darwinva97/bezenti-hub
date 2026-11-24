@@ -137,6 +137,7 @@ for (const file of files) {
     .filter(Boolean)
     .join("\n\n")
     .split("\n")
+    .filter((line) => !line.includes("/node_modules/"))
     .slice(0, 80)
     .join("\n");
   details.push(`<details><summary>test ${file}</summary>\n\n\`\`\`text\n${text}\n\`\`\`\n</details>\n`);

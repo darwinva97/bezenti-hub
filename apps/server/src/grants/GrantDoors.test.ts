@@ -533,3 +533,79 @@ it.effect(
       );
     }),
 );
+
+it.effect(
+  "each door has its inverse, one by one: give and cancel, wait and decide, use and end, cap and change, link and cancel",
+  () =>
+    Effect.gen(function* () {
+      const t = yield* team;
+      yield* t.server.sql`
+      INSERT INTO ai_accounts (account_id, name, type, provider, priority, status, created_at,
+        updated_at, owner_kind, owner_id)
+      VALUES ('adam-key', 'adam-key account', 'api-key', 'claude', 1, 'ready', ${AT}, ${AT},
+        'user', ${t.adam.id})
+    `;
+      const asAdam = CommandActor.actAs(t.adam.id);
+      const asMia = CommandActor.actAs(t.mia.id);
+      const miasSpace = SpaceIdSchema.make(`personal:${t.mia.id}`);
+      // Adam lends to Mia's Personal space (they share Acme): it waits for her.
+      const give = () =>
+        t.grants
+          .give(
+            {
+              resource: { kind: "ai-account", aiAccountId: "adam-key" as never },
+              spaceId: miasSpace,
+              limits: NO_CAP,
+            },
+            { strongFactor: false },
+          )
+          .pipe(asAdam);
+      const states: Array<string> = [];
+      const note = (grant: { readonly state: string; readonly endReason: string | null }) =>
+        states.push(grant.endReason === null ? grant.state : `${grant.state}:${grant.endReason}`);
+
+      // give ↔ cancel
+      const first = yield* give();
+      note(first);
+      note(yield* t.grants.cancel({ grantId: first.id }).pipe(asAdam));
+      // pending ↔ reject
+      const second = yield* give();
+      note(yield* t.grants.reject({ grantId: second.id }).pipe(asMia));
+      // pending ↔ accept, active ↔ return
+      const third = yield* give();
+      note(yield* t.grants.accept({ grantId: third.id }, { strongFactor: false }).pipe(asMia));
+      // cap ↔ change
+      const capped = yield* t.grants.setLimits({ grantId: third.id, limits: CAPPED }).pipe(asAdam);
+      assert.deepEqual(capped.limits, CAPPED);
+      const uncapped = yield* t.grants
+        .setLimits({ grantId: third.id, limits: NO_CAP })
+        .pipe(asAdam);
+      assert.deepEqual(uncapped.limits, NO_CAP);
+      note(yield* t.grants.end({ grantId: third.id }).pipe(asMia));
+      // active ↔ revoke
+      const fourth = yield* give();
+      yield* t.grants.accept({ grantId: fourth.id }, { strongFactor: false }).pipe(asMia);
+      note(yield* t.grants.end({ grantId: fourth.id }).pipe(asAdam));
+      // link ↔ cancel: a cancelled link reads as dead to anyone.
+      const link = yield* t.grants
+        .createOffer({
+          resource: { kind: "ai-account", aiAccountId: "adam-key" as never },
+          limits: NO_CAP,
+        })
+        .pipe(asAdam);
+      const token = /#token=([A-Za-z0-9_-]+)/.exec(link.path)?.[1] ?? "";
+      assert.equal((yield* t.grants.readOffer({ token }).pipe(asMia)).status, "valid");
+      note(yield* t.grants.cancel({ grantId: link.grant.id }).pipe(asAdam));
+      assert.equal((yield* t.grants.readOffer({ token }).pipe(asMia)).status, "invalid");
+
+      assert.deepEqual(states, [
+        "pending",
+        "cancelled",
+        "rejected",
+        "active",
+        "ended:returned",
+        "ended:revoked",
+        "cancelled",
+      ]);
+    }),
+);

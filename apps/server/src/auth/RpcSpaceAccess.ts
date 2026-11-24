@@ -105,7 +105,7 @@ const ACCESS_KEYS = {
 /** Grants name no Thread or Project: Grants decides each by AccessPolicy `grant.*`. */
 const GRANTS = {
   unscoped:
-    "Grants: AccessPolicy `grant.*` for the session's User in Grants (the lender's side on the resource's owner, the destination's on its Space); a loan the User sees from neither side answers like a missing one; names, states and limits only, never a credential",
+    "Grants: AccessPolicy `grant.*` for the session's User in Grants (the lender's side on the resource's owner, the destination's on its Space); a loan the User sees from neither side, and a resource not on their lending side, answers like a missing one; waiting loans to whoever decides, active ones to whoever works there, ended ones to whoever runs the Space; names, states and limits only, never a credential, a link's token or a lent Secret's value",
 };
 const INSTALLATION_ACCESS = Object.fromEntries(
   INSTALLATION_RPC_METHODS.map((method) => [method, "installation"]),

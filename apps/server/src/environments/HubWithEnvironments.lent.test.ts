@@ -22,8 +22,11 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
+import * as References from "effect/References";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -41,6 +44,7 @@ import * as OrganizationLifecycle from "../spaces/OrganizationLifecycle.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as EnvironmentRegistry from "./EnvironmentRegistry.ts";
 import { listEnvironments } from "./environments.testkit.ts";
+import { databaseText, processArgsHolding } from "./HubWithEnvironments.secretMasking.testkit.ts";
 import { makeHub, seedProject, type Hub } from "./HubWithEnvironments.testkit.ts";
 
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
@@ -456,6 +460,65 @@ describe("Hub con Environments: a machine lent to Spaces", () => {
   );
 
   it.live(
+    "leak smoke: a lent Sandbox's credential is in no log, span, process argument or stored row (Grants 13)",
+    () => {
+      const logs: Array<string> = [];
+      const spans: Array<Tracer.NativeSpan> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      const logger = Logger.make((options) => {
+        logs.push(
+          [options.message, options.cause, options.fiber.getRef(References.CurrentLogAnnotations)]
+            .map((part) => {
+              try {
+                return JSON.stringify(part) ?? String(part);
+              } catch {
+                return String(part);
+              }
+            })
+            .join(" "),
+        );
+      });
+      return Effect.gen(function* () {
+        const t = yield* lentToAcmeAndGlobex();
+        const { hub, acmeLaunch, globexLaunch } = t;
+        // Used: connected, asked about, reaching git.
+        assert.equal(yield* checkOf(hub, acmeLaunch.credential), acmeLaunch.joined.environmentId);
+        yield* gitStatus(hub, t.acmeProject, acmeLaunch.credential);
+        const needles = [acmeLaunch.credential, globexLaunch.credential];
+        const holds = (text: string) => needles.filter((needle) => text.includes(needle)).length;
+        const recorded = [
+          ...logs,
+          ...spans.flatMap((span) => [
+            span.name,
+            ...Array.from(span.attributes.values(), (value) => JSON.stringify(value)),
+          ]),
+        ];
+        assert.isAbove(spans.length, 0);
+        const processes = yield* Effect.forEach(needles, (needle) => processArgsHolding(needle));
+        assert.deepEqual(
+          {
+            processes: processes.flat().length,
+            database: holds(yield* databaseText(hub)),
+            logsAndSpans: recorded.filter((text) => holds(text) > 0).length,
+          },
+          { processes: 0, database: 0, logsAndSpans: 0 },
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.withTracer(tracer),
+        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        Effect.provideService(References.MinimumLogLevel, "All"),
+      );
+    },
+  );
+
+  it.live(
     "starts no turn on a Sandbox over its disk limit or on a host almost out of disk, until it has room",
     () =>
       Effect.gen(function* () {
@@ -562,6 +625,22 @@ describe("Hub con Environments: a machine lent to Spaces", () => {
         yield* host.round;
         assert.isFalse(NodeFS.existsSync(acmeLaunch.homePath));
         assert.isTrue(NodeFS.existsSync(globexLaunch.homePath));
+        // Grants ticket 13, the inverse door: the released Thread goes to another Environment of
+        // Acme's, here the Owner's own machine, as Acme's Admin.
+        const placed = yield* hub
+          .service(EnvironmentRegistry.EnvironmentRegistry)
+          .chooseForThread({
+            userId: t.owner,
+            requested: host.native.environmentId,
+            projectId: t.acmeProject,
+            providerInstanceId: INSTANCE,
+            threadId,
+          })
+          .pipe(
+            Effect.as("placed"),
+            Effect.orElseSucceed(() => "refused"),
+          );
+        assert.equal(placed, "placed");
       }).pipe(Effect.scoped),
   );
 

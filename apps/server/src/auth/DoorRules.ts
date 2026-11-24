@@ -599,7 +599,7 @@ export const KEYCLOAK_SESSION_CREDENTIALS: Readonly<Record<string, LoginCredenti
   "Grant offer links": {
     where: ["grants.offer_token_hash"],
     outlivesLogin:
-      "an offer for another Space's Admins, revocable; claiming takes their own session and strong factor",
+      "an offer for another Space's Admins, revocable; claiming takes their own session, and a machine's also their strong factor",
   },
   "guest links": {
     where: ["guest/GuestShareService.ts"],
@@ -645,7 +645,8 @@ export const KEYCLOAK_SESSION_CREDENTIALS: Readonly<Record<string, LoginCredenti
       "dedicated_sandbox_credentials.credential_hash",
       "dedicated_sandbox_credentials.previous_credential_hash",
     ],
-    notFromSession: "the Hub's own, for the Sandboxes it runs",
+    notFromSession:
+      "the Hub's own, for the Sandboxes it runs, and one per active loan of a lent machine (Grants): for its borrowing Space only, reading only the repositories of the Threads it runs, dead once the loan ended and its turns' time to stop passed",
   },
   "local passwords, TOTP secrets and recovery codes": {
     where: [

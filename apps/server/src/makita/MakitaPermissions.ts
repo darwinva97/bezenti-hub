@@ -25,6 +25,7 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import { pauseCreatorConfigsWithin } from "./makitaRows.ts";
 
 const NOT_YOURS =
   "Makita is set up by a person in Platform settings or Space settings, not by an agent.";
@@ -32,7 +33,7 @@ const OWNER_ONLY = "Only the Owner decides who may use Makita.";
 
 /**
  * A User removed from the Hub (inside `InstallationUserService`'s transaction): every row of
- * theirs goes, each audited (`user-removed`).
+ * theirs goes, each audited (`user-removed`), and their configurations pause (`creator-left`).
  */
 export const forgetUserWithin = Effect.fn("MakitaPermissions.forgetUserWithin")(function* (
   sql: SqlClient.SqlClient,
@@ -52,6 +53,13 @@ export const forgetUserWithin = Effect.fn("MakitaPermissions.forgetUserWithin")(
       detail: { space: row.spaceId, reason: "user-removed" },
     });
   }
+  yield* pauseCreatorConfigsWithin(sql, {
+    actor,
+    pausedBy: actor.source === "user" ? actor.userId : null,
+    creator: userId,
+    spaceId: null,
+    reason: "creator-left",
+  });
 });
 
 export class MakitaPermissions extends Context.Service<
@@ -353,6 +361,14 @@ const make = Effect.gen(function* () {
               ...(names[0] === undefined ? {} : { name: names[0].name }),
             },
             detail: { space: input.spaceId, reason: "revoked" },
+          });
+          // Their configurations of this Space stop with it (Makita ticket 03).
+          yield* pauseCreatorConfigsWithin(sql, {
+            actor: AuditLog.userActor(input.actorUserId),
+            pausedBy: input.actorUserId,
+            creator: input.userId,
+            spaceId: input.spaceId,
+            reason: "permission-revoked",
           });
         }),
       )

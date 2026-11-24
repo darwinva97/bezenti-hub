@@ -1,6 +1,8 @@
 import * as Schema from "effect/Schema";
 
-import { SpaceId, UserId } from "./baseSchemas.ts";
+import { AiAccountId } from "./aiAccounts.ts";
+import { EnvironmentId, ProjectId, SpaceId, UserId } from "./baseSchemas.ts";
+import { ModelSelection } from "./modelSelection.ts";
 
 /**
  * Makita (spec `makita`): the GitHub bot teammate. A normal GitHub account the Owner registers
@@ -136,6 +138,183 @@ export type MakitaPermissionsListResult = typeof MakitaPermissionsListResult.Typ
 
 export const MakitaPermissionInput = Schema.Struct({ userId: UserId, spaceId: SpaceId });
 export type MakitaPermissionInput = typeof MakitaPermissionInput.Type;
+
+/** Live configurations one Space may hold (it bounds the polling, not the tokens). */
+export const MAKITA_CONFIG_MAX_PER_SPACE = 20;
+/** The label that triggers Makita unless a configuration names another. */
+export const MAKITA_DEFAULT_LABEL = "makita";
+
+/** The repositories a configuration listens to: all the Space's Projects with a GitHub remote, or these. */
+export const MakitaRepos = Schema.Union([
+  Schema.Struct({ all: Schema.Literal(true) }),
+  Schema.Struct({ projects: Schema.Array(ProjectId) }),
+]);
+export type MakitaRepos = typeof MakitaRepos.Type;
+
+/** What wakes Makita: the label on an issue, assigning it to Makita, mentioning it (ticket 09). */
+export const MakitaTriggers = Schema.Struct({
+  label: Schema.NullOr(Schema.String),
+  assigned: Schema.Boolean,
+  mention: Schema.Boolean,
+});
+export type MakitaTriggers = typeof MakitaTriggers.Type;
+
+/** Whom it answers. Batch 1: only a list of GitHub users. */
+export const MakitaCallersMode = Schema.Literals(["creator", "list", "members", "anyone"]);
+export type MakitaCallersMode = typeof MakitaCallersMode.Type;
+
+/** A GitHub user as a configuration keeps it: always compared by its numeric id. */
+export const MakitaGitHubUser = Schema.Struct({ id: Schema.Number, login: Schema.String });
+export type MakitaGitHubUser = typeof MakitaGitHubUser.Type;
+
+export const MakitaCapability = Schema.Literals(["comment", "push"]);
+export type MakitaCapability = typeof MakitaCapability.Type;
+export const MakitaApproval = Schema.Literals(["others", "always", "never"]);
+export type MakitaApproval = typeof MakitaApproval.Type;
+export const MakitaStrangers = Schema.Literals(["ignore", "reply"]);
+export type MakitaStrangers = typeof MakitaStrangers.Type;
+export const MakitaPausedReason = Schema.Literals([
+  "manual",
+  "owner",
+  "permission-revoked",
+  "creator-disabled",
+  "creator-left",
+]);
+export type MakitaPausedReason = typeof MakitaPausedReason.Type;
+
+/**
+ * How a Project's GitHub repository resolves (gh's rule over its checkout's remotes): `ok`, no
+ * GitHub remote, two candidates and no `gh repo set-default` («Pick the GitHub remote»), gone.
+ */
+export const MakitaRepoState = Schema.Literals(["ok", "no-remote", "ambiguous", "gone"]);
+export type MakitaRepoState = typeof MakitaRepoState.Type;
+
+export const MakitaProjectRepo = Schema.Struct({
+  projectId: ProjectId,
+  /** Null for a Project that no longer exists. */
+  title: Schema.NullOr(Schema.String),
+  /** `owner/name`, when it resolves. */
+  repo: Schema.NullOr(Schema.String),
+  state: MakitaRepoState,
+});
+export type MakitaProjectRepo = typeof MakitaProjectRepo.Type;
+
+/** What a configuration warns of now. */
+export const MakitaConfigWarning = Schema.Literals(["ai-account-unavailable", "no-repository"]);
+export type MakitaConfigWarning = typeof MakitaConfigWarning.Type;
+
+/** A Makita configuration as whoever may see it does: never a token. */
+export const MakitaConfig = Schema.Struct({
+  configId: Schema.String,
+  spaceId: SpaceId,
+  spaceName: Schema.NullOr(Schema.String),
+  name: Schema.String,
+  createdBy: UserId,
+  createdByName: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  repos: MakitaRepos,
+  /** The Projects it listens to now, each with its repository or why none. */
+  projects: Schema.Array(MakitaProjectRepo),
+  triggers: MakitaTriggers,
+  callersMode: MakitaCallersMode,
+  callers: Schema.Array(MakitaGitHubUser),
+  strangers: MakitaStrangers,
+  modelSelection: ModelSelection,
+  /** The AI account's name, when it still exists. */
+  aiAccountName: Schema.NullOr(Schema.String),
+  capability: MakitaCapability,
+  mayLand: Schema.Boolean,
+  approval: MakitaApproval,
+  approvers: Schema.Array(MakitaGitHubUser),
+  baseBranch: Schema.NullOr(Schema.String),
+  /** Null: the Space's Sandbox. */
+  environmentId: Schema.NullOr(EnvironmentId),
+  pausedAt: Schema.NullOr(Schema.String),
+  pausedBy: Schema.NullOr(UserId),
+  pausedByName: Schema.NullOr(Schema.String),
+  pausedReason: Schema.NullOr(MakitaPausedReason),
+  warnings: Schema.Array(MakitaConfigWarning),
+  /** What the viewer may do with it (the Hub decides again on each door). */
+  canEdit: Schema.Boolean,
+  canPause: Schema.Boolean,
+  canResume: Schema.Boolean,
+  canDelete: Schema.Boolean,
+});
+export type MakitaConfig = typeof MakitaConfig.Type;
+
+/** What a configuration says, as its creator writes it (logins, resolved to ids on save). */
+const MakitaConfigFields = {
+  name: Schema.String,
+  repos: MakitaRepos,
+  triggers: MakitaTriggers,
+  callersMode: MakitaCallersMode,
+  /** GitHub logins; the Hub resolves each to its numeric id. */
+  callers: Schema.Array(Schema.String),
+  strangers: MakitaStrangers,
+  modelSelection: ModelSelection,
+  capability: MakitaCapability,
+  mayLand: Schema.Boolean,
+  approval: MakitaApproval,
+  approvers: Schema.Array(Schema.String),
+  baseBranch: Schema.NullOr(Schema.String),
+  environmentId: Schema.NullOr(EnvironmentId),
+};
+
+export const MakitaConfigInput = Schema.Struct({ spaceId: SpaceId, ...MakitaConfigFields });
+export type MakitaConfigInput = typeof MakitaConfigInput.Type;
+
+export const MakitaConfigUpdateInput = Schema.Struct({
+  configId: Schema.String,
+  ...MakitaConfigFields,
+});
+export type MakitaConfigUpdateInput = typeof MakitaConfigUpdateInput.Type;
+
+export const MakitaConfigRef = Schema.Struct({ configId: Schema.String });
+export type MakitaConfigRef = typeof MakitaConfigRef.Type;
+
+/** A saved configuration, with what the Hub could not do on GitHub (a label it could not make). */
+export const MakitaConfigSaveResult = Schema.Struct({
+  config: MakitaConfig,
+  notes: Schema.Array(Schema.String),
+});
+export type MakitaConfigSaveResult = typeof MakitaConfigSaveResult.Type;
+
+export const MakitaConfigsListInput = Schema.Struct({
+  /** One Space's configurations. Without it: the Owner's view of every Space. */
+  spaceId: Schema.optionalKey(SpaceId),
+});
+export type MakitaConfigsListInput = typeof MakitaConfigsListInput.Type;
+
+/** An AI account the viewer may give a configuration here, with the models it serves. */
+export const MakitaAiAccountOption = Schema.Struct({
+  id: AiAccountId,
+  name: Schema.String,
+  type: Schema.String,
+  provider: Schema.String,
+  /** Null: its catalog cannot be read now. */
+  models: Schema.NullOr(Schema.Array(Schema.String)),
+});
+export type MakitaAiAccountOption = typeof MakitaAiAccountOption.Type;
+
+export const MakitaConfigsListResult = Schema.Struct({
+  configs: Schema.Array(MakitaConfig),
+  /** True for the Owner's list of every Space. */
+  everyone: Schema.Boolean,
+  /** For one Space's list: whether the viewer may make configurations, and the form's options. */
+  space: Schema.NullOr(
+    Schema.Struct({
+      canCreate: Schema.Boolean,
+      /** Whether Makita's GitHub account is registered (the form needs it to resolve logins). */
+      accountReady: Schema.Boolean,
+      projects: Schema.Array(MakitaProjectRepo),
+      aiAccounts: Schema.Array(MakitaAiAccountOption),
+      /** The provider instances that go through the AI gateway, for the agent of its Threads. */
+      agents: Schema.Array(Schema.Struct({ instanceId: Schema.String, label: Schema.String })),
+    }),
+  ),
+});
+export type MakitaConfigsListResult = typeof MakitaConfigsListResult.Type;
 
 /** Why a Makita door refused, in words for the person; never a token. */
 export class MakitaError extends Schema.TaggedError<MakitaError>()("MakitaError", {

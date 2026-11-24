@@ -7,7 +7,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import { hub } from "../ai/AiGatewayRoute.testkit.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as MakitaAccount from "./MakitaAccount.ts";
+import * as MakitaConfigs from "./MakitaConfigs.ts";
 import * as MakitaGitHub from "./MakitaGitHub.ts";
 import { makeFakeGitHub } from "./MakitaGitHub.testkit.ts";
 import * as MakitaPermissions from "./MakitaPermissions.ts";
@@ -16,9 +18,10 @@ export const makitaHub = Effect.gen(function* () {
   const setup = yield* hub;
   const github = makeFakeGitHub();
   const context = yield* Layer.build(
-    Layer.mergeAll(MakitaAccount.layer, MakitaPermissions.layer).pipe(
+    Layer.mergeAll(MakitaAccount.layer, MakitaPermissions.layer, MakitaConfigs.layer).pipe(
       Layer.provideMerge(MakitaGitHub.layer),
       Layer.provide(github.layer),
+      Layer.provide(ProcessRunner.layer),
       Layer.provide(Layer.succeedContext(Context.merge(setup.server.services, setup.context))),
     ),
   );
@@ -27,6 +30,7 @@ export const makitaHub = Effect.gen(function* () {
     github,
     makitaAccount: Context.get(context, MakitaAccount.MakitaAccount),
     makitaPermissions: Context.get(context, MakitaPermissions.MakitaPermissions),
+    makitaConfigs: Context.get(context, MakitaConfigs.MakitaConfigs),
   };
 });
 

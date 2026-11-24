@@ -630,6 +630,13 @@ it.effect(
         // makita/MakitaPermissions.test.ts (Makita ticket 02: «may use Makita»)
         "makita.permission.grant",
         "makita.permission.revoke",
+        // makita/MakitaConfigs.test.ts (Makita ticket 03: a configuration and its label)
+        "makita.config.create",
+        "makita.config.update",
+        "makita.config.delete",
+        "makita.config.pause",
+        "makita.config.resume",
+        "makita.github.label",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

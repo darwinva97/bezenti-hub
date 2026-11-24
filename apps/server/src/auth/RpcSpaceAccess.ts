@@ -112,6 +112,11 @@ const MAKITA_PERMISSIONS = {
   unscoped:
     "«May use Makita»: MakitaPermissions answers a person's own session only (never an agent, the Hub's shell or a one-Space session) and only the Owner (AccessPolicy `makita.manageAccount`), who sees every User and Space anyway; given only to an Admin or Member of an open Organization, or to a User in their own Personal space",
 };
+/** A Space's Makita configurations: MakitaConfigs decides each on its Space. */
+const MAKITA_CONFIGS = {
+  unscoped:
+    "Makita configurations: MakitaConfigs answers a person's own session only (never an agent, the Hub's shell or a one-Space session); AccessPolicy `makita.view` on the named Space to list (without one, the Owner every Space, anyone else the Spaces they view), `makita.use` to create, `makita.edit` / `.delete` / `.pause` / `.resume` on each; Projects named must be live in that Space; another Space's configuration answers like a missing one",
+};
 /** Grants name no Thread or Project: Grants decides each by AccessPolicy `grant.*`. */
 const GRANTS = {
   unscoped:
@@ -185,6 +190,12 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.makitaPermissionsList]: MAKITA_PERMISSIONS,
   [WS_METHODS.makitaPermissionsGrant]: MAKITA_PERMISSIONS,
   [WS_METHODS.makitaPermissionsRevoke]: MAKITA_PERMISSIONS,
+  [WS_METHODS.makitaConfigsList]: MAKITA_CONFIGS,
+  [WS_METHODS.makitaConfigsCreate]: MAKITA_CONFIGS,
+  [WS_METHODS.makitaConfigsUpdate]: MAKITA_CONFIGS,
+  [WS_METHODS.makitaConfigsDelete]: MAKITA_CONFIGS,
+  [WS_METHODS.makitaConfigsPause]: MAKITA_CONFIGS,
+  [WS_METHODS.makitaConfigsResume]: MAKITA_CONFIGS,
   // Spec 5 ticket 03. Allowances and a Space's defaults: AccessPolicy `vault.manage` and
   // `vault.choose` in Vaults. A Project's choices and a Thread's names: the named Project or
   // Thread must be visible first, then the same rules (EffectiveVaults for the Thread).

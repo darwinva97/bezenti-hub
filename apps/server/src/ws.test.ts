@@ -140,6 +140,7 @@ import * as AiGateway from "./ai/AiGateway.ts";
 import * as AiUsage from "./ai/AiUsage.ts";
 import * as AccessKeys from "./ai/AccessKeys.ts";
 import * as MakitaAccount from "./makita/MakitaAccount.ts";
+import * as MakitaConfigs from "./makita/MakitaConfigs.ts";
 import * as MakitaPermissions from "./makita/MakitaPermissions.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
@@ -898,6 +899,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(AccessKeys.AccessKeys)({}),
   Layer.mock(MakitaAccount.MakitaAccount)({}),
   Layer.mock(MakitaPermissions.MakitaPermissions)({}),
+  Layer.mock(MakitaConfigs.MakitaConfigs)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(TerminalManager.TerminalManager)({}),

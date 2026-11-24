@@ -162,8 +162,20 @@ export interface MakitaSpaceResource {
   readonly permitted: boolean;
 }
 
+/** One Makita configuration (Makita ticket 03), as someone acts on it. */
+export interface MakitaConfigResource {
+  readonly kind: "makita-config";
+  readonly space: SpaceResource;
+  readonly createdBy: UserId;
+  /** Whether the acting User holds «may use Makita» in its Space. */
+  readonly permitted: boolean;
+  /** The Owner paused it (someone else's): only the Owner resumes it. */
+  readonly pausedByOwner: boolean;
+}
+
 export type Resource =
   | MakitaSpaceResource
+  | MakitaConfigResource
   | GrantResource
   | VaultResource
   | SpaceResource
@@ -346,6 +358,16 @@ export type Action =
   | "makita.use"
   /** See a Space's Makita configurations: `makita.use` there, its Admins and the Owner. */
   | "makita.view"
+  /**
+   * On one configuration (Makita ticket 03), decided on a `MakitaConfigResource`. Pause: its
+   * creator, its Organization's Admins and the Owner. Resume: its creator with `makita.use`, or the
+   * Owner; one the Owner paused, only the Owner. Edit: its creator with `makita.use`. Delete: its
+   * creator or the Owner.
+   */
+  | "makita.pause"
+  | "makita.resume"
+  | "makita.edit"
+  | "makita.delete"
   // Grants (`GrantResource`; see `decideGrant`).
   /** Lend one's resource to a Space; decided on the resource's owner and the destination. */
   | "grant.give"
@@ -958,6 +980,60 @@ const decideMakita = (
   return allow;
 };
 
+const MAKITA_CONFIG_ACTIONS: ReadonlySet<Action> = new Set([
+  "makita.pause",
+  "makita.resume",
+  "makita.edit",
+  "makita.delete",
+]);
+
+/**
+ * One Makita configuration (Makita ticket 03). Pausing and deleting are ways out: they hold in an
+ * archived Space too. Resuming and editing are using Makita: `makita.use` for its creator.
+ */
+const decideMakitaConfig = (
+  principal: Principal,
+  action: Action,
+  config: MakitaConfigResource,
+): Decision => {
+  const { space } = config;
+  const creator = config.createdBy === principal.userId;
+  const use = (): Decision =>
+    decideMakita(principal, "makita.use", {
+      kind: "makita-space",
+      space,
+      permitted: config.permitted,
+    });
+  // Still in its Space: an Organization's Admin or Member (a demoted Guest too: they may stop it).
+  const inSpace = (): Decision =>
+    space.kind === "personal"
+      ? inPersonalSpace(principal, space)
+      : inOrganization(principal, space);
+  switch (action) {
+    case "makita.pause":
+      if (principal.isOwner) return allow;
+      if (creator) return inSpace();
+      return space.kind === "organization"
+        ? inOrganization(principal, space, ADMIN_ONLY)
+        : deny("not-your-personal-space");
+    case "makita.resume":
+      if (principal.isOwner && !creator) {
+        if (space.archived) return deny("space-archived");
+        return space.frozen ? deny("space-frozen") : allow;
+      }
+      if (!creator) return deny("not-yours");
+      if (config.pausedByOwner && !principal.isOwner) return deny("owner-only");
+      return use();
+    case "makita.edit":
+      return creator ? use() : deny("not-yours");
+    case "makita.delete":
+      if (principal.isOwner) return allow;
+      return creator ? inSpace() : deny("not-yours");
+    default:
+      return deny("wrong-resource");
+  }
+};
+
 const GRANT_ACTIONS: ReadonlySet<Action> = new Set([
   "grant.give",
   "grant.offer",
@@ -1047,6 +1123,11 @@ export function decide(principal: Principal, action: Action, resource: Resource)
   if (action === "makita.use" || action === "makita.view" || resource.kind === "makita-space") {
     return (action === "makita.use" || action === "makita.view") && resource.kind === "makita-space"
       ? decideMakita(principal, action, resource)
+      : deny("wrong-resource");
+  }
+  if (MAKITA_CONFIG_ACTIONS.has(action) || resource.kind === "makita-config") {
+    return MAKITA_CONFIG_ACTIONS.has(action) && resource.kind === "makita-config"
+      ? decideMakitaConfig(principal, action, resource)
       : deny("wrong-resource");
   }
   if (GRANT_ACTIONS.has(action) || resource.kind === "grant") {

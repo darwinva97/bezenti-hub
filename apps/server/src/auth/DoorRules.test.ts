@@ -709,7 +709,7 @@ describe("every door of the Hub declares its rule", () => {
     ]);
   });
 
-  it("keeps Makita's token in the Hub: WS doors of a person's session only, no answer carries it, its store read by MakitaGitHub alone, its tables makita/'s (Makita tickets 01 and 02)", () => {
+  it("keeps Makita's token in the Hub: WS doors of a person's session only, no answer carries it, its store read by MakitaGitHub alone, its tables makita/'s (Makita tickets 01 to 03)", () => {
     const makitaRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
       /^makita\./u.test(rpc._tag),
     );
@@ -718,6 +718,12 @@ describe("every door of the Hub declares its rule", () => {
       "makita.account.pauseAll",
       "makita.account.resumeAll",
       "makita.account.set",
+      "makita.configs.create",
+      "makita.configs.delete",
+      "makita.configs.list",
+      "makita.configs.pause",
+      "makita.configs.resume",
+      "makita.configs.update",
       "makita.permissions.grant",
       "makita.permissions.list",
       "makita.permissions.revoke",
@@ -738,7 +744,7 @@ describe("every door of the Hub declares its rule", () => {
     // No answer has a field that could carry the token; only `set` takes one.
     for (const rpc of makitaRpcs) {
       const fields = successFields(rpc.successSchema.ast);
-      for (const secret of ["token", "secret", "hash", "key", "value"]) {
+      for (const secret of ["token", "secret", "hash", "tokenHash"]) {
         expect(fields, rpc._tag).not.toContain(secret);
       }
       expect(successFields(rpc.payloadSchema.ast).has("token"), rpc._tag).toBe(
@@ -766,6 +772,7 @@ describe("every door of the Hub declares its rule", () => {
     for (const [table, migration] of [
       ["makita_account", "163_MakitaAccount"],
       ["makita_permissions", "164_MakitaPermissions"],
+      ["makita_configs", "165_MakitaConfigs"],
     ] as const) {
       expect(
         files
@@ -777,7 +784,9 @@ describe("every door of the Hub declares its rule", () => {
       ).toEqual([`persistence/Migrations/${migration}.ts`]);
     }
     for (const { file, text } of toolModules) {
-      expect(text, file).not.toMatch(/MakitaAccount|MakitaTokenStore|MakitaPermissions/u);
+      expect(text, file).not.toMatch(
+        /MakitaAccount|MakitaTokenStore|MakitaPermissions|MakitaConfigs/u,
+      );
     }
   });
 

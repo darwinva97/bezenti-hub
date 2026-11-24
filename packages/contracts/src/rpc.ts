@@ -66,6 +66,13 @@ import {
   MakitaError,
   MakitaPermissionInput,
   MakitaPermissionsListResult,
+  MakitaConfig,
+  MakitaConfigInput,
+  MakitaConfigRef,
+  MakitaConfigSaveResult,
+  MakitaConfigUpdateInput,
+  MakitaConfigsListInput,
+  MakitaConfigsListResult,
 } from "./makita.ts";
 import {
   AiGatewayError,
@@ -780,6 +787,13 @@ export const WS_METHODS = {
   makitaPermissionsList: "makita.permissions.list",
   makitaPermissionsGrant: "makita.permissions.grant",
   makitaPermissionsRevoke: "makita.permissions.revoke",
+  // Makita ticket 03: a Space's configurations.
+  makitaConfigsList: "makita.configs.list",
+  makitaConfigsCreate: "makita.configs.create",
+  makitaConfigsUpdate: "makita.configs.update",
+  makitaConfigsDelete: "makita.configs.delete",
+  makitaConfigsPause: "makita.configs.pause",
+  makitaConfigsResume: "makita.configs.resume",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1522,6 +1536,36 @@ const WsMakitaPermissionsGrantRpc = Rpc.make(WS_METHODS.makitaPermissionsGrant, 
 const WsMakitaPermissionsRevokeRpc = Rpc.make(WS_METHODS.makitaPermissionsRevoke, {
   payload: MakitaPermissionInput,
   success: MakitaPermissionsListResult,
+  error: MakitaErrors,
+});
+const WsMakitaConfigsListRpc = Rpc.make(WS_METHODS.makitaConfigsList, {
+  payload: MakitaConfigsListInput,
+  success: MakitaConfigsListResult,
+  error: MakitaErrors,
+});
+const WsMakitaConfigsCreateRpc = Rpc.make(WS_METHODS.makitaConfigsCreate, {
+  payload: MakitaConfigInput,
+  success: MakitaConfigSaveResult,
+  error: MakitaErrors,
+});
+const WsMakitaConfigsUpdateRpc = Rpc.make(WS_METHODS.makitaConfigsUpdate, {
+  payload: MakitaConfigUpdateInput,
+  success: MakitaConfigSaveResult,
+  error: MakitaErrors,
+});
+const WsMakitaConfigsDeleteRpc = Rpc.make(WS_METHODS.makitaConfigsDelete, {
+  payload: MakitaConfigRef,
+  success: MakitaConfig,
+  error: MakitaErrors,
+});
+const WsMakitaConfigsPauseRpc = Rpc.make(WS_METHODS.makitaConfigsPause, {
+  payload: MakitaConfigRef,
+  success: MakitaConfig,
+  error: MakitaErrors,
+});
+const WsMakitaConfigsResumeRpc = Rpc.make(WS_METHODS.makitaConfigsResume, {
+  payload: MakitaConfigRef,
+  success: MakitaConfig,
   error: MakitaErrors,
 });
 const WsAiAccountsCreateRpc = Rpc.make(WS_METHODS.aiAccountsCreate, {
@@ -2654,6 +2698,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsMakitaPermissionsListRpc,
   WsMakitaPermissionsGrantRpc,
   WsMakitaPermissionsRevokeRpc,
+  WsMakitaConfigsListRpc,
+  WsMakitaConfigsCreateRpc,
+  WsMakitaConfigsUpdateRpc,
+  WsMakitaConfigsDeleteRpc,
+  WsMakitaConfigsPauseRpc,
+  WsMakitaConfigsResumeRpc,
   WsProjectCloneStartRpc,
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,

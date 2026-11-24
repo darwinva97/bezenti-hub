@@ -270,6 +270,7 @@ import { withHubAiAccountLimits } from "./usage/hubAiAccountLimits.ts";
 import { withHubGatewayUsage } from "./usage/hubGatewayUsage.ts";
 import * as AccessKeys from "./ai/AccessKeys.ts";
 import * as MakitaAccount from "./makita/MakitaAccount.ts";
+import * as MakitaConfigs from "./makita/MakitaConfigs.ts";
 import * as MakitaPermissions from "./makita/MakitaPermissions.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
@@ -1453,6 +1454,7 @@ export const layerWsRpc = (
       const accessKeys = yield* AccessKeys.AccessKeys;
       const makitaAccount = yield* MakitaAccount.MakitaAccount;
       const makitaPermissions = yield* MakitaPermissions.MakitaPermissions;
+      const makitaConfigs = yield* MakitaConfigs.MakitaConfigs;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const triage = yield* TriageService.TriageService;
@@ -3014,6 +3016,13 @@ export const layerWsRpc = (
         [WS_METHODS.makitaPermissionsList]: () => makitaPermissions.listForSession,
         [WS_METHODS.makitaPermissionsGrant]: (input) => makitaPermissions.grantForSession(input),
         [WS_METHODS.makitaPermissionsRevoke]: (input) => makitaPermissions.revokeForSession(input),
+        // A Space's Makita configurations: a person's own session, by AccessPolicy `makita.*`.
+        [WS_METHODS.makitaConfigsList]: (input) => makitaConfigs.listForSession(input),
+        [WS_METHODS.makitaConfigsCreate]: (input) => makitaConfigs.createForSession(input),
+        [WS_METHODS.makitaConfigsUpdate]: (input) => makitaConfigs.updateForSession(input),
+        [WS_METHODS.makitaConfigsDelete]: (input) => makitaConfigs.removeForSession(input),
+        [WS_METHODS.makitaConfigsPause]: (input) => makitaConfigs.pauseForSession(input),
+        [WS_METHODS.makitaConfigsResume]: (input) => makitaConfigs.resumeForSession(input),
         [WS_METHODS.projectCloneStart]: (input) =>
           requireCloneDestination(input.destinationPath, { asProject: true }).pipe(
             Effect.andThen(

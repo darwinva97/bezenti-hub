@@ -91,6 +91,14 @@ export const AuditAction = Schema.Literals([
   // Makita ticket 02: «may use Makita» given or taken back per User and Space.
   "makita.permission.grant",
   "makita.permission.revoke",
+  // Makita ticket 03: a configuration made, changed, deleted, paused or resumed, and the label
+  // Makita made on GitHub for it.
+  "makita.config.create",
+  "makita.config.update",
+  "makita.config.delete",
+  "makita.config.pause",
+  "makita.config.resume",
+  "makita.github.label",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -127,6 +135,7 @@ export const AuditTargetKind = Schema.Literals([
   "ai_gateway_key",
   "access_key",
   "makita_account",
+  "makita_config",
   "secret_provider",
   "provider_scope",
   "grant",
@@ -379,6 +388,18 @@ export const AUDIT_DETAIL_KEYS = {
   "makita.permission.grant": ["space", "role"],
   /** Why: `revoked` by the Owner; `user-removed` with the User's removal from the Hub. */
   "makita.permission.revoke": ["space", "reason"],
+  /**
+   * A configuration's Space, repositories (`all` or how many Projects), whom it answers and what
+   * it may do; `changed` names the fields an update changed. Never a login list or a model's text.
+   */
+  "makita.config.create": ["space", "repos", "callersMode", "capability", "mayLand", "aiAccount"],
+  "makita.config.update": ["space", "changed", "capability", "mayLand", "aiAccount"],
+  "makita.config.delete": ["space"],
+  /** `manual` by its creator or an Admin, `owner`, or the Hub's (`permission-revoked`, …). */
+  "makita.config.pause": ["space", "reason"],
+  "makita.config.resume": ["space"],
+  /** The label Makita made in a repository for a configuration (`owner/name`, public). */
+  "makita.github.label": ["space", "repo", "label", "outcome"],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

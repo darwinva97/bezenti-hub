@@ -153,6 +153,7 @@ import Migration0161 from "./Migrations/161_AccessKeysOfGoneSpaces.ts";
 import Migration0162 from "./Migrations/162_GrantEndings.ts";
 import Migration0163 from "./Migrations/163_MakitaAccount.ts";
 import Migration0164 from "./Migrations/164_MakitaPermissions.ts";
+import Migration0165 from "./Migrations/165_MakitaConfigs.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -308,6 +309,7 @@ const migrationEntries = [
   [162, "GrantEndings", Migration0162],
   [163, "MakitaAccount", Migration0163],
   [164, "MakitaPermissions", Migration0164],
+  [165, "MakitaConfigs", Migration0165],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

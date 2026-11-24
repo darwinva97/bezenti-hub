@@ -74,6 +74,12 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // Makita ticket 02: who may make configurations that spend AI accounts and write on GitHub.
   [WS_METHODS.makitaPermissionsGrant]: AuthAccessWriteScope,
   [WS_METHODS.makitaPermissionsRevoke]: AuthAccessWriteScope,
+  // Makita ticket 03: configurations launch Threads as their creator, as scheduled tasks do.
+  [WS_METHODS.makitaConfigsCreate]: AuthOrchestrationOperateScope,
+  [WS_METHODS.makitaConfigsUpdate]: AuthOrchestrationOperateScope,
+  [WS_METHODS.makitaConfigsDelete]: AuthOrchestrationOperateScope,
+  [WS_METHODS.makitaConfigsPause]: AuthOrchestrationOperateScope,
+  [WS_METHODS.makitaConfigsResume]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectCloneStart]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneCancel]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneRetry]: AuthSourceControlWriteScope,

@@ -46,7 +46,7 @@ jobs:
           GIT_TERMINAL_PROMPT: "0"
         run: |
           set -euo pipefail
-          git init -q .
+          git -c init.defaultBranch=main init -q .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
           git fetch -q --no-tags --filter=blob:none origin "$GITHUB_SHA" "+refs/heads/main:refs/remotes/origin/main"
           git sparse-checkout set --no-cone '/*' '!/.repos/'
@@ -92,15 +92,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # A mano, como bezenti.yml: actions/checkout falla con los gitlinks huérfanos de .repos.
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
-          sparse-checkout-cone-mode: false
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git -c init.defaultBranch=main init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/' '!/apps/mobile/modules/t3-terminal/Vendor/**/*.a'
+          git -c checkout.workers=0 checkout -q --detach FETCH_HEAD
 
       - name: Dependencies
         uses: ./.github/actions/setup-ci-deps
@@ -131,15 +133,17 @@ jobs:
       matrix:
         group: ${{ fromJSON(needs.plan.outputs.typecheck) }}
     steps:
+      # A mano, como bezenti.yml: actions/checkout falla con los gitlinks huérfanos de .repos.
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
-          sparse-checkout-cone-mode: false
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git -c init.defaultBranch=main init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/' '!/apps/mobile/modules/t3-terminal/Vendor/**/*.a'
+          git -c checkout.workers=0 checkout -q --detach FETCH_HEAD
 
       - name: Dependencies
         uses: ./.github/actions/setup-ci-deps
@@ -172,15 +176,17 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.tests) }}
     steps:
+      # A mano, como bezenti.yml: actions/checkout falla con los gitlinks huérfanos de .repos.
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
-          sparse-checkout-cone-mode: false
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git -c init.defaultBranch=main init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/' '!/apps/mobile/modules/t3-terminal/Vendor/**/*.a'
+          git -c checkout.workers=0 checkout -q --detach FETCH_HEAD
 
       # Las pruebas de escritorio compilan el ayudante de secretos del navegador; apt corre mientras se instalan las dependencias.
       - name: Start installing desktop build libraries
@@ -280,12 +286,15 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /.github/scripts/
-          sparse-checkout-cone-mode: false
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git -c init.defaultBranch=main init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --depth=1 --filter=blob:none origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/.github/scripts/'
+          git checkout -q --detach FETCH_HEAD
 
       - name: Download results
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

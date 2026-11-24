@@ -4,6 +4,13 @@ T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provid
 
 You can think of T3 Code as an open source "bring-your-own-subscription" alternative to apps like Claude Desktop, Codex App, Cursor Glass and Conductor.
 
+## This fork: Bezenti Hub (read first)
+
+This checkout is the Bezenti Hub fork, a multi-user Hub built on T3 Code. Before any work, read
+[bezenti/AGENTS.md](bezenti/AGENTS.md): how a change goes from branch to CI verification to the
+integration branch, and the Hub's rules on access, isolation and the public repository. Where it
+disagrees with this file (verification, pull requests, plans), it wins.
+
 ## What makes T3 Code special?
 
 We have over 500,000 users who love T3 Code. It's important we maintain the things they love as we continue to iterate on the product. Here's a brief list of the things we can never compromise on.

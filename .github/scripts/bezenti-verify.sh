@@ -57,8 +57,9 @@ typecheck)
     log=$LOGS/typecheck-${dir//\//_}.log
     (cd "$dir" && timeout 900 vp exec effect-tsgo tsrs --noEmit) >"$log" 2>&1
     rc=$?
-    # Known error already on the production base (2026-11-17): ThreadTabStrip.browser.test.tsx:134.
-    errors=$(grep 'error TS' "$log" | grep -v 'ThreadTabStrip.browser.test.tsx:134:')
+    # Known error already on the production base (2026-11-17): ThreadTabStrip.browser.test.tsx:134
+    # (written `file(134,52)` when the output is not a terminal).
+    errors=$(grep 'error TS' "$log" | grep -vE 'ThreadTabStrip\.browser\.test\.tsx(:134:|\(134,)')
     if [ -n "$errors" ]; then
       say "FAIL typecheck $dir ($(echo "$errors" | wc -l) errors)"
       echo "$errors" | detail "typecheck $dir"

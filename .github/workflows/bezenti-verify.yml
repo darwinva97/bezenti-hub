@@ -172,6 +172,9 @@ jobs:
     name: test (${{ matrix.shard.id }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # ubuntu-latest es Ubuntu 26.04 y el Playwright del repo aún no lo reconoce: se usan sus navegadores de 24.04.
+    env:
+      PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
     strategy:
       fail-fast: false
       matrix:

@@ -16,7 +16,7 @@ Spec: ../spec.md
 
 - [ ] Migración `makita_tasks` con test (`UNIQUE (host, repo, number)` para tareas vivas).
 - [ ] Lanzamiento con `ThreadLaunchService.launch` como `ScheduledTaskService.runTask`: `CommandActor.actAsResolved` del creador, `creationSource: "makita"`, título, `ModelSelection`, worktree desde la base; `CommandId`/`MessageId` derivados de la clave del evento.
-- [ ] Colocación fija al Sandbox del Space (o la máquina dedicada de la configuración); nunca una máquina personal.
+- [ ] Colocación fija a «Where it works»: en esta tanda, el Sandbox del Space; nunca una máquina personal ni prestada, ni la preferencia del Project. El Thread corre como el creador de la configuración, pida quien pida.
 - [ ] Comprobaciones al empezar y antes de cada turno: pausa, creador activo, en el Space y con `makita.use`, Space abierto, AI account disponible; si falla por el creador, la configuración se pausa con su motivo.
 - [ ] Un Thread de Makita: `EffectiveVaults` vacío, `SecretDelivery` no entrega nada, `request_secret`/`list_secret_names` → `forbidden`, sin workload identity; lista de herramientas MCP permitidas en `McpToolAccess.ts`.
 - [ ] Prompt inicial con el enmarcado de `webhookTemplate.ts` (autor y «allowed» por comentario) y las instrucciones de la spec.

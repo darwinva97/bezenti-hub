@@ -24,6 +24,8 @@ Makita is the Hub's GitHub bot teammate: a normal GitHub account whose token the
 | `makitaCallers.ts`      | nothing (reads)                                          | Whom each configuration answers now, by numeric GitHub id (ticket 08).                                                                    |
 | `MakitaPullRequests.ts` | `makita_tasks.pr_number`, `ci_*`, `ci_fix_attempts`      | A pushing task's pull request (`makita_open_pull_request`), the CI watch (`makita-ci`) and `makita_ci_logs` (ticket 12).                  |
 | `makitaCi.ts`           | nothing (pure)                                           | A commit's CI verdict, the pull request's required sections and footer, what Makita says about CI.                                        |
+| `makitaApprovers.ts`    | nothing (reads)                                          | Who approves a configuration now, whether a push waits, `/makita ok` in a comment (ticket 11).                                            |
+| `makitaApprovalFlow.ts` | `pending_push_json`, `approved_through`                  | A waiting push and its request, an approval recorded, the approved commit sent (ticket 11).                                               |
 
 Only `makita/` names these tables (`DoorRules.test.ts` checks it). Other modules ask `makitaRows.makitaTaskOfThread`.
 
@@ -96,7 +98,7 @@ A configuration with «Also push branches» (`capability: push`) lets its tasks 
 
 - **Its own worktree.** Before the launch, the Hub fetches the base (`base_branch`, else GitHub's default) with Makita's token into the Project's Hub repository at `refs/t3/project/makita/<taskId>/base`. On the Space's work place (`chooseForThread` with `spaceWorkOnly`), `move.fetch` brings it into the Project's checkout and `move.prepare` makes a worktree there whose setup command checks out `makita/<n>-<slug>` at the base and sets the bot as author in that worktree's config only (`extensions.worktreeConfig`). The task row keeps it in `workspace_json`, so a restart never makes it twice. Making it may take minutes, so it and the launch run in a fiber off the intake's tick (which also carries stops); the event stays `queued` until the launch ends, a restart replays it, and a task stopped meanwhile gets no Thread. The Thread launches with `existing_worktree`: `ThreadLaunchService` and `ThreadManagementService.placeThread` allow a worktree off the Hub machine only for that `space-work` launch of a pushing Makita Thread, and the Project's setup script does not run for it.
 - **`makita_push {}`.** Listed only when the configuration may push. The Thread's machine captures its worktree into `refs/t3/threads/<threadId>/makita/push` (a commit whose parent is `HEAD`) and uploads it with its own credential; `gitRoute.ts` already lets only the Thread's Active environment write there. In the Hub's bare repository the Hub takes the capture's parent and checks: it descends from the last pushed tip (else the start commit); the new commits are at most 100 and about 64 MiB, each authored and committed by the bot's `noreply` address, none changing `.github/workflows/**`, and their messages and added lines pass the creator's secret mask and the token-shape refusal. Then GitHub's branch must be where Makita left it, and `MakitaGitHub.pushBranch` pushes `<sha>:refs/heads/makita/…` without `+`. Audited `makita.github.push`.
-- **Approval seam (ticket 11).** With `approval: others`, the first push for a caller who is not an approver is kept in `pending_push_json` and not sent.
+- **Approval (ticket 11).** A push that needs an approver is kept in `pending_push_json` and not sent; see «Approval».
 - **The token.** Only `MakitaGitHub` reads it. Its git commands run on the Hub host in the Hub's bare repository, naming GitHub by URL, with the token in the environment of that one process through `HubRepository.withEnvironmentCredential`'s helper: never in an argument, a URL, a config file or a log.
 - **Stopping.** Every push reads the task again under a per-Thread lock and once more right before `git push`; a stop clears `pending_push_json`.
 
@@ -110,6 +112,18 @@ A configuration with «Also push branches» (`capability: push`) lets its tasks 
   - A PR closed meanwhile (`closed`) or moved by someone else (`moved`) ends the watch without a word. Every Hub comment goes through the loop guard.
 - **`makita_ci_logs { job }`.** Only a failing check of the last RED, and only a GitHub Actions job. `MakitaGitHub.tail` streams the job's log and keeps its last 64 KiB. The text is masked, colour codes removed, and framed.
 
+## Approval (ticket 11)
+
+A configuration says when a push waits (`approval`: `others` by default, `always`, `never`) and who else approves (`approvers`, GitHub logins resolved to ids on save). Design note: `.scratch/makita/issues/11-design.md`.
+
+- **Who approves** (`makitaApprovers.approverIdsOf`, read at every use): the creator's linked GitHub id while the creator is active and still in the Space (or is the Owner), and each listed id linked by an active Admin or Member of the Space. Guests, people who left, unlinked or disabled accounts and Makita itself never count. Saving never says whether a listed login is linked.
+- **When a push waits** (`pushNeedsApproval`, inside `makita_push` before GitHub): an instruction is an event that started or woke the task (its `started` or queued trigger rows; the caller if pruned). A push waits while some instruction is not covered by `approved_through` (written before the last approval) and `approval = always`, or its author is not an approver now. A push woken by CI inherits; `never` never waits.
+- **Waiting.** `pending_push_json` keeps the commit and its size; Makita comments once per waiting commit «Ready to push `makita/…` (+a −d in f files). @x can reply `/makita ok` to send it.», naming only approvers who already wrote on the issue, and keeps that comment's id (`request`). The loop guard counts it.
+- **`/makita ok`.** A new issue comment (on the task's issue or its pull request's conversation) whose first line is exactly `/makita ok` is queued for the live task's configuration (`detail = ok`). The tasks pass reads it again by id: unedited, same author id, not Makita, an approver now, newer than the request (comment ids only grow), the waiting push not yet approved. Then, in one transaction, the pending push gets its approval, `approved_through` holds `{ at, via, login, commentId }`, the event is `approval` and `makita.task.approve` is audited (`via: github`). Makita reacts 👍. Anything else ends `ignored-not-approver`, `ignored-edited` or `command` and writes nothing on GitHub.
+- **Sending.** `MakitaPushes.releaseApproved`, at the end of every tasks pass and under the Thread's push lock, pushes exactly the approved commit (never forced; the branch must be where Makita left it, or already there), audits `makita.github.push` as the system, posts «Pushed `makita/…` (sha, n commits), approved by @x.» and wakes the Thread (`makita-approved:<taskId>:<sha>`).
+- **The Owner** approves from the Hub: WS `makita.tasks.approve` (AccessPolicy `makita.approve`, open Space), audited with `via: hub`; the next pass sends it. The activity shows a waiting push, «Approve» for the Owner, and the last approval.
+- **Stopping** clears `pending_push_json` (ticket 06), so nothing approved later is sent.
+
 ## What other tickets read
 
 - The gateway: `makitaTaskOfThread` on the Thread of a gateway key gives the configuration and `halted`. `GatewayCaller.makitaConfigId` carries the configuration.
@@ -117,3 +131,4 @@ A configuration with «Also push branches» (`capability: push`) lets its tasks 
 - Approvers (ticket 11): `GitHubIdentities.linkedUserOf(sql, githubUserId)` names the Hub User who linked a GitHub id; `linkedIdsOf(sql, userIds)` the ids these Users linked. Whether the User may still act is the caller's check.
 - Landing (ticket 13): `MakitaPullRequests.ciOf(repo, sha)` gives the verdict of one commit («GREEN on the exact head»); the row has `pr_number`, `head_sha` and `last_push_at`.
 - The PR conversation (ticket 14): `pr_number` names Makita's own PR.
+- `/makita merge` (ticket 13): `makitaApprovers.isApproverNow(sql, configId, githubUserId)` answers whether a GitHub id approves a configuration right now, with every check above.

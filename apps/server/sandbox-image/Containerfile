@@ -55,15 +55,19 @@ RUN set -eu; \
     node --version; npm --version
 
 # The tools and libraries the document skills (skills/) run, which they say are preinstalled:
-# LibreOffice without its GUI (conversions, recalculating formulas), Poppler and qpdf (PDF pages),
+# LibreOffice without its GUI (conversions, recalculating formulas) from bookworm-backports, since
+# bookworm's 7.4 aborts headless in the xlsx skill's recalculation macro, Poppler and qpdf (PDF pages),
 # pandoc, Tesseract with English and Spanish (OCR), and fonts metric-compatible with Office's
 # (Liberation for Arial and Times, Carlito for Calibri, Caladea for Cambria) so documents keep their
 # layout. Python's are installed system-wide from office/requirements.txt, every file checked by its
 # hash; PIP_BREAK_SYSTEM_PACKAGES lets an agent's own `pip install` fall back to ~/.local. Node's
 # are office/package-lock.json, none with an install script; NODE_PATH lets `require` find them.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
+RUN echo "deb http://deb.debian.org/debian bookworm-backports main" \
+      > /etc/apt/sources.list.d/bookworm-backports.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends -t bookworm-backports \
       libreoffice-calc-nogui libreoffice-impress-nogui libreoffice-writer-nogui \
+ && apt-get install -y --no-install-recommends \
       pandoc poppler-utils qpdf tesseract-ocr tesseract-ocr-spa python3-pip python-is-python3 \
       fonts-crosextra-caladea fonts-crosextra-carlito fonts-dejavu-core fonts-liberation2 fonts-noto-core \
  && rm -rf /var/lib/apt/lists/*

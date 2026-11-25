@@ -423,7 +423,8 @@ Agents in a Sandbox work with Word, PowerPoint, Excel and PDF files out of the b
 Anthropic's `docx`, `pptx`, `xlsx` and `pdf` skills, copied unchanged (Apache 2.0) into
 [sandbox-image/skills](../../apps/server/sandbox-image/skills/README.md), which names the commit.
 The skills say their tools are preinstalled and tell the model not to install them, so the image
-carries all of them: LibreOffice without its GUI, Poppler, qpdf, pandoc and Tesseract (English and
+carries all of them: LibreOffice without its GUI (from bookworm-backports: 7.4 aborts in the
+xlsx skill's headless recalculation), Poppler, qpdf, pandoc and Tesseract (English and
 Spanish) from Debian, fonts metric-compatible with Office's (without them converted documents lose
 their layout), the Python libraries of
 [office/requirements.txt](../../apps/server/sandbox-image/office/requirements.txt) installed

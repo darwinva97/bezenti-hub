@@ -1,4 +1,5 @@
 import { formatTokens, formatUsd } from "@t3tools/client-runtime/ai-usage-view";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   type EnvironmentId,
   type MakitaActivityInput,
@@ -13,8 +14,10 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
+import { errorMessageOf } from "../../lib/errorMessage";
 import { makitaEnvironment } from "../../state/makita";
 import { useEnvironmentQuery } from "../../state/query";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -64,6 +67,10 @@ const OUTCOME_LABEL: Readonly<Record<MakitaEventOutcome, string>> = {
   land: "Merge",
   command: "Command",
 };
+
+/** A task still at work or waiting: ticket 06's «Stop now» applies. */
+const isLive = (task: MakitaActivityTask) =>
+  task.state !== "done" && task.state !== "stopped" && task.state !== "failed";
 
 const formatWhen = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -124,9 +131,14 @@ function UsageLine({ total }: { readonly total: MakitaUsagePeriods | null }) {
 function TaskRow({
   task,
   configName,
+  onStop,
+  stopping,
 }: {
   readonly task: MakitaActivityTask;
   readonly configName: string | null;
+  /** Null when the viewer may not stop it, or it has ended. */
+  readonly onStop: (() => void) | null;
+  readonly stopping: boolean;
 }) {
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-2 text-xs">
@@ -152,15 +164,29 @@ function TaskRow({
         {task.failure === null ? "" : ` · ${task.failure}`}
         {task.usage === null ? "" : ` · ${makitaUsageText(task.usage)}`}
       </span>
-      {task.threadId === null ? null : (
-        <Link
-          className="ms-auto text-primary hover:underline"
-          to="/$threadId"
-          params={{ threadId: task.threadId }}
-        >
-          Open Thread
-        </Link>
-      )}
+      <span className="ms-auto flex items-center gap-2">
+        {task.threadId === null ? null : (
+          <Link
+            className="text-primary hover:underline"
+            to="/$threadId"
+            params={{ threadId: task.threadId }}
+          >
+            Open Thread
+          </Link>
+        )}
+        {onStop === null ? null : (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={stopping}
+            aria-label={`Stop ${task.repo}#${task.number} now`}
+            title="Interrupts its turn. Makita writes nothing on GitHub about it."
+            onClick={onStop}
+          >
+            Stop now
+          </Button>
+        )}
+      </span>
     </li>
   );
 }
@@ -206,9 +232,30 @@ const TABS = [
 type Tab = (typeof TABS)[number][0];
 
 /** The activity itself: its usage on one line, the rest one tab at a time (details on demand). */
-function ActivityBody({ activity }: { readonly activity: MakitaActivityResult }) {
+function ActivityBody({
+  activity,
+  onStop,
+  stopping,
+}: {
+  readonly activity: MakitaActivityResult;
+  readonly onStop: (task: MakitaActivityTask) => void;
+  /** The task being stopped now, if any. */
+  readonly stopping: string | null;
+}) {
   const [tab, setTab] = useState<Tab>("now");
   const names = new Map(activity.configs.map((config) => [config.configId, config.name]));
+  const stoppable = new Set(
+    activity.configs.flatMap((config) => (config.canStop ? [config.configId] : [])),
+  );
+  const row = (task: MakitaActivityTask) => (
+    <TaskRow
+      key={task.taskId}
+      task={task}
+      configName={nameOf(task.configId)}
+      onStop={isLive(task) && stoppable.has(task.configId) ? () => onStop(task) : null}
+      stopping={stopping === task.taskId}
+    />
+  );
   const nameOf = (configId: string) =>
     activity.configs.length > 1 ? (names.get(configId) ?? null) : null;
   const visibleConfigs = activity.configs.filter((config) => config.usage !== null);
@@ -235,9 +282,7 @@ function ActivityBody({ activity }: { readonly activity: MakitaActivityResult })
           <p className="text-sm text-muted-foreground">Makita is not working on anything now.</p>
         ) : (
           <ul aria-label="Makita now" className="divide-y divide-border/50">
-            {activity.now.map((task) => (
-              <TaskRow key={task.taskId} task={task} configName={nameOf(task.configId)} />
-            ))}
+            {activity.now.map(row)}
           </ul>
         )
       ) : tab === "tasks" ? (
@@ -245,9 +290,7 @@ function ActivityBody({ activity }: { readonly activity: MakitaActivityResult })
           <p className="text-sm text-muted-foreground">No task yet.</p>
         ) : (
           <ul aria-label="Recent Makita tasks" className="divide-y divide-border/50">
-            {activity.tasks.map((task) => (
-              <TaskRow key={task.taskId} task={task} configName={nameOf(task.configId)} />
-            ))}
+            {activity.tasks.map(row)}
           </ul>
         )
       ) : tab === "events" ? (
@@ -318,6 +361,17 @@ export function MakitaActivityDialog({
   readonly onClose: () => void;
 }) {
   const query = useMakitaActivity(environmentId, input);
+  const stopTask = useAtomCommand(makitaEnvironment.stopTask, "stop a Makita task");
+  const [stopping, setStopping] = useState<string | null>(null);
+  const [stopError, setStopError] = useState<string | null>(null);
+  const stop = async (task: MakitaActivityTask) => {
+    setStopping(task.taskId);
+    setStopError(null);
+    const result = await stopTask({ environmentId, input: { taskId: task.taskId } });
+    setStopping(null);
+    if (result._tag === "Success") query.refresh();
+    else setStopError(errorMessageOf(squashAtomCommandFailure(result), "Could not stop it."));
+  };
   return (
     <Dialog
       open
@@ -341,7 +395,18 @@ export function MakitaActivityDialog({
               {query.error ?? "Loading…"}
             </p>
           ) : (
-            <ActivityBody activity={query.data} />
+            <div className="flex flex-col gap-2">
+              {stopError === null ? null : (
+                <p className="text-xs text-destructive" role="alert">
+                  {stopError}
+                </p>
+              )}
+              <ActivityBody
+                activity={query.data}
+                onStop={(task) => void stop(task)}
+                stopping={stopping}
+              />
+            </div>
           )}
         </DialogPanel>
       </DialogPopup>

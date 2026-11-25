@@ -148,6 +148,8 @@ live(
       const hers = yield* activity.activityForSession({ configId: config.configId }).pipe(asGrace);
       assert.isFalse(hers.everyone);
       assert.lengthOf(hers.configs, 1);
+      // Her own configuration: she may stop its tasks (ticket 06's door).
+      assert.isTrue(hers.configs[0]!.canStop);
       const usage = hers.configs[0]!.usage;
       assert.isNotNull(usage);
       assert.equal(usage!.today.requests, 1);
@@ -188,6 +190,7 @@ live(
         .activityForSession({ spaceId: setup.acmeId })
         .pipe(CommandActor.actAs(setup.people.admin));
       assert.equal(ada.configs[0]?.usage?.today.requests, 1);
+      assert.isTrue(ada.configs[0]?.canStop);
       assert.equal(ada.now[0]?.usage?.requests, 1);
     }),
   60_000,
@@ -201,6 +204,8 @@ live(
       const asHedy = CommandActor.actAs(hedy);
       const hers = yield* activity.activityForSession({ configId: config.configId }).pipe(asHedy);
       assert.isNull(hers.configs[0]!.usage);
+      // Another creator's configuration: she may not stop its tasks.
+      assert.isFalse(hers.configs[0]!.canStop);
       assert.lengthOf(hers.now, 1);
       assert.isNull(hers.now[0]!.usage);
       assert.isNotNull(hers.now[0]!.threadId);

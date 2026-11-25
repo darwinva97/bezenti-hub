@@ -69,6 +69,8 @@ export const MakitaActivityConfig = Schema.Struct({
   pausedAt: Schema.NullOr(Schema.String),
   /** Null: the viewer may not see this configuration's usage (another creator's, a Member). */
   usage: Schema.NullOr(MakitaUsagePeriods),
+  /** Whether the viewer may stop its tasks (`makita.tasks.stop`; the Hub decides again). */
+  canStop: Schema.Boolean,
 });
 export type MakitaActivityConfig = typeof MakitaActivityConfig.Type;
 

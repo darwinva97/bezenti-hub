@@ -16,7 +16,7 @@ import {
   type MakitaUsagePeriods,
   SpaceId,
   ThreadId,
-  type UserId,
+  UserId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -72,6 +72,7 @@ interface ConfigRow {
   readonly name: string;
   readonly createdBy: string;
   readonly pausedAt: string | null;
+  readonly pausedReason: string | null;
 }
 
 interface TaskRow {
@@ -124,7 +125,7 @@ const make = Effect.gen(function* () {
   const configsWhere = (where: ReturnType<typeof sql.and>) =>
     sql<ConfigRow>`
       SELECT config_id AS "configId", space_id AS "spaceId", name, created_by AS "createdBy",
-        paused_at AS "pausedAt"
+        paused_at AS "pausedAt", paused_reason AS "pausedReason"
       FROM makita_configs WHERE ${where}
       ORDER BY space_id, created_at, config_id
     `.pipe(Effect.catch(storage("read the configurations")));
@@ -224,6 +225,29 @@ const make = Effect.gen(function* () {
       month: periodOf("month", now).fromDay,
     };
 
+    // Ticket 06's «Stop now» on a task: whoever may pause its configuration (`makita.pause`).
+    const permitted = new Map<string, boolean>();
+    const mayStop = Effect.fn("MakitaActivity.mayStop")(function* (row: ConfigRow) {
+      const space = known.get(SpaceId.make(row.spaceId));
+      if (space === undefined) return false;
+      if (!permitted.has(row.spaceId)) {
+        permitted.set(
+          row.spaceId,
+          yield* permittedIn(sql, input.actorUserId, space.resource.id).pipe(
+            Effect.catch(storage("read who may use Makita")),
+          ),
+        );
+      }
+      return AccessPolicy.isAllowed(
+        AccessPolicy.decide(principal, "makita.pause", {
+          kind: "makita-config",
+          space: space.resource,
+          createdBy: UserId.make(row.createdBy),
+          permitted: permitted.get(row.spaceId) === true,
+          pausedByOwner: row.pausedReason === "owner",
+        } satisfies AccessPolicy.MakitaConfigResource),
+      );
+    });
     const configs: Array<MakitaActivityConfig> = [];
     for (const row of rows) {
       const visible = usageVisible.has(row.configId);
@@ -240,6 +264,7 @@ const make = Effect.gen(function* () {
               starts,
             )
           : null,
+        canStop: yield* mayStop(row),
       });
     }
 

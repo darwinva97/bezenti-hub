@@ -107,6 +107,9 @@ it.effect(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* migrate;
+      // Today's EffectiveVaults reads what later tickets added (Keycloak sign-in, Makita's tasks):
+      // it reads the database migrated to today.
+      yield* runMigrations();
       const after = yield* effectiveSets;
       const reviews = yield* sql<{ readonly row: string }>`
         SELECT group_id || '|' || user_id || '|' || space_id AS "row"

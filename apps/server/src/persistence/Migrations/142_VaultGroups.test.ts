@@ -8,6 +8,9 @@ import { runMigrations } from "../Migrations.ts";
 import GOLDEN from "./142_VaultGroups.golden.json" with { type: "json" };
 import { effectiveSets, seedBefore142 } from "./142_VaultGroups.testkit.ts";
 
+/** Grace's Thread in acme-web, whose Project removes vault-tools. */
+const GRACE_WEB = "t-acme-grace-web";
+
 const rows = (list: ReadonlyArray<Record<string, unknown>>) =>
   list.map((row) => Object.values(row).join("|"));
 
@@ -131,6 +134,9 @@ it.effect("every Thread receives the same set as before, files and Provider entr
     yield* runMigrations({ toMigrationInclusive: 141 });
     yield* seedBefore142;
     yield* runMigrations({ toMigrationInclusive: 142 });
+    // Today's EffectiveVaults reads what later tickets added (Keycloak sign-in, Makita) and
+    // reaches an Owner's group through Grants (149): it reads the database migrated to today.
+    yield* runMigrations();
     const sql = yield* SqlClient.SqlClient;
     const defaults = new Set(
       (yield* sql<{ readonly groupId: string }>`
@@ -141,14 +147,23 @@ it.effect("every Thread receives the same set as before, files and Provider entr
       string,
       { readonly vaults: ReadonlyArray<string>; readonly variables: unknown }
     >;
-    // The only difference: an Organization's new, empty `default` among the groups drawn from.
+    // The differences: new, empty `default` groups among those drawn from, and (Grants ticket 07,
+    // its own test's PROJECT_REMOVES) acme-web's remove now holds for the group Grace had by
+    // allowance, so its Thread loses vault-tools and the names it won.
     const withoutNewDefaults = Object.fromEntries(
       Object.entries(after).map(([threadId, set]) => [
         threadId,
         { vaults: set.vaults.filter((vault) => !defaults.has(vault)), variables: set.variables },
       ]),
     );
-    assert.deepStrictEqual(withoutNewDefaults, GOLDEN);
+    const golden = GOLDEN as Record<string, { readonly vaults: ReadonlyArray<string> }>;
+    const { [GRACE_WEB]: graceWeb, ...rest } = withoutNewDefaults;
+    const { [GRACE_WEB]: graceWebBefore, ...restBefore } = golden;
+    assert.deepStrictEqual(rest, restBefore);
+    assert.deepStrictEqual(
+      graceWeb?.vaults,
+      graceWebBefore?.vaults.filter((vault) => vault !== "vault-tools:user"),
+    );
     assert.isTrue(
       after["t-acme-ada"]?.vaults.some((vault) => defaults.has(vault)) === true,
       "Acme's default is a fixed default of Acme",

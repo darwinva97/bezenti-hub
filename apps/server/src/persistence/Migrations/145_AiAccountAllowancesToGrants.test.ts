@@ -81,6 +81,9 @@ it.effect(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* migrate;
+      // Today's AllowedAiAccounts reads what later tickets added (Keycloak sign-in's identities
+      // and managed Memberships): it reads the database migrated to today.
+      yield* runMigrations();
       const after = yield* usableSets;
       const reviews = yield* sql<{
         readonly account: string;

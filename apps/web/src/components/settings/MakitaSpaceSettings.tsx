@@ -50,6 +50,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { InfoTip } from "./InfoTip";
 import { MakitaActivityDialog, makitaUsageText, useMakitaActivity } from "./MakitaActivity";
+import { labelNamesOf, MakitaLabelsField } from "./MakitaLabelsField";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useSettingsSpace } from "./useSettingsSpace";
 
@@ -295,6 +296,7 @@ function MakitaConfigsPanel({
       )}
       {editing === null || options === null ? null : (
         <ConfigDialog
+          environmentId={environmentId}
           spaceId={spaceId}
           options={options}
           config={editing === "new" ? null : editing}
@@ -529,6 +531,7 @@ const APPROVAL_NOTES: Readonly<Record<MakitaConfig["approval"], string>> = {
 
 /** «New configuration» or «Edit»: batch 1's choices, the rest said as coming later. */
 function ConfigDialog(props: {
+  readonly environmentId: EnvironmentId;
   readonly spaceId: SpaceId;
   readonly options: Options;
   readonly config: MakitaConfig | null;
@@ -571,6 +574,8 @@ function ConfigDialog(props: {
   // Ticket 13: landing, and the confirmation that turning it on asks for (a merge can deploy).
   const [mayLand, setMayLand] = useState(config?.mayLand ?? false);
   const [landConfirmed, setLandConfirmed] = useState(config?.mayLand ?? false);
+  // Ticket 24: the labels Makita may set, as names separated by commas.
+  const [labels, setLabels] = useState(config?.labels.join(", ") ?? "");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -631,6 +636,7 @@ function ConfigDialog(props: {
                   approvers: loginsOf(approvers),
                   baseBranch: baseBranch.trim().length === 0 ? null : baseBranch.trim(),
                   environmentId: null,
+                  labels: labelNamesOf(labels),
                 },
                 config?.configId ?? null,
               )
@@ -971,6 +977,15 @@ function ConfigDialog(props: {
                 ) : null}
                 <span className="font-normal text-muted-foreground">{CI_NOTE}</span>
               </div>
+              <MakitaLabelsField
+                environmentId={props.environmentId}
+                spaceId={props.spaceId}
+                repos={allRepos ? { all: true } : { projects: chosen }}
+                triggerLabel={label}
+                value={labels}
+                onChange={setLabels}
+                disabled={pending}
+              />
               <div className="flex flex-col gap-1 text-xs">
                 <span className="font-medium">Where it works</span>
                 <span>Space Sandbox (recommended)</span>

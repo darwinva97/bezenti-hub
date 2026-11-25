@@ -202,6 +202,16 @@ function TaskRow({
           {CI_LABEL[task.ci]}
         </Badge>
       )}
+      {task.reproduced === null ? null : (
+        <Badge size="sm" variant={task.reproduced === "yes" ? "info" : "secondary"}>
+          {task.reproduced === "yes" ? "Reproduced" : "Not reproduced"}
+        </Badge>
+      )}
+      {task.labels.map((name) => (
+        <Badge key={name} size="sm" variant="outline">
+          {name}
+        </Badge>
+      ))}
       {waiting === null ? null : (
         <Badge size="sm" variant="warning">
           {waiting.approved ? "Approved, pushing" : "Push waits for approval"}

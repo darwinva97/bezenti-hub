@@ -6,10 +6,14 @@
  * replays nothing.
  */
 import { assert, it } from "@effect/vitest";
-import { ThreadId } from "@t3tools/contracts";
+import { CommandId, type ModelSelection, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 
+import * as AiAccountChoice from "../ai/AiAccountChoice.ts";
+import * as AiGatewaySessions from "../ai/AiGatewaySessions.ts";
 import { MAKITA_STOPPED } from "../ai/AiGatewayKeys.ts";
 import { call, messages, platform, posix } from "../ai/AiGatewayRoute.testkit.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
@@ -301,4 +305,79 @@ live("taking back the creator's permission stops their running task with that re
         "Makita stopped this work: its configuration's creator may no longer use Makita here.",
     });
   }),
+);
+
+live(
+  "a Makita Thread keeps the AI account it started with: another account, another provider or a delegated task is refused; another Thread may switch",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* running;
+      const { setup } = ctx;
+      const choice = Context.get(
+        yield* Layer.build(
+          AiAccountChoice.layer.pipe(
+            Layer.provide(
+              Layer.mock(AiGatewaySessions.AiGatewaySessions)({
+                applies: () => Effect.succeed(true),
+              }),
+            ),
+            Layer.provide(
+              Layer.succeedContext(Context.merge(setup.server.services, setup.context)),
+            ),
+          ),
+        ),
+        AiAccountChoice.AiAccountChoice,
+      );
+      const other = yield* setup.account("Acme Claude B", "claude", { spaceIds: [setup.acmeId] });
+      const selection = ctx.config.modelSelection;
+      const setSelection = (threadId: ThreadId, modelSelection: ModelSelection) =>
+        choice
+          .settle({
+            type: "thread.model-selection.set",
+            commandId: CommandId.make(`set-${threadId}-${modelSelection.aiAccountId ?? "none"}`),
+            threadId,
+            modelSelection,
+          })
+          .pipe(CommandActor.actAs(setup.people.member));
+
+      // Its own account and model go on; naming none keeps its own.
+      yield* setSelection(ctx.threadId, selection);
+      const { aiAccountId: _named, ...unnamed } = selection;
+      const kept = yield* setSelection(ctx.threadId, unnamed as ModelSelection);
+      assert.equal(
+        kept.type === "thread.model-selection.set" && kept.modelSelection.aiAccountId,
+        selection.aiAccountId,
+      );
+      // Another account (gateway or not) or another provider: refused.
+      const switched = yield* setSelection(ctx.threadId, { ...selection, aiAccountId: other }).pipe(
+        Effect.flip,
+      );
+      assert.deepEqual(
+        [switched._tag, "reason" in switched ? switched.reason : null],
+        ["AiAccountChoiceError", "not-allowed"],
+      );
+      assert.include(switched.message, "keeps the AI account");
+      const provider = yield* setSelection(ctx.threadId, {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.5",
+      }).pipe(Effect.flip);
+      assert.include(provider.message, "keeps the AI account");
+      const delegated = yield* choice
+        .settle({
+          type: "delegated_task.request",
+          commandId: CommandId.make("delegate-from-makita"),
+          parentThreadId: ctx.threadId,
+          modelSelection: selection,
+        } as never)
+        .pipe(CommandActor.actAs(setup.people.member), Effect.flip);
+      assert.include(delegated.message, "does not delegate");
+
+      // A Thread that is not Makita's switches as before.
+      const plain = yield* setup.thread(setup.people.member, setup.acmeId, selection.aiAccountId);
+      const moved = yield* setSelection(plain.threadId, { ...selection, aiAccountId: other });
+      assert.equal(
+        moved.type === "thread.model-selection.set" && moved.modelSelection.aiAccountId,
+        other,
+      );
+    }),
 );

@@ -28,6 +28,7 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as CommandActor from "../auth/CommandActor.ts";
+import { makitaTaskOfThread } from "../makita/makitaRows.ts";
 import { threadAccessOf } from "../orchestration-v2/commandAccess.ts";
 import { threadTurnOwner } from "../orchestration-v2/threadTurnOwner.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -298,7 +299,36 @@ const make = Effect.gen(function* () {
         yield* spaces.authorizeItem(actor, access.action, { kind: "thread", id: access.threadId });
       }
     }
+    // Makita ticket 06: a Makita Thread keeps the gateway account it started with, so its
+    // configuration's pause and usage keep holding; it delegates nothing.
+    const makitaThreadId =
+      command.type === "delegated_task.request"
+        ? command.parentThreadId
+        : command.type === "message.dispatch" ||
+            command.type === "thread.model-selection.set" ||
+            command.type === "provider.switch"
+          ? command.threadId
+          : undefined;
+    const makita =
+      makitaThreadId === undefined
+        ? Option.none()
+        : yield* makitaTaskOfThread(sql, makitaThreadId).pipe(
+            Effect.catch(() => refuse("unavailable", "Could not read this Thread. Try again.")),
+          );
+    if (Option.isSome(makita) && command.type === "delegated_task.request") {
+      return yield* refuse("not-allowed", "A Makita Thread does not delegate tasks.");
+    }
     const settled = yield* settleSelection(selection, found.value, resolveDriver);
+    if (
+      Option.isSome(makita) &&
+      (settled.instanceId !== found.value.current?.instanceId ||
+        settled.aiAccountId !== found.value.current?.aiAccountId)
+    ) {
+      return yield* refuse(
+        "not-allowed",
+        "A Makita Thread keeps the AI account its configuration started it with.",
+      );
+    }
     return settled === selection
       ? command
       : ({ ...command, modelSelection: settled } as OrchestrationV2ServerCommand);

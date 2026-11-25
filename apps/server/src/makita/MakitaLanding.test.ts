@@ -545,6 +545,11 @@ live(
       yield* tick(ctx);
       const octocat = yield* ctx.say(OCTOCAT, "@makita-bot merge it", 12);
       yield* tick(ctx);
+      // The wake says who approves and which comment it is.
+      assert.include(
+        String(setup.sends.at(-1)?.input.text),
+        `GitHub user octocat (allowed, not an approver) mentioned you in a new comment (comment id ${octocat.id}, kind issue-comment)`,
+      );
       yield* refusedWith(octocat.id, "Only an approver's comment");
       yield* refusedWith(innocent.id, "did not wake your current turn");
       // A stranger quoting the approver; Makita's own comment; an issue's number as an id.
@@ -565,6 +570,10 @@ live(
       // The approver's order wakes the turn; CI turned red meanwhile: refused, and said once.
       const order = yield* ctx.say(GRACE_GH, "@makita-bot mergealo", 12);
       yield* tick(ctx);
+      assert.include(
+        String(setup.sends.at(-1)?.input.text),
+        `GitHub user Grace-GH (allowed, an approver) mentioned you in a new comment (comment id ${order.id}, kind issue-comment)`,
+      );
       const head = (yield* ctx.row).headSha!;
       setup.github.ci.set(head, {
         checkRuns: [{ id: 9, name: "lint", status: "completed", conclusion: "failure" }],

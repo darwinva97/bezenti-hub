@@ -40,7 +40,7 @@ import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
 import { approveFromGitHub, tellReleased } from "./makitaApprovalFlow.ts";
-import { APPROVAL_DETAIL } from "./makitaApprovers.ts";
+import { APPROVAL_DETAIL, isApproverNow } from "./makitaApprovers.ts";
 import { allowedCallerIds } from "./makitaCallers.ts";
 import { MakitaConfigs } from "./MakitaConfigs.ts";
 import {
@@ -57,7 +57,7 @@ import { MakitaGitHub, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { makitaBranchOf } from "./makitaBranch.ts";
 import { MakitaIntake } from "./MakitaIntake.ts";
 import { MakitaLanding } from "./MakitaLanding.ts";
-import { LAND_INSTRUCTIONS, MERGE_DETAIL } from "./makitaLandingRules.ts";
+import { LAND_INSTRUCTIONS, landingNote, MERGE_DETAIL } from "./makitaLandingRules.ts";
 import { MakitaPushes } from "./MakitaPushes.ts";
 import { pauseCreatorConfigsWithin, permittedIn, stopTasksWithin } from "./makitaRows.ts";
 
@@ -515,6 +515,28 @@ const make = Effect.gen(function* () {
     return comment;
   });
 
+  /** Ticket 13: what a wake tells the agent where its configuration may land; else undefined. */
+  const landingOf = Effect.fn("MakitaTasks.landingOf")(function* (
+    configId: string,
+    authorId: number,
+    commentId: number,
+    eventKey: string,
+  ) {
+    const [config] = yield* sql<{ readonly mayLand: number; readonly capability: string }>`
+      SELECT may_land AS "mayLand", capability FROM makita_configs WHERE config_id = ${configId}
+    `;
+    if (config?.mayLand !== 1 || config.capability !== "push") return undefined;
+    return {
+      approver: yield* isApproverNow(sql, configId, authorId),
+      commentId,
+      kind: eventKey.startsWith("gh:review-comment:")
+        ? ("review-comment" as const)
+        : eventKey.startsWith("gh:review:")
+          ? ("review" as const)
+          : ("issue-comment" as const),
+    };
+  });
+
   /**
    * Ticket 09: an allowed person's mention on an issue with a live task wakes its Thread, queued
    * after any turn at work, framed as the first message. The loop guard counts from zero again.
@@ -550,17 +572,23 @@ const make = Effect.gen(function* () {
     if (author === null || author.id !== row.actorId || comment.updatedAt !== comment.createdAt) {
       return yield* finish(row.eventKey, "ignored-edited", null);
     }
+    // Ticket 13: where it may land, the agent learns whether the author approves and which
+    // comment this is (the only thing makita_request_merge may point at).
+    const landing = yield* landingOf(live.configId, author.id, comment.id, row.eventKey);
     const text =
       item !== undefined
-        ? conversationText({
-            repo: row.repo,
-            issue: live.number,
-            pr: row.number,
-            item,
-            authorLogin: author.login,
-            frameTag: FRAME_TAG,
-            frameId: newFrameId(),
-          })
+        ? [
+            conversationText({
+              repo: row.repo,
+              issue: live.number,
+              pr: row.number,
+              item,
+              authorLogin: author.login,
+              frameTag: FRAME_TAG,
+              frameId: newFrameId(),
+            }),
+            ...(landing === undefined ? [] : [landingNote(landing)]),
+          ].join("\n")
         : followUpText({
             repo: row.repo,
             number: row.number,
@@ -569,6 +597,9 @@ const make = Effect.gen(function* () {
             body: comment.body,
             frameTag: FRAME_TAG,
             frameId: newFrameId(),
+            ...(landing === undefined || landing.kind === "review"
+              ? {}
+              : { landing: { ...landing, kind: landing.kind } }),
           });
     const sent = yield* threads
       .sendToThread({

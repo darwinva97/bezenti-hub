@@ -191,8 +191,19 @@ export const stagingEnvironment = (env: NodeJS.ProcessEnv = process.env): NodeJS
   };
 };
 
-/** What the build context takes of `sandbox-image/` (the release archive carries the same). */
-const SANDBOX_IMAGE_FILES = ["Containerfile", "clis/package.json", "clis/package-lock.json"];
+/**
+ * What the build context takes of `sandbox-image/`, files and whole directories (the release
+ * archive carries the same, scripts/build-cli-archive.ts).
+ */
+const SANDBOX_IMAGE_FILES = [
+  "Containerfile",
+  "clis/package.json",
+  "clis/package-lock.json",
+  "office/package.json",
+  "office/package-lock.json",
+  "office/requirements.txt",
+  "skills",
+];
 
 /**
  * The context: the Containerfile, and the server of this Hub's version. A `t3` release runs from
@@ -238,7 +249,9 @@ const prepareContext = Effect.fn("SandboxImage.prepareContext")(function* (
       Effect.try({
         try: () => {
           NodeFS.mkdirSync(NodePath.dirname(NodePath.join(contextDir, file)), { recursive: true });
-          NodeFS.copyFileSync(NodePath.join(from, file), NodePath.join(contextDir, file));
+          NodeFS.cpSync(NodePath.join(from, file), NodePath.join(contextDir, file), {
+            recursive: true,
+          });
         },
         catch: (cause) => new SandboxImageBuildError({ detail: String(cause) }),
       }),
@@ -279,7 +292,7 @@ const prepareContext = Effect.fn("SandboxImage.prepareContext")(function* (
     onLine,
     { cwd: checkout, env: stagingEnvironment(), timeoutMs: 20 * 60 * 1000 },
   );
-  // The Containerfile and the CLIs' lockfile.
+  // The Containerfile, the lockfiles and the skills.
   yield* copyDefinition(NodePath.join(checkout, "apps", "server", "sandbox-image"));
 });
 

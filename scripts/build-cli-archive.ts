@@ -524,10 +524,18 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   yield* fs.copy(resourceMonitorDir, path.join(contentDir, "resource-monitor"));
   // `t3 sandbox image build` builds the Sandbox image from this Containerfile and this tree.
   // Only its files (as SandboxImage copies them): nothing else left in that directory ships.
-  for (const file of ["Containerfile", "clis/package.json", "clis/package-lock.json"]) {
+  for (const file of [
+    "Containerfile",
+    "clis/package.json",
+    "clis/package-lock.json",
+    "office/package.json",
+    "office/package-lock.json",
+    "office/requirements.txt",
+    "skills",
+  ]) {
     const to = path.join(contentDir, "sandbox-image", file);
     yield* fs.makeDirectory(path.dirname(to), { recursive: true });
-    yield* fs.copyFile(path.join(serverDir, "sandbox-image", file), to);
+    yield* fs.copy(path.join(serverDir, "sandbox-image", file), to);
   }
   yield* stageRuntimeExternals({
     repoRoot,

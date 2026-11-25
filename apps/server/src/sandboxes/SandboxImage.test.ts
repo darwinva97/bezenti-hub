@@ -6,7 +6,19 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import { DEBIAN_PACKAGES } from "../preview/PreviewBrowserHost.ts";
 import { cachedUntilAvailable, makeContextReadable, stagingEnvironment } from "./SandboxImage.ts";
+
+it("installs every library T3's browser needs, as no one in a Sandbox can run its setup", () => {
+  const containerfile = NodeFS.readFileSync(
+    NodePath.join(import.meta.dirname, "../../sandbox-image/Containerfile"),
+    "utf8",
+  );
+  const installed = new Set(containerfile.split(/[\s\\]+/u));
+  const missing = DEBIAN_PACKAGES.filter((names) => !names.some((name) => installed.has(name)));
+  assert.deepEqual(missing, []);
+  assert.include(containerfile, "T3CODE_SERVER_BROWSER_SANDBOX=0");
+});
 
 it("stages with the registry's proxy, CA and package manager settings, never provider keys", () => {
   const staged = stagingEnvironment({

@@ -1,0 +1,15 @@
+# What the document skills (../skills) import or run, locked with hashes into requirements.txt.
+defusedxml
+lxml
+markitdown[docx,pdf,pptx,xls,xlsx]
+openpyxl
+pandas
+pdf2image
+pdfplumber
+pillow
+pypdf
+pypdfium2
+pytesseract
+python-docx
+python-pptx
+reportlab

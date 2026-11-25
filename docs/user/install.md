@@ -960,8 +960,10 @@ checkpoints, terminals and moves work as on a joined machine.
 
 Agents in a Sandbox can create, read and edit Word, PowerPoint, Excel and PDF
 files without installing anything: ask for a report, a deck or a spreadsheet
-and the agent writes the file in the Project, and can turn it into a PDF. The
-Sandbox has no desktop, so it cannot open Office or other apps with a window.
+and the agent writes the file in the Project, and can turn it into a PDF. They
+can also browse websites with T3's browser, for example to fill in a form on a
+site you sign them in to. The Sandbox has no desktop, so it cannot open Office
+or other apps with a window.
 Sandboxes made from an older image get this once the Owner builds the image
 again.
 

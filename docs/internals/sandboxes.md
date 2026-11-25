@@ -406,6 +406,17 @@ whether its install scripts changed (`npm view <pkg>@<version> scripts`, for eve
 new lockfile marks `hasInstallScript`), update `allowScripts`, the paragraph above and this table,
 and rebuild.
 
+### Browser
+
+T3's browser (the agent's `preview_*` tools and HTML previews) runs inside the Sandbox like any
+server's. Nobody in a Sandbox has root for `t3 browser setup`, so the image installs the libraries
+and fonts it would (`PreviewBrowserHost.DEBIAN_PACKAGES`; `SandboxImage.test.ts` fails when that
+list gains one the Containerfile lacks). The browser itself still downloads into the home on first
+use, pinned by the server, so it never drifts from the server's version. Chrome's own sandbox needs
+namespaces the container's dropped capabilities do not give it; the container is already the
+boundary (the Space's agent runs anything in it), so the image sets
+`T3CODE_SERVER_BROWSER_SANDBOX=0`.
+
 ### Documents
 
 Agents in a Sandbox work with Word, PowerPoint, Excel and PDF files out of the box, through

@@ -727,6 +727,8 @@ describe("every door of the Hub declares its rule", () => {
       "makita.permissions.grant",
       "makita.permissions.list",
       "makita.permissions.revoke",
+      // Ticket 06: stop one task, `makita.pause` on its configuration.
+      "makita.tasks.stop",
     ]);
     // Each decided in makita/ for the session's own person, by AccessPolicy.
     for (const rpc of makitaRpcs) {

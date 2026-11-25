@@ -19,7 +19,15 @@ export interface MakitaThreadTask {
   readonly state: string;
   /** The configuration's creator: the Thread is theirs and runs as them. */
   readonly createdBy: UserId;
+  /**
+   * Why Makita may not work on this task now (ticket 06), or null while it may: Makita stopped
+   * (or no account), the configuration paused or deleted, or the task no longer live.
+   */
+  readonly halted: "makita-paused" | "config-paused" | "task-ended" | null;
 }
+
+/** The states in which a task still works (or waits to); anything else has ended. */
+const LIVE_TASK_STATES = ["awaiting-approval", "running", "waiting-ci", "waiting-reply"];
 
 /**
  * The Makita task whose Thread this is, if any: one indexed read. The row exists before the
@@ -37,9 +45,14 @@ export const makitaTaskOfThread = Effect.fn("makitaRows.makitaTaskOfThread")(fun
     readonly spaceId: string;
     readonly state: string;
     readonly createdBy: string;
+    readonly configPaused: number;
+    readonly makitaPaused: number;
   }>`
     SELECT t.task_id AS "taskId", t.config_id AS "configId", t.space_id AS "spaceId",
-      t.state, c.created_by AS "createdBy"
+      t.state, c.created_by AS "createdBy",
+      (c.paused_at IS NOT NULL OR c.deleted_at IS NOT NULL) AS "configPaused",
+      COALESCE((SELECT global_paused_at IS NOT NULL FROM makita_account
+        WHERE account_id = 'makita'), 1) AS "makitaPaused"
     FROM makita_tasks t JOIN makita_configs c ON c.config_id = t.config_id
     WHERE t.thread_id = ${threadId}
   `;
@@ -52,7 +65,100 @@ export const makitaTaskOfThread = Effect.fn("makitaRows.makitaTaskOfThread")(fun
         spaceId: SpaceId.make(row.spaceId),
         state: row.state,
         createdBy: UserId.make(row.createdBy),
+        halted: row.makitaPaused
+          ? "makita-paused"
+          : row.configPaused
+            ? "config-paused"
+            : LIVE_TASK_STATES.includes(row.state)
+              ? null
+              : "task-ended",
       });
+});
+
+/** Why a task stopped (its `failure`, and the audit's `reason`). */
+export type MakitaTaskStopReason =
+  | "manual"
+  | "config-paused"
+  | "config-deleted"
+  | "makita-paused"
+  | "permission-revoked"
+  | "creator-left"
+  | "creator-disabled"
+  | "issue-closed"
+  | "issue-locked";
+
+/** A task just stopped: what the turn interrupt and the answers need. */
+interface StoppedMakitaTask {
+  readonly taskId: string;
+  readonly threadId: string;
+}
+
+/**
+ * Stops, inside the caller's transaction, every live task in scope (ticket 06): `stopped` with its
+ * reason, a pending approval cancelled with it, each audited `makita.task.stop`. The turns are
+ * interrupted outside the transaction by `MakitaStops`, which reads what this wrote.
+ */
+export const stopTasksWithin = Effect.fn("makitaRows.stopTasksWithin")(function* (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly actor: AuditLog.AuditActor;
+    readonly scope:
+      | { readonly taskId: string }
+      | { readonly configId: string }
+      | { readonly creator: UserId; readonly spaceId: SpaceId | null }
+      | {
+          readonly issue: { readonly host: string; readonly repo: string; readonly number: number };
+        }
+      | { readonly all: true };
+    readonly reason: MakitaTaskStopReason;
+  },
+) {
+  const at = DateTime.formatIso(yield* DateTime.now);
+  const scope = input.scope;
+  const where =
+    "taskId" in scope
+      ? sql`task_id = ${scope.taskId}`
+      : "configId" in scope
+        ? sql`config_id = ${scope.configId}`
+        : "creator" in scope
+          ? sql`config_id IN (SELECT config_id FROM makita_configs
+              WHERE created_by = ${scope.creator}
+                AND (${scope.spaceId} IS NULL OR space_id = ${scope.spaceId}))`
+          : "issue" in scope
+            ? sql`host = ${scope.issue.host} AND repo = ${scope.issue.repo}
+                AND number = ${scope.issue.number}`
+            : sql`1 = 1`;
+  const stopped = yield* sql<{
+    readonly taskId: string;
+    readonly threadId: string;
+    readonly configId: string;
+    readonly spaceId: string;
+    readonly repo: string;
+    readonly number: number;
+  }>`
+    UPDATE makita_tasks SET state = 'stopped', failure = ${input.reason},
+      pending_push_json = NULL, updated_at = ${at}
+    WHERE ${where} AND state NOT IN ('done', 'stopped', 'failed')
+    RETURNING task_id AS "taskId", thread_id AS "threadId", config_id AS "configId",
+      space_id AS "spaceId", repo, number
+  `;
+  const write = AuditLog.write(sql);
+  for (const row of stopped) {
+    yield* write({
+      actor: input.actor,
+      action: "makita.task.stop",
+      spaceId: SpaceId.make(row.spaceId),
+      target: { kind: "makita_task", id: row.taskId, name: `${row.repo}#${row.number}` },
+      detail: {
+        space: row.spaceId,
+        repo: row.repo,
+        number: row.number,
+        makita: row.configId,
+        reason: input.reason,
+      },
+    });
+  }
+  return stopped.map((row): StoppedMakitaTask => ({ taskId: row.taskId, threadId: row.threadId }));
 });
 
 /** Whether a User holds «may use Makita» in a Space (whether it takes effect is the policy's). */
@@ -71,7 +177,7 @@ export const permittedIn = Effect.fn("makitaRows.permittedIn")(function* (
 /**
  * Pauses, inside the caller's transaction, a User's live configurations that are running: of one
  * Space (their permission there taken back) or of every Space (they left the Hub). Each audited
- * with its reason; one already paused keeps its own.
+ * with its reason; one already paused keeps its own. Their live tasks stop with the same reason.
  */
 export const pauseCreatorConfigsWithin = Effect.fn("makitaRows.pauseCreatorConfigsWithin")(
   function* (
@@ -106,5 +212,11 @@ export const pauseCreatorConfigsWithin = Effect.fn("makitaRows.pauseCreatorConfi
         detail: { space: row.spaceId, reason: input.reason },
       });
     }
+    // Their running work stops with them (ticket 06); `MakitaStops` interrupts the turns.
+    yield* stopTasksWithin(sql, {
+      actor: input.actor,
+      scope: { creator: input.creator, spaceId: input.spaceId },
+      reason: input.reason,
+    });
   },
 );

@@ -281,8 +281,8 @@ function MakitaConfigsPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete «{deleting?.name}»?</AlertDialogTitle>
             <AlertDialogDescription>
-              Makita stops listening to its repositories. Its Threads stay in the Space. To only
-              stop it for a while, pause it instead.
+              Makita stops listening to its repositories and its running work stops. Its Threads
+              stay in the Space. To only stop it for a while, pause it instead.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -383,6 +383,7 @@ function ConfigRow(props: {
               variant="outline"
               disabled={props.disabled}
               aria-label={`Stop ${config.name} now`}
+              title="Stops its running work too. Makita writes nothing on GitHub about it."
               onClick={props.onPause}
             >
               Stop now

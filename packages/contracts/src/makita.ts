@@ -323,6 +323,14 @@ export const MakitaConfigsListResult = Schema.Struct({
 });
 export type MakitaConfigsListResult = typeof MakitaConfigsListResult.Type;
 
+/** One Makita task (ticket 06: stop it now). */
+export const MakitaTaskRef = Schema.Struct({ taskId: Schema.String });
+export type MakitaTaskRef = typeof MakitaTaskRef.Type;
+
+/** False when the task had already ended: nothing more to stop. */
+export const MakitaTaskStopResult = Schema.Struct({ stopped: Schema.Boolean });
+export type MakitaTaskStopResult = typeof MakitaTaskStopResult.Type;
+
 /** Why a Makita door refused, in words for the person; never a token. */
 export class MakitaError extends Schema.TaggedError<MakitaError>()("MakitaError", {
   reason: Schema.Literals(["forbidden", "not-found", "invalid", "limit", "github", "storage"]),

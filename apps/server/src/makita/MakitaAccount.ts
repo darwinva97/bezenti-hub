@@ -37,6 +37,7 @@ import {
   type MakitaGitHubError,
   type MakitaTokenCheck,
 } from "./MakitaGitHub.ts";
+import { stopTasksWithin } from "./makitaRows.ts";
 
 export { MakitaError };
 
@@ -363,6 +364,14 @@ const make = Effect.gen(function* () {
             target: { kind: "makita_account", id: ACCOUNT_ID, name: row.login },
             detail: {},
           });
+          // Every running task stops with it (ticket 06); MakitaStops interrupts the turns.
+          if (paused) {
+            yield* stopTasksWithin(sql, {
+              actor: AuditLog.userActor(actorUserId),
+              scope: { all: true },
+              reason: "makita-paused",
+            });
+          }
           return "changed" as const;
         }),
       )

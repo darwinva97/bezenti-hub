@@ -24,6 +24,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { MakitaGitHub, type MakitaGitHubAnswer, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { listenedProjects, type SpaceProjectRepo, spaceProjectRepos } from "./MakitaRepos.ts";
+import { stopTasksWithin } from "./makitaRows.ts";
 
 /** The one feed batch 1 reads. */
 const ISSUE_EVENTS_FEED = "issue-events";
@@ -342,15 +343,19 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const queued: Array<QueuedEvent> = [];
         for (const event of input.events) {
-          // Ticket 05: an issue closed or locked ends its live task (ticket 06 stops its turn).
+          // An issue closed or locked stops its live task; MakitaStops interrupts its turn.
           if ((event.event === "closed" || event.event === "locked") && event.issue !== undefined) {
-            yield* sql`
-              UPDATE makita_tasks SET state = 'stopped', failure = ${`issue-${event.event}`},
-                updated_at = ${iso(input.now)}
-              WHERE host = ${MAKITA_GITHUB_HOST} AND repo = ${input.listened.repo}
-                AND number = ${event.issue.number}
-                AND state NOT IN ('done', 'stopped', 'failed')
-            `;
+            yield* stopTasksWithin(sql, {
+              actor: { source: "system" },
+              scope: {
+                issue: {
+                  host: MAKITA_GITHUB_HOST,
+                  repo: input.listened.repo,
+                  number: event.issue.number,
+                },
+              },
+              reason: event.event === "closed" ? "issue-closed" : "issue-locked",
+            });
             continue;
           }
           const decision = decideLabeled({

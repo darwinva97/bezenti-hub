@@ -3,7 +3,7 @@
  * Acme; Gus of Globex) and a fake GitHub. Each test gets its own Hub and its own fake. The
  * Thread launch and the secret masker are recorders: what Makita asked for, as whom.
  */
-import type { ThreadId } from "@t3tools/contracts";
+import type { OrchestrationV2ServerCommand, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import { hub } from "../ai/AiGatewayRoute.testkit.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
 import * as MakitaAccount from "./MakitaAccount.ts";
@@ -19,11 +20,18 @@ import * as MakitaGitHub from "./MakitaGitHub.ts";
 import { makeFakeGitHub } from "./MakitaGitHub.testkit.ts";
 import * as MakitaIntake from "./MakitaIntake.ts";
 import * as MakitaPermissions from "./MakitaPermissions.ts";
+import * as MakitaStops from "./MakitaStops.ts";
 import * as MakitaTasks from "./MakitaTasks.ts";
 
 /** One `ThreadLaunchService.launch` Makita asked for, and the actor it ran as. */
 export interface RecordedLaunch {
   readonly input: ThreadLaunchService.ThreadLaunchInput;
+  readonly actor: CommandActor.Actor;
+}
+
+/** A Thread command Makita sent (ticket 06: a stopped task's turn interrupted), and as whom. */
+export interface RecordedCommand {
+  readonly command: OrchestrationV2ServerCommand;
   readonly actor: CommandActor.Actor;
 }
 
@@ -43,6 +51,14 @@ export const makitaHub = Effect.gen(function* () {
         return { threadId: input.threadId as ThreadId } as never;
       }),
   });
+  const commands: Array<RecordedCommand> = [];
+  const threads = Layer.mock(ThreadManagementService.ThreadManagementService)({
+    dispatch: (command) =>
+      Effect.gen(function* () {
+        commands.push({ command, actor: yield* CommandActor.resolve });
+        return {} as never;
+      }),
+  });
   const masker = Layer.mock(SecretMasker.SecretMasker)({
     forUser: () =>
       Effect.succeed({
@@ -52,7 +68,7 @@ export const makitaHub = Effect.gen(function* () {
       } as never),
   });
   const context = yield* Layer.build(
-    MakitaTasks.layer.pipe(
+    Layer.mergeAll(MakitaTasks.layer, MakitaStops.layer).pipe(
       Layer.provideMerge(
         Layer.mergeAll(
           MakitaAccount.layer,
@@ -61,7 +77,7 @@ export const makitaHub = Effect.gen(function* () {
           MakitaIntake.layer,
         ),
       ),
-      Layer.provide(Layer.mergeAll(launcher, masker)),
+      Layer.provide(Layer.mergeAll(launcher, masker, threads)),
       Layer.provideMerge(MakitaGitHub.layer),
       Layer.provide(github.layer),
       Layer.provide(ProcessRunner.layer),
@@ -72,6 +88,7 @@ export const makitaHub = Effect.gen(function* () {
     ...setup,
     github,
     launches,
+    commands,
     launchState,
     creatorSecrets,
     makitaAccount: Context.get(context, MakitaAccount.MakitaAccount),
@@ -79,6 +96,7 @@ export const makitaHub = Effect.gen(function* () {
     makitaConfigs: Context.get(context, MakitaConfigs.MakitaConfigs),
     makitaIntake: Context.get(context, MakitaIntake.MakitaIntake),
     makitaTasks: Context.get(context, MakitaTasks.MakitaTasks),
+    makitaStops: Context.get(context, MakitaStops.MakitaStops),
   };
 });
 

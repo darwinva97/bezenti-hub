@@ -31,6 +31,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
+import { makitaTaskOfThread } from "../makita/makitaRows.ts";
 import { threadTurnOwner } from "../orchestration-v2/threadTurnOwner.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { accessKeyForRequest, noteAccessKeyUse } from "./AccessKeys.ts";
@@ -73,6 +74,8 @@ export interface GatewayCaller {
   readonly allowed: ReadonlyArray<AllowedAiAccounts.AllowedAiAccount>;
   /** The Thread's own AI account (its model selection), if it chose one. */
   readonly chosenAccountId: AiAccountId | null;
+  /** The Makita configuration whose task this Thread is (Makita ticket 06); null otherwise. */
+  readonly makitaConfigId: string | null;
 }
 
 /** A key just made: shown once, never stored. */
@@ -202,6 +205,8 @@ const utcMinute = (millis: number) =>
 const SPACE_LOST = "You no longer work in this key's Space: it was revoked. Make a new key.";
 /** A Thread key is refused, never revoked, here: archive and restore, the key works again. */
 const THREAD_SPACE_LOST = "You cannot work in this Thread's Space now, so its key is refused.";
+/** A Makita Thread whose configuration or Makita is paused, or whose task ended (ticket 06). */
+export const MAKITA_STOPPED = "Makita is stopped for this work.";
 /** SQLite takes at most 32766 parameters per statement: revocations go in batches. */
 const REVOKE_BATCH = 500;
 /** Why a key was revoked when its User stopped working in its Space. */
@@ -684,6 +689,7 @@ const make = Effect.gen(function* () {
       threadId: null,
       allowed,
       chosenAccountId: null,
+      makitaConfigId: null,
     } satisfies GatewayCaller;
   });
 
@@ -744,17 +750,20 @@ const make = Effect.gen(function* () {
     }
     let threadId: ThreadId | null = null;
     let chosenAccountId: AiAccountId | null = null;
+    let makitaConfigId: string | null = null;
     if (row.kind === "thread") {
       threadId = ThreadId.make(row.threadId ?? "");
       if (!row.threadFound || row.deletedAt !== null || row.archivedAt !== null) {
         return yield* refused(401, UNKNOWN_KEY);
       }
-      // The Thread's Space now (SpaceDirectory's rule), its turn owner and any move, at once.
-      const [space, owner, blocked] = yield* Effect.all(
+      // The Thread's Space now (SpaceDirectory's rule), its turn owner, any move and whether it
+      // is a Makita task's (one indexed read), at once.
+      const [space, owner, blocked, makita] = yield* Effect.all(
         [
           spaces.spaceOf({ kind: "thread", id: threadId }),
           threadTurnOwner(sql, threadId),
           spaces.workBlocked(threadId),
+          makitaTaskOfThread(sql, threadId),
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.catch(unavailable));
@@ -773,6 +782,12 @@ const make = Effect.gen(function* () {
       }
       if (blocked === "project-moving") {
         return yield* refused(503, "The Project is moving to another Space. Try again.");
+      }
+      // Makita ticket 06: paused, stopped or ended, its next request gets nothing, even when the
+      // turn's interrupt has not landed yet. Refused, not revoked.
+      if (Option.isSome(makita)) {
+        if (makita.value.halted !== null) return yield* refused(403, MAKITA_STOPPED);
+        makitaConfigId = makita.value.configId;
       }
       chosenAccountId = (row.chosen ?? null) as AiAccountId | null;
     }
@@ -813,6 +828,7 @@ const make = Effect.gen(function* () {
       threadId,
       allowed,
       chosenAccountId,
+      makitaConfigId,
     } satisfies GatewayCaller;
   });
 

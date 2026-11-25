@@ -3023,6 +3023,7 @@ export const layerWsRpc = (
         [WS_METHODS.makitaConfigsDelete]: (input) => makitaConfigs.removeForSession(input),
         [WS_METHODS.makitaConfigsPause]: (input) => makitaConfigs.pauseForSession(input),
         [WS_METHODS.makitaConfigsResume]: (input) => makitaConfigs.resumeForSession(input),
+        [WS_METHODS.makitaTasksStop]: (input) => makitaConfigs.stopTaskForSession(input),
         [WS_METHODS.projectCloneStart]: (input) =>
           requireCloneDestination(input.destinationPath, { asProject: true }).pipe(
             Effect.andThen(

@@ -25,6 +25,8 @@ import {
   MakitaGitHubUser,
   type MakitaProjectRepo,
   MakitaRepos,
+  type MakitaTaskRef,
+  type MakitaTaskStopResult,
   MakitaTriggers,
   ModelSelection,
   ProjectId,
@@ -52,11 +54,12 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { MakitaGitHub, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { resolveProjectRepo, type ResolvedRepo } from "./MakitaRepos.ts";
-import { permittedIn } from "./makitaRows.ts";
+import { permittedIn, stopTasksWithin } from "./makitaRows.ts";
 
 const NOT_YOURS =
   "Makita is set up by a person in Platform settings or Space settings, not by an agent.";
 const NO_SUCH_CONFIG = "No such Makita configuration.";
+const NO_SUCH_TASK = "No such Makita task.";
 const MAX_NAME = 80;
 const MAX_CALLERS = 50;
 const MAX_PROJECTS = 50;
@@ -180,6 +183,13 @@ export class MakitaConfigs extends Context.Service<
     readonly removeForSession: (input: MakitaConfigRef) => Effect.Effect<MakitaConfig, MakitaError>;
     readonly pauseForSession: (input: MakitaConfigRef) => Effect.Effect<MakitaConfig, MakitaError>;
     readonly resumeForSession: (input: MakitaConfigRef) => Effect.Effect<MakitaConfig, MakitaError>;
+    /** Ticket 06: one task stopped now, by whoever may pause its configuration. */
+    readonly stopTask: (
+      input: MakitaTaskRef & { readonly actorUserId: UserId },
+    ) => Effect.Effect<MakitaTaskStopResult, MakitaError>;
+    readonly stopTaskForSession: (
+      input: MakitaTaskRef,
+    ) => Effect.Effect<MakitaTaskStopResult, MakitaError>;
     /**
      * Ticket 05, at each task's start: the AI account and model still a gateway one the creator
      * may use in the Space, serving the model (the same check as saving). Answers its name.
@@ -1077,6 +1087,14 @@ const make = Effect.gen(function* () {
                     RETURNING config_id AS id
                   `;
           if (changed.length === 0) return;
+          // Paused or deleted, its running work stops in the same transaction (ticket 06).
+          if (action !== "makita.resume") {
+            yield* stopTasksWithin(sql, {
+              actor: AuditLog.userActor(input.actorUserId),
+              scope: { configId: input.configId },
+              reason: action === "makita.pause" ? "config-paused" : "config-deleted",
+            });
+          }
           const entry = {
             actor: AuditLog.userActor(input.actorUserId),
             spaceId,
@@ -1121,6 +1139,44 @@ const make = Effect.gen(function* () {
   const resume = (input: MakitaConfigRef & { readonly actorUserId: UserId }) =>
     act(input, "makita.resume");
 
+  /** One task stopped now (ticket 06): `makita.pause` on its configuration; its turn interrupted by MakitaStops. */
+  const stopTask = Effect.fn("MakitaConfigs.stopTask")(function* (
+    input: MakitaTaskRef & { readonly actorUserId: UserId },
+  ) {
+    const [task] = yield* sql<{ readonly configId: string }>`
+      SELECT config_id AS "configId" FROM makita_tasks WHERE task_id = ${input.taskId}
+    `.pipe(Effect.catch(storage("read the task")));
+    if (task === undefined) return yield* fail("not-found", NO_SUCH_TASK);
+    // A task of a configuration the actor cannot see answers like a missing one.
+    const found = yield* visibleConfig(input.actorUserId, task.configId).pipe(
+      Effect.catchIf(
+        (error) => error.reason === "not-found",
+        () => fail("not-found", NO_SUCH_TASK),
+      ),
+    );
+    const allowed =
+      found.space === undefined
+        ? found.principal.isOwner
+        : AccessPolicy.isAllowed(
+            AccessPolicy.decide(
+              found.principal,
+              "makita.pause",
+              yield* configResource(input.actorUserId, found.row, found.space.resource),
+            ),
+          );
+    if (!allowed) return yield* fail("forbidden", "You cannot stop this Makita task.");
+    const stopped = yield* sql
+      .withTransaction(
+        stopTasksWithin(sql, {
+          actor: AuditLog.userActor(input.actorUserId),
+          scope: { taskId: input.taskId },
+          reason: "manual",
+        }),
+      )
+      .pipe(Effect.catch(storage("stop the task")));
+    return { stopped: stopped.length > 0 } satisfies MakitaTaskStopResult;
+  });
+
   return MakitaConfigs.of({
     checkSelection: checkedSelection,
     list,
@@ -1156,6 +1212,12 @@ const make = Effect.gen(function* () {
       input: MakitaConfigRef,
     ) {
       return yield* resume({ ...input, actorUserId: yield* sessionUser });
+    }),
+    stopTask,
+    stopTaskForSession: Effect.fn("MakitaConfigs.stopTaskAsSession")(function* (
+      input: MakitaTaskRef,
+    ) {
+      return yield* stopTask({ ...input, actorUserId: yield* sessionUser });
     }),
   });
 });

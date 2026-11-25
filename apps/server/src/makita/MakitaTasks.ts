@@ -474,6 +474,13 @@ const make = Effect.gen(function* () {
     if (placed._tag === "open") {
       return yield* finish(row.eventKey, "ignored-no-config", "task-open");
     }
+    // Stopped since (a pause between the row and here, ticket 06): no Thread starts for it.
+    const [current] = yield* sql<{ readonly state: string }>`
+      SELECT state FROM makita_tasks WHERE task_id = ${placed.taskId}
+    `;
+    if (current?.state !== "running") {
+      return yield* finish(row.eventKey, "ignored-paused", "task-stopped", placed.taskId);
+    }
 
     const allowed = new Set(
       Option.getOrElse(decodeUsers(config.callersJson), () => []).map((user) => user.id),

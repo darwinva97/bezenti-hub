@@ -73,6 +73,8 @@ import {
   MakitaConfigUpdateInput,
   MakitaConfigsListInput,
   MakitaConfigsListResult,
+  MakitaTaskRef,
+  MakitaTaskStopResult,
 } from "./makita.ts";
 import {
   AiGatewayError,
@@ -794,6 +796,8 @@ export const WS_METHODS = {
   makitaConfigsDelete: "makita.configs.delete",
   makitaConfigsPause: "makita.configs.pause",
   makitaConfigsResume: "makita.configs.resume",
+  // Makita ticket 06: stop one task now.
+  makitaTasksStop: "makita.tasks.stop",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1566,6 +1570,11 @@ const WsMakitaConfigsPauseRpc = Rpc.make(WS_METHODS.makitaConfigsPause, {
 const WsMakitaConfigsResumeRpc = Rpc.make(WS_METHODS.makitaConfigsResume, {
   payload: MakitaConfigRef,
   success: MakitaConfig,
+  error: MakitaErrors,
+});
+const WsMakitaTasksStopRpc = Rpc.make(WS_METHODS.makitaTasksStop, {
+  payload: MakitaTaskRef,
+  success: MakitaTaskStopResult,
   error: MakitaErrors,
 });
 const WsAiAccountsCreateRpc = Rpc.make(WS_METHODS.aiAccountsCreate, {
@@ -2704,6 +2713,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsMakitaConfigsDeleteRpc,
   WsMakitaConfigsPauseRpc,
   WsMakitaConfigsResumeRpc,
+  WsMakitaTasksStopRpc,
   WsProjectCloneStartRpc,
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,

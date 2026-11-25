@@ -4,6 +4,7 @@ import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as MakitaIntake from "../makita/MakitaIntake.ts";
+import * as MakitaStops from "../makita/MakitaStops.ts";
 import * as MakitaTasks from "../makita/MakitaTasks.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Layer from "effect/Layer";
@@ -574,6 +575,10 @@ export const layerProduction = Layer.mergeAll(
     ),
     Layer.provideMerge(MakitaIntake.layer.pipe(Layer.provide(ProcessRunner.layer))),
     Layer.provide(SpaceDirectory.layer),
+  ),
+  // Makita ticket 06: a stopped task's turn is interrupted, as the system.
+  MakitaStops.layerScheduled.pipe(
+    Layer.provide(MakitaStops.layer.pipe(Layer.provide(layerThreadManagementProvided))),
   ),
 ).pipe(
   Layer.provide(

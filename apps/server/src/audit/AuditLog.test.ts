@@ -640,6 +640,8 @@ it.effect(
         // makita/MakitaTasks.test.ts (Makita ticket 05: a task and Makita's comments)
         "makita.task.start",
         "makita.github.comment",
+        // makita/MakitaStops.test.ts (Makita ticket 06: stopping for real)
+        "makita.task.stop",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

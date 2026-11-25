@@ -12,7 +12,8 @@ Makita is the Hub's GitHub bot teammate: a normal GitHub account whose token the
 | `MakitaConfigs.ts`     | `makita_configs`                                         | A Space's configurations (repositories from each Project's checkout, callers by numeric id, a gateway AI account).                        |
 | `MakitaIntake.ts`      | `makita_repo_cursors`, `makita_events`                   | The poller (ticket 04).                                                                                                                   |
 | `MakitaTasks.ts`       | `makita_tasks`                                           | Tasks and their Threads, and the agent's GitHub writes (ticket 05).                                                                       |
-| `makitaRows.ts`        | shared reads                                             | `permittedIn`, `pauseCreatorConfigsWithin`, `makitaTaskOfThread` (the seam other modules read).                                           |
+| `makitaRows.ts`        | shared reads                                             | `permittedIn`, `pauseCreatorConfigsWithin`, `stopTasksWithin`, `makitaTaskOfThread` (the seam other modules read).                        |
+| `MakitaStops.ts`       | nothing (reads `makita_tasks`)                           | Interrupts the turn of each stopped task (ticket 06).                                                                                     |
 
 Only `makita/` names these tables (`DoorRules.test.ts` checks it). Other modules ask `makitaRows.makitaTaskOfThread`.
 
@@ -38,7 +39,21 @@ The Scheduler runs `makita-intake` every tick: `MakitaIntake.pollDue`, then `Mak
 - **`makita_comment`** posts only on its task's issue. The Hub refuses it when Makita or the configuration is paused or the task has ended. It masks every value the creator's Threads hold (`SecretMasker.forUser`) and refuses anything shaped like a token. It allows at most 5 Makita comments in a row without a person in between (the sixth does not go out; the Hub posts «Waiting for a person before I continue.» once) and at most 30 per issue in 24 hours. Every comment is audited as `makita.github.comment`.
 - **A closed or locked issue** stops its live task.
 
+## Stopping (ticket 06)
+
+- **One way to stop.** `makitaRows.stopTasksWithin` runs in the transaction of whatever stops the work. It marks each live task `stopped` with its reason in `failure` and audits `makita.task.stop`. A pending approval is cancelled with it. The callers and their reasons:
+  - a configuration paused (`config-paused`) or deleted (`config-deleted`);
+  - «Stop all Makita work» (`makita-paused`);
+  - the creator's configurations paused by the Hub (`permission-revoked`, `creator-left`, `creator-disabled`), through `pauseCreatorConfigsWithin`;
+  - an issue closed or locked (`issue-closed`, `issue-locked`);
+  - a person's Stop on one task (`manual`), WS `makita.tasks.stop`, for whoever may pause its configuration.
+- **The turn.** `MakitaStops` is a Scheduler source (`makita-stops`, every 5 s) beside the intake. It sends `thread.stop` as the system to each task stopped in the last hour that this process has not handled yet, with `CommandId` `makita-stop:<taskId>`, so a repeat after a restart replays nothing. A failed dispatch is retried twice more.
+- **The gateway.** `AiGatewayKeys.authorize` reads `makitaTaskOfThread` for every Thread key, in the same parallel batch as the Thread's Space and owner. `halted` says whether Makita may work: Makita is stopped or has no account, the configuration is paused or deleted, or the task has ended. Any of these answers 403 «Makita is stopped for this work.», so a turn the interrupt has not reached yet stops spending at its next request. The key is refused, not revoked.
+- **Starting.** `startOne` reads the task again right before the launch, so a task stopped in between gets no Thread.
+- **Resuming** replays nothing. Stopped tasks stay stopped and the next trigger makes a new task. Events that came while a configuration was paused are `ignored-paused`. While Makita is stopped no cursor is kept, so each repository starts from now.
+- **GitHub** hears nothing about a stop.
+
 ## What other tickets read
 
-- The gateway (ticket 06): `makitaTaskOfThread` on the Thread of a gateway key gives the configuration and the task state. Answer 403 while paused or stopped.
-- Usage (ticket 07): the same lookup gives `makita_config_id`.
+- The gateway: `makitaTaskOfThread` on the Thread of a gateway key gives the configuration and `halted`. `GatewayCaller.makitaConfigId` carries the configuration.
+- Usage (ticket 07): `GatewayCaller.makitaConfigId` gives `makita_config_id`.

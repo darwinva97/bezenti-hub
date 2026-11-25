@@ -66,5 +66,10 @@ export function createMakitaEnvironmentAtoms<R, E>(
       label: "environment-data:makita:configs-resume",
       tag: WS_METHODS.makitaConfigsResume,
     }),
+    // Ticket 06: stop one task now (its configuration's pausers).
+    stopTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:tasks-stop",
+      tag: WS_METHODS.makitaTasksStop,
+    }),
   };
 }

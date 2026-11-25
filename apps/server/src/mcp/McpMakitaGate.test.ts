@@ -20,7 +20,9 @@ import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 
-const caller = (makita: "comment" | "push" | null): McpInvocationContext.McpInvocationScope => ({
+const caller = (
+  makita: "comment" | "push" | "land" | null,
+): McpInvocationContext.McpInvocationScope => ({
   environmentId: EnvironmentId.make("environment"),
   requestNamespace: "provider:thread",
   thread: {
@@ -33,7 +35,14 @@ const caller = (makita: "comment" | "push" | null): McpInvocationContext.McpInvo
   issuedAt: 0,
   ...(makita === null
     ? {}
-    : { makita: { taskId: "mkt_1", configId: "mk_1", push: makita === "push" } }),
+    : {
+        makita: {
+          taskId: "mkt_1",
+          configId: "mk_1",
+          push: makita !== "comment",
+          land: makita === "land",
+        },
+      }),
 });
 
 const mcpClient = McpSchema.McpServerClient.of({
@@ -55,6 +64,7 @@ const NAMES = [
   "makita_push",
   "makita_open_pull_request",
   "makita_ci_logs",
+  "makita_request_merge",
   "merge_pull_request",
   "thread_history",
   "t3_background_wait",
@@ -98,12 +108,22 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
   Effect.gen(function* () {
     const asMakita: Record<string, boolean> = {};
     const asPusher: Record<string, boolean> = {};
+    const asLander: Record<string, boolean> = {};
     const asOther: Record<string, boolean> = {};
     for (const name of NAMES) {
       asMakita[name] = yield* reached(caller("comment"), name);
       asPusher[name] = yield* reached(caller("push"), name);
+      asLander[name] = yield* reached(caller("land"), name);
       asOther[name] = yield* reached(caller(null), name);
     }
+    // A scope that says land without push still gets no merge request.
+    const landOnly = caller("comment");
+    expect(
+      yield* reached(
+        { ...landOnly, makita: { ...landOnly.makita!, land: true } },
+        "makita_request_merge",
+      ),
+    ).toBe(false);
     // Ticket 10: a configuration that only comments does not see makita_push. Ticket 12: nor
     // its pull request or the CI logs; nobody's agent has a merge tool.
     expect(asMakita).toEqual({
@@ -112,6 +132,7 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       makita_push: false,
       makita_open_pull_request: false,
       makita_ci_logs: false,
+      makita_request_merge: false,
       merge_pull_request: false,
       thread_history: true,
       t3_background_wait: true,
@@ -129,12 +150,15 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       makita_open_pull_request: true,
       makita_ci_logs: true,
     });
+    // Ticket 13: only a configuration that may land sees the merge request; still no merge tool.
+    expect(asLander).toEqual({ ...asPusher, makita_request_merge: true });
     expect(asOther).toEqual({
       makita_comment: false,
       makita_read_issue: false,
       makita_push: false,
       makita_open_pull_request: false,
       makita_ci_logs: false,
+      makita_request_merge: false,
       merge_pull_request: true,
       thread_history: true,
       t3_background_wait: true,
@@ -152,6 +176,7 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       "makita_open_pull_request",
       "makita_push",
       "makita_read_issue",
+      "makita_request_merge",
       "t3_background_wait",
       "thread_history",
     ]);

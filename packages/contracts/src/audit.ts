@@ -115,6 +115,8 @@ export const AuditAction = Schema.Literals([
   "github_identity.unlink",
   // Makita ticket 12: the pull request Makita opened for a task.
   "makita.github.pull_request",
+  // Makita ticket 13: a task's pull request merged on an approver's order.
+  "makita.github.merge",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -444,6 +446,26 @@ export const AUDIT_DETAIL_KEYS = {
   "github_identity.unlink": ["githubUserId", "login", "reason"],
   /** The pull request opened for a task (as the creator's agent): number, head and base; no text. */
   "makita.github.pull_request": ["space", "repo", "number", "makita", "pr", "branch", "base"],
+  /**
+   * A merge on an approver's order: the head merged and the commit made, whether the base is the
+   * default branch, who ordered it (public login, GitHub id, linked User) and with which comment.
+   */
+  "makita.github.merge": [
+    "space",
+    "repo",
+    "number",
+    "makita",
+    "pr",
+    "base",
+    "sha",
+    "landedSha",
+    "defaultBranch",
+    "orderedBy",
+    "orderedById",
+    "orderedByUser",
+    "orderComment",
+    "via",
+  ],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

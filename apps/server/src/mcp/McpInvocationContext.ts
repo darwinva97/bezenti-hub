@@ -136,6 +136,8 @@ export interface McpInvocationScope {
     readonly configId: string;
     /** Ticket 10: its configuration may push branches, so `makita_push` is listed. */
     readonly push?: boolean;
+    /** Ticket 13: its configuration may land, so `makita_request_merge` is listed. */
+    readonly land?: boolean;
   };
 }
 
@@ -150,6 +152,7 @@ export const MAKITA_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "makita_push",
   "makita_open_pull_request",
   "makita_ci_logs",
+  "makita_request_merge",
   "thread_history",
   "t3_background_wait",
 ]);
@@ -164,12 +167,16 @@ const MAKITA_PUSH_TOOLS: ReadonlySet<string> = new Set([
   "makita_ci_logs",
 ]);
 
+/** Ticket 13: listed only when the configuration may push and land. */
+const MAKITA_LAND_TOOLS: ReadonlySet<string> = new Set(["makita_request_merge"]);
+
 /** Whether `tool` is listed and callable for this caller. */
 export const toolAllowedFor = (scope: McpInvocationScope | undefined, tool: string): boolean =>
   scope?.makita === undefined
     ? !tool.startsWith("makita_")
     : MAKITA_ALLOWED_TOOLS.has(tool) &&
-      (scope.makita.push === true || !MAKITA_PUSH_TOOLS.has(tool));
+      (scope.makita.push === true || !MAKITA_PUSH_TOOLS.has(tool)) &&
+      ((scope.makita.push === true && scope.makita.land === true) || !MAKITA_LAND_TOOLS.has(tool));
 
 /**
  * T3 Code renders `t3-thread://` links as thread chips. Other MCP clients cannot open them, so

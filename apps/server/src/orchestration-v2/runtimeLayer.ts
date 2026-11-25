@@ -5,6 +5,7 @@ import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as MakitaIntake from "../makita/MakitaIntake.ts";
 import * as MakitaMachines from "../makita/MakitaMachines.ts";
+import * as MakitaLanding from "../makita/MakitaLanding.ts";
 import * as MakitaPullRequests from "../makita/MakitaPullRequests.ts";
 import * as MakitaPushes from "../makita/MakitaPushes.ts";
 import * as MakitaStops from "../makita/MakitaStops.ts";
@@ -585,6 +586,8 @@ export const layerProduction = Layer.mergeAll(
         ),
       ),
     ),
+    // Makita ticket 13: landing a task's pull request on an approver's order.
+    Layer.provideMerge(MakitaLanding.layer.pipe(Layer.provide(layerThreadManagementProvided))),
     // Makita ticket 10: a pushing task's worktree on its machine, and `makita_push`.
     Layer.provideMerge(
       MakitaPushes.layer.pipe(

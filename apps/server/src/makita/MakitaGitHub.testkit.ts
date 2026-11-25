@@ -110,6 +110,19 @@ export interface FakePullRequest {
   readonly user: FakeGitHubUser;
   /** The head commit when no branch tip is known (`hooks.branchTip`). */
   headSha: string;
+  /** Ticket 13: GitHub's word on merging it (`null` while it computes), and whether it was. */
+  mergeable?: boolean | null;
+  mergeableState?: string;
+  merged?: boolean;
+}
+
+/** Ticket 13: a merge GitHub made, as `PUT pulls/{n}/merge` asked for it. */
+interface FakeMerge {
+  readonly repo: string;
+  readonly number: number;
+  readonly sha: string;
+  readonly method: string;
+  readonly mergeSha: string;
 }
 
 /** A commit's CI as GitHub reports it (ticket 12). */
@@ -176,6 +189,17 @@ export const makeFakeGitHub = () => {
   /** Ticket 14: `owner/name#n` → a pull request's reviews, oldest first, and their ETag version. */
   const reviews = new Map<string, Array<FakeReview>>();
   const reviewVersions = new Map<string, number>();
+  /**
+   * Ticket 13: a pull request's files (`owner/name#n`; none listed: none changed), the merge
+   * methods a repository allows, the merges made and the branches deleted.
+   */
+  const pullFiles = new Map<
+    string,
+    Array<{ readonly filename: string; readonly previous_filename?: string }>
+  >();
+  const mergeSettings = new Map<string, { merge: boolean; squash: boolean }>();
+  const merges: Array<FakeMerge> = [];
+  const deletedBranches: Array<{ readonly repo: string; readonly branch: string }> = [];
 
   const touch = (repo: string) => feedVersions.set(repo, (feedVersions.get(repo) ?? 0) + 1);
 
@@ -579,21 +603,87 @@ export const makeFakeGitHub = () => {
     const repoOnly = /^repos\/([^/]+)\/([^/]+)$/u.exec(route);
     if (request.method === "GET" && repoOnly !== null) {
       const repo = `${repoOnly[1]}/${repoOnly[2]}`;
+      const settings = mergeSettings.get(repo) ?? { merge: true, squash: true };
       return repos.has(repo)
-        ? json(request, 200, { full_name: repo, default_branch: "main" })
+        ? json(request, 200, {
+            full_name: repo,
+            default_branch: "main",
+            allow_merge_commit: settings.merge,
+            allow_squash_merge: settings.squash,
+            allow_rebase_merge: true,
+          })
         : json(request, 404, { message: "Not Found" });
     }
+    const headOf = (repo: string, pr: FakePullRequest) =>
+      hooks.branchTip(repo, pr.head) ?? pr.headSha;
     const pullOf = (repo: string, pr: FakePullRequest) => ({
       number: pr.number,
       title: pr.title,
       body: pr.body,
       state: pr.state,
-      merged: false,
+      merged: pr.merged ?? false,
+      mergeable: pr.mergeable === undefined ? true : pr.mergeable,
+      mergeable_state: pr.mergeableState ?? "clean",
       html_url: `https://github.com/${repo}/pull/${pr.number}`,
       user: { login: pr.user.login, id: pr.user.id, type: pr.user.type ?? "User" },
-      head: { ref: pr.head, sha: hooks.branchTip(repo, pr.head) ?? pr.headSha },
+      head: { ref: pr.head, sha: headOf(repo, pr) },
       base: { ref: pr.base },
     });
+    // Ticket 13: a pull request's files, its merge (of exactly the head asked), a branch deleted.
+    const pullFilesMatch = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/files$/u.exec(route);
+    if (request.method === "GET" && pullFilesMatch !== null) {
+      const key = `${pullFilesMatch[1]}/${pullFilesMatch[2]}#${pullFilesMatch[3]}`;
+      const perPage = Number(query.get("per_page") ?? "30");
+      const page = Number(query.get("page") ?? "1");
+      return json(
+        request,
+        200,
+        (pullFiles.get(key) ?? []).slice((page - 1) * perPage, page * perPage),
+      );
+    }
+    const mergeMatch = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/u.exec(route);
+    if (request.method === "PUT" && mergeMatch !== null) {
+      const repo = `${mergeMatch[1]}/${mergeMatch[2]}`;
+      const pr = pulls.get(`${repo}#${mergeMatch[3]}`);
+      if (pr === undefined) return json(request, 404, { message: "Not Found" });
+      const input = (bodyOf(request) ?? {}) as {
+        readonly sha?: string;
+        readonly merge_method?: string;
+      };
+      const settings = mergeSettings.get(repo) ?? { merge: true, squash: true };
+      if (pr.state !== "open" || pr.merged === true || pr.mergeable === false) {
+        return json(request, 405, { message: "Pull Request is not mergeable" });
+      }
+      if (input.sha !== undefined && input.sha !== headOf(repo, pr)) {
+        return json(request, 409, {
+          message: "Head branch was modified. Review and try the merge again.",
+        });
+      }
+      const method = input.merge_method ?? "merge";
+      if (
+        method === "rebase" ||
+        (method === "merge" && !settings.merge) ||
+        (method === "squash" && !settings.squash)
+      ) {
+        return json(request, 405, {
+          message: `${method} merges are not allowed on this repository.`,
+        });
+      }
+      const mergeSha = `${String(merges.length + 1).padStart(4, "0")}${"e".repeat(36)}`;
+      merges.push({ repo, number: pr.number, sha: headOf(repo, pr), method, mergeSha });
+      pr.state = "closed";
+      pr.merged = true;
+      return json(request, 200, {
+        sha: mergeSha,
+        merged: true,
+        message: "Pull Request successfully merged",
+      });
+    }
+    const refMatch = /^repos\/([^/]+)\/([^/]+)\/git\/refs\/heads\/(.+)$/u.exec(route);
+    if (request.method === "DELETE" && refMatch !== null) {
+      deletedBranches.push({ repo: `${refMatch[1]}/${refMatch[2]}`, branch: refMatch[3]! });
+      return json(request, 204, null);
+    }
     const pullsMatch = /^repos\/([^/]+)\/([^/]+)\/pulls(?:\/(\d+))?$/u.exec(route);
     if (pullsMatch !== null) {
       const repo = `${pullsMatch[1]}/${pullsMatch[2]}`;
@@ -817,6 +907,10 @@ export const makeFakeGitHub = () => {
     ci,
     jobLogs,
     hooks,
+    pullFiles,
+    mergeSettings,
+    merges,
+    deletedBranches,
     addEvent,
     label,
     comment,

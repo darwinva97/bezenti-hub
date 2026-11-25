@@ -803,14 +803,20 @@ describe("every door of the Hub declares its rule", () => {
     }
     // Ticket 05: MCP tools for a Makita task's Thread only; no tool takes a repository. Ticket
     // 10: `makita_push`, only where its configuration may push. 12: its pull request and the CI
-    // logs, likewise; no merge or approve tool.
+    // logs, likewise; no approve tool. 13: a merge is only requested, never made by a tool.
     expect(Object.keys(MCP_TOOL_RULES).filter((name) => name.startsWith("makita_"))).toEqual([
       "makita_comment",
       "makita_read_issue",
       "makita_push",
       "makita_open_pull_request",
       "makita_ci_logs",
+      "makita_request_merge",
     ]);
+    expect(Object.keys(MCP_TOOL_RULES).filter((name) => /merge|approve/u.test(name))).toEqual([
+      "makita_request_merge",
+    ]);
+    // No RPC merges or lands anything.
+    expect([...WsRpcGroup.requests.keys()].filter((tag) => /merge|land/iu.test(tag))).toEqual([]);
   });
 
   it("links a User's GitHub account over the session's WS RPCs only: no HTTP, raw route or MCP door, the code in one answer, its tables GitHubIdentities' (Makita ticket 08)", () => {

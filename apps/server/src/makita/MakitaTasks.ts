@@ -56,6 +56,8 @@ import { askedText, followUpText, type MakitaTrigger, triggerOf } from "./makita
 import { MakitaGitHub, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { makitaBranchOf } from "./makitaBranch.ts";
 import { MakitaIntake } from "./MakitaIntake.ts";
+import { MakitaLanding } from "./MakitaLanding.ts";
+import { LAND_INSTRUCTIONS, MERGE_DETAIL } from "./makitaLandingRules.ts";
 import { MakitaPushes } from "./MakitaPushes.ts";
 import { pauseCreatorConfigsWithin, permittedIn, stopTasksWithin } from "./makitaRows.ts";
 
@@ -207,6 +209,8 @@ interface ConfigRow {
   readonly callersJson: string;
   readonly modelSelectionJson: string;
   readonly capability: string;
+  /** Ticket 13: 1 when an approver may order its pull request merged. */
+  readonly mayLand: number;
   readonly baseBranch: string | null;
   readonly pausedAt: string | null;
   readonly deletedAt: string | null;
@@ -337,6 +341,8 @@ const make = Effect.gen(function* () {
       readonly base: string | null;
       readonly cwd: string;
     } | null;
+    /** Ticket 13: its configuration may land, so the agent may ask for a merge. */
+    readonly land: boolean;
   }) =>
     [
       "You are Makita, a teammate bot that answers GitHub issues for this repository's maintainers. You run inside the Hub, in a sandbox, on behalf of the person who set you up.",
@@ -353,7 +359,8 @@ const make = Effect.gen(function* () {
         : [
             `- You work in your own git worktree, ${input.pushing.cwd}, on the branch ${input.pushing.branch}, made from ${input.pushing.base ?? "the repository's default branch"}. Commit there with plain git; your commits are authored as Makita already.`,
             `- makita_push is the only way your commits reach GitHub: it pushes them to ${input.pushing.branch} and nowhere else. Never run git push, never force anything, never change .github/workflows, never commit secrets. Nothing of yours reaches the base or the default branch.`,
-            `- Once your branch is pushed, open one pull request into ${input.pushing.base ?? "the default branch"} with makita_open_pull_request; its body has the sections Problem, Fix, Verified and Downsides. The Hub then watches its CI: it wakes you with the failing checks if CI fails (read their logs with makita_ci_logs, fix, commit, makita_push) and says on the issue when it passes. You may never merge or approve a pull request.`,
+            `- Once your branch is pushed, open one pull request into ${input.pushing.base ?? "the default branch"} with makita_open_pull_request; its body has the sections Problem, Fix, Verified and Downsides. The Hub then watches its CI: it wakes you with the failing checks if CI fails (read their logs with makita_ci_logs, fix, commit, makita_push) and says on the issue when it passes.${input.land ? "" : " You may never merge or approve a pull request."}`,
+            ...(input.land ? LAND_INSTRUCTIONS : []),
           ]),
       input.pushing === null
         ? "- makita_comment is your only way to write on GitHub; it posts on this issue only. makita_read_issue reads the issue again."
@@ -667,8 +674,8 @@ const make = Effect.gen(function* () {
       SELECT config_id AS "configId", space_id AS "spaceId", name, created_by AS "createdBy",
         triggers_json AS "triggersJson", callers_mode AS "callersMode",
         callers_json AS "callersJson",
-        model_selection_json AS "modelSelectionJson", capability, base_branch AS "baseBranch",
-        paused_at AS "pausedAt", deleted_at AS "deletedAt"
+        model_selection_json AS "modelSelectionJson", capability, may_land AS "mayLand",
+        base_branch AS "baseBranch", paused_at AS "pausedAt", deleted_at AS "deletedAt"
       FROM makita_configs WHERE config_id = ${row.configId}
     `;
     if (config === undefined || config.deletedAt !== null) {
@@ -869,6 +876,7 @@ const make = Effect.gen(function* () {
               asked: askedText({ trigger, callerLogin: row.actorLogin, label, kind: row.kind }),
               text,
               pushing,
+              land: pushing !== null && config.mayLand === 1,
             }),
             attachments: [],
           },
@@ -975,6 +983,7 @@ const make = Effect.gen(function* () {
         actor_login AS "actorLogin", config_id AS "configId", task_id AS "taskId",
         seen_at AS "seenAt", detail
       FROM makita_events WHERE outcome = 'queued' AND config_id IS NOT NULL
+        AND (detail IS NULL OR detail <> ${MERGE_DETAIL})
       ORDER BY seen_at, rowid LIMIT 20
     `;
     for (const row of rows) {
@@ -1236,9 +1245,11 @@ export const layerScheduled = Layer.effectDiscard(
     const scheduler = yield* Scheduler.Scheduler;
     const intake = yield* MakitaIntake;
     const tasks = yield* MakitaTasks;
+    const landing = yield* MakitaLanding;
+    // Ticket 13: merge orders after the tasks pass, so a `/makita stop` of the same pass wins.
     yield* scheduler.register(
       "makita-intake",
-      intake.pollDue.pipe(Effect.andThen(tasks.startQueued)),
+      intake.pollDue.pipe(Effect.andThen(tasks.startQueued), Effect.andThen(landing.landQueued)),
     );
   }),
 );

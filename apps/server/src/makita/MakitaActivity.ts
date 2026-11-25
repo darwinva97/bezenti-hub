@@ -89,6 +89,7 @@ interface TaskRow {
   readonly failure: string | null;
   readonly prNumber: number | null;
   readonly ciState: MakitaActivityTask["ci"];
+  readonly landedSha: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly pendingJson: string | null;
@@ -97,7 +98,8 @@ interface TaskRow {
 
 const TASK_COLUMNS = `task_id AS "taskId", config_id AS "configId", space_id AS "spaceId",
   thread_id AS "threadId", repo, number, kind, state, caller_login AS "callerLogin", failure,
-  pr_number AS "prNumber", ci_state AS "ciState", created_at AS "createdAt",
+  pr_number AS "prNumber", ci_state AS "ciState", landed_sha AS "landedSha",
+  created_at AS "createdAt",
   updated_at AS "updatedAt", pending_push_json AS "pendingJson",
   approved_through AS "approvedThrough"`;
 
@@ -319,6 +321,7 @@ const make = Effect.gen(function* () {
         failure: row.failure,
         prNumber: row.prNumber,
         ci: row.ciState,
+        landedSha: row.landedSha,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         threadId: seesThread(row.spaceId) ? ThreadId.make(row.threadId) : null,

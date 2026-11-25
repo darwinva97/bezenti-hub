@@ -157,6 +157,8 @@ interface Checked {
   readonly baseBranch: string | null;
   /** Ticket 10: «Also push branches»; ticket 11: when a push waits, and who else approves. */
   readonly capability: MakitaConfig["capability"];
+  /** Ticket 13: an approver may order its pull request merged (only with `push`). */
+  readonly mayLand: boolean;
   readonly approval: MakitaConfig["approval"];
   readonly approverLogins: ReadonlyArray<string>;
 }
@@ -273,8 +275,9 @@ const checkedInput = (
   if (input.strangers !== "ignore") {
     return refused("For now Makita stays silent with people not on the list.");
   }
-  if (input.mayLand) {
-    return refused("Landing on the default branch comes later.");
+  // Ticket 13: landing merges Makita's own pull request, so it needs a configuration that pushes.
+  if (input.mayLand && input.capability !== "push") {
+    return refused("Makita can land only where it also pushes branches.");
   }
   // Ticket 11: approvers besides the creator, by login, resolved to ids like the callers.
   const approverLogins = input.approvers.map((login) => login.trim().replace(/^@/u, ""));
@@ -303,6 +306,7 @@ const checkedInput = (
       modelSelection: input.modelSelection,
       baseBranch: baseBranch === null || baseBranch.length === 0 ? null : baseBranch,
       capability: input.capability,
+      mayLand: input.mayLand,
       approval: input.approval,
       approverLogins: [
         ...new Map(approverLogins.map((login) => [login.toLowerCase(), login])).values(),
@@ -925,8 +929,9 @@ const make = Effect.gen(function* () {
             VALUES (${configId}, ${input.spaceId}, ${value.name}, ${input.actorUserId}, ${at},
               ${at}, ${jsonOf(value.repos)},
               ${jsonOf(value.triggers)}, ${value.callersMode},
-              ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, ${value.capability}, 0,
-              ${value.approval}, ${jsonOf(approvers)}, ${value.baseBranch}, NULL)
+              ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, ${value.capability},
+              ${value.mayLand ? 1 : 0}, ${value.approval}, ${jsonOf(approvers)}, ${value.baseBranch},
+              NULL)
           `;
           yield* audit.record({
             actor: AuditLog.userActor(input.actorUserId),
@@ -938,7 +943,7 @@ const make = Effect.gen(function* () {
               repos: "all" in value.repos ? "all" : value.repos.projects.length,
               callersMode: value.callersMode,
               capability: value.capability,
-              mayLand: false,
+              mayLand: value.mayLand,
               aiAccount: value.modelSelection.aiAccountId ?? null,
             },
           });
@@ -1009,6 +1014,7 @@ const make = Effect.gen(function* () {
       modelSelection: found.row.modelSelectionJson,
       baseBranch: found.row.baseBranch,
       capability: found.row.capability,
+      may_land: found.row.mayLand === 1,
       approval: found.row.approval,
       approvers: found.row.approversJson,
     };
@@ -1021,6 +1027,8 @@ const make = Effect.gen(function* () {
       modelSelection: jsonOf(value.modelSelection),
       baseBranch: value.baseBranch,
       capability: value.capability,
+      // Ticket 13: named as the spec audits it (`changed: may_land`).
+      may_land: value.mayLand,
       approval: value.approval,
       approvers: jsonOf(approvers),
     };
@@ -1043,7 +1051,8 @@ const make = Effect.gen(function* () {
                 triggers_json = ${after.triggers}, callers_mode = ${after.callersMode},
                 callers_json = ${after.callers},
                 model_selection_json = ${after.modelSelection}, base_branch = ${after.baseBranch},
-                capability = ${after.capability}, approval = ${after.approval},
+                capability = ${after.capability}, may_land = ${after.may_land ? 1 : 0},
+                approval = ${after.approval},
                 approvers_json = ${after.approvers}, updated_at = ${at}
               WHERE config_id = ${input.configId} AND deleted_at IS NULL
               RETURNING config_id AS id
@@ -1058,7 +1067,7 @@ const make = Effect.gen(function* () {
                 space: spaceId,
                 changed: changed.join(","),
                 capability: value.capability,
-                mayLand: false,
+                mayLand: value.mayLand,
                 aiAccount: value.modelSelection.aiAccountId ?? null,
               },
             });

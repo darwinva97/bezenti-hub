@@ -2,6 +2,11 @@ import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
+import { MakitaLanding } from "../../../makita/MakitaLanding.ts";
+import {
+  MERGE_REQUEST_KINDS,
+  REQUEST_MERGE_DESCRIPTION,
+} from "../../../makita/makitaLandingRules.ts";
 import { MakitaPullRequests } from "../../../makita/MakitaPullRequests.ts";
 import { MakitaPushes } from "../../../makita/MakitaPushes.ts";
 import { MakitaTasks } from "../../../makita/MakitaTasks.ts";
@@ -126,10 +131,38 @@ const MakitaCiLogsTool = Tool.make("makita_ci_logs", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true);
 
+// Makita ticket 13: listed only where the configuration may land. It only asks: the Hub reads the
+// comment again on GitHub and merges only on a valid approver's order.
+const MakitaRequestMergeTool = Tool.make("makita_request_merge", {
+  description: REQUEST_MERGE_DESCRIPTION,
+  parameters: Schema.Struct({
+    commentId: Schema.Number,
+    kind: Schema.Literals(MERGE_REQUEST_KINDS),
+  }),
+  success: Schema.Struct({
+    merged: Schema.Boolean,
+    message: Schema.String,
+    sha: Schema.NullOr(Schema.String),
+  }),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    MakitaLanding,
+    ThreadManagementService.ThreadManagementService,
+  ],
+})
+  .annotate(Tool.Title, "Ask the Hub to merge your Makita pull request")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, true);
+
 export const MakitaToolkit = Toolkit.make(
   MakitaReadIssueTool,
   MakitaCommentTool,
   MakitaPushTool,
   MakitaOpenPullRequestTool,
   MakitaCiLogsTool,
+  MakitaRequestMergeTool,
 );

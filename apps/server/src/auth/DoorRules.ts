@@ -304,6 +304,10 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   makita_ci_logs: own(
     "the calling agent's own Thread, which must be a Makita task's whose configuration may push; only a failing job of its own pull request's last RED, framed as untrusted data",
   ),
+  // Makita ticket 13: listed only when its configuration may land. It only asks; no tool merges.
+  makita_request_merge: own(
+    "the calling agent's own Thread, which must be a Makita task's whose configuration may push and land; only requests: the Hub re-reads the cited comment from GitHub and merges its own pull request only if it is a valid approver's order that woke the turn, unused, with the same checks as /makita merge",
+  ),
   list_scheduled_tasks: own("visibleScheduledTasks, as scheduledTasksSubscribe"),
   list_thread_pull_requests: VISIBLE_THREAD,
   orchestrator_capabilities: own("the caller's own limits and the Hub's providers; no Space data"),

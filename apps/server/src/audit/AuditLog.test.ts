@@ -653,6 +653,8 @@ it.effect(
         "github_identity.unlink",
         // makita/MakitaPullRequests.test.ts (Makita ticket 12: its pull request and CI)
         "makita.github.pull_request",
+        // makita/MakitaLanding.test.ts (Makita ticket 13: a merge on an approver's order)
+        "makita.github.merge",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

@@ -18,6 +18,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { linkCodeOf, linkFromCommentWithin } from "./GitHubIdentities.ts";
 import { decideApprovalComment, isApprovalCommand, liveTaskOfItem } from "./makitaApprovers.ts";
+import { decideMergeComment, isMergeCommand } from "./makitaLandingRules.ts";
 import { allowedCallerIds } from "./makitaCallers.ts";
 import { decideConversation, decodeReviewPage, reviewsPath } from "./makitaConversation.ts";
 import {
@@ -210,6 +211,7 @@ const ENDED_STATES: ReadonlyArray<string> = ["done", "stopped", "failed"];
 const speaksToMakita = (comment: FeedComment, login: string) =>
   commandOf(comment.body) !== undefined ||
   isApprovalCommand(comment.body) ||
+  isMergeCommand(comment.body) ||
   mentions(comment.body, login);
 
 /** A reaction owed to a link command once its batch commits (ticket 08). */
@@ -648,9 +650,23 @@ const make = Effect.gen(function* () {
                 (yield* liveTaskOfItem(sql, input.listened.repo, comment.number))?.configId ?? null,
             })
           : undefined;
+      // Ticket 13: `/makita merge`, likewise; whether its author approves is read when handled.
+      const merge =
+        approval === undefined &&
+        isMergeCommand(comment.body) &&
+        comment.eventKey.startsWith("gh:issue-comment:")
+          ? decideMergeComment({
+              comment,
+              configs: input.listened.configs,
+              makita: input.makita,
+              liveConfigId:
+                (yield* liveTaskOfItem(sql, input.listened.repo, comment.number))?.configId ?? null,
+            })
+          : undefined;
       // Ticket 14: on Makita's own pull request, what is not an approval is conversation.
       const decision =
         approval ??
+        merge ??
         (pull === undefined
           ? decideComment({
               comment,

@@ -106,6 +106,8 @@ export const MakitaActivityTask = Schema.Struct({
   /** Ticket 12: its pull request on GitHub (public), and how its CI went; null before it. */
   prNumber: Schema.NullOr(NonNegativeInt),
   ci: Schema.NullOr(MakitaCiState),
+  /** Ticket 13: the commit GitHub made on the base when an approver's order landed its PR. */
+  landedSha: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
   /** Null when the viewer may not see the Thread: no link then. */

@@ -175,6 +175,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
                       taskId: task.value.taskId,
                       configId: task.value.configId,
                       push: task.value.capability === "push",
+                      land: task.value.capability === "push" && task.value.mayLand,
                     },
                   },
             ),
@@ -974,8 +975,8 @@ export const layerMcpTransport = <RA, RE, RR>(registrations: Layer.Layer<RA, RE,
   }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 /**
- * `makita_read_issue`, `makita_comment`, `makita_push`, `makita_open_pull_request`, `makita_ci_logs`:
- * a Makita Thread's agent, on its own task's issue, branch and pull request only.
+ * `makita_read_issue`, `makita_comment`, `makita_push`, `makita_open_pull_request`, `makita_ci_logs`,
+ * `makita_request_merge`: a Makita Thread's agent, on its own task's issue, branch and PR only.
  */
 const layerMakitaToolkit = toolkitRegistration(MakitaToolkit, MakitaHandlers.layer);
 

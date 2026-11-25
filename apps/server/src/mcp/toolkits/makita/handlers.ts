@@ -1,6 +1,7 @@
 import { type MakitaError, OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
+import { MakitaLanding } from "../../../makita/MakitaLanding.ts";
 import { MakitaPullRequests } from "../../../makita/MakitaPullRequests.ts";
 import { MakitaPushes } from "../../../makita/MakitaPushes.ts";
 import { MakitaTasks } from "../../../makita/MakitaTasks.ts";
@@ -53,6 +54,14 @@ export const layer = McpToolAccess.toLayer(MakitaToolkit, {
       const pulls = yield* MakitaPullRequests;
       return yield* pulls
         .openForThread(yield* callerThread, { title: input.title, body: input.body })
+        .pipe(Effect.mapError(asFailure));
+    }),
+  ),
+  makita_request_merge: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const landing = yield* MakitaLanding;
+      return yield* landing
+        .requestForThread(yield* callerThread, { commentId: input.commentId, kind: input.kind })
         .pipe(Effect.mapError(asFailure));
     }),
   ),

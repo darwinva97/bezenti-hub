@@ -304,7 +304,8 @@ it.live.skipIf(!posix || platform === undefined)(
         // Ticket 11: approvers are GitHub logins that exist.
         ["an unknown approver", { capability: "push" as const, approvers: ["nobody-here"] }],
         ["a bad approver login", { capability: "push" as const, approvers: ["not a login"] }],
-        ["landing", { capability: "push" as const, mayLand: true }],
+        // Ticket 13: landing only where Makita also pushes.
+        ["landing without push", { capability: "comment" as const, mayLand: true }],
         ["anyone", { callersMode: "anyone" as const }],
         ["replies to strangers", { strangers: "reply" as const }],
         ["an empty label", { triggers: { label: " ", assigned: false, mention: true } }],

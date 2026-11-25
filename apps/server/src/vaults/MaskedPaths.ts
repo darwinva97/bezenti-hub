@@ -550,6 +550,8 @@ export const MCP_DOOR_RULES: Record<string, DoorRule> = {
   // Makita ticket 12: the PR's number and link; a CI log's tail, masked and framed.
   makita_open_pull_request: none("whether Makita opened its task's pull request: number, link"),
   makita_ci_logs: none("a public CI job's log tail, masked with the creator's secrets and framed"),
+  // Makita ticket 13: whether the Hub merged, the commit it made, or why not; no GitHub text.
+  makita_request_merge: none("whether the Hub merged Makita's pull request: the commit, why not"),
   list_scheduled_tasks: none(
     "the calling agent's own work; what it says next is an event (masked)",
   ),

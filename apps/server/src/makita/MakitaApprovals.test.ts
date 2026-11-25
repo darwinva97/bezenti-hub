@@ -217,6 +217,28 @@ live(
         ctx.said().at(-1),
         `Ready to push \`${BRANCH}\` (+1 −0 in 1 file). @Grace-GH can reply \`/makita ok\` to send it.`,
       );
+
+      // With its pull request open (ticket 12), an approval in the PR's conversation counts,
+      // and the released commit becomes the one CI is watched on.
+      yield* setup.server
+        .sql`UPDATE makita_tasks SET pr_number = 77 WHERE task_id = ${ctx.task.taskId}`;
+      later(ctx, 15);
+      setup.github.commentOn(REPO, 77, GRACE_GH, "/makita ok", { pull: true });
+      yield* tick(ctx);
+      const third = again.sha!;
+      assert.equal(world.tipOf(REPO, BRANCH), third);
+      const [watched] = yield* setup.server.sql<{
+        readonly state: string;
+        readonly ciSha: string | null;
+        readonly ciState: string | null;
+      }>`
+        SELECT state, ci_sha AS "ciSha", ci_state AS "ciState" FROM makita_tasks
+        WHERE task_id = ${ctx.task.taskId}
+      `;
+      assert.deepEqual(
+        [watched?.state, watched?.ciSha, watched?.ciState],
+        ["waiting-ci", third, "pending"],
+      );
     }),
 );
 

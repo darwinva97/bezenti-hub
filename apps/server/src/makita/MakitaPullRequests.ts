@@ -604,11 +604,11 @@ const make = Effect.gen(function* () {
       })).body,
     );
     if (Option.isSome(current) && current.value.state !== "open") {
-      yield* settle(task, sha, "closed");
+      yield* settle(task, sha, "closed", { state: "waiting-reply" });
       return;
     }
     if (Option.isSome(current) && current.value.head.sha !== sha) {
-      yield* settle(task, sha, "moved");
+      yield* settle(task, sha, "moved", { state: "waiting-reply" });
       return;
     }
     switch (outcome) {

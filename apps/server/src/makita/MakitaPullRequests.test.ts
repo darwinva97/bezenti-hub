@@ -382,3 +382,16 @@ live("a comment-only configuration's task may not open a pull request", () =>
     );
   }),
 );
+
+live("a pull request closed before CI ends is no longer watched: no wake, no comment", () =>
+  Effect.gen(function* () {
+    const ctx = yield* opened;
+    const { setup } = ctx;
+    setup.github.ci.set(ctx.head, failingCi());
+    setup.github.pulls.get(`${REPO}#${ctx.pr}`)!.state = "closed";
+    yield* setup.makitaPullRequests.watchCi;
+    assert.lengthOf(setup.sends, 0);
+    assert.deepEqual(setup.github.commentsBy(REPO, ctx.pr, "makita-bot"), []);
+    assert.deepInclude(yield* ctx.row, { state: "waiting-reply", ciState: "closed" });
+  }),
+);

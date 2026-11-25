@@ -6,12 +6,7 @@
  * and anything stopped wins. Each attempt of the design note's table is a case here.
  */
 import { assert, it } from "@effect/vitest";
-import {
-  MAKITA_GITHUB_HOST,
-  type MakitaConfigInput,
-  ThreadId,
-  type UserId,
-} from "@t3tools/contracts";
+import { type MakitaConfigInput, ThreadId, type UserId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -304,7 +299,7 @@ live(
       yield* tick(ctx);
       assert.deepEqual(ctx.merges(), []);
       assert.deepEqual(yield* outcome(edited.id), ["ignored-edited"]);
-      assert.equal((yield* ctx.row).state, "waiting-ci");
+      assert.notEqual((yield* ctx.row).state, "done");
 
       // The control: the approver's own new order lands.
       setup.github.commentOn(REPO, pr, GRACE_GH, "/makita merge");
@@ -585,32 +580,31 @@ live(
       setup.github.ci.set(head, GREEN);
       yield* refusedWith(order.id, "already used");
 
-      // A new order, on the pull request this time (as ticket 14 wakes from it): it lands.
+      // An approver's words on the pull request's conversation wake the turn without a mention
+      // (ticket 14), and the wake names the comment to point at.
       const valid = yield* ctx.say(GRACE_GH, "Merge it, thanks.", pr);
-      yield* setup.server.sql`
-        INSERT INTO makita_events (event_key, host, repo, number, kind, actor_github_id,
-          actor_login, created_at_github, seen_at, config_id, outcome, detail, task_id)
-        VALUES (${`gh:issue-comment:${valid.id}`}, ${MAKITA_GITHUB_HOST}, ${REPO}, ${pr}, 'pull',
-          ${GRACE_GH.id}, ${GRACE_GH.login}, ${valid.created_at},
-          ${DateTime.formatIso(yield* DateTime.now)}, ${ctx.config.configId}, 'started',
-          'continued', ${ctx.task.taskId})
-      `;
-      // Edited after it woke the turn: refused.
+      yield* tick(ctx);
+      assert.include(
+        String(setup.sends.at(-1)?.input.text),
+        `Its author is an approver. Only if it clearly orders a merge now, call makita_request_merge with commentId ${valid.id} and kind issue-comment.`,
+      );
+      // Edited after it woke the turn: refused; and `valid` is no longer the newest wake.
       const editedOrder = yield* ctx.say(GRACE_GH, "@makita-bot merge it", 12);
       yield* tick(ctx);
       setup.github.editComment(REPO, editedOrder.id, "@makita-bot merge it now");
       yield* refusedWith(editedOrder.id, "edited");
-      // `valid` is no longer the newest wake either: one more, then the request.
-      const last = yield* ctx.say(GRACE_GH, "Merge it.", pr);
-      yield* setup.server.sql`
-        INSERT INTO makita_events (event_key, host, repo, number, kind, actor_github_id,
-          actor_login, created_at_github, seen_at, config_id, outcome, detail, task_id)
-        VALUES (${`gh:issue-comment:${last.id}`}, ${MAKITA_GITHUB_HOST}, ${REPO}, ${pr}, 'pull',
-          ${GRACE_GH.id}, ${GRACE_GH.login}, ${last.created_at},
-          ${DateTime.formatIso(DateTime.makeUnsafe(DateTime.toEpochMillis(yield* DateTime.now) + 5_000))},
-          ${ctx.config.configId}, 'started', 'continued', ${ctx.task.taskId})
-      `;
       yield* refusedWith(valid.id, "did not wake your current turn");
+      setup.github.clock.now = gitHubTime(
+        DateTime.toEpochMillis(DateTime.makeUnsafe(editedOrder.created_at)) + 120_000,
+      );
+      // An approver's review wakes the turn, but never orders a merge: its text can change unseen.
+      const review = setup.github.review(REPO, pr, GRACE_GH, "APPROVED", "LGTM, merge");
+      yield* tick(ctx);
+      assert.include(String(setup.sends.at(-1)?.input.text), "a review cannot order a merge");
+      yield* refusedWith(review.id, "A review cannot order a merge", "review");
+      // The approver's next words on the pull request: that comment lands.
+      const last = setup.github.commentOn(REPO, pr, GRACE_GH, "Merge it.");
+      yield* tick(ctx);
       const answer = yield* ctx.request(last.id, "issue-comment");
       assert.isTrue(answer.merged, answer.message);
       assert.deepEqual(

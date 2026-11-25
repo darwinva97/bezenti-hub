@@ -125,8 +125,9 @@ live(
       for (let n = 0; n < 5; n += 1) github.commentOn(REPO, 41, CI_HELPER, `Build ${n} done.`);
       github.commentOn(REPO, 41, MAKITA_BOT, "My own note.");
       github.review(REPO, 41, OCTOCAT, "COMMENTED", "");
-      // A command Makita does not know yet is left for its ticket (13: `/makita merge`).
-      github.commentOn(REPO, 41, OCTOCAT, "/makita merge");
+      // A command Makita does not know is not stored (`/makita merge` is ticket 13's: see
+      // MakitaLanding.test.ts).
+      github.commentOn(REPO, 41, OCTOCAT, "/makita deploy");
       github.commentOn(REPO, 41, STRANGER, "/makita stop");
       yield* tick(ctx);
       assert.lengthOf(setup.sends, 0);

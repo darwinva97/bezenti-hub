@@ -26,6 +26,7 @@ Makita is the Hub's GitHub bot teammate: a normal GitHub account whose token the
 | `makitaCi.ts`           | nothing (pure)                                           | A commit's CI verdict, the pull request's required sections and footer, what Makita says about CI.                                        |
 | `makitaApprovers.ts`    | nothing (reads)                                          | Who approves a configuration now, whether a push waits, `/makita ok` in a comment (ticket 11).                                            |
 | `makitaApprovalFlow.ts` | `pending_push_json`, `approved_through`                  | A waiting push and its request, an approval recorded, the approved commit sent (ticket 11).                                               |
+| `makitaConversation.ts` | nothing (pure)                                           | What is said on Makita's own pull request: reviews, the decision without a mention, the wake and read texts (ticket 14).                  |
 
 Only `makita/` names these tables (`DoorRules.test.ts` checks it). Other modules ask `makitaRows.makitaTaskOfThread`.
 
@@ -123,6 +124,15 @@ A configuration says when a push waits (`approval`: `others` by default, `always
 - **Sending.** `MakitaPushes.releaseApproved`, at the end of every tasks pass and under the Thread's push lock, pushes exactly the approved commit (never forced; the branch must be where Makita left it, or already there), audits `makita.github.push` as the system, posts «Pushed `makita/…` (sha, n commits), approved by @x.» and wakes the Thread (`makita-approved:<taskId>:<sha>`).
 - **The Owner** approves from the Hub: WS `makita.tasks.approve` (AccessPolicy `makita.approve`, open Space), audited with `via: hub`; the next pass sends it. The activity shows a waiting push, «Approve» for the Owner, and the last approval.
 - **Stopping** clears `pending_push_json` (ticket 06), so nothing approved later is sent.
+
+## The pull request's conversation (ticket 14)
+
+- **Makita's pull request** is the `pr_number` of a live task. On it no mention is needed. Conversation comments and review comments come from the existing comment feeds. Reviews come from `GET pulls/{n}/reviews`, read for each such PR whenever the repository's `review-comments` feed is due, with an in-memory ETag. Their key is `gh:review:<id>`, and there is no cursor: the key decides once. A review counts when it is `APPROVED`, `CHANGES_REQUESTED`, or `COMMENTED` with text.
+- **The decision** (`makitaConversation.decideConversation`, pure). Makita's own words are not stored. Neither is a `/makita …` first line Makita does not know yet: tickets 11 and 13 add those commands. A known command goes through `decideComment`, with the task as the live one. Otherwise ghosts, bots and `ignore_json` logins are `ignored-bot`, an edited comment is `ignored-edited`, a paused configuration is `ignored-paused`, and an author not on the list is `ignored-not-allowed`. Everything else is `queued` / `conversation`.
+- **The wake** is ticket 09's continue. The item is read again by id (`issues/comments`, `pulls/comments` or `pulls/{n}/reviews/{id}`) and must have the same author and, for a comment, no edit. It is framed with where it was said (conversation, review state, or file, line and review comment id) and how to answer there. The event becomes `started` / `conversation`. If the task ended meanwhile, nothing is woken (`task-ended`). GitHub gives a review no edit time.
+- **Answering.** `makita_comment` takes `on: "pull_request"` (the task's own PR) or `replyTo: <review comment id>`. The Hub reads that review comment and refuses it unless it is on the task's PR. The reply goes to the thread's first comment. The same mask, checks, audit and loop guard apply. The guard is per task, so the issue and the PR share its counts. `makita_read_issue` adds the PR's comments, reviews and review comments, framed, with each author marked.
+- **Ending.** `merged` on the PR makes the task `done`. `closed` stops it (`pr-closed`), and `locked` stops it too (`pr-locked`). Stopping «the task of N» (`stopTasksWithin` with `issue`) also matches `pr_number = N`, so `/makita stop` works on the PR.
+- **Approval.** A wake is a `started` event of the task by its author, so `pushNeedsApproval` treats a review or comment by someone who is not an approver as an instruction: the next push waits for `/makita ok`. `/makita ok` in the PR's conversation is ticket 11's approval, decided before the conversation.
 
 ## What other tickets read
 

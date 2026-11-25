@@ -155,6 +155,7 @@ import { useRightPanelStore } from "../rightPanelStore";
 import { readThreadShell, useProjects } from "../state/entities";
 import { serverEnvironment } from "../state/server";
 import { shellEnvironment } from "../state/shell";
+import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import { assetEnvironment } from "../state/assets";
 import {
   readEnvironmentScope,
@@ -796,6 +797,33 @@ function useChatMarkdownState({
     });
     return metadata._tag === "Success" && metadata.value.entries[0] === null ? match : null;
   };
+  const downloadMarkdownFile = async (path: string, name: string) => {
+    const httpBaseUrl = threadRef
+      ? readPreparedConnection(threadRef.environmentId)?.httpBaseUrl
+      : undefined;
+    if (!threadRef || !httpBaseUrl) {
+      throw new Error("Reconnect to this environment and try again.");
+    }
+    const result = await createAssetUrl({
+      environmentId: threadRef.environmentId,
+      input: {
+        resource: {
+          _tag: "media-file",
+          threadId: threadRef.threadId,
+          path,
+          disposition: "attachment",
+        },
+      },
+    });
+    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+    const url = resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);
+    if (url === null) throw new Error("The environment returned an invalid download URL.");
+    // The asset route answers with Content-Disposition: attachment, so no blob round-trip.
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = name;
+    anchor.click();
+  };
   const openFileInPanel = (fileLinkMeta: MarkdownFileLinkMeta, panelPath: string) => {
     if (!threadRef) return;
     // Every open supersedes pending lookups, including synchronous opens.
@@ -881,6 +909,12 @@ function useChatMarkdownState({
             : undefined
         }
         revealLabel={revealInFileManagerLabel}
+        onDownload={
+          threadRef
+            ? async () =>
+                downloadMarkdownFile((await resolveHostPath()).absolutePath, fileLinkMeta.basename)
+            : undefined
+        }
         onOpenInBrowser={
           threadRef &&
           canOperatePreview &&

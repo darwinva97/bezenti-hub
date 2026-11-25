@@ -130,7 +130,7 @@ const GITHUB_IDENTITY = {
 /** A Space's Makita configurations: MakitaConfigs decides each on its Space. */
 const MAKITA_CONFIGS = {
   unscoped:
-    "Makita configurations: MakitaConfigs answers a person's own session only (never an agent, the Hub's shell or a one-Space session); AccessPolicy `makita.view` on the named Space to list (without one, the Owner every Space, anyone else the Spaces they view), `makita.use` to create, `makita.edit` / `.delete` / `.pause` / `.resume` on each, and `makita.pause` on its configuration to stop one task (`makita.tasks.stop`); Projects named must be live in that Space; another Space's configuration answers like a missing one",
+    "Makita configurations: MakitaConfigs answers a person's own session only (never an agent, the Hub's shell or a one-Space session); AccessPolicy `makita.view` on the named Space to list (without one, the Owner every Space, anyone else the Spaces they view), `makita.use` to create, `makita.edit` / `.delete` / `.pause` / `.resume` on each, and `makita.pause` on its configuration to stop one task (`makita.tasks.stop`); `makita.approve` (the Owner, decided before the task is read) to approve a task's waiting push (`makita.tasks.approve`); Projects named must be live in that Space; another Space's configuration answers like a missing one",
 };
 /** Grants name no Thread or Project: Grants decides each by AccessPolicy `grant.*`. */
 const GRANTS = {
@@ -212,6 +212,7 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.makitaConfigsPause]: MAKITA_CONFIGS,
   [WS_METHODS.makitaConfigsResume]: MAKITA_CONFIGS,
   [WS_METHODS.makitaTasksStop]: MAKITA_CONFIGS,
+  [WS_METHODS.makitaTasksApprove]: MAKITA_CONFIGS,
   [WS_METHODS.makitaActivity]: MAKITA_ACTIVITY,
   [WS_METHODS.makitaThreads]: MAKITA_THREADS,
   [WS_METHODS.githubIdentityGet]: GITHUB_IDENTITY,

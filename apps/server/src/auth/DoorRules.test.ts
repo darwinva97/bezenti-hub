@@ -729,6 +729,8 @@ describe("every door of the Hub declares its rule", () => {
       "makita.permissions.grant",
       "makita.permissions.list",
       "makita.permissions.revoke",
+      // Ticket 11: the Owner approves a task's waiting push, `makita.approve`.
+      "makita.tasks.approve",
       // Ticket 06: stop one task, `makita.pause` on its configuration.
       "makita.tasks.stop",
       "makita.threads",

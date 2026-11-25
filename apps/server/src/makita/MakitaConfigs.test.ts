@@ -301,9 +301,9 @@ it.live.skipIf(!posix || platform === undefined)(
         ["a Project with no GitHub remote", { repos: { projects: [p.local] } }],
         ["a Project with two GitHub remotes", { repos: { projects: [p.twins] } }],
         ["a machine", { environmentId: EnvironmentId.make("env-dedicated") }],
-        // Ticket 10: pushing is taken; asking for every push and approvers come with ticket 11.
-        ["asking for every push", { capability: "push" as const, approval: "always" as const }],
-        ["approvers", { capability: "push" as const, approvers: ["octocat"] }],
+        // Ticket 11: approvers are GitHub logins that exist.
+        ["an unknown approver", { capability: "push" as const, approvers: ["nobody-here"] }],
+        ["a bad approver login", { capability: "push" as const, approvers: ["not a login"] }],
         ["landing", { capability: "push" as const, mayLand: true }],
         ["anyone", { callersMode: "anyone" as const }],
         ["replies to strangers", { strangers: "reply" as const }],

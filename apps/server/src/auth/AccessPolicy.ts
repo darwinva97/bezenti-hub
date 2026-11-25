@@ -375,6 +375,8 @@ export type Action =
   | "makita.resume"
   | "makita.edit"
   | "makita.delete"
+  /** Approve a task's waiting push from the Hub (Makita ticket 11): the Owner, in an open Space. */
+  | "makita.approve"
   /**
    * A linked GitHub account (Makita ticket 08), on a `GitHubIdentityResource`. Manage (read it,
    * ask for a code): its own User only. Unlink: its own User or the Owner.
@@ -998,6 +1000,7 @@ const MAKITA_CONFIG_ACTIONS: ReadonlySet<Action> = new Set([
   "makita.resume",
   "makita.edit",
   "makita.delete",
+  "makita.approve",
 ]);
 
 /**
@@ -1042,6 +1045,10 @@ const decideMakitaConfig = (
     case "makita.delete":
       if (principal.isOwner) return allow;
       return creator ? inSpace() : deny("not-yours");
+    case "makita.approve":
+      if (!principal.isOwner) return deny("owner-only");
+      if (space.archived) return deny("space-archived");
+      return space.frozen ? deny("space-frozen") : allow;
     default:
       return deny("wrong-resource");
   }

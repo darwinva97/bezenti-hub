@@ -88,6 +88,8 @@ export const MakitaActivityConfig = Schema.Struct({
   usage: Schema.NullOr(MakitaUsagePeriods),
   /** Whether the viewer may stop its tasks (`makita.tasks.stop`; the Hub decides again). */
   canStop: Schema.Boolean,
+  /** Ticket 11: whether the viewer may approve its waiting pushes from the Hub (the Owner). */
+  canApprove: Schema.Boolean,
 });
 export type MakitaActivityConfig = typeof MakitaActivityConfig.Type;
 
@@ -110,6 +112,26 @@ export const MakitaActivityTask = Schema.Struct({
   threadId: Schema.NullOr(ThreadId),
   /** Its usage so far (last 90 days, a live task's not yet written included); null as above. */
   usage: Schema.NullOr(MakitaUsage),
+  /** Ticket 11: a push waiting for an approver; `approved` once one approved it, until sent. */
+  waitingPush: Schema.NullOr(
+    Schema.Struct({
+      branch: Schema.String,
+      sha: Schema.String,
+      commits: NonNegativeInt,
+      files: NonNegativeInt,
+      additions: NonNegativeInt,
+      deletions: NonNegativeInt,
+      approved: Schema.Boolean,
+    }),
+  ),
+  /** Its last approval: a `/makita ok` (the approver's public login) or the Owner on the Hub. */
+  lastApproval: Schema.NullOr(
+    Schema.Struct({
+      via: Schema.Literals(["github", "hub"]),
+      login: Schema.NullOr(Schema.String),
+      at: Schema.String,
+    }),
+  ),
 });
 export type MakitaActivityTask = typeof MakitaActivityTask.Type;
 
@@ -147,7 +169,7 @@ export const MakitaActivityResult = Schema.Struct({
   configs: Schema.Array(MakitaActivityConfig),
   /** True for the Owner's view of every configuration. */
   everyone: Schema.Boolean,
-  /** Tasks at work now: running, waiting for CI or for an approval. */
+  /** Tasks at work now: running, waiting for CI, or with a push waiting for an approval. */
   now: Schema.Array(MakitaActivityTask),
   /** The most recent tasks, newest first. */
   tasks: Schema.Array(MakitaActivityTask),

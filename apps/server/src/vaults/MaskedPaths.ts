@@ -206,6 +206,7 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "makita.configs.pause": none("the paused Makita configuration"),
   "makita.configs.resume": none("the resumed Makita configuration"),
   "makita.tasks.stop": none("whether a Makita task was stopped"),
+  "makita.tasks.approve": none("whether a Makita task's waiting push was approved"),
   "makita.activity": none(
     "Makita's tasks, events and usage counts: repositories, GitHub logins, outcomes, never issue text",
   ),

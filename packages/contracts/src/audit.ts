@@ -108,6 +108,8 @@ export const AuditAction = Schema.Literals([
   "makita.github.reaction",
   // Makita ticket 10: a branch Makita pushed to GitHub for a task.
   "makita.github.push",
+  // Makita ticket 11: a task's waiting push approved, by `/makita ok` or by the Owner.
+  "makita.task.approve",
   // Makita ticket 08: a User's GitHub account linked (proved from it) or unlinked.
   "github_identity.link",
   "github_identity.unlink",
@@ -434,6 +436,8 @@ export const AUDIT_DETAIL_KEYS = {
   "makita.github.reaction": ["space", "repo", "number", "makita", "content"],
   /** A push to the task's own `makita/…` branch (as the creator's agent): never a diff. */
   "makita.github.push": ["space", "repo", "number", "makita", "branch", "sha", "commits"],
+  /** The approved commit, and how: `github` (the approver's public login) or `hub` (the Owner). */
+  "makita.task.approve": ["space", "repo", "number", "makita", "via", "login", "sha"],
   /** The GitHub account by numeric id and login (public), and the repository it was proved in. */
   "github_identity.link": ["githubUserId", "login", "repo"],
   /** Which account and why: `user` (its User), `owner`, `replaced` or `user-removed`. */

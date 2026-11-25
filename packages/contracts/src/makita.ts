@@ -331,6 +331,10 @@ export type MakitaTaskRef = typeof MakitaTaskRef.Type;
 export const MakitaTaskStopResult = Schema.Struct({ stopped: Schema.Boolean });
 export type MakitaTaskStopResult = typeof MakitaTaskStopResult.Type;
 
+/** Ticket 11: false when another approval came first; the Hub sends the push on its next pass. */
+export const MakitaTaskApproveResult = Schema.Struct({ approved: Schema.Boolean });
+export type MakitaTaskApproveResult = typeof MakitaTaskApproveResult.Type;
+
 /** Why a Makita door refused, in words for the person; never a token. */
 export class MakitaError extends Schema.TaggedError<MakitaError>()("MakitaError", {
   reason: Schema.Literals(["forbidden", "not-found", "invalid", "limit", "github", "storage"]),

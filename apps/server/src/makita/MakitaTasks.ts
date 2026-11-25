@@ -39,6 +39,8 @@ import { frameUntrusted } from "../scheduledTasks/webhookTemplate.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
+import { approveFromGitHub, tellReleased } from "./makitaApprovalFlow.ts";
+import { APPROVAL_DETAIL } from "./makitaApprovers.ts";
 import { allowedCallerIds } from "./makitaCallers.ts";
 import { MakitaConfigs } from "./MakitaConfigs.ts";
 import { commentOfKey, commentPath, decodeOneComment } from "./makitaFeeds.ts";
@@ -895,10 +897,19 @@ const make = Effect.gen(function* () {
               Effect.logError("Makita could not start a task", { eventKey: row.eventKey, cause }),
           ),
         );
+      // Ticket 11: a `/makita ok`, checked again by id before it approves anything.
+      if (row.detail === APPROVAL_DETAIL) {
+        yield* guarded(approveFromGitHub(sql, github, row));
+        continue;
+      }
       const trigger = triggerOf(row.detail);
       yield* trigger === "stop"
         ? guarded(stopFromGitHub(row))
         : guarded(startOne(row, now, trigger));
+    }
+    // Ticket 11: approved pushes go out, then are said on GitHub and to their Threads.
+    for (const released of yield* pushes.releaseApproved) {
+      yield* tellReleased(sql, github, threads, released);
     }
   }).pipe(
     Effect.catch((cause) => Effect.logError("Makita could not read its queued events", { cause })),

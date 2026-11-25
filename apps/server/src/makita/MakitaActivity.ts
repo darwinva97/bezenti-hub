@@ -36,6 +36,7 @@ import {
 } from "../ai/AiUsage.ts";
 import { periodOf } from "../ai/GrantCaps.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import { approvalOf } from "./makitaApprovers.ts";
 import { permittedIn } from "./makitaRows.ts";
 
 const NOT_YOURS =
@@ -90,12 +91,15 @@ interface TaskRow {
   readonly ciState: MakitaActivityTask["ci"];
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly pendingJson: string | null;
+  readonly approvedThrough: string | null;
 }
 
 const TASK_COLUMNS = `task_id AS "taskId", config_id AS "configId", space_id AS "spaceId",
   thread_id AS "threadId", repo, number, kind, state, caller_login AS "callerLogin", failure,
   pr_number AS "prNumber", ci_state AS "ciState", created_at AS "createdAt",
-  updated_at AS "updatedAt"`;
+  updated_at AS "updatedAt", pending_push_json AS "pendingJson",
+  approved_through AS "approvedThrough"`;
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -230,7 +234,10 @@ const make = Effect.gen(function* () {
 
     // Ticket 06's «Stop now» on a task: whoever may pause its configuration (`makita.pause`).
     const permitted = new Map<string, boolean>();
-    const mayStop = Effect.fn("MakitaActivity.mayStop")(function* (row: ConfigRow) {
+    const mayAct = Effect.fn("MakitaActivity.mayAct")(function* (
+      row: ConfigRow,
+      action: "makita.pause" | "makita.approve" = "makita.pause",
+    ) {
       const space = known.get(SpaceId.make(row.spaceId));
       if (space === undefined) return false;
       if (!permitted.has(row.spaceId)) {
@@ -242,7 +249,7 @@ const make = Effect.gen(function* () {
         );
       }
       return AccessPolicy.isAllowed(
-        AccessPolicy.decide(principal, "makita.pause", {
+        AccessPolicy.decide(principal, action, {
           kind: "makita-config",
           space: space.resource,
           createdBy: UserId.make(row.createdBy),
@@ -267,14 +274,17 @@ const make = Effect.gen(function* () {
               starts,
             )
           : null,
-        canStop: yield* mayStop(row),
+        canStop: yield* mayAct(row),
+        // Ticket 11: «Approve» on a waiting push, the Owner's (`makita.approve`).
+        canApprove: yield* mayAct(row, "makita.approve"),
       });
     }
 
     const inConfigs = configIds.length === 0 ? sql`1 = 0` : sql.in("config_id", configIds);
     const live = yield* sql<TaskRow>`
       SELECT ${sql.literal(TASK_COLUMNS)} FROM makita_tasks
-      WHERE ${inConfigs} AND ${sql.in("state", [...LIVE_STATES])}
+      WHERE ${inConfigs} AND (${sql.in("state", [...LIVE_STATES])}
+        OR (pending_push_json IS NOT NULL AND state NOT IN ('done', 'stopped', 'failed')))
       ORDER BY created_at DESC, task_id LIMIT ${MAX_LIVE}
     `.pipe(Effect.catch(storage("read Makita's tasks")));
     const recent = yield* sql<TaskRow>`
@@ -313,6 +323,7 @@ const make = Effect.gen(function* () {
         updatedAt: row.updatedAt,
         threadId: seesThread(row.spaceId) ? ThreadId.make(row.threadId) : null,
         usage: taskUsage,
+        ...approvalOf(row),
       } satisfies MakitaActivityTask;
     });
     const nowTasks = yield* Effect.forEach(live, shownTask);

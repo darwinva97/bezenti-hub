@@ -3028,6 +3028,7 @@ export const layerWsRpc = (
         [WS_METHODS.makitaConfigsPause]: (input) => makitaConfigs.pauseForSession(input),
         [WS_METHODS.makitaConfigsResume]: (input) => makitaConfigs.resumeForSession(input),
         [WS_METHODS.makitaTasksStop]: (input) => makitaConfigs.stopTaskForSession(input),
+        [WS_METHODS.makitaTasksApprove]: (input) => makitaConfigs.approveTaskForSession(input),
         // What Makita does and spends, and the Makita tasks of the Threads one sees (ticket 07).
         [WS_METHODS.makitaActivity]: (input) => makitaActivity.activityForSession(input),
         [WS_METHODS.makitaThreads]: () => makitaActivity.threadsForSession,

@@ -17,6 +17,7 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { linkCodeOf, linkFromCommentWithin } from "./GitHubIdentities.ts";
+import { decideApprovalComment, isApprovalCommand, liveTaskOfItem } from "./makitaApprovers.ts";
 import { allowedCallerIds } from "./makitaCallers.ts";
 import {
   commandOf,
@@ -206,7 +207,9 @@ const ENDED_STATES: ReadonlyArray<string> = ["done", "stopped", "failed"];
 
 /** Whether a comment mentions Makita or holds a `/makita` command: only those are decided. */
 const speaksToMakita = (comment: FeedComment, login: string) =>
-  commandOf(comment.body) !== undefined || mentions(comment.body, login);
+  commandOf(comment.body) !== undefined ||
+  isApprovalCommand(comment.body) ||
+  mentions(comment.body, login);
 
 /** A reaction owed to a link command once its batch commits (ticket 08). */
 interface LinkReaction {
@@ -600,12 +603,25 @@ const make = Effect.gen(function* () {
         });
         continue;
       }
-      const decision = decideComment({
-        comment,
-        configs: input.listened.configs,
-        makita: input.makita,
-        tasks: yield* tasksOf(input.listened.repo, comment.number),
-      });
+      // Ticket 11: `/makita ok` in an issue or pull request conversation, for its live task.
+      const approval =
+        isApprovalCommand(comment.body) && comment.eventKey.startsWith("gh:issue-comment:")
+          ? decideApprovalComment({
+              comment,
+              configs: input.listened.configs,
+              makita: input.makita,
+              liveConfigId:
+                (yield* liveTaskOfItem(sql, input.listened.repo, comment.number))?.configId ?? null,
+            })
+          : undefined;
+      const decision =
+        approval ??
+        decideComment({
+          comment,
+          configs: input.listened.configs,
+          makita: input.makita,
+          tasks: yield* tasksOf(input.listened.repo, comment.number),
+        });
       if (decision === undefined) continue;
       const inserted = yield* insertEvent({
         eventKey: comment.eventKey,

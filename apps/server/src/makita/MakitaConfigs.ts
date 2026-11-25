@@ -25,6 +25,7 @@ import {
   MakitaGitHubUser,
   type MakitaProjectRepo,
   MakitaRepos,
+  type MakitaTaskApproveResult,
   type MakitaTaskRef,
   type MakitaTaskStopResult,
   MakitaTriggers,
@@ -52,6 +53,7 @@ import { chooseAiAccount } from "../ai/chooseAiAccount.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import { approveFromHubWithin } from "./makitaApprovalFlow.ts";
 import { MakitaGitHub, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { resolveProjectRepo, type ResolvedRepo } from "./MakitaRepos.ts";
 import { permittedIn, stopTasksWithin } from "./makitaRows.ts";
@@ -62,6 +64,7 @@ const NO_SUCH_CONFIG = "No such Makita configuration.";
 const NO_SUCH_TASK = "No such Makita task.";
 const MAX_NAME = 80;
 const MAX_CALLERS = 50;
+const MAX_APPROVERS = 20;
 const MAX_PROJECTS = 50;
 const LABEL_COLOR = "6f42c1";
 const LABEL_DESCRIPTION = "Makita, this repository's bot teammate, takes issues with this label.";
@@ -152,9 +155,10 @@ interface Checked {
   readonly logins: ReadonlyArray<string>;
   readonly modelSelection: ModelSelection;
   readonly baseBranch: string | null;
-  /** Ticket 10: «Also push branches», and whether its first push waits for an approver. */
+  /** Ticket 10: «Also push branches»; ticket 11: when a push waits, and who else approves. */
   readonly capability: MakitaConfig["capability"];
-  readonly approval: "others" | "never";
+  readonly approval: MakitaConfig["approval"];
+  readonly approverLogins: ReadonlyArray<string>;
 }
 
 export class MakitaConfigs extends Context.Service<
@@ -198,6 +202,13 @@ export class MakitaConfigs extends Context.Service<
     readonly stopTaskForSession: (
       input: MakitaTaskRef,
     ) => Effect.Effect<MakitaTaskStopResult, MakitaError>;
+    /** Ticket 11: the Owner approves a task's waiting push from the Hub. */
+    readonly approveTask: (
+      input: MakitaTaskRef & { readonly actorUserId: UserId },
+    ) => Effect.Effect<MakitaTaskApproveResult, MakitaError>;
+    readonly approveTaskForSession: (
+      input: MakitaTaskRef,
+    ) => Effect.Effect<MakitaTaskApproveResult, MakitaError>;
     /**
      * Ticket 05, at each task's start: the AI account and model still a gateway one the creator
      * may use in the Space, serving the model (the same check as saving). Answers its name.
@@ -216,7 +227,7 @@ const fail = (reason: MakitaError["reason"], message: string) =>
 /**
  * The values taken so far (the table holds the spec's others for later tickets): the creator, a
  * list of GitHub users or the Members (ticket 08), any trigger, «Comment and analyse» or
- * (ticket 10) «Also push branches» with the default approval or none, no landing, the Sandbox.
+ * (ticket 10) «Also push branches», any approval and approvers (ticket 11), no landing, the Sandbox.
  */
 const checkedInput = (
   input: Omit<MakitaConfigInput, "spaceId">,
@@ -265,9 +276,13 @@ const checkedInput = (
   if (input.mayLand) {
     return refused("Landing on the default branch comes later.");
   }
-  if (input.approval === "always" || input.approvers.length > 0) {
-    return refused("Approvers, and asking for every push, come later.");
+  // Ticket 11: approvers besides the creator, by login, resolved to ids like the callers.
+  const approverLogins = input.approvers.map((login) => login.trim().replace(/^@/u, ""));
+  if (approverLogins.length > MAX_APPROVERS) {
+    return refused(`Name at most ${MAX_APPROVERS} approvers besides you.`);
   }
+  const badApprover = approverLogins.find((login) => !validLogin(login));
+  if (badApprover !== undefined) return refused(`«${badApprover}» is not a GitHub login.`);
   if (input.environmentId !== null) {
     return refused("For now Makita works only in the Space's Sandbox.");
   }
@@ -288,7 +303,10 @@ const checkedInput = (
       modelSelection: input.modelSelection,
       baseBranch: baseBranch === null || baseBranch.length === 0 ? null : baseBranch,
       capability: input.capability,
-      approval: input.approval === "never" ? "never" : "others",
+      approval: input.approval,
+      approverLogins: [
+        ...new Map(approverLogins.map((login) => [login.toLowerCase(), login])).values(),
+      ],
     },
   };
 };
@@ -879,6 +897,7 @@ const make = Effect.gen(function* () {
     yield* checkedSelection(input.actorUserId, input.spaceId, value.modelSelection);
     yield* checkedProjects(input.spaceId, value.repos);
     const callers = yield* resolvedCallers(value.logins, []);
+    const approvers = yield* resolvedCallers(value.approverLogins, []);
     const configId = newConfigId();
     const at = DateTime.formatIso(yield* DateTime.now);
     const outcome = yield* sql
@@ -907,7 +926,7 @@ const make = Effect.gen(function* () {
               ${at}, ${jsonOf(value.repos)},
               ${jsonOf(value.triggers)}, ${value.callersMode},
               ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, ${value.capability}, 0,
-              ${value.approval}, '[]', ${value.baseBranch}, NULL)
+              ${value.approval}, ${jsonOf(approvers)}, ${value.baseBranch}, NULL)
           `;
           yield* audit.record({
             actor: AuditLog.userActor(input.actorUserId),
@@ -977,6 +996,10 @@ const make = Effect.gen(function* () {
     yield* checkedProjects(spaceId, value.repos);
     const known = Option.getOrElse(decodeUsers(found.row.callersJson), () => []);
     const callers = yield* resolvedCallers(value.logins, known);
+    const approvers = yield* resolvedCallers(
+      value.approverLogins,
+      Option.getOrElse(decodeUsers(found.row.approversJson), () => []),
+    );
     const before = {
       name: found.row.name,
       repos: found.row.reposJson,
@@ -987,6 +1010,7 @@ const make = Effect.gen(function* () {
       baseBranch: found.row.baseBranch,
       capability: found.row.capability,
       approval: found.row.approval,
+      approvers: found.row.approversJson,
     };
     const after = {
       name: value.name,
@@ -998,6 +1022,7 @@ const make = Effect.gen(function* () {
       baseBranch: value.baseBranch,
       capability: value.capability,
       approval: value.approval,
+      approvers: jsonOf(approvers),
     };
     const changed = (Object.keys(after) as Array<keyof typeof after>).filter(
       (key) => before[key] !== after[key],
@@ -1018,7 +1043,8 @@ const make = Effect.gen(function* () {
                 triggers_json = ${after.triggers}, callers_mode = ${after.callersMode},
                 callers_json = ${after.callers},
                 model_selection_json = ${after.modelSelection}, base_branch = ${after.baseBranch},
-                capability = ${after.capability}, approval = ${after.approval}, updated_at = ${at}
+                capability = ${after.capability}, approval = ${after.approval},
+                approvers_json = ${after.approvers}, updated_at = ${at}
               WHERE config_id = ${input.configId} AND deleted_at IS NULL
               RETURNING config_id AS id
             `;
@@ -1206,6 +1232,50 @@ const make = Effect.gen(function* () {
     return { stopped: stopped.length > 0 } satisfies MakitaTaskStopResult;
   });
 
+  /**
+   * Ticket 11: the Owner's «Approve» on a task's waiting push (AccessPolicy `makita.approve`);
+   * anyone else is refused before the task is read, so it says nothing about the task.
+   */
+  const approveTask = Effect.fn("MakitaConfigs.approveTask")(function* (
+    input: MakitaTaskRef & { readonly actorUserId: UserId },
+  ) {
+    const principal = yield* principalFor(input.actorUserId);
+    if (!principal.isOwner || principal.inactive === true) {
+      return yield* fail("forbidden", "Only the Owner approves a Makita push from the Hub.");
+    }
+    const [task] = yield* sql<{ readonly configId: string }>`
+      SELECT config_id AS "configId" FROM makita_tasks WHERE task_id = ${input.taskId}
+    `.pipe(Effect.catch(storage("read the task")));
+    if (task === undefined) return yield* fail("not-found", NO_SUCH_TASK);
+    const found = yield* visibleConfig(input.actorUserId, task.configId).pipe(
+      Effect.catchIf(
+        (error) => error.reason === "not-found",
+        () => fail("not-found", NO_SUCH_TASK),
+      ),
+    );
+    const allowed =
+      found.space !== undefined &&
+      AccessPolicy.isAllowed(
+        AccessPolicy.decide(
+          found.principal,
+          "makita.approve",
+          yield* configResource(input.actorUserId, found.row, found.space.resource),
+        ),
+      );
+    if (!allowed) {
+      return yield* fail("forbidden", "Nothing runs in this Space now, so nothing is approved.");
+    }
+    const outcome = yield* sql
+      .withTransaction(
+        approveFromHubWithin(sql, { taskId: input.taskId, actorUserId: input.actorUserId }),
+      )
+      .pipe(Effect.catch(storage("approve the push")));
+    if (outcome === "nothing-pending") {
+      return yield* fail("invalid", "Nothing of this task is waiting for approval.");
+    }
+    return { approved: outcome === "approved" } satisfies MakitaTaskApproveResult;
+  });
+
   return MakitaConfigs.of({
     checkSelection: checkedSelection,
     list,
@@ -1247,6 +1317,12 @@ const make = Effect.gen(function* () {
       input: MakitaTaskRef,
     ) {
       return yield* stopTask({ ...input, actorUserId: yield* sessionUser });
+    }),
+    approveTask,
+    approveTaskForSession: Effect.fn("MakitaConfigs.approveTaskAsSession")(function* (
+      input: MakitaTaskRef,
+    ) {
+      return yield* approveTask({ ...input, actorUserId: yield* sessionUser });
     }),
   });
 });

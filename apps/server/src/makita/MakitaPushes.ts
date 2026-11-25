@@ -6,7 +6,6 @@
 import {
   type EnvironmentId,
   MakitaError,
-  MakitaGitHubUser,
   type ProjectId,
   type ProviderInstanceId,
   SpaceId,
@@ -25,6 +24,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
+import { holdForApproval, type MakitaReleased, makeReleaseApproved } from "./makitaApprovalFlow.ts";
 import {
   makitaAuthorOf,
   makitaBaseRef,
@@ -63,21 +63,6 @@ const WorkspaceJson = Schema.fromJsonString(MakitaTaskWorkspace);
 const decodeWorkspace = Schema.decodeUnknownOption(WorkspaceJson);
 const encodeWorkspace = Schema.encodeSync(WorkspaceJson);
 
-/** A push waiting for an approver's `/makita ok` (ticket 11 posts the request and sends it). */
-export const MakitaPendingPush = Schema.Struct({
-  sha: Schema.String,
-  branch: Schema.String,
-  commits: Schema.Number,
-  files: Schema.Number,
-  additions: Schema.Number,
-  deletions: Schema.Number,
-  at: Schema.String,
-});
-const encodePending = Schema.encodeSync(Schema.fromJsonString(MakitaPendingPush));
-const decodeUsers = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Array(MakitaGitHubUser)),
-);
-
 export interface MakitaPushResult {
   readonly pushed: boolean;
   readonly message: string;
@@ -108,6 +93,8 @@ export class MakitaPushes extends Context.Service<
     ) => Effect.Effect<MakitaTaskWorkspace, MakitaError>;
     /** `makita_push`: the calling Thread's task's worktree to its branch, checked on the Hub. */
     readonly pushForThread: (threadId: ThreadId) => Effect.Effect<MakitaPushResult, MakitaError>;
+    /** Ticket 11: every approved waiting push sent (or refused), under its Thread's lock. */
+    readonly releaseApproved: Effect.Effect<ReadonlyArray<MakitaReleased>>;
   }
 >()("t3/makita/MakitaPushes") {}
 
@@ -462,35 +449,15 @@ const make = Effect.gen(function* () {
     });
     if (checked._tag === "refused") return notPushed(checked.message);
 
-    // Ticket 11's seam: the first push asked by someone who is not an approver waits.
-    const approvers = new Set(
-      Option.getOrElse(decodeUsers(task.approversJson), () => []).map((user) => user.id),
-    );
-    const needsApproval =
-      task.lastPushAt === null &&
-      task.approvedThrough === null &&
-      (task.approval === "always" || (task.approval === "others" && !approvers.has(task.callerId)));
-    const at = DateTime.formatIso(yield* DateTime.now);
-    if (needsApproval) {
-      const stats = yield* changeStats(gitDir, workspace.startSha, head);
-      yield* sql`
-        UPDATE makita_tasks SET pending_push_json = ${encodePending({
-          sha: head,
-          branch,
-          commits: checked.commits,
-          ...stats,
-          at,
-        })}, updated_at = ${at}
-        WHERE task_id = ${task.taskId} AND state NOT IN ('done', 'stopped', 'failed')
-      `.pipe(Effect.catch(storage("keep the push for approval")));
-      return {
-        pushed: false,
-        message: `This push needs an approver's \`/makita ok\` before it reaches GitHub. Nothing was pushed; ${branch} (+${stats.additions} −${stats.deletions} in ${stats.files} files) waits. Stop here.`,
-        branch,
-        sha: head,
-        commits: checked.commits,
-      } satisfies MakitaPushResult;
-    }
+    // Ticket 11: a push after an instruction no approval covers waits for an approver.
+    const held = yield* holdForApproval(sql, github, {
+      taskId: task.taskId,
+      head,
+      branch,
+      commits: checked.commits,
+      stats: changeStats(gitDir, since, head),
+    });
+    if (held !== null) return held;
 
     // GitHub's branch must be where Makita left it: absent before the first push.
     const remote = yield* github
@@ -603,7 +570,21 @@ const make = Effect.gen(function* () {
     return yield* lockOf(threadId).withPermits(1)(checkedPush(threadId));
   });
 
-  return MakitaPushes.of({ prepareWorkspace, pushForThread });
+  const releaseApproved = makeReleaseApproved({
+    sql,
+    github,
+    machines,
+    hasCommit: (gitDir, sha) =>
+      OBJECT_ID.test(sha)
+        ? Effect.map(
+            git(gitDir, ["cat-file", "-e", `${sha}^{commit}`]),
+            (out) => out.exitCode === 0,
+          )
+        : Effect.succeed(false),
+    locked: (threadId, effect) => lockOf(threadId).withPermits(1)(effect),
+  });
+
+  return MakitaPushes.of({ prepareWorkspace, pushForThread, releaseApproved });
 });
 
 /** Over Makita's GitHub client, the machines, the audit log, the masker and git. */

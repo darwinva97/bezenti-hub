@@ -1882,6 +1882,29 @@ const rows: ReadonlyArray<Row> = [
     gracesConfig(),
     deny("not-a-member"),
   ],
+  // Makita ticket 11: approving a waiting push from the Hub is the Owner's alone.
+  ["the Owner approves a waiting push", owner, "makita.approve", gracesConfig(), allow],
+  [
+    "its creator does not approve from the Hub",
+    member,
+    "makita.approve",
+    gracesConfig(),
+    deny("owner-only"),
+  ],
+  [
+    "an Admin does not approve from the Hub",
+    admin,
+    "makita.approve",
+    gracesConfig(),
+    deny("owner-only"),
+  ],
+  [
+    "nothing is approved in an archived Organization",
+    owner,
+    "makita.approve",
+    gracesConfig({ space: archivedOrganization }),
+    deny("space-archived"),
+  ],
   [
     "a configuration decides nothing else",
     owner,

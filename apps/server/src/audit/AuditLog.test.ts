@@ -646,6 +646,8 @@ it.effect(
         "makita.github.reaction",
         // makita/MakitaPushes.test.ts (Makita ticket 10: pushing makita/* branches)
         "makita.github.push",
+        // makita/MakitaApprovals.test.ts (Makita ticket 11: `/makita ok` and the Owner's approval)
+        "makita.task.approve",
         // makita/GitHubIdentities.test.ts (Makita ticket 08: a linked GitHub account)
         "github_identity.link",
         "github_identity.unlink",

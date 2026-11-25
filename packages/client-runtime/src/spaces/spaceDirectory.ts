@@ -191,6 +191,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "makita.task.stop": "Stopped a Makita task",
   "makita.github.reaction": "Makita reacted on GitHub",
   "makita.github.push": "Makita pushed a branch to GitHub",
+  "makita.task.approve": "Approved a Makita push",
   "github_identity.link": "Linked a GitHub account",
   "github_identity.unlink": "Unlinked a GitHub account",
   "makita.github.pull_request": "Makita opened a pull request on GitHub",

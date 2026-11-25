@@ -71,6 +71,11 @@ export function createMakitaEnvironmentAtoms<R, E>(
       label: "environment-data:makita:tasks-stop",
       tag: WS_METHODS.makitaTasksStop,
     }),
+    // Ticket 11: the Owner approves a task's waiting push.
+    approveTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:tasks-approve",
+      tag: WS_METHODS.makitaTasksApprove,
+    }),
     // What Makita does and spends (ticket 07), read again every 30 s while a screen shows it.
     activity: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:makita:activity",

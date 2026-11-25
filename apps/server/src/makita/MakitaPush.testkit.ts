@@ -10,6 +10,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { EnvironmentId, MakitaError } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -119,34 +120,51 @@ export const makeGitWorld = () => {
   };
   const made: Array<MakitaWorktreeInput & { readonly cwd: string }> = [];
   const uploads: Array<{ readonly ref: string; readonly cwd: string }> = [];
-  const state = { failWorktree: false };
+  /**
+   * `gate`: while set, making a worktree waits for it (a slow first clone); `attempts` counts
+   * every start of one, each also told to `started` (its number) when set.
+   */
+  const state: {
+    failWorktree: boolean;
+    gate: Deferred.Deferred<void> | null;
+    attempts: number;
+    started: ((attempt: number) => Effect.Effect<void>) | null;
+  } = { failWorktree: false, gate: null, attempts: 0, started: null };
 
   const fail = (message: string) => Effect.fail(new MakitaError({ reason: "github", message }));
+  const slow = Effect.suspend(() => {
+    state.attempts += 1;
+    return (state.started === null ? Effect.void : state.started(state.attempts)).pipe(
+      Effect.andThen(state.gate === null ? Effect.void : Deferred.await(state.gate)),
+    );
+  });
   const machines = Layer.succeed(
     MakitaMachines,
     MakitaMachines.of({
       hubRepository: (projectId) => Effect.sync(() => hubRepositoryOf(projectId)),
       makeWorktree: (input) =>
-        state.failWorktree
-          ? fail("The machine is not connected.")
-          : Effect.try({
-              try: () => {
-                // `move.fetch`, then `move.prepare` with the Hub's setup command.
-                const checkout = checkoutOf(input.projectId);
-                const bare = hubRepositoryOf(input.projectId);
-                git(checkout, ["fetch", "--quiet", bare, `+${input.baseRef}:${input.baseRef}`]);
-                const cwd = NodePath.join(machine, "worktrees", input.threadId);
-                git(checkout, ["worktree", "add", "--quiet", "--detach", cwd, input.baseRef]);
-                NodeChildProcess.execFileSync("sh", ["-c", input.setupCommand], {
-                  cwd,
-                  env,
-                  stdio: ["ignore", "pipe", "pipe"],
-                });
-                made.push({ ...input, cwd });
-                return { environmentId: SANDBOX, cwd };
-              },
-              catch: (cause) => new MakitaError({ reason: "github", message: String(cause) }),
-            }),
+        Effect.andThen(slow, () =>
+          state.failWorktree
+            ? fail("The machine is not connected.")
+            : Effect.try({
+                try: () => {
+                  // `move.fetch`, then `move.prepare` with the Hub's setup command.
+                  const checkout = checkoutOf(input.projectId);
+                  const bare = hubRepositoryOf(input.projectId);
+                  git(checkout, ["fetch", "--quiet", bare, `+${input.baseRef}:${input.baseRef}`]);
+                  const cwd = NodePath.join(machine, "worktrees", input.threadId);
+                  git(checkout, ["worktree", "add", "--quiet", "--detach", cwd, input.baseRef]);
+                  NodeChildProcess.execFileSync("sh", ["-c", input.setupCommand], {
+                    cwd,
+                    env,
+                    stdio: ["ignore", "pipe", "pipe"],
+                  });
+                  made.push({ ...input, cwd });
+                  return { environmentId: SANDBOX, cwd };
+                },
+                catch: (cause) => new MakitaError({ reason: "github", message: String(cause) }),
+              }),
+        ),
       uploadWorktree: (input) =>
         Effect.try({
           try: () => {

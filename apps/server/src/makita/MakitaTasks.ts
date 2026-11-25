@@ -25,6 +25,7 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -140,6 +141,8 @@ export class MakitaTasks extends Context.Service<
   {
     /** Every `queued` event becomes a task and its Thread, or says why not. */
     readonly startQueued: Effect.Effect<void>;
+    /** Ticket 10: waits for the worktrees and launches that `startQueued` left running. */
+    readonly awaitStarting: Effect.Effect<void>;
     /** `makita_read_issue`: the calling Thread's task's issue, framed. */
     readonly readIssueForThread: (
       threadId: ThreadId,
@@ -214,6 +217,9 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const masker = yield* SecretMasker.SecretMasker;
   const pushes = yield* MakitaPushes;
+  /** Ticket 10: events whose task's worktree and launch run off the tick right now. */
+  const preparing = new Map<string, Fiber.Fiber<unknown, unknown> | null>();
+  const scope = yield* Effect.scope;
 
   const storage = (what: string) => (cause: unknown) =>
     Effect.logError(`MakitaTasks: could not ${what}`, { cause }).pipe(
@@ -685,150 +691,187 @@ const make = Effect.gen(function* () {
     if (current?.state !== "running") {
       return yield* finish(row.eventKey, "ignored-paused", "task-stopped", placed.taskId);
     }
-    // Ticket 10: a pushing task works in its own worktree, made by the Hub before its Thread.
-    const workspace =
-      current.branch === null
-        ? null
-        : yield* pushes
-            .prepareWorkspace({
-              taskId: placed.taskId,
-              threadId: ThreadId.make(placed.threadId),
-              projectId: ProjectId.make(projectId),
-              spaceId,
-              creator,
-              providerInstanceId: selection.value.instanceId,
-              repo: row.repo,
-              branch: current.branch,
-              baseBranch: config.baseBranch,
-            })
-            .pipe(Effect.result);
-    if (workspace !== null && workspace._tag === "Failure") {
-      yield* Effect.logWarning("Makita could not make a task's worktree", {
-        taskId: placed.taskId,
-        repo: row.repo,
-      });
-      const failedAt = yield* nowIso;
-      yield* sql.withTransaction(
-        Effect.gen(function* () {
-          yield* sql`
+    const branch = current.branch;
+    const launchIt = Effect.gen(function* () {
+      // Ticket 10: a pushing task works in its own worktree, made by the Hub before its Thread.
+      const workspace =
+        branch === null
+          ? null
+          : yield* pushes
+              .prepareWorkspace({
+                taskId: placed.taskId,
+                threadId: ThreadId.make(placed.threadId),
+                projectId: ProjectId.make(projectId),
+                spaceId,
+                creator,
+                providerInstanceId: selection.value.instanceId,
+                repo: row.repo,
+                branch,
+                baseBranch: config.baseBranch,
+              })
+              .pipe(Effect.result);
+      // Stopped while its worktree was made (that may take minutes): no Thread starts for it.
+      if (workspace !== null) {
+        const [still] = yield* sql<{ readonly state: string }>`
+        SELECT state FROM makita_tasks WHERE task_id = ${placed.taskId}
+      `;
+        if (still?.state !== "running") {
+          return yield* finish(row.eventKey, "ignored-paused", "task-stopped", placed.taskId);
+        }
+      }
+      if (workspace !== null && workspace._tag === "Failure") {
+        yield* Effect.logWarning("Makita could not make a task's worktree", {
+          taskId: placed.taskId,
+          repo: row.repo,
+        });
+        const failedAt = yield* nowIso;
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
             UPDATE makita_tasks SET state = 'failed', failure = ${oneLine(workspace.failure.message, 300)},
               updated_at = ${failedAt}
             WHERE task_id = ${placed.taskId}
           `;
-          yield* finish(row.eventKey, "started", "workspace-failed", placed.taskId);
-        }),
-      );
-      return;
-    }
-    const pushing =
-      workspace === null || current.branch === null
-        ? null
-        : { branch: current.branch, base: config.baseBranch, cwd: workspace.success.cwd };
-
-    const allowed = new Set(
-      Option.getOrElse(decodeUsers(config.callersJson), () => []).map((user) => user.id),
-    );
-    const triggers = decodeTriggers(config.triggersJson);
-    const label = Option.isSome(triggers) ? (triggers.value.label ?? "makita") : "makita";
-    const text = issueText({
-      repo: row.repo,
-      issue,
-      comments,
-      allowed,
-      frameId: newFrameId(),
-    });
-    const launched = yield* threadLaunch
-      .launch({
-        commandId: CommandId.make(`makita:${row.eventKey}`),
-        threadId: ThreadId.make(placed.threadId),
-        projectId: ProjectId.make(projectId),
-        title: oneLine(`Makita: ${row.repo}#${row.number} ${issue.title}`, MAX_TITLE),
-        modelSelection: selection.value,
-        runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: "default",
-        workspaceStrategy:
-          pushing === null
-            ? { type: "root" }
-            : { type: "existing_worktree", worktreePath: pushing.cwd, branch: pushing.branch },
-        initialMessage: {
-          messageId: MessageId.make(`makita-message:${row.eventKey}`),
-          text: firstMessage({
-            repo: row.repo,
-            asked: askedText({ trigger, callerLogin: row.actorLogin, label, kind: row.kind }),
-            text,
-            pushing,
+            yield* finish(row.eventKey, "started", "workspace-failed", placed.taskId);
           }),
-          attachments: [],
-        },
-        createdBy: "system",
-        creationSource: "server",
-        ownerUserId: creator,
-        spaceId,
-        placement: "space-work",
-      })
-      .pipe(CommandActor.actAsResolved({ _tag: "User", userId: creator }), Effect.exit);
-    const done = yield* nowIso;
-    if (launched._tag === "Failure") {
-      const reason = oneLine(Cause.pretty(launched.cause), 300);
-      yield* Effect.logWarning("Makita could not start a task's Thread", {
-        taskId: placed.taskId,
+        );
+        return;
+      }
+      const pushing =
+        workspace === null || branch === null
+          ? null
+          : { branch, base: config.baseBranch, cwd: workspace.success.cwd };
+
+      const allowed = new Set(
+        Option.getOrElse(decodeUsers(config.callersJson), () => []).map((user) => user.id),
+      );
+      const triggers = decodeTriggers(config.triggersJson);
+      const label = Option.isSome(triggers) ? (triggers.value.label ?? "makita") : "makita";
+      const text = issueText({
         repo: row.repo,
+        issue,
+        comments,
+        allowed,
+        frameId: newFrameId(),
       });
-      yield* sql.withTransaction(
-        Effect.gen(function* () {
-          yield* sql`
+      const launched = yield* threadLaunch
+        .launch({
+          commandId: CommandId.make(`makita:${row.eventKey}`),
+          threadId: ThreadId.make(placed.threadId),
+          projectId: ProjectId.make(projectId),
+          title: oneLine(`Makita: ${row.repo}#${row.number} ${issue.title}`, MAX_TITLE),
+          modelSelection: selection.value,
+          runtimeMode: DEFAULT_RUNTIME_MODE,
+          interactionMode: "default",
+          workspaceStrategy:
+            pushing === null
+              ? { type: "root" }
+              : { type: "existing_worktree", worktreePath: pushing.cwd, branch: pushing.branch },
+          initialMessage: {
+            messageId: MessageId.make(`makita-message:${row.eventKey}`),
+            text: firstMessage({
+              repo: row.repo,
+              asked: askedText({ trigger, callerLogin: row.actorLogin, label, kind: row.kind }),
+              text,
+              pushing,
+            }),
+            attachments: [],
+          },
+          createdBy: "system",
+          creationSource: "server",
+          ownerUserId: creator,
+          spaceId,
+          placement: "space-work",
+        })
+        .pipe(CommandActor.actAsResolved({ _tag: "User", userId: creator }), Effect.exit);
+      const done = yield* nowIso;
+      if (launched._tag === "Failure") {
+        const reason = oneLine(Cause.pretty(launched.cause), 300);
+        yield* Effect.logWarning("Makita could not start a task's Thread", {
+          taskId: placed.taskId,
+          repo: row.repo,
+        });
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
             UPDATE makita_tasks SET state = 'failed', failure = ${reason}, updated_at = ${done}
             WHERE task_id = ${placed.taskId}
           `;
-          yield* finish(row.eventKey, "started", "launch-failed", placed.taskId);
+            yield* finish(row.eventKey, "started", "launch-failed", placed.taskId);
+          }),
+        );
+        return;
+      }
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          yield* finish(row.eventKey, "started", trigger, placed.taskId);
+          yield* AuditLog.write(sql)({
+            actor: { source: "system" },
+            action: "makita.task.start",
+            spaceId,
+            target: { kind: "makita_task", id: placed.taskId, name: `${row.repo}#${row.number}` },
+            detail: {
+              space: spaceId,
+              repo: row.repo,
+              number: row.number,
+              trigger,
+              caller: row.actorLogin,
+              makita: config.configId,
+            },
+          });
         }),
       );
-      return;
-    }
-    yield* sql.withTransaction(
-      Effect.gen(function* () {
-        yield* finish(row.eventKey, "started", trigger, placed.taskId);
-        yield* AuditLog.write(sql)({
-          actor: { source: "system" },
-          action: "makita.task.start",
-          spaceId,
-          target: { kind: "makita_task", id: placed.taskId, name: `${row.repo}#${row.number}` },
-          detail: {
-            space: spaceId,
-            repo: row.repo,
-            number: row.number,
-            trigger,
-            caller: row.actorLogin,
-            makita: config.configId,
-          },
-        });
-      }),
-    );
-    // Once per task: a launch replayed after a restart does not say it again.
-    const [said] = yield* sql<{ readonly replies: number }>`
+      // Once per task: a launch replayed after a restart does not say it again.
+      const [said] = yield* sql<{ readonly replies: number }>`
       SELECT replies_without_person AS replies FROM makita_tasks WHERE task_id = ${placed.taskId}
     `;
-    if ((said?.replies ?? 0) > 0) return;
-    yield* postComment({
-      task: {
-        taskId: placed.taskId,
-        configId: config.configId,
-        spaceId,
-        repo: row.repo,
-        number: row.number,
-      },
-      body: ON_IT,
-      by: "hub",
-      creator,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Makita could not say it took an issue", {
+      if ((said?.replies ?? 0) > 0) return;
+      yield* postComment({
+        task: {
           taskId: placed.taskId,
-          reason: "reason" in error ? error.reason : "storage",
-        }),
+          configId: config.configId,
+          spaceId,
+          repo: row.repo,
+          number: row.number,
+        },
+        body: ON_IT,
+        by: "hub",
+        creator,
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Makita could not say it took an issue", {
+            taskId: placed.taskId,
+            reason: "reason" in error ? error.reason : "storage",
+          }),
+        ),
+      );
+    });
+    if (branch === null) return yield* launchIt;
+    // Ticket 10: making the worktree may take minutes (a first clone), so it and the launch run
+    // off the intake's tick, which also carries stops. The event stays `queued` with its task
+    // until then: a restart replays it with the same ids, and the recorded worktree is reused.
+    if (preparing.has(row.eventKey)) return;
+    preparing.set(row.eventKey, null);
+    const fiber = yield* launchIt.pipe(
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logError("Makita could not start a task", { eventKey: row.eventKey, cause }),
       ),
+      Effect.ensuring(Effect.sync(() => preparing.delete(row.eventKey))),
+      Effect.forkIn(scope),
     );
+    // Not when it already ended (and took its entry with it).
+    if (preparing.has(row.eventKey)) preparing.set(row.eventKey, fiber);
   });
+
+  const awaitStarting = Effect.suspend(() =>
+    Effect.forEach(
+      [...preparing.values()].filter((fiber) => fiber !== null),
+      (fiber) => Fiber.await(fiber),
+      { discard: true },
+    ),
+  );
 
   const startQueued = Effect.gen(function* () {
     const now = DateTime.toEpochMillis(yield* DateTime.now);
@@ -840,6 +883,8 @@ const make = Effect.gen(function* () {
       ORDER BY seen_at, rowid LIMIT 20
     `;
     for (const row of rows) {
+      // Ticket 10: its worktree is being made off the tick; nothing to do for it yet.
+      if (preparing.has(row.eventKey)) continue;
       const guarded = <A, E>(work: Effect.Effect<A, E>) =>
         work.pipe(
           Effect.asVoid,
@@ -982,7 +1027,7 @@ const make = Effect.gen(function* () {
     } satisfies MakitaCommentResult;
   });
 
-  return MakitaTasks.of({ startQueued, readIssueForThread, commentForThread });
+  return MakitaTasks.of({ startQueued, awaitStarting, readIssueForThread, commentForThread });
 });
 
 /** Over Makita's GitHub client and configurations, the intake, the launch, the masker, pushes. */

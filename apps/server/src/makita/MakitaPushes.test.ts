@@ -6,17 +6,21 @@
  */
 import { assert, it } from "@effect/vitest";
 import { type MakitaConfigInput, ThreadId } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 
 import { platform, posix } from "../ai/AiGatewayRoute.testkit.ts";
 import { classicToken } from "./MakitaGitHub.testkit.ts";
-import { makitaReady, OCTOCAT } from "./MakitaFixtures.testkit.ts";
+import { makitaReady, type MakitaReady, OCTOCAT } from "./MakitaFixtures.testkit.ts";
 import { SOMEONE_ELSE_PUSHED } from "./MakitaPushes.ts";
 
 const live = it.live.skipIf(!posix || platform === undefined);
 const REPO = "acme/widgets";
 const BRANCH = "makita/12-login-fails";
 const BOT_EMAIL = "4242+makita-bot@users.noreply.github.com";
+
+/** A pushing task's worktree and launch run off the tick: what the tick left, done. */
+const settled = (setup: MakitaReady["setup"]) => setup.makitaTasks.awaitStarting;
 
 /** Makita ready, a configuration that may push, octocat's label on issue 12 turned into a task. */
 const started = (over: Partial<MakitaConfigInput> = { capability: "push", approval: "never" }) =>
@@ -31,6 +35,7 @@ const started = (over: Partial<MakitaConfigInput> = { capability: "push", approv
     yield* due;
     yield* setup.makitaIntake.pollDue;
     yield* setup.makitaTasks.startQueued;
+    yield* settled(setup);
     const [task] = yield* setup.server.sql<{
       readonly taskId: string;
       readonly threadId: string;
@@ -278,6 +283,73 @@ live(
     }),
 );
 
+live(
+  "a slow worktree does not hold the intake: the tick returns, the next poll runs and its stop lands, and the launch follows off the tick",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* makitaReady;
+      const { setup, due } = ctx;
+      const world = setup.gitWorld;
+      world.seed(REPO, ["main"]);
+      const gate = yield* Deferred.make<void>();
+      world.state.gate = gate;
+      const first = yield* Deferred.make<void>();
+      const second = yield* Deferred.make<void>();
+      world.state.started = (attempt) =>
+        Deferred.succeed(attempt === 1 ? first : second, undefined).pipe(Effect.asVoid);
+      yield* ctx.configure({ capability: "push", approval: "never" });
+      yield* setup.makitaIntake.pollDue;
+      setup.github.label(REPO, 12, "makita", OCTOCAT, { title: "Login fails" });
+      yield* due;
+      yield* setup.makitaIntake.pollDue;
+      // The tick returns while issue 12's worktree is still being made.
+      yield* setup.makitaTasks.startQueued.pipe(Effect.timeout("5 seconds"));
+      yield* Deferred.await(first);
+      assert.lengthOf(setup.launches, 0);
+
+      // Meanwhile the next poll runs: issue 12 is closed (a stop) and issue 13 is labelled.
+      setup.github.addEvent(REPO, {
+        event: "closed",
+        actor: { login: OCTOCAT.login, id: OCTOCAT.id, type: "User" },
+        issue: { number: 12, title: "Login fails" },
+      });
+      setup.github.label(REPO, 13, "makita", OCTOCAT, { title: "Signup fails" });
+      yield* due;
+      yield* setup.makitaIntake.pollDue.pipe(Effect.timeout("5 seconds"));
+      yield* setup.makitaTasks.startQueued.pipe(Effect.timeout("5 seconds"));
+      const [twelve] = yield* setup.server.sql<{ readonly state: string }>`
+        SELECT state FROM makita_tasks WHERE number = 12
+      `;
+      assert.equal(twelve?.state, "stopped");
+      // Issue 13 started its own worktree; issue 12's was not started a second time.
+      yield* Deferred.await(second);
+
+      // The worktrees finish: the stopped task gets no Thread, issue 13 launches.
+      yield* Deferred.succeed(gate, undefined);
+      yield* settled(setup);
+      assert.equal(world.state.attempts, 2);
+      assert.deepEqual(
+        setup.launches.map((launch) => launch.input.title),
+        ["Makita: acme/widgets#13 Signup fails"],
+      );
+      const outcomes = yield* setup.server.sql<{
+        readonly number: number;
+        readonly outcome: string;
+        readonly detail: string | null;
+      }>`
+        SELECT number, outcome, detail FROM makita_events WHERE task_id IS NOT NULL
+        ORDER BY number
+      `;
+      assert.deepEqual(
+        outcomes.map((row) => [row.number, row.outcome, row.detail]),
+        [
+          [12, "ignored-paused", "task-stopped"],
+          [13, "started", "label"],
+        ],
+      );
+    }),
+);
+
 live("a worktree that cannot be made fails the task before any Thread starts", () =>
   Effect.gen(function* () {
     const ctx = yield* makitaReady;
@@ -290,6 +362,7 @@ live("a worktree that cannot be made fails the task before any Thread starts", (
     yield* due;
     yield* setup.makitaIntake.pollDue;
     yield* setup.makitaTasks.startQueued;
+    yield* settled(setup);
     assert.lengthOf(setup.launches, 0);
     const [task] = yield* setup.server.sql<{ readonly state: string }>`
       SELECT state FROM makita_tasks

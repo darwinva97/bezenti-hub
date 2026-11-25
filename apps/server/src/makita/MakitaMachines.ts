@@ -149,6 +149,11 @@ const make = Effect.gen(function* () {
           fail("github", `Could not make the task's worktree: ${why(error)}`),
         ),
       );
+    // A worktree left half-made (a restart mid-way) is reused without the setup command: refused,
+    // rather than a task on the wrong branch and author.
+    if (prepared.setupScript.status !== "succeeded") {
+      return yield* fail("github", "An earlier, unfinished worktree for this task is in the way.");
+    }
     return { environmentId, cwd: prepared.cwd } satisfies MakitaWorktree;
   });
 

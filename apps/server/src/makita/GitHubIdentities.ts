@@ -151,6 +151,21 @@ export const linkedIdsOf = Effect.fn("GitHubIdentities.linkedIdsOf")(function* (
 });
 
 /**
+ * The Hub User who linked this numeric GitHub id, if any (for ticket 11's approvers and the
+ * audit's `orderedBy`). Whether that User may still act is the caller's to check.
+ */
+export const linkedUserOf = Effect.fn("GitHubIdentities.linkedUserOf")(function* (
+  sql: SqlClient.SqlClient,
+  githubUserId: number,
+) {
+  const [row] = yield* sql<{ readonly userId: string }>`
+    SELECT user_id AS "userId" FROM github_identities
+    WHERE host = ${MAKITA_GITHUB_HOST} AND github_user_id = ${githubUserId}
+  `;
+  return row === undefined ? Option.none<UserId>() : Option.some(UserId.make(row.userId));
+});
+
+/**
  * A User removed from the Hub (inside `InstallationUserService`'s transaction, through
  * `MakitaPermissions.forgetUserWithin`): their link and codes go, the link audited.
  */

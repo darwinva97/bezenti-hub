@@ -849,7 +849,7 @@ describe("every door of the Hub declares its rule", () => {
           .filter((file) => file !== "auth/DoorRules.ts")
           .toSorted(),
         table,
-      ).toEqual(["makita/GitHubIdentities.ts", "persistence/Migrations/169_GitHubIdentities.ts"]);
+      ).toEqual(["makita/GitHubIdentities.ts", "persistence/Migrations/170_GitHubIdentities.ts"]);
     }
     for (const { file, text } of toolModules) {
       expect(text, file).not.toMatch(/GitHubIdentities/u);

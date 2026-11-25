@@ -102,3 +102,4 @@ A configuration with «Also push branches» (`capability: push`) lets its tasks 
 
 - The gateway: `makitaTaskOfThread` on the Thread of a gateway key gives the configuration and `halted`. `GatewayCaller.makitaConfigId` carries the configuration.
 - Usage (ticket 07): `GatewayCaller.makitaConfigId` gives `makita_config_id`.
+- Approvers (ticket 11): `GitHubIdentities.linkedUserOf(sql, githubUserId)` names the Hub User who linked a GitHub id; `linkedIdsOf(sql, userIds)` the ids these Users linked. Whether the User may still act is the caller's check.

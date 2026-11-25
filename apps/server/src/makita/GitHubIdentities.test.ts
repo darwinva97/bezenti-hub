@@ -6,9 +6,11 @@
  */
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import { platform, posix } from "../ai/AiGatewayRoute.testkit.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
+import { linkedIdsOf, linkedUserOf } from "./GitHubIdentities.ts";
 import {
   GRACE_GH,
   type MakitaReady,
@@ -98,6 +100,14 @@ live(
         [[posted.id, "+1"]],
       );
       assert.lengthOf(setup.launches, 0);
+      // The narrow reads later tickets use: who linked this id, which id this User linked.
+      const holder = yield* linkedUserOf(setup.server.sql, GRACE_GH.id);
+      assert.deepEqual(Option.getOrNull(holder), setup.people.member);
+      assert.isTrue(Option.isNone(yield* linkedUserOf(setup.server.sql, STRANGER.id)));
+      assert.deepEqual(
+        [...(yield* linkedIdsOf(setup.server.sql, [setup.people.member, setup.people.admin]))],
+        [[setup.people.member, GRACE_GH.id]],
+      );
       const links = yield* auditOf(ctx, "github_identity.link");
       assert.lengthOf(links, 1);
       assert.deepInclude(links[0], { actor: setup.people.member, target: setup.people.member });

@@ -158,7 +158,7 @@ import Migration0166 from "./Migrations/166_MakitaIntake.ts";
 import Migration0167 from "./Migrations/167_MakitaTasks.ts";
 import Migration0168 from "./Migrations/168_AiUsageMakita.ts";
 import Migration0169 from "./Migrations/169_MakitaTaskWorkspace.ts";
-import Migration0170 from "./Migrations/169_GitHubIdentities.ts";
+import Migration0170 from "./Migrations/170_GitHubIdentities.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -319,6 +319,7 @@ const migrationEntries = [
   [167, "MakitaTasks", Migration0167],
   [168, "AiUsageMakita", Migration0168],
   [169, "MakitaTaskWorkspace", Migration0169],
+  [170, "GitHubIdentities", Migration0170],
   [170, "GitHubIdentities", Migration0170],
 ] as const;
 

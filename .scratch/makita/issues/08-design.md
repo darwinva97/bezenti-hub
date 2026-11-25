@@ -4,7 +4,7 @@ Ticket: `08-vincular-la-cuenta-de-github.md`. Spec: `../spec.md` («Vincular una
 
 ## What changes
 
-- **Migration `169_GitHubIdentities`** (the number may move at integration):
+- **Migration `170_GitHubIdentities`** (the number may move at integration):
   - `github_identities (user_id PRIMARY KEY, host, github_user_id, login, linked_at, UNIQUE (host, github_user_id))`: one GitHub account per User, one User per GitHub account.
   - `github_link_codes (code_hash PRIMARY KEY, user_id, host, github_user_id, login, created_at, expires_at, used_at, outcome)`: `code_hash` is the SHA-256 of the code; `outcome` is `linked` or `taken` once used. Index on `user_id`.
   - Both named only by `makita/GitHubIdentities.ts` and the migration (`DoorRules`).
@@ -55,4 +55,4 @@ No HTTP, raw route or MCP door.
 
 ## Tests (red-first)
 
-`makita/GitHubIdentities.test.ts` over the fake GitHub: a code posted by its account links it (👍, audited) and a renamed login is still recognised; an expired code, a used code and a code posted by another account do not link; an account linked to Ada cannot be linked by Grace (😕, «linked to someone else», no name); «Only me» answers the creator's linked account and stops at the next event after unlinking; «members» answers Ada and stops at the next event after she leaves Acme; a Guest's link does not count; unlink by the Owner; an agent session is refused. Migration test for 169; door sweeps.
+`makita/GitHubIdentities.test.ts` over the fake GitHub: a code posted by its account links it (👍, audited) and a renamed login is still recognised; an expired code, a used code and a code posted by another account do not link; an account linked to Ada cannot be linked by Grace (😕, «linked to someone else», no name); «Only me» answers the creator's linked account and stops at the next event after unlinking; «members» answers Ada and stops at the next event after she leaves Acme; a Guest's link does not count; unlink by the Owner; an agent session is refused. Migration test for 170; door sweeps.

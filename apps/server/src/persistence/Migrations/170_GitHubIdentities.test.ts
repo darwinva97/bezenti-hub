@@ -10,9 +10,9 @@ const layer = NodeSqliteClient.layer({ filename: ":memory:" });
 it.effect("links one GitHub account per User and one User per GitHub account", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 168 });
-    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 169 }), [
-      [169, "GitHubIdentities"],
+    yield* runMigrations({ toMigrationInclusive: 169 });
+    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 170 }), [
+      [170, "GitHubIdentities"],
     ]);
     const link = (userId: string, githubUserId: number) => sql`
       INSERT INTO github_identities (user_id, host, github_user_id, login, linked_at)

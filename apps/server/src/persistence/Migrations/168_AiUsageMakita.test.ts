@@ -28,7 +28,7 @@ it.effect("keeps every daily row's values and keys Makita configurations apart",
       `SELECT ${columns} FROM ai_usage_daily ORDER BY day, user_id, grant_id, access_key_id`,
     );
 
-    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 169 }), [[169, "AiUsageMakita"]]);
+    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 168 }), [[168, "AiUsageMakita"]]);
 
     const after = yield* sql.unsafe<Record<string, unknown>>(
       `SELECT ${columns} FROM ai_usage_daily ORDER BY day, user_id, grant_id, access_key_id`,

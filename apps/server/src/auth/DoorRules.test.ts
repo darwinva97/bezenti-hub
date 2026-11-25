@@ -843,7 +843,7 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/159_AiAccessKeys.ts",
       "persistence/Migrations/160_AiUsageAccessKey.ts",
       // Each Makita configuration's usage apart (Makita ticket 07).
-      "persistence/Migrations/169_AiUsageMakita.ts",
+      "persistence/Migrations/168_AiUsageMakita.ts",
     ]);
   });
 

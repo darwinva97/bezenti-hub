@@ -4,7 +4,7 @@ Ticket: `07-uso-y-actividad.md`. Spec: `../spec.md` («Uso», «Clientes», «Pu
 
 ## What changes
 
-- **Migration `169_AiUsageMakita`** (168 is left for ticket 06):
+- **Migration `168_AiUsageMakita`** (ticket 06 needed none):
   - `ai_usage.makita_config_id TEXT` (NULL unless a Makita Thread made the request), with a partial index `(makita_config_id, at) WHERE makita_config_id IS NOT NULL`.
   - `ai_usage_daily` rebuilt as 146 and 160 did, with `makita_config_id TEXT NOT NULL DEFAULT ''` in the primary key and a partial index `(makita_config_id, day) WHERE makita_config_id <> ''`. Every existing row is copied as is with `''`.
   - No backfill: Makita 05 has only run on `public-hub-1`, so no production request was a Makita Thread's. Golden test like 160's.
@@ -29,7 +29,7 @@ Reads only, nothing to undo. The migration adds a nullable column and rebuilds a
 
 ## Tests (red-first)
 
-- Migration 169: every daily row kept with `''`; two configurations on the same day, account and model are rows of their own; the indexes exist.
+- Migration 168: every daily row kept with `''`; two configurations on the same day, account and model are rows of their own; the indexes exist.
 - `AiGatewayRoute` over its testkit: a Makita Thread's request writes `makita_config_id` to `ai_usage` and `ai_usage_daily`; a normal Thread's writes none.
 - `AiUsage`: the tokens count on the creator (filter by User) and show as their configuration's row; a Member who does not read the Space's usage sees neither another creator's rows nor the configuration's name; another Space's Admin sees nothing; a lender's view of a borrower's Makita row names no configuration.
 - `MakitaActivity`: the creator sees today / week / month and per task / repository / caller; an Admin of the Space too; a Member with `makita.use` sees the activity of another's configuration with `usage: null`; another Space's Admin gets not-found for a `configId` and forbidden for a `spaceId`; only the Owner gets the view of every configuration; an agent's or a one-Space session is refused; events show their outcome and detail; «Now» includes unwritten tokens; `makita.threads` lists only Threads of Spaces the viewer sees.

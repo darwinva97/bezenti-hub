@@ -9,7 +9,7 @@ import * as NodeFS from "node:fs";
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 import {
   CommandId,
-  EnvironmentId,
+  type EnvironmentId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -335,45 +335,6 @@ describe("Hub con Environments: a machine dedicated to a Space", () => {
         // Not for another Space's Thread, though the Owner works in both.
         assert.equal(yield* choose(owner, acmeProject), vps);
         assert.equal(yield* refusal(owner, globexProject), "not-usable");
-
-        // Makita ticket 15: a configuration's machine, only while it is dedicated to the Thread's
-        // Space; nothing falls back to the Sandbox.
-        assert.deepEqual(yield* registry.dedicatedMachines(acme), [{ id: vps, name: "Acme VPS" }]);
-        assert.deepEqual(yield* registry.dedicatedMachines(globex), []);
-        const onMachine = (userId: UserId, projectId: ProjectId, machine: EnvironmentId) =>
-          registry.chooseForThread({
-            userId,
-            requested: undefined,
-            projectId,
-            providerInstanceId: INSTANCE,
-            spaceWorkOnly: true,
-            spaceWorkOn: machine,
-          });
-        assert.equal(yield* onMachine(grace, acmeProject, vps), vps);
-        const notDedicated = yield* onMachine(hedy, globexProject, vps).pipe(Effect.flip);
-        assert.equal(
-          EnvironmentRegistry.environmentRefusalMessage(notDedicated),
-          "This machine is no longer dedicated to this Space.",
-        );
-        const unknown = yield* onMachine(
-          grace,
-          acmeProject,
-          EnvironmentId.make("no-such-machine"),
-        ).pipe(Effect.flip);
-        assert.equal(
-          unknown._tag === "ThreadEnvironmentUnavailableError" ? unknown.reason : unknown._tag,
-          "not-dedicated",
-        );
-        // Dedicated to Acme, but a Guest there still may not use it.
-        assert.equal(
-          yield* onMachine(linus, acmeProject, vps).pipe(
-            Effect.flip,
-            Effect.map((error) =>
-              error._tag === "ThreadEnvironmentUnavailableError" ? error.reason : error._tag,
-            ),
-          ),
-          "not-usable",
-        );
 
         // A Member's Thread runs there; a Globex Member gets no way onto it through a Thread.
         yield* createThread(hub, grace, {

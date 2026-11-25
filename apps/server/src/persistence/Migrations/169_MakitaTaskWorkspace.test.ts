@@ -18,8 +18,8 @@ it.effect("gives every Makita task a workspace column, empty for the ones before
         't1', 1, 'octocat', 'running', '2026-11-24T10:00:00Z', '2026-11-24T10:00:00Z')
     `;
 
-    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 170 }), [
-      [170, "MakitaTaskWorkspace"],
+    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 169 }), [
+      [169, "MakitaTaskWorkspace"],
     ]);
 
     const before = yield* sql<{ readonly workspace: string | null }>`

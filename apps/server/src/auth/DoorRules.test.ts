@@ -782,7 +782,7 @@ describe("every door of the Hub declares its rule", () => {
       ["makita_repo_cursors", "166_MakitaIntake"],
       ["makita_events", "166_MakitaIntake"],
       // Ticket 05: the tasks; others ask makitaRows.makitaTaskOfThread. Ticket 10: the worktree.
-      ["makita_tasks", "167_MakitaTasks", "170_MakitaTaskWorkspace"],
+      ["makita_tasks", "167_MakitaTasks", "169_MakitaTaskWorkspace"],
     ] as const) {
       const [table, ...migrations] = entry;
       expect(

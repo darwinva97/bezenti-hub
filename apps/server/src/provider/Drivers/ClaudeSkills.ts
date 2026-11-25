@@ -492,7 +492,7 @@ export function claudeLaunchArgDirectories(launchArgs?: string): ReadonlyArray<s
   return directories;
 }
 
-/** First name wins, matching Claude Code's precedence of user skills over project skills. */
+/** First name wins, matching Claude Code's precedence: managed, then user, then project skills. */
 export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* (
   config: Pick<ClaudeSettings, "homePath"> & Partial<Pick<ClaudeSettings, "launchArgs">>,
   cwd?: string,
@@ -507,7 +507,20 @@ export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* 
     environment ?? process.env,
   );
 
+  const managedSettingsPath = claudeManagedSettingsPath(
+    path,
+    yield* HostProcess.Platform,
+    environment ?? process.env,
+  );
   const roots: ReadonlyArray<ClaudeSkillRoot> = [
+    ...(managedSettingsPath
+      ? [
+          {
+            directory: path.join(path.dirname(managedSettingsPath), ".claude", "skills"),
+            scope: "user" as const,
+          },
+        ]
+      : []),
     { directory: path.join(configDirPath, "skills"), scope: "user" },
     ...(cwd ? [{ directory: path.join(cwd, ".claude", "skills"), scope: "project" as const }] : []),
     ...claudeLaunchArgDirectories(config.launchArgs)

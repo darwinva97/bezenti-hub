@@ -65,6 +65,8 @@ const LOG_MAX_SIZE = "10mb";
 /** How often a container checks its Hub still answers, and how many misses end it. */
 const HUB_GONE_CHECK_MS = 10_000;
 const HUB_GONE_CHECKS = 3;
+/** Where the base image keeps its skills (sandbox-image/skills). */
+const SANDBOX_IMAGE_SKILLS_DIR = "/opt/t3/skills";
 
 /**
  * Runs inside the container as its first process, under the image's Node: forwards the container's
@@ -76,6 +78,24 @@ const net = require("node:net");
 const childProcess = require("node:child_process");
 const os = require("node:os");
 const [socketPath, port, command, ...args] = process.argv.slice(1);
+// The image's skills, where Codex, OpenCode and Pi (~/.agents) and Grok (~/.grok) look; a skill of
+// the same name the home already has is left alone.
+try {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const skills = fs.readdirSync(${JSON.stringify(SANDBOX_IMAGE_SKILLS_DIR)}, { withFileTypes: true });
+  for (const dir of [".agents", ".grok"]) {
+    const target = path.join(os.homedir(), dir, "skills");
+    fs.mkdirSync(target, { recursive: true });
+    for (const entry of skills) {
+      if (!entry.isDirectory()) continue;
+      const link = path.join(target, entry.name);
+      try { fs.lstatSync(link); } catch { fs.symlinkSync(path.join(${JSON.stringify(SANDBOX_IMAGE_SKILLS_DIR)}, entry.name), link); }
+    }
+  }
+} catch (error) {
+  if (error.code !== "ENOENT") console.error("t3 sandbox: the image's skills were not linked:", error);
+}
 const forward = net.createServer((client) => {
   const hub = net.connect(socketPath);
   const end = () => { client.destroy(); hub.destroy(); };

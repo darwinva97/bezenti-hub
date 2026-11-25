@@ -773,6 +773,9 @@ describe("every door of the Hub declares its rule", () => {
       ["makita_account", "163_MakitaAccount"],
       ["makita_permissions", "164_MakitaPermissions"],
       ["makita_configs", "165_MakitaConfigs"],
+      // Ticket 04: what the intake read and decided.
+      ["makita_repo_cursors", "166_MakitaIntake"],
+      ["makita_events", "166_MakitaIntake"],
     ] as const) {
       expect(
         files
@@ -785,7 +788,7 @@ describe("every door of the Hub declares its rule", () => {
     }
     for (const { file, text } of toolModules) {
       expect(text, file).not.toMatch(
-        /MakitaAccount|MakitaTokenStore|MakitaPermissions|MakitaConfigs/u,
+        /MakitaAccount|MakitaTokenStore|MakitaPermissions|MakitaConfigs|MakitaIntake/u,
       );
     }
   });

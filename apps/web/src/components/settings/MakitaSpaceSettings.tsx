@@ -72,6 +72,8 @@ const PAUSE_REASONS: Readonly<Record<NonNullable<MakitaConfig["pausedReason"]>, 
 const WARNINGS: Readonly<Record<MakitaConfig["warnings"][number], string>> = {
   "ai-account-unavailable": "This AI account is no longer available to its creator here.",
   "no-repository": "No repository to listen to: no Project here has a GitHub remote.",
+  "repo-unreachable":
+    "Makita cannot read one of its repositories. Check that the bot is a collaborator there.",
 };
 
 /** Whether a failure is the Hub saying the viewer may not see Makita in this Space. */

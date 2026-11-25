@@ -37,6 +37,8 @@ export const MakitaAccountWarning = Schema.Literals([
   "no-repo-scope",
   "rate-limited",
   "unreachable",
+  /** Makita ticket 04: the poller cannot read a repository a configuration listens to. */
+  "repo-unreachable",
 ]);
 export type MakitaAccountWarning = typeof MakitaAccountWarning.Type;
 
@@ -200,7 +202,12 @@ export const MakitaProjectRepo = Schema.Struct({
 export type MakitaProjectRepo = typeof MakitaProjectRepo.Type;
 
 /** What a configuration warns of now. */
-export const MakitaConfigWarning = Schema.Literals(["ai-account-unavailable", "no-repository"]);
+export const MakitaConfigWarning = Schema.Literals([
+  "ai-account-unavailable",
+  "no-repository",
+  /** Makita ticket 04: GitHub answered 403/404 for one of its repositories. */
+  "repo-unreachable",
+]);
 export type MakitaConfigWarning = typeof MakitaConfigWarning.Type;
 
 /** A Makita configuration as whoever may see it does: never a token. */

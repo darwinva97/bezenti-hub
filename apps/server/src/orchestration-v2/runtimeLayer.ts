@@ -2,6 +2,8 @@ import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as OrganizationLifecycle from "../spaces/OrganizationLifecycle.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as MakitaIntake from "../makita/MakitaIntake.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as Layer from "effect/Layer";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as OrchestrationCommandReceipts from "../persistence/OrchestrationCommandReceipts.ts";
@@ -560,6 +562,15 @@ export const layerProduction = Layer.mergeAll(
   ),
   layerAgentSessionImporterProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
+  // Makita's intake (Makita ticket 04): Makita's token reads each listened repository's events.
+  MakitaIntake.layerScheduled.pipe(
+    Layer.provide(
+      MakitaIntake.layer.pipe(
+        Layer.provide(ProcessRunner.layer),
+        Layer.provide(SpaceDirectory.layer),
+      ),
+    ),
+  ),
 ).pipe(
   Layer.provide(
     ResourceCleanupService.layer.pipe(

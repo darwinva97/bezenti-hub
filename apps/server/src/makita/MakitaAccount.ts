@@ -81,6 +81,8 @@ interface AccountRow {
   readonly globalPausedBy: string | null;
   readonly globalPausedByName: string | null;
   readonly updatedAt: string;
+  /** Repositories the poller cannot read (ticket 04). */
+  readonly unreachableRepos: number;
 }
 
 export class MakitaAccount extends Context.Service<
@@ -156,7 +158,9 @@ const make = Effect.gen(function* () {
       a.token_hint AS hint, a.scopes_json AS "scopesJson", a.token_expires_at AS "expiresAt",
       a.status, a.checked_at AS "checkedAt", a.global_paused_at AS "globalPausedAt",
       a.global_paused_by AS "globalPausedBy", u.display_name AS "globalPausedByName",
-      a.updated_at AS "updatedAt"
+      a.updated_at AS "updatedAt",
+      (SELECT COUNT(*) FROM makita_repo_cursors WHERE unreachable_since IS NOT NULL)
+        AS "unreachableRepos"
     FROM makita_account a
     LEFT JOIN users u ON u.user_id = a.global_paused_by
     WHERE a.account_id = ${ACCOUNT_ID}
@@ -189,6 +193,7 @@ const make = Effect.gen(function* () {
     ) {
       warnings.push("no-repo-scope");
     }
+    if (row.unreachableRepos > 0) warnings.push("repo-unreachable");
     return {
       host: row.host,
       login: row.login,

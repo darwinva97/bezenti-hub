@@ -61,6 +61,8 @@ const WARNINGS: Readonly<Record<MakitaAccountWarning, string>> = {
     "This classic token has neither public_repo nor repo: Makita cannot write to any repository.",
   "rate-limited": "GitHub's rate limit for this token was spent at the last check.",
   unreachable: "GitHub could not be reached at the last check.",
+  "repo-unreachable":
+    "Makita cannot read a repository a configuration listens to. Check that the bot is a collaborator there.",
 };
 
 const STATUS_LABEL: Readonly<Record<MakitaAccountView["status"], string>> = {

@@ -8,8 +8,15 @@ import {
   parseFetchRemotes,
   selectGitHubBaseRepository,
 } from "@t3tools/source-control-github/server/gitHubRepositoryResolution";
-import { MAKITA_GITHUB_HOST, type MakitaRepoState } from "@t3tools/contracts";
+import {
+  MAKITA_GITHUB_HOST,
+  type MakitaRepoState,
+  type MakitaRepos,
+  ProjectId,
+  type SpaceId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import type * as SqlClient from "effect/sql/SqlClient";
 
 import * as ProcessRunner from "../processRunner.ts";
 
@@ -81,3 +88,55 @@ export const resolveProjectRepo = Effect.fn("MakitaRepos.resolveProjectRepo")(fu
     ? ({ state: "ambiguous", repo: null } satisfies ResolvedRepo)
     : ({ state: "ok", repo: `${selected.owner}/${selected.name}` } satisfies ResolvedRepo);
 });
+
+/** A live Project of a Space and the GitHub repository its checkout resolves to. */
+export interface SpaceProjectRepo extends ResolvedRepo {
+  readonly projectId: ProjectId;
+  readonly title: string;
+  readonly workspaceRoot: string;
+}
+
+/**
+ * Each live Project of a Space with its repository (tickets 04–05: what a configuration listens
+ * to, and the Project a task's Thread lives in), read from its checkout on the Hub.
+ */
+export const spaceProjectRepos = Effect.fn("MakitaRepos.spaceProjectRepos")(function* (
+  sql: SqlClient.SqlClient,
+  spaceId: SpaceId,
+) {
+  const rows = yield* sql<{
+    readonly projectId: string;
+    readonly title: string;
+    readonly workspaceRoot: string;
+  }>`
+    SELECT project_id AS "projectId", title, workspace_root AS "workspaceRoot"
+    FROM projection_projects
+    WHERE space_id = ${spaceId} AND deleted_at IS NULL
+    ORDER BY title, project_id
+  `;
+  return yield* Effect.forEach(
+    rows,
+    (row) =>
+      resolveProjectRepo(row.workspaceRoot).pipe(
+        Effect.map((resolved): SpaceProjectRepo => ({
+          ...resolved,
+          projectId: ProjectId.make(row.projectId),
+          title: row.title,
+          workspaceRoot: row.workspaceRoot,
+        })),
+      ),
+    { concurrency: 4 },
+  );
+});
+
+/** The Projects a configuration's `repos_json` names, among its Space's, that resolve. */
+export const listenedProjects = (
+  repos: MakitaRepos,
+  inSpace: ReadonlyArray<SpaceProjectRepo>,
+): ReadonlyArray<SpaceProjectRepo & { readonly repo: string }> =>
+  inSpace.filter(
+    (project): project is SpaceProjectRepo & { readonly repo: string } =>
+      project.state === "ok" &&
+      project.repo !== null &&
+      ("all" in repos || repos.projects.includes(project.projectId)),
+  );

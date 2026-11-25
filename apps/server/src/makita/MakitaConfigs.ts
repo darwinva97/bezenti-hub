@@ -11,6 +11,7 @@ import {
   AI_GATEWAY_DRIVERS,
   type AiAccountId,
   MAKITA_CONFIG_MAX_PER_SPACE,
+  MAKITA_GITHUB_HOST,
   type MakitaAiAccountOption,
   type MakitaConfig,
   type MakitaConfigInput,
@@ -553,6 +554,15 @@ const make = Effect.gen(function* () {
             SELECT account_id AS id, name FROM ai_accounts WHERE ${sql.in("account_id", accountIds)}
           `.pipe(Effect.catch(storage("read the AI accounts")));
     const nameOf = new Map(accountNames.map((account) => [account.id, account.name]));
+    // Ticket 04: repositories the poller could not read (403/404) since it last could.
+    const unreachable = new Set(
+      (yield* sql<{ readonly repo: string }>`
+        SELECT DISTINCT repo FROM makita_repo_cursors
+        WHERE host = ${MAKITA_GITHUB_HOST} AND unreachable_since IS NOT NULL
+      `.pipe(Effect.catch(storage("read what Makita could not reach")))).map((row) =>
+        row.repo.toLowerCase(),
+      ),
+    );
     const configs: Array<MakitaConfig> = [];
     for (const row of rows) {
       const space = found.get(SpaceId.make(row.spaceId));
@@ -566,6 +576,13 @@ const make = Effect.gen(function* () {
       const projects = projectsFor(repos, projectsBySpace.get(row.spaceId) ?? []);
       const warnings: Array<MakitaConfigWarning> = [];
       if (!projects.some((project) => project.state === "ok")) warnings.push("no-repository");
+      if (
+        projects.some(
+          (project) => project.repo !== null && unreachable.has(project.repo.toLowerCase()),
+        )
+      ) {
+        warnings.push("repo-unreachable");
+      }
       const creator = UserId.make(row.createdBy);
       const usable =
         selection.aiAccountId !== undefined &&

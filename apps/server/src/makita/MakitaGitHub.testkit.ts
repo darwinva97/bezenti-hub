@@ -38,9 +38,45 @@ export interface FakeGitHubRequest {
   readonly body: unknown;
   /** Whether a known token signed it (never the token itself). */
   readonly signed: boolean;
+  /** The `If-None-Match` it carried, if any (ticket 04). */
+  readonly ifNoneMatch?: string;
+}
+
+/** One entry of `GET /repos/{o}/{r}/issues/events`, as GitHub writes it (ticket 04). */
+export interface FakeIssueEvent {
+  readonly id: number;
+  readonly event: string;
+  readonly actor: { readonly login: string; readonly id: number; readonly type: string } | null;
+  readonly label?: { readonly name: string };
+  readonly created_at: string;
+  readonly issue: {
+    readonly number: number;
+    readonly title: string;
+    readonly pull_request?: { readonly url: string };
+  };
+}
+
+/** An issue and its comments (ticket 05). */
+export interface FakeIssue {
+  readonly number: number;
+  title: string;
+  body: string | null;
+  readonly user: FakeGitHubUser;
+  state: "open" | "closed";
+  locked: boolean;
+  readonly pull?: boolean;
+}
+
+export interface FakeComment {
+  readonly id: number;
+  readonly body: string;
+  readonly user: FakeGitHubUser;
+  readonly created_at: string;
+  readonly updated_at: string;
 }
 
 const API = "https://api.github.com/";
+const FEED_PAGE = 100;
 
 export const makeFakeGitHub = () => {
   const tokens = new Map<string, FakeGitHubToken>();
@@ -51,6 +87,84 @@ export const makeFakeGitHub = () => {
   const labelsRefused = new Set<string>();
   const requests: Array<FakeGitHubRequest> = [];
   const state = { down: false, rateLimited: false };
+  /** `owner/name` → its issue events, oldest first (answered newest first, as GitHub does). */
+  const issueEvents = new Map<string, Array<FakeIssueEvent>>();
+  /** `owner/name` → how many times its feed changed: its ETag. */
+  const feedVersions = new Map<string, number>();
+  /** `owner/name` → `X-Poll-Interval` it answers with. */
+  const pollIntervals = new Map<string, number>();
+  /**
+   * `owner/name` → the status every request about it answers: 401, 403, 404, 429, or
+   * `secondary` (GitHub's secondary limit: a 403 with `retry-after`).
+   */
+  const failures = new Map<string, 401 | 403 | 404 | 429 | "secondary">();
+  /** `owner/name#n` → the issue; `…#n` → its comments, oldest first. */
+  const issues = new Map<string, FakeIssue>();
+  const comments = new Map<string, Array<FakeComment>>();
+  let nextEventId = 1_000;
+  let nextCommentId = 5_000;
+  /** What the fake stamps on events and comments it makes. */
+  const clock = { now: "2026-11-24T10:00:00Z" };
+
+  const touch = (repo: string) => feedVersions.set(repo, (feedVersions.get(repo) ?? 0) + 1);
+
+  /** Adds one event to a repository's feed (an id larger than every earlier one). */
+  const addEvent = (repo: string, event: Omit<FakeIssueEvent, "id" | "created_at">) => {
+    nextEventId += 1;
+    const full: FakeIssueEvent = { ...event, id: nextEventId, created_at: clock.now };
+    issueEvents.set(repo, [...(issueEvents.get(repo) ?? []), full]);
+    touch(repo);
+    return full;
+  };
+
+  /** `actor` puts `label` on issue `number` (made if missing) of `repo`. */
+  const label = (
+    repo: string,
+    number: number,
+    labelName: string,
+    actor: FakeGitHubUser,
+    options: { readonly pull?: boolean; readonly title?: string; readonly body?: string } = {},
+  ) => {
+    const key = `${repo}#${number}`;
+    if (!issues.has(key)) {
+      issues.set(key, {
+        number,
+        title: options.title ?? `Issue ${number}`,
+        body: options.body ?? "Something is broken.",
+        user: actor,
+        state: "open",
+        locked: false,
+        ...(options.pull === true ? { pull: true } : {}),
+      });
+    }
+    return addEvent(repo, {
+      event: "labeled",
+      actor: { login: actor.login, id: actor.id, type: actor.type ?? "User" },
+      label: { name: labelName },
+      issue: {
+        number,
+        title: issues.get(key)!.title,
+        ...(options.pull === true
+          ? { pull_request: { url: `${API}repos/${repo}/pulls/${number}` } }
+          : {}),
+      },
+    });
+  };
+
+  /** A comment by `user` on issue `number` of `repo`. */
+  const comment = (repo: string, number: number, user: FakeGitHubUser, body: string) => {
+    nextCommentId += 1;
+    const made: FakeComment = {
+      id: nextCommentId,
+      body,
+      user,
+      created_at: clock.now,
+      updated_at: clock.now,
+    };
+    const key = `${repo}#${number}`;
+    comments.set(key, [...(comments.get(key) ?? []), made]);
+    return made;
+  };
 
   const json = (
     request: HttpClientRequest.HttpClientRequest,
@@ -81,7 +195,14 @@ export const makeFakeGitHub = () => {
     const auth = request.headers["authorization"] ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
     const held = tokens.get(token);
-    requests.push({ method: request.method, path, body: bodyOf(request), signed: !!held });
+    const ifNoneMatch = request.headers["if-none-match"];
+    requests.push({
+      method: request.method,
+      path,
+      body: bodyOf(request),
+      signed: !!held,
+      ...(ifNoneMatch === undefined ? {} : { ifNoneMatch }),
+    });
     if (state.rateLimited) {
       return json(
         request,
@@ -116,6 +237,78 @@ export const makeFakeGitHub = () => {
       return user === undefined
         ? json(request, 404, { message: "Not Found" })
         : json(request, 200, { login: user.login, id: user.id, type: user.type ?? "User" });
+    }
+    const repoMatch = /^repos\/([^/]+)\/([^/]+)(?:\/|$)/u.exec(route);
+    const failure =
+      repoMatch === null ? undefined : failures.get(`${repoMatch[1]}/${repoMatch[2]}`);
+    if (failure !== undefined) {
+      if (failure === "secondary") {
+        return json(
+          request,
+          403,
+          { message: "You have exceeded a secondary rate limit." },
+          { "retry-after": "90" },
+        );
+      }
+      if (failure === 429) {
+        return json(request, 429, { message: "Too many requests" }, { "retry-after": "120" });
+      }
+      return json(request, failure, {
+        message: failure === 401 ? "Bad credentials" : failure === 403 ? "Forbidden" : "Not Found",
+      });
+    }
+    const feedMatch = /^repos\/([^/]+)\/([^/]+)\/issues\/events$/u.exec(route);
+    if (request.method === "GET" && feedMatch !== null) {
+      const repo = `${feedMatch[1]}/${feedMatch[2]}`;
+      if (!repos.has(repo)) return json(request, 404, { message: "Not Found" });
+      const etag = `W/"${repo}-${feedVersions.get(repo) ?? 0}"`;
+      const headers: Record<string, string> = { etag };
+      const interval = pollIntervals.get(repo);
+      if (interval !== undefined) headers["x-poll-interval"] = String(interval);
+      if (ifNoneMatch === etag) return json(request, 304, null, headers);
+      const events = (issueEvents.get(repo) ?? []).toReversed().slice(0, FEED_PAGE);
+      return json(request, 200, events, headers);
+    }
+    const issueMatch = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)(\/comments)?$/u.exec(route);
+    if (issueMatch !== null) {
+      const key = `${issueMatch[1]}/${issueMatch[2]}#${issueMatch[3]}`;
+      const issue = issues.get(key);
+      if (issue === undefined) return json(request, 404, { message: "Not Found" });
+      const userOf = (user: FakeGitHubUser) => ({
+        login: user.login,
+        id: user.id,
+        type: user.type ?? "User",
+      });
+      if (request.method === "GET" && issueMatch[4] === undefined) {
+        return json(request, 200, {
+          number: issue.number,
+          title: issue.title,
+          body: issue.body,
+          user: userOf(issue.user),
+          state: issue.state,
+          locked: issue.locked,
+          ...(issue.pull === true
+            ? { pull_request: { url: `${API}repos/${key.replace("#", "/pulls/")}` } }
+            : {}),
+        });
+      }
+      if (request.method === "GET" && issueMatch[4] !== undefined) {
+        return json(
+          request,
+          200,
+          (comments.get(key) ?? []).map((entry) => ({ ...entry, user: userOf(entry.user) })),
+        );
+      }
+      if (request.method === "POST" && issueMatch[4] !== undefined) {
+        if (issue.locked) return json(request, 403, { message: "Issue is locked" });
+        const made = comment(
+          `${issueMatch[1]}/${issueMatch[2]}`,
+          issue.number,
+          held.user,
+          (bodyOf(request) as { readonly body?: string } | null)?.body ?? "",
+        );
+        return json(request, 201, { ...made, user: userOf(made.user) });
+      }
     }
     const labelMatch = /^repos\/([^/]+)\/([^/]+)\/labels(?:\/([^/]+))?$/u.exec(route);
     if (labelMatch !== null) {
@@ -158,6 +351,20 @@ export const makeFakeGitHub = () => {
     labelsRefused,
     requests,
     state,
+    issueEvents,
+    pollIntervals,
+    failures,
+    issues,
+    comments,
+    clock,
+    addEvent,
+    label,
+    comment,
+    /** The comments a login wrote on an issue, as they read on GitHub. */
+    commentsBy: (repo: string, number: number, login: string) =>
+      (comments.get(`${repo}#${number}`) ?? [])
+        .filter((entry) => entry.user.login === login)
+        .map((entry) => entry.body),
   };
 };
 

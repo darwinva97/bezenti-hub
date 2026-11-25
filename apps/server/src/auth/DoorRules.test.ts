@@ -781,7 +781,7 @@ describe("every door of the Hub declares its rule", () => {
     for (const entry of [
       ["makita_account", "163_MakitaAccount"],
       ["makita_permissions", "164_MakitaPermissions"],
-      ["makita_configs", "165_MakitaConfigs", "173_MakitaTriage"],
+      ["makita_configs", "165_MakitaConfigs", "172_MakitaTriage"],
       // Ticket 04: what the intake read and decided.
       ["makita_repo_cursors", "166_MakitaIntake"],
       ["makita_events", "166_MakitaIntake"],
@@ -791,7 +791,7 @@ describe("every door of the Hub declares its rule", () => {
         "167_MakitaTasks",
         "169_MakitaTaskWorkspace",
         "171_MakitaTaskCi",
-        "173_MakitaTriage",
+        "172_MakitaTriage",
       ],
     ] as const) {
       const [table, ...migrations] = entry;

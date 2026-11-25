@@ -12,7 +12,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 172 });
+      yield* runMigrations({ toMigrationInclusive: 171 });
       yield* sql`
         INSERT INTO makita_configs (config_id, space_id, name, created_by, created_at, updated_at,
           repos_json, triggers_json, callers_mode, model_selection_json)
@@ -26,8 +26,8 @@ it.effect(
           't1', 1, 'octocat', 'running', '2026-11-24T10:00:00Z', '2026-11-24T10:00:00Z')
       `;
 
-      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 173 }), [
-        [173, "MakitaTriage"],
+      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 172 }), [
+        [172, "MakitaTriage"],
       ]);
 
       const config = sql<{ readonly labels: string }>`

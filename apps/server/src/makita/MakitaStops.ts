@@ -34,6 +34,8 @@ const REASONS: Readonly<Record<MakitaTaskStopReason, string>> = {
   "github-stop": "someone asked on GitHub to stop",
   "pr-closed": "its pull request was closed",
   "pr-locked": "its pull request was locked",
+  "pr-idle": "its pull request was closed after days without activity",
+  "bad-work": "an approver labelled its pull request bad work",
 };
 
 /** The `thread.stop` reason for a task's failure. */

@@ -3,7 +3,9 @@ import * as OrganizationLifecycle from "../spaces/OrganizationLifecycle.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as AuditLog from "../audit/AuditLog.ts";
+import * as MakitaCleanup from "../makita/MakitaCleanup.ts";
 import * as MakitaIntake from "../makita/MakitaIntake.ts";
+import * as MakitaIssueCloses from "../makita/MakitaIssueCloses.ts";
 import * as MakitaMachines from "../makita/MakitaMachines.ts";
 import * as MakitaLanding from "../makita/MakitaLanding.ts";
 import * as MakitaPullRequests from "../makita/MakitaPullRequests.ts";
@@ -575,6 +577,9 @@ export const layerProduction = Layer.mergeAll(
   MakitaTasks.layerScheduled.pipe(
     // Makita ticket 12: a task's pull request, and the watch of its CI.
     Layer.merge(MakitaPullRequests.layerScheduled),
+    // Makita tickets 26–27: closing issues with a verdict, and cleaning up its pull requests.
+    Layer.merge(MakitaCleanup.layerScheduled),
+    Layer.provideMerge(MakitaCleanup.layer.pipe(Layer.provideMerge(MakitaIssueCloses.layer))),
     Layer.provideMerge(
       MakitaPullRequests.layer.pipe(
         Layer.provide(Layer.mergeAll(layerThreadManagementProvided, AuditLog.layer)),

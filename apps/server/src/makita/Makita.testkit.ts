@@ -16,10 +16,12 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
 import * as GitHubIdentities from "./GitHubIdentities.ts";
 import * as MakitaAccount from "./MakitaAccount.ts";
+import * as MakitaCleanup from "./MakitaCleanup.ts";
 import * as MakitaConfigs from "./MakitaConfigs.ts";
 import * as MakitaGitHub from "./MakitaGitHub.ts";
 import { makeFakeGitHub } from "./MakitaGitHub.testkit.ts";
 import * as MakitaIntake from "./MakitaIntake.ts";
+import * as MakitaIssueCloses from "./MakitaIssueCloses.ts";
 import * as MakitaLanding from "./MakitaLanding.ts";
 import * as MakitaPermissions from "./MakitaPermissions.ts";
 import { makeGitWorld } from "./MakitaPush.testkit.ts";
@@ -95,6 +97,8 @@ export const makitaHub = Effect.gen(function* () {
       MakitaPullRequests.layer,
       MakitaLanding.layer,
       MakitaTriage.layer,
+      // Tickets 26–27: closing issues with a verdict, cleaning up Makita's pull requests.
+      MakitaCleanup.layer.pipe(Layer.provideMerge(MakitaIssueCloses.layer)),
     ).pipe(
       Layer.provideMerge(MakitaPushes.layer),
       Layer.provideMerge(
@@ -131,6 +135,8 @@ export const makitaHub = Effect.gen(function* () {
     makitaPullRequests: Context.get(context, MakitaPullRequests.MakitaPullRequests),
     makitaLanding: Context.get(context, MakitaLanding.MakitaLanding),
     makitaTriage: Context.get(context, MakitaTriage.MakitaTriage),
+    makitaIssueCloses: Context.get(context, MakitaIssueCloses.MakitaIssueCloses),
+    makitaCleanup: Context.get(context, MakitaCleanup.MakitaCleanup),
     gitWorld,
     githubIdentities: Context.get(context, GitHubIdentities.GitHubIdentities),
   };

@@ -349,11 +349,30 @@ live(
       const needs = pushNeedsApproval(setup.server.sql, task.taskId);
       // Asked by an approver: nothing waits yet.
       assert.isFalse(yield* needs);
+      // An approver's own review on the pull request is an instruction that needs no approval.
+      later(ctx, 2);
+      setup.github.review(REPO, 41, GRACE_GH, "CHANGES_REQUESTED", "Rename the helper.");
+      yield* tick(ctx);
+      assert.lengthOf(setup.sends, 1);
+      assert.isFalse(yield* needs);
+      // An allowed person who is not an approver asks in a review: the next push waits.
       later(ctx, 3);
       setup.github.review(REPO, 41, OCTOCAT, "CHANGES_REQUESTED", "Rename it and push.");
       yield* tick(ctx);
-      assert.lengthOf(setup.sends, 1);
+      assert.lengthOf(setup.sends, 2);
       assert.isTrue(yield* needs);
+      const started = yield* setup.server.sql<{ readonly login: string; readonly detail: string }>`
+        SELECT actor_login AS login, detail FROM makita_events
+        WHERE task_id = ${task.taskId} AND outcome = 'started' ORDER BY seen_at, event_key
+      `;
+      assert.deepEqual(
+        started.map((row) => [row.login, row.detail]),
+        [
+          ["Grace-GH", "label"],
+          ["Grace-GH", "conversation"],
+          ["octocat", "conversation"],
+        ],
+      );
     }),
 );
 

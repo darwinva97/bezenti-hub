@@ -149,6 +149,9 @@ interface Checked {
   readonly logins: ReadonlyArray<string>;
   readonly modelSelection: ModelSelection;
   readonly baseBranch: string | null;
+  /** Ticket 10: «Also push branches», and whether its first push waits for an approver. */
+  readonly capability: MakitaConfig["capability"];
+  readonly approval: "others" | "never";
 }
 
 export class MakitaConfigs extends Context.Service<
@@ -208,8 +211,9 @@ const fail = (reason: MakitaError["reason"], message: string) =>
   Effect.fail(new MakitaError({ reason, message }));
 
 /**
- * The values batch 1 takes (the table holds the spec's others for later tickets): a list of GitHub
- * users, any trigger, «Comment and analyse», no landing, the default approval, the Sandbox.
+ * The values taken so far (the table holds the spec's others for later tickets): a list of GitHub
+ * users, any trigger, «Comment and analyse» or (ticket 10) «Also push branches» with the default
+ * approval or none, no landing, the Sandbox.
  */
 const checkedInput = (
   input: Omit<MakitaConfigInput, "spaceId">,
@@ -250,11 +254,11 @@ const checkedInput = (
   if (input.strangers !== "ignore") {
     return refused("For now Makita stays silent with people not on the list.");
   }
-  if (input.capability !== "comment" || input.mayLand) {
-    return refused("For now Makita only comments and analyses: pushing branches comes later.");
+  if (input.mayLand) {
+    return refused("Landing on the default branch comes later.");
   }
-  if (input.approval !== "others" || input.approvers.length > 0) {
-    return refused("Approvals come with pushing branches, in a later version.");
+  if (input.approval === "always" || input.approvers.length > 0) {
+    return refused("Approvers, and asking for every push, come later.");
   }
   if (input.environmentId !== null) {
     return refused("For now Makita works only in the Space's Sandbox.");
@@ -274,6 +278,8 @@ const checkedInput = (
       logins: [...new Map(logins.map((login) => [login.toLowerCase(), login])).values()],
       modelSelection: input.modelSelection,
       baseBranch: baseBranch === null || baseBranch.length === 0 ? null : baseBranch,
+      capability: input.capability,
+      approval: input.approval === "never" ? "never" : "others",
     },
   };
 };
@@ -891,8 +897,8 @@ const make = Effect.gen(function* () {
             VALUES (${configId}, ${input.spaceId}, ${value.name}, ${input.actorUserId}, ${at},
               ${at}, ${jsonOf(value.repos)},
               ${jsonOf(value.triggers)}, 'list',
-              ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, 'comment', 0,
-              'others', '[]', ${value.baseBranch}, NULL)
+              ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, ${value.capability}, 0,
+              ${value.approval}, '[]', ${value.baseBranch}, NULL)
           `;
           yield* audit.record({
             actor: AuditLog.userActor(input.actorUserId),
@@ -903,7 +909,7 @@ const make = Effect.gen(function* () {
               space: input.spaceId,
               repos: "all" in value.repos ? "all" : value.repos.projects.length,
               callersMode: "list",
-              capability: "comment",
+              capability: value.capability,
               mayLand: false,
               aiAccount: value.modelSelection.aiAccountId ?? null,
             },
@@ -969,6 +975,8 @@ const make = Effect.gen(function* () {
       callers: found.row.callersJson,
       modelSelection: found.row.modelSelectionJson,
       baseBranch: found.row.baseBranch,
+      capability: found.row.capability,
+      approval: found.row.approval,
     };
     const after = {
       name: value.name,
@@ -977,6 +985,8 @@ const make = Effect.gen(function* () {
       callers: jsonOf(callers),
       modelSelection: jsonOf(value.modelSelection),
       baseBranch: value.baseBranch,
+      capability: value.capability,
+      approval: value.approval,
     };
     const changed = (Object.keys(after) as Array<keyof typeof after>).filter(
       (key) => before[key] !== after[key],
@@ -996,7 +1006,7 @@ const make = Effect.gen(function* () {
               UPDATE makita_configs SET name = ${after.name}, repos_json = ${after.repos},
                 triggers_json = ${after.triggers}, callers_json = ${after.callers},
                 model_selection_json = ${after.modelSelection}, base_branch = ${after.baseBranch},
-                updated_at = ${at}
+                capability = ${after.capability}, approval = ${after.approval}, updated_at = ${at}
               WHERE config_id = ${input.configId} AND deleted_at IS NULL
               RETURNING config_id AS id
             `;
@@ -1009,7 +1019,7 @@ const make = Effect.gen(function* () {
               detail: {
                 space: spaceId,
                 changed: changed.join(","),
-                capability: "comment",
+                capability: value.capability,
                 mayLand: false,
                 aiAccount: value.modelSelection.aiAccountId ?? null,
               },

@@ -120,7 +120,7 @@ export interface ThreadLaunchInput {
 
 type PreparationInput = Pick<
   ThreadLaunchInput,
-  "commandId" | "projectId" | "workspaceStrategy" | "initialMessage"
+  "commandId" | "projectId" | "workspaceStrategy" | "initialMessage" | "placement"
 > & {
   readonly reusedWorktree?: { readonly baseRef: string };
 };
@@ -603,8 +603,10 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
       }
       yield* setupTracker.stageStatus(threadId, "setup-script", "running");
+      // Makita ticket 10: the Hub made a `space-work` worktree on its machine and set it up there;
+      // a setup script here would run in a terminal on the Hub host.
       const setup =
-        worktreePath === null
+        worktreePath === null || input.placement === "space-work"
           ? ({ status: "no-script" } as const)
           : yield* setupScripts
               .runForThread({
@@ -891,7 +893,14 @@ const make = Effect.gen(function* () {
             ...(input.placement === "space-work" ? { spaceWorkOnly: true } : {}),
           })
           .pipe(Effect.mapError(mapError(input, "create-thread")));
-        if (placed !== HUB_MACHINE_ENVIRONMENT_ID && input.workspaceStrategy.type !== "root") {
+        // Makita ticket 10: a `space-work` launch may bring the worktree the Hub made there.
+        const madeThere =
+          input.placement === "space-work" && input.workspaceStrategy.type === "existing_worktree";
+        if (
+          placed !== HUB_MACHINE_ENVIRONMENT_ID &&
+          input.workspaceStrategy.type !== "root" &&
+          !madeThere
+        ) {
           return yield* mapError(
             input,
             "provision-worktree",

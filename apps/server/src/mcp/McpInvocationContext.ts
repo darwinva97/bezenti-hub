@@ -131,7 +131,12 @@ export interface McpInvocationScope {
    * The caller's Thread is a Makita task's (Makita ticket 05), set by the MCP door from its task
    * row: only `MAKITA_ALLOWED_TOOLS` are listed or callable.
    */
-  readonly makita?: { readonly taskId: string; readonly configId: string };
+  readonly makita?: {
+    readonly taskId: string;
+    readonly configId: string;
+    /** Ticket 10: its configuration may push branches, so `makita_push` is listed. */
+    readonly push?: boolean;
+  };
 }
 
 /**
@@ -142,13 +147,20 @@ export interface McpInvocationScope {
 export const MAKITA_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "makita_read_issue",
   "makita_comment",
+  "makita_push",
   "thread_history",
   "t3_background_wait",
 ]);
 
+/** Ticket 10: listed only when the Makita Thread's configuration may push branches. */
+const MAKITA_PUSH_TOOLS: ReadonlySet<string> = new Set(["makita_push"]);
+
 /** Whether `tool` is listed and callable for this caller. */
 export const toolAllowedFor = (scope: McpInvocationScope | undefined, tool: string): boolean =>
-  scope?.makita === undefined ? !tool.startsWith("makita_") : MAKITA_ALLOWED_TOOLS.has(tool);
+  scope?.makita === undefined
+    ? !tool.startsWith("makita_")
+    : MAKITA_ALLOWED_TOOLS.has(tool) &&
+      (scope.makita.push === true || !MAKITA_PUSH_TOOLS.has(tool));
 
 /**
  * T3 Code renders `t3-thread://` links as thread chips. Other MCP clients cannot open them, so

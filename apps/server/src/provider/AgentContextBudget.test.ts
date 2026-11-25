@@ -13,6 +13,7 @@ import { ServerConfig } from "../config.ts";
 import { DeviceService } from "../device/DeviceService.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
+import { MakitaPushes } from "../makita/MakitaPushes.ts";
 import { MakitaTasks } from "../makita/MakitaTasks.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
@@ -52,6 +53,7 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(GitWorkflowService)({}),
   Layer.mock(ManagedProjectFolders)({ namedProjectsRoot: "" }),
   Layer.mock(McpProviderSessions)({}),
+  Layer.mock(MakitaPushes)({}),
   Layer.mock(MakitaTasks)({}),
   Layer.mock(OrchestratorV2)({}),
   Layer.mock(PreviewAutomationBroker)({}),

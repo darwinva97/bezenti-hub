@@ -2,6 +2,7 @@ import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
+import { MakitaPushes } from "../../../makita/MakitaPushes.ts";
 import { MakitaTasks } from "../../../makita/MakitaTasks.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -44,4 +45,31 @@ const MakitaCommentTool = Tool.make("makita_comment", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, true);
 
-export const MakitaToolkit = Toolkit.make(MakitaReadIssueTool, MakitaCommentTool);
+// Makita ticket 10: no input at all. The Hub pushes the task's worktree to the task's own
+// `makita/…` branch; the agent cannot name another branch, ref or repository.
+const MakitaPushTool = Tool.make("makita_push", {
+  description:
+    "Publish the commits of your Makita worktree to your task's makita/ branch on GitHub. Commit with plain git first; never run git push. The Hub checks every new commit (Makita's author, no workflow changes, no secrets) and never force-pushes.",
+  // No `parameters`: Tool.EmptyParams (an empty Struct is not a valid MCP input schema).
+  success: Schema.Struct({
+    pushed: Schema.Boolean,
+    message: Schema.String,
+    branch: Schema.NullOr(Schema.String),
+    sha: Schema.NullOr(Schema.String),
+    commits: Schema.Number,
+  }),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    MakitaPushes,
+    ThreadManagementService.ThreadManagementService,
+  ],
+})
+  .annotate(Tool.Title, "Push your Makita branch")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, true);
+
+export const MakitaToolkit = Toolkit.make(MakitaReadIssueTool, MakitaCommentTool, MakitaPushTool);

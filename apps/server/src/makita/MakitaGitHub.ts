@@ -23,6 +23,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { withEnvironmentCredential } from "../checkpointing/HubRepository.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 
 /** The one entry of `MakitaTokenStore`. */
 export const MAKITA_TOKEN_ID = "makita";
@@ -113,6 +115,35 @@ export interface MakitaRestInput {
   readonly ifNoneMatch?: string;
 }
 
+/**
+ * Makita ticket 10: where Makita's git commands reach GitHub, by URL. Tests point it at a folder of
+ * local bare repositories.
+ */
+export const MakitaGitRemote = Context.Reference<{ readonly urlOf: (repo: string) => string }>(
+  "t3/makita/MakitaGitHub/MakitaGitRemote",
+  { defaultValue: () => ({ urlOf: (repo) => `https://${MAKITA_GITHUB_HOST}/${repo}.git` }) },
+);
+
+export interface MakitaFetchInput {
+  /** `owner/name`. */
+  readonly repo: string;
+  /** The Hub's bare repository the commit lands in. */
+  readonly gitDir: string;
+  /** Null: GitHub's default branch. */
+  readonly branch: string | null;
+  /** Where the commit is kept in `gitDir` (replaced). */
+  readonly ref: string;
+}
+
+export interface MakitaPushInput {
+  readonly repo: string;
+  readonly gitDir: string;
+  /** A commit of `gitDir`. */
+  readonly sha: string;
+  /** The `makita/…` branch: built by the Hub, never by the agent. */
+  readonly branch: string;
+}
+
 export class MakitaGitHub extends Context.Service<
   MakitaGitHub,
   {
@@ -127,8 +158,37 @@ export class MakitaGitHub extends Context.Service<
      * fails. A 401 marks the account `token-invalid`.
      */
     readonly rest: (input: MakitaRestInput) => Effect.Effect<MakitaGitHubAnswer, MakitaGitHubError>;
+    /**
+     * Ticket 10: fetches a branch of the repository into a ref of a Hub repository, with the
+     * stored token; the commit it is at.
+     */
+    readonly fetchBranch: (input: MakitaFetchInput) => Effect.Effect<string, MakitaGitHubError>;
+    /**
+     * Ticket 10: pushes a commit to a branch of the repository with the stored token, never
+     * forced. `rejected`: GitHub has commits there the push does not build on.
+     */
+    readonly pushBranch: (
+      input: MakitaPushInput,
+    ) => Effect.Effect<"pushed" | "rejected", MakitaGitHubError>;
+    /** Ticket 10: the commit a branch of the repository is at on GitHub, or null without one. */
+    readonly branchTip: (
+      input: Omit<MakitaPushInput, "sha">,
+    ) => Effect.Effect<string | null, MakitaGitHubError>;
   }
 >()("t3/makita/MakitaGitHub") {}
+
+/** Text with the shape of a token, wherever git's words are passed on. */
+const TOKEN_SHAPE =
+  /(?:t3gk_|t3ak_|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/gu;
+const REJECTED =
+  /\[rejected\]|non-fast-forward|fetch first|\(stale info\)|failed to push some refs/iu;
+const AUTH_FAILED = /authentication failed|invalid username or password|returned error: 401/iu;
+const DENIED = /permission to .* denied|returned error: 403|refusing to allow|workflow/iu;
+const NOT_FOUND = /repository not found|returned error: 404|couldn't find remote ref/iu;
+const UNREACHABLE =
+  /could not resolve host|failed to connect|timed out|connection (refused|reset)/iu;
+const GIT_TIMEOUT_MS = 5 * 60_000;
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u;
 
 const decodeUser = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -173,6 +233,8 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const slots = yield* Semaphore.make(CONCURRENCY);
   const rest = gitHubApiUrls(MAKITA_GITHUB_HOST).rest;
+  const gitRemote = yield* MakitaGitRemote;
+  const vcs = yield* VcsProcess.VcsProcess;
 
   /** One request as `token`; the answer whatever its status, or `unreachable`. */
   const send = Effect.fn("MakitaGitHub.send")(function* (
@@ -325,14 +387,194 @@ const make = Effect.gen(function* () {
     return answer;
   });
 
+  /**
+   * One git command in a Hub repository, naming GitHub by URL, with the stored token in the
+   * environment of that process only (`withEnvironmentCredential`): never an argument, a URL or a
+   * config file. Git's words come back scrubbed of anything token-shaped.
+   */
+  const gitWith = Effect.fn("MakitaGitHub.git")(function* (
+    token: Redacted.Redacted<string>,
+    input: {
+      readonly operation: string;
+      readonly repo: string;
+      readonly gitDir: string;
+      readonly args: (url: string) => ReadonlyArray<string>;
+    },
+  ) {
+    yield* Effect.annotateCurrentSpan({ "makita.github.operation": input.operation });
+    const accounts = yield* sql<{ readonly login: string }>`
+      SELECT login FROM makita_account WHERE account_id = 'makita'
+    `.pipe(Effect.orElseSucceed(() => []));
+    const login = accounts[0]?.login ?? "";
+    const url = gitRemote.urlOf(input.repo);
+    const remote = withEnvironmentCredential(
+      url,
+      Redacted.value(token),
+      /^[A-Za-z0-9-]{1,39}$/u.test(login) ? login : "makita",
+    );
+    const output = yield* vcs
+      .run({
+        operation: `MakitaGitHub.${input.operation}`,
+        command: "git",
+        cwd: input.gitDir,
+        args: ["--git-dir", input.gitDir, "-c", "gc.auto=0", ...input.args(url)],
+        ...(remote.env === undefined ? {} : { env: remote.env }),
+        allowNonZeroExit: true,
+        timeoutMs: GIT_TIMEOUT_MS,
+      })
+      // Nothing of the failure travels on: its cause names the process.
+      .pipe(Effect.mapError(() => new MakitaGitHubError({ reason: "unreachable" })));
+    return {
+      exitCode: output.exitCode,
+      words: `${output.stdout}\n${output.stderr}`.replace(TOKEN_SHAPE, "[token]"),
+    };
+  });
+
+  /** A failed git command as the failure it is. */
+  const gitFailure = (words: string) => {
+    const detail = words
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .slice(-3)
+      .join(" ")
+      .slice(0, 300);
+    if (AUTH_FAILED.test(words)) return new MakitaGitHubError({ reason: "unauthorized" });
+    if (DENIED.test(words)) {
+      return new MakitaGitHubError({
+        reason: "failed",
+        detail: detail.length > 0 ? detail : "GitHub refused the push.",
+      });
+    }
+    if (NOT_FOUND.test(words)) return new MakitaGitHubError({ reason: "not-found" });
+    if (UNREACHABLE.test(words)) return new MakitaGitHubError({ reason: "unreachable" });
+    return new MakitaGitHubError({
+      reason: "failed",
+      ...(detail.length > 0 ? { detail } : {}),
+    });
+  };
+
+  const fetchWith = Effect.fn("MakitaGitHub.fetchWith")(function* (
+    token: Redacted.Redacted<string>,
+    input: MakitaFetchInput,
+  ) {
+    if (
+      !input.ref.startsWith("refs/") ||
+      (input.branch !== null && !SAFE_NAME.test(input.branch))
+    ) {
+      return yield* new MakitaGitHubError({ reason: "failed", detail: "Not a branch name." });
+    }
+    const source = input.branch === null ? "HEAD" : `refs/heads/${input.branch}`;
+    const fetched = yield* gitWith(token, {
+      operation: "fetch-branch",
+      repo: input.repo,
+      gitDir: input.gitDir,
+      args: (url) => [
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--quiet",
+        url,
+        `+${source}:${input.ref}`,
+      ],
+    });
+    if (fetched.exitCode !== 0) return yield* gitFailure(fetched.words);
+    const read = yield* vcs
+      .run({
+        operation: "MakitaGitHub.fetch-branch",
+        command: "git",
+        cwd: input.gitDir,
+        args: [
+          "--git-dir",
+          input.gitDir,
+          "rev-parse",
+          "--verify",
+          "--quiet",
+          `${input.ref}^{commit}`,
+        ],
+        allowNonZeroExit: true,
+      })
+      .pipe(Effect.mapError(() => new MakitaGitHubError({ reason: "failed" })));
+    const sha = read.stdout.trim();
+    if (read.exitCode !== 0 || !/^[0-9a-f]{40}$/u.test(sha)) {
+      return yield* new MakitaGitHubError({ reason: "failed", detail: "No commit was fetched." });
+    }
+    return sha;
+  });
+
+  const pushWith = Effect.fn("MakitaGitHub.pushWith")(function* (
+    token: Redacted.Redacted<string>,
+    input: MakitaPushInput,
+  ) {
+    // Defense in depth: whatever the caller checked, only a commit to a `makita/` branch.
+    if (
+      !input.branch.startsWith("makita/") ||
+      !SAFE_NAME.test(input.branch) ||
+      !/^[0-9a-f]{40}$/u.test(input.sha)
+    ) {
+      return yield* new MakitaGitHubError({ reason: "failed", detail: "Not a Makita branch." });
+    }
+    const pushed = yield* gitWith(token, {
+      operation: "push-branch",
+      repo: input.repo,
+      gitDir: input.gitDir,
+      // No `+`, no `--force`: GitHub takes only a fast-forward.
+      args: (url) => [
+        "-c",
+        "push.followTags=false",
+        "push",
+        "--no-verify",
+        "--recurse-submodules=no",
+        url,
+        `${input.sha}:refs/heads/${input.branch}`,
+      ],
+    });
+    if (pushed.exitCode === 0) return "pushed" as const;
+    if (!AUTH_FAILED.test(pushed.words) && !DENIED.test(pushed.words)) {
+      if (REJECTED.test(pushed.words)) return "rejected" as const;
+    }
+    return yield* gitFailure(pushed.words);
+  });
+
+  const tipWith = Effect.fn("MakitaGitHub.tipWith")(function* (
+    token: Redacted.Redacted<string>,
+    input: Omit<MakitaPushInput, "sha">,
+  ) {
+    if (!SAFE_NAME.test(input.branch)) {
+      return yield* new MakitaGitHubError({ reason: "failed", detail: "Not a branch name." });
+    }
+    const listed = yield* gitWith(token, {
+      operation: "branch-tip",
+      repo: input.repo,
+      gitDir: input.gitDir,
+      args: (url) => ["ls-remote", url, `refs/heads/${input.branch}`],
+    });
+    if (listed.exitCode !== 0) return yield* gitFailure(listed.words);
+    const line = listed.words
+      .split("\n")
+      .find((entry) => entry.endsWith(`\trefs/heads/${input.branch}`));
+    const sha = line?.split("\t")[0]?.trim() ?? "";
+    return /^[0-9a-f]{40}$/u.test(sha) ? sha : null;
+  });
+
   return MakitaGitHub.of({
     check: checkWith,
     checkStored: withStored(checkWith),
     rest: Effect.fn("MakitaGitHub.rest")(function* (input: MakitaRestInput) {
       return yield* withStored((token) => restWith(token, input));
     }),
+    fetchBranch: Effect.fn("MakitaGitHub.fetchBranch")(function* (input: MakitaFetchInput) {
+      return yield* withStored((token) => fetchWith(token, input));
+    }),
+    pushBranch: Effect.fn("MakitaGitHub.pushBranch")(function* (input: MakitaPushInput) {
+      return yield* withStored((token) => pushWith(token, input));
+    }),
+    branchTip: Effect.fn("MakitaGitHub.branchTip")(function* (input: Omit<MakitaPushInput, "sha">) {
+      return yield* withStored((token) => tipWith(token, input));
+    }),
   });
 });
 
-/** Over the Hub's `HttpClient`, its SQL and the sealed store. */
+/** Over the Hub's `HttpClient`, its SQL, the sealed store and git (ticket 10). */
 export const layer = Layer.effect(MakitaGitHub, make);

@@ -541,6 +541,8 @@ export const MCP_DOOR_RULES: Record<string, DoorRule> = {
   // Makita ticket 05: GitHub's public issue text, framed; no Thread output or Vault value.
   makita_comment: none("whether Makita posted on its task's issue; never the text it posted"),
   makita_read_issue: none("a public GitHub issue and its comments, framed as untrusted data"),
+  // Makita ticket 10: whether it pushed, the branch and commit; never a diff or the token.
+  makita_push: none("whether Makita pushed its task's branch: the branch, the commit, why not"),
   list_scheduled_tasks: none(
     "the calling agent's own work; what it says next is an event (masked)",
   ),

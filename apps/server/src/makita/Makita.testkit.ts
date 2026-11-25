@@ -20,6 +20,8 @@ import * as MakitaGitHub from "./MakitaGitHub.ts";
 import { makeFakeGitHub } from "./MakitaGitHub.testkit.ts";
 import * as MakitaIntake from "./MakitaIntake.ts";
 import * as MakitaPermissions from "./MakitaPermissions.ts";
+import { makeGitWorld } from "./MakitaPush.testkit.ts";
+import * as MakitaPushes from "./MakitaPushes.ts";
 import * as MakitaStops from "./MakitaStops.ts";
 import * as MakitaTasks from "./MakitaTasks.ts";
 
@@ -79,8 +81,12 @@ export const makitaHub = Effect.gen(function* () {
           creatorSecrets.reduce((masked, value) => masked.split(value).join("[MASKED]"), text),
       } as never),
   });
+  // Ticket 10: GitHub's git side and the machine, as local repositories.
+  const gitWorld = makeGitWorld();
+  yield* Effect.addFinalizer(() => Effect.sync(gitWorld.cleanup));
   const context = yield* Layer.build(
     Layer.mergeAll(MakitaTasks.layer, MakitaStops.layer).pipe(
+      Layer.provideMerge(MakitaPushes.layer),
       Layer.provideMerge(
         Layer.mergeAll(
           MakitaAccount.layer,
@@ -89,9 +95,9 @@ export const makitaHub = Effect.gen(function* () {
           MakitaIntake.layer,
         ),
       ),
-      Layer.provide(Layer.mergeAll(launcher, masker, threads)),
+      Layer.provide(Layer.mergeAll(launcher, masker, threads, gitWorld.machines)),
       Layer.provideMerge(MakitaGitHub.layer),
-      Layer.provide(github.layer),
+      Layer.provide(Layer.mergeAll(github.layer, gitWorld.remote, gitWorld.vcs)),
       Layer.provide(ProcessRunner.layer),
       Layer.provide(Layer.succeedContext(Context.merge(setup.server.services, setup.context))),
     ),
@@ -110,6 +116,8 @@ export const makitaHub = Effect.gen(function* () {
     makitaIntake: Context.get(context, MakitaIntake.MakitaIntake),
     makitaTasks: Context.get(context, MakitaTasks.MakitaTasks),
     makitaStops: Context.get(context, MakitaStops.MakitaStops),
+    makitaPushes: Context.get(context, MakitaPushes.MakitaPushes),
+    gitWorld,
   };
 });
 

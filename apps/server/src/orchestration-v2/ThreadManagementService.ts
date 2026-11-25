@@ -678,6 +678,17 @@ const makeWith = Effect.fn("ThreadManagementService.make")(function* (
           Effect.orElseSucceed(() => true),
         ),
     });
+  /** A pushing Makita task's Thread (ticket 10): its worktree was made by the Hub where it runs. */
+  const makitaWorktreeAllowed = (threadId: ThreadId) =>
+    Option.match(threadSql, {
+      onNone: () => Effect.succeed(false),
+      onSome: (sql) =>
+        makitaTaskOfThread(sql, threadId).pipe(
+          Effect.map((task) => Option.isSome(task) && task.value.capability === "push"),
+          // Unknown: no worktree off the Hub machine, as before.
+          Effect.orElseSucceed(() => false),
+        ),
+    });
   const isScratchWorkspace = (projectId: ProjectId, worktreePath: string) =>
     Option.match(scratchThreads, {
       onNone: () => Effect.succeed(false),
@@ -919,10 +930,15 @@ const makeWith = Effect.fn("ThreadManagementService.make")(function* (
           if (activeEnvironmentId === HUB_MACHINE_ENVIRONMENT_ID || worktreePath === null) {
             return placed;
           }
-          // Worktrees are still made on the Hub machine only; a scratch folder anywhere.
-          return isScratchWorkspace(command.projectId, worktreePath).pipe(
-            Effect.flatMap((scratch) =>
-              scratch
+          // Worktrees are still made on the Hub machine only; a scratch folder anywhere; and
+          // the worktree the Hub made for a Makita task where its Space works (ticket 10).
+          return Effect.zipWith(
+            isScratchWorkspace(command.projectId, worktreePath),
+            makitaWorktreeAllowed(command.threadId),
+            (scratch, makita) => scratch || makita,
+          ).pipe(
+            Effect.flatMap((allowed) =>
+              allowed
                 ? placed
                 : Effect.fail(
                     new EnvironmentRegistry.ThreadEnvironmentUnavailableError({

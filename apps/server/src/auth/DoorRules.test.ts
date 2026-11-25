@@ -774,16 +774,17 @@ describe("every door of the Hub declares its rule", () => {
       expect(text, file).not.toMatch(/GitHubCredentials|GitHubRest\b|PinnedGitHubCredential/u);
     }
     // The tables: named under makita/ and by their migrations; removals call makita/'s functions.
-    for (const [table, migration] of [
+    for (const entry of [
       ["makita_account", "163_MakitaAccount"],
       ["makita_permissions", "164_MakitaPermissions"],
       ["makita_configs", "165_MakitaConfigs"],
       // Ticket 04: what the intake read and decided.
       ["makita_repo_cursors", "166_MakitaIntake"],
       ["makita_events", "166_MakitaIntake"],
-      // Ticket 05: the tasks; others ask makitaRows.makitaTaskOfThread.
-      ["makita_tasks", "167_MakitaTasks"],
+      // Ticket 05: the tasks; others ask makitaRows.makitaTaskOfThread. Ticket 10: the worktree.
+      ["makita_tasks", "167_MakitaTasks", "170_MakitaTaskWorkspace"],
     ] as const) {
+      const [table, ...migrations] = entry;
       expect(
         files
           .filter(({ text }) => new RegExp(`\\b${table}\\b`, "u").test(text))
@@ -791,17 +792,19 @@ describe("every door of the Hub declares its rule", () => {
           .filter((file) => !file.startsWith("makita/"))
           .toSorted(),
         table,
-      ).toEqual([`persistence/Migrations/${migration}.ts`]);
+      ).toEqual(migrations.map((migration) => `persistence/Migrations/${migration}.ts`));
     }
     for (const { file, text } of toolModules) {
       expect(text, file).not.toMatch(
         /MakitaAccount|MakitaTokenStore|MakitaPermissions|MakitaConfigs|MakitaIntake|MakitaGitHub/u,
       );
     }
-    // Ticket 05: two MCP tools, for a Makita task's Thread only; no tool takes a repository.
+    // Ticket 05: MCP tools for a Makita task's Thread only; no tool takes a repository. Ticket
+    // 10: `makita_push`, only where its configuration may push.
     expect(Object.keys(MCP_TOOL_RULES).filter((name) => name.startsWith("makita_"))).toEqual([
       "makita_comment",
       "makita_read_issue",
+      "makita_push",
     ]);
   });
 

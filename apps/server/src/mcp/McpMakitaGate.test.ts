@@ -20,7 +20,7 @@ import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 
-const caller = (makita: boolean): McpInvocationContext.McpInvocationScope => ({
+const caller = (makita: "comment" | "push" | null): McpInvocationContext.McpInvocationScope => ({
   environmentId: EnvironmentId.make("environment"),
   requestNamespace: "provider:thread",
   thread: {
@@ -31,7 +31,9 @@ const caller = (makita: boolean): McpInvocationContext.McpInvocationScope => ({
   client: undefined,
   capabilities: new Set(["orchestration", "preview", "device", "pull-requests"]),
   issuedAt: 0,
-  ...(makita ? { makita: { taskId: "mkt_1", configId: "mk_1" } } : {}),
+  ...(makita === null
+    ? {}
+    : { makita: { taskId: "mkt_1", configId: "mk_1", push: makita === "push" } }),
 });
 
 const mcpClient = McpSchema.McpServerClient.of({
@@ -50,6 +52,7 @@ const mcpClient = McpSchema.McpServerClient.of({
 const NAMES = [
   "makita_comment",
   "makita_read_issue",
+  "makita_push",
   "thread_history",
   "t3_background_wait",
   "t3_thread_launch",
@@ -91,14 +94,18 @@ const reached = (scope: McpInvocationContext.McpInvocationScope, name: string) =
 it.effect("a Makita Thread reaches only its allow-list; nobody else reaches makita_*", () =>
   Effect.gen(function* () {
     const asMakita: Record<string, boolean> = {};
+    const asPusher: Record<string, boolean> = {};
     const asOther: Record<string, boolean> = {};
     for (const name of NAMES) {
-      asMakita[name] = yield* reached(caller(true), name);
-      asOther[name] = yield* reached(caller(false), name);
+      asMakita[name] = yield* reached(caller("comment"), name);
+      asPusher[name] = yield* reached(caller("push"), name);
+      asOther[name] = yield* reached(caller(null), name);
     }
+    // Ticket 10: a configuration that only comments does not see makita_push.
     expect(asMakita).toEqual({
       makita_comment: true,
       makita_read_issue: true,
+      makita_push: false,
       thread_history: true,
       t3_background_wait: true,
       t3_thread_launch: false,
@@ -109,9 +116,11 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       preview_open: false,
       schedule_task: false,
     });
+    expect(asPusher).toEqual({ ...asMakita, makita_push: true });
     expect(asOther).toEqual({
       makita_comment: false,
       makita_read_issue: false,
+      makita_push: false,
       thread_history: true,
       t3_background_wait: true,
       t3_thread_launch: true,
@@ -124,6 +133,7 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
     });
     expect([...McpInvocationContext.MAKITA_ALLOWED_TOOLS].toSorted()).toEqual([
       "makita_comment",
+      "makita_push",
       "makita_read_issue",
       "t3_background_wait",
       "thread_history",

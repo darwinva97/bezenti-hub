@@ -171,7 +171,11 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
                 ? scope
                 : {
                     ...scope,
-                    makita: { taskId: task.value.taskId, configId: task.value.configId },
+                    makita: {
+                      taskId: task.value.taskId,
+                      configId: task.value.configId,
+                      push: task.value.capability === "push",
+                    },
                   },
             ),
           ),
@@ -969,7 +973,10 @@ export const layerMcpTransport = <RA, RE, RR>(registrations: Layer.Layer<RA, RE,
     registrations,
   }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
-/** `makita_read_issue`, `makita_comment`: a Makita Thread's agent, on its own task's issue only. */
+/**
+ * `makita_read_issue`, `makita_comment`, `makita_push`: a Makita Thread's agent, on its own task's
+ * issue and branch only.
+ */
 const layerMakitaToolkit = toolkitRegistration(MakitaToolkit, MakitaHandlers.layer);
 
 /**

@@ -190,6 +190,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "makita.github.comment": "Makita commented on GitHub",
   "makita.task.stop": "Stopped a Makita task",
   "makita.github.reaction": "Makita reacted on GitHub",
+  "makita.github.push": "Makita pushed a branch to GitHub",
   "secret_provider.create": "Connected a secret provider",
   "secret_provider.update": "Changed a secret provider",
   "secret_provider.delete": "Removed a secret provider",

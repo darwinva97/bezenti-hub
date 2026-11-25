@@ -394,7 +394,7 @@ function ConfigRow(props: {
             </Badge>
           )}
           <Badge variant="secondary" size="sm">
-            Comment and analyse
+            {config.capability === "push" ? "Also pushes branches" : "Comment and analyse"}
           </Badge>
         </div>
         <span className="text-xs text-muted-foreground">
@@ -521,6 +521,10 @@ function ConfigDialog(props: {
   const account = options.aiAccounts.find((entry) => entry.id === accountId) ?? null;
   const [model, setModel] = useState(config?.modelSelection.model ?? account?.models?.[0] ?? "");
   const [baseBranch, setBaseBranch] = useState(config?.baseBranch ?? "");
+  const [capability, setCapability] = useState<"comment" | "push">(config?.capability ?? "comment");
+  const [approval, setApproval] = useState<"others" | "never">(
+    config?.approval === "never" ? "never" : "others",
+  );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -571,9 +575,9 @@ function ConfigDialog(props: {
                     model: model.trim(),
                     aiAccountId: account.id as AiAccountId,
                   },
-                  capability: "comment",
+                  capability,
                   mayLand: false,
-                  approval: "others",
+                  approval,
                   approvers: [],
                   baseBranch: baseBranch.trim().length === 0 ? null : baseBranch.trim(),
                   environmentId: null,
@@ -806,12 +810,43 @@ function ConfigDialog(props: {
                   No AI account that goes through the Hub's AI gateway is available to you here.
                 </p>
               ) : null}
-              <div className="flex flex-col gap-1 text-xs">
-                <span className="font-medium">What it may do</span>
-                <span>
-                  Comment and analyse. Pushing branches and opening pull requests come later.
-                </span>
-                <span className="text-muted-foreground">{CI_NOTE}</span>
+              <div className="flex flex-col gap-2 text-xs font-medium">
+                What it may do
+                <ToggleGroup
+                  aria-label="What it may do"
+                  size="sm"
+                  value={[capability]}
+                  onValueChange={(next) => setCapability(next[0] === "push" ? "push" : "comment")}
+                >
+                  <Toggle value="comment">Comment and analyse</Toggle>
+                  <Toggle value="push">Also push branches</Toggle>
+                </ToggleGroup>
+                {capability === "push" ? (
+                  <>
+                    <p className="font-normal text-muted-foreground">
+                      Makita commits in its own worktree and the Hub pushes them to a makita/…
+                      branch, never to the base or the default branch, never forced, never changing
+                      workflows. Opening pull requests comes later.
+                    </p>
+                    <ToggleGroup
+                      aria-label="Approval before pushing"
+                      size="sm"
+                      value={[approval]}
+                      onValueChange={(next) =>
+                        setApproval(next[0] === "never" ? "never" : "others")
+                      }
+                    >
+                      <Toggle value="others">Wait for an approver</Toggle>
+                      <Toggle value="never">Push without approval</Toggle>
+                    </ToggleGroup>
+                    <p className="font-normal text-muted-foreground">
+                      {approval === "others"
+                        ? "Its first push for someone other than an approver waits for /makita ok, which comes in a later version: until then those pushes wait."
+                        : "It pushes for anyone on the list without asking."}
+                    </p>
+                  </>
+                ) : null}
+                <span className="font-normal text-muted-foreground">{CI_NOTE}</span>
               </div>
               <div className="flex flex-col gap-1 text-xs">
                 <span className="font-medium">Where it works</span>

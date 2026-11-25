@@ -609,6 +609,8 @@ const layerAuth = Layer.mergeAll(
           ).pipe(
             Layer.provideMerge(MakitaGitHub.layer),
             Layer.provide(FetchHttpClient.layer),
+            // Ticket 10: the base fetched and the branch pushed with git, in the Hub's repository.
+            Layer.provide(VcsProcess.layer),
             // A configuration's repositories come from each Project's checkout (git remote).
             Layer.provide(ProcessRunner.layer),
           ),

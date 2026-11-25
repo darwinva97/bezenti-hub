@@ -4,6 +4,8 @@ import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as MakitaIntake from "../makita/MakitaIntake.ts";
+import * as MakitaMachines from "../makita/MakitaMachines.ts";
+import * as MakitaPushes from "../makita/MakitaPushes.ts";
 import * as MakitaStops from "../makita/MakitaStops.ts";
 import * as MakitaTasks from "../makita/MakitaTasks.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -572,6 +574,17 @@ export const layerProduction = Layer.mergeAll(
       MakitaTasks.layer.pipe(
         Layer.provide(
           Layer.mergeAll(layerThreadLaunchProvided, layerThreadManagementProvided, AuditLog.layer),
+        ),
+      ),
+    ),
+    // Makita ticket 10: a pushing task's worktree on its machine, and `makita_push`.
+    Layer.provideMerge(
+      MakitaPushes.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            MakitaMachines.layer.pipe(Layer.provide(layerEnvironmentExecutorsProvided)),
+            AuditLog.layer,
+          ),
         ),
       ),
     ),

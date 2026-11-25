@@ -291,6 +291,10 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   makita_read_issue: own(
     "the calling agent's own Thread, which must be a Makita task's; its repository and number only",
   ),
+  // Makita ticket 10: listed only when its configuration may push; no input at all.
+  makita_push: own(
+    "the calling agent's own Thread, which must be a Makita task's whose configuration may push; its worktree to its own makita/ branch only, never forced; the pause, the task's state, the commits' author, workflows, size and secrets, checked on the Hub",
+  ),
   list_scheduled_tasks: own("visibleScheduledTasks, as scheduledTasksSubscribe"),
   list_thread_pull_requests: VISIBLE_THREAD,
   orchestrator_capabilities: own("the caller's own limits and the Hub's providers; no Space data"),

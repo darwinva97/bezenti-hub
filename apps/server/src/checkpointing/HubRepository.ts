@@ -151,23 +151,29 @@ const PROTOCOL_VARIABLE = "T3CODE_HUB_GIT_PROTOCOL";
 const HOST_VARIABLE = "T3CODE_HUB_GIT_HOST";
 
 // Answers `get` only for the Hub's own protocol and host:port, all read from the environment.
-const CREDENTIAL_HELPER = [
-  "!f() {",
-  'test "$1" = get || exit 0; p=; h=;',
-  "while IFS='=' read -r k v; do",
-  'case "$k" in protocol) p=$v ;; host) h=$v ;; "") break ;; esac;',
-  "done;",
-  `test "$p" = "$${PROTOCOL_VARIABLE}" && test "$h" = "$${HOST_VARIABLE}" &&`,
-  `printf 'username=${HUB_REPOSITORY_USERNAME}\\npassword=%s\\n' "$${CREDENTIAL_VARIABLE}";`,
-  "}; f",
-].join(" ");
+const credentialHelper = (username: string) =>
+  [
+    "!f() {",
+    'test "$1" = get || exit 0; p=; h=;',
+    "while IFS='=' read -r k v; do",
+    'case "$k" in protocol) p=$v ;; host) h=$v ;; "") break ;; esac;',
+    "done;",
+    `test "$p" = "$${PROTOCOL_VARIABLE}" && test "$h" = "$${HOST_VARIABLE}" &&`,
+    `printf 'username=${username}\\npassword=%s\\n' "$${CREDENTIAL_VARIABLE}";`,
+    "}; f",
+  ].join(" ");
 
 /**
  * The Hub repository over HTTP, with `t3`'s credential helper: the credential stays in the process
  * environment, never on a command line. The empty helper first drops the user's own, so none is
- * asked or stores it; redirects are not followed, so it is never sent to another host.
+ * asked or stores it; redirects are not followed, so it is never sent to another host. Makita
+ * (ticket 10) pushes to GitHub the same way, with its bot's login as `username`.
  */
-export const withEnvironmentCredential = (url: string, credential: string): HubRemote => {
+export const withEnvironmentCredential = (
+  url: string,
+  credential: string,
+  username: string = HUB_REPOSITORY_USERNAME,
+): HubRemote => {
   const target = new URL(url);
   return {
     url,
@@ -180,7 +186,7 @@ export const withEnvironmentCredential = (url: string, credential: string): HubR
       GIT_CONFIG_KEY_0: "credential.helper",
       GIT_CONFIG_VALUE_0: "",
       GIT_CONFIG_KEY_1: "credential.helper",
-      GIT_CONFIG_VALUE_1: CREDENTIAL_HELPER,
+      GIT_CONFIG_VALUE_1: credentialHelper(username),
       GIT_CONFIG_KEY_2: "http.followRedirects",
       GIT_CONFIG_VALUE_2: "false",
       [PROTOCOL_VARIABLE]: target.protocol.slice(0, -1),

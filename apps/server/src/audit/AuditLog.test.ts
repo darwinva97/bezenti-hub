@@ -644,6 +644,8 @@ it.effect(
         "makita.task.stop",
         // makita/MakitaMentions.test.ts (Makita ticket 09: `/makita stop` answered with a reaction)
         "makita.github.reaction",
+        // makita/MakitaPushes.test.ts (Makita ticket 10: pushing makita/* branches)
+        "makita.github.push",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

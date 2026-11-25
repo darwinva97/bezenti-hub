@@ -51,6 +51,16 @@ const PLACEHOLDER = /\{\{([^{}]*)\}\}/g;
 // Checked with Claude Code 2.1.296, Codex 0.162.1, Pi 1.2.0 and dsh 0.2.0-rc.2; others may parse more.
 const MENTION = /[\p{Sc}@]|(?<=^|\s)\/(?=[^\s/]+(?:\s|$))|t3-context(?=:)|webhook(?=-data)/giu;
 
+/**
+ * Untrusted text between `<tag-frameId>` tags with its mentions broken, as webhook values are
+ * framed (Makita ticket 05 frames issues and comments the same way). `frameId` must be
+ * unpredictable per request, so the text cannot close the frame itself.
+ */
+export function frameUntrusted(text: string, tag: string, frameId: string): string {
+  const name = `${tag}-${frameId}`;
+  return `<${name}>${text.replace(MENTION, "$&⁠")}</${name}>`;
+}
+
 function parseBody(request: WebhookRequest): unknown {
   const contentType = (request.headers["content-type"] ?? "").toLowerCase();
   if (contentType.includes("application/x-www-form-urlencoded")) {

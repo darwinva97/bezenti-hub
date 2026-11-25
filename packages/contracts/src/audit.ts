@@ -99,6 +99,9 @@ export const AuditAction = Schema.Literals([
   "makita.config.pause",
   "makita.config.resume",
   "makita.github.label",
+  // Makita ticket 05: a task started for an issue, and each comment Makita posted on GitHub.
+  "makita.task.start",
+  "makita.github.comment",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -136,6 +139,7 @@ export const AuditTargetKind = Schema.Literals([
   "access_key",
   "makita_account",
   "makita_config",
+  "makita_task",
   "secret_provider",
   "provider_scope",
   "grant",
@@ -400,6 +404,16 @@ export const AUDIT_DETAIL_KEYS = {
   "makita.config.resume": ["space"],
   /** The label Makita made in a repository for a configuration (`owner/name`, public). */
   "makita.github.label": ["space", "repo", "label", "outcome"],
+  /**
+   * A task Makita started (`system`): its repository and issue, the trigger and the GitHub login
+   * of who asked (public, and what must be traceable). Never the issue's text.
+   */
+  "makita.task.start": ["space", "repo", "number", "trigger", "caller", "makita"],
+  /**
+   * A comment Makita posted: by the agent (as the configuration's creator) or by the Hub itself
+   * («On it.», the loop guard's notice). Never the comment's text.
+   */
+  "makita.github.comment": ["space", "repo", "number", "makita", "by"],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

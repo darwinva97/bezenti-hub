@@ -83,6 +83,7 @@ import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as SpaceVisibility from "../spaces/SpaceVisibility.ts";
 import { readThreadWorkflowScript } from "./workflowScriptQuery.ts";
 import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
+import { makitaTaskOfThread } from "../makita/makitaRows.ts";
 import * as EnvironmentDemand from "../environment/EnvironmentDemand.ts";
 import * as EnvironmentExecutor from "../environment/EnvironmentExecutor.ts";
 import type * as AccessPolicy from "../auth/AccessPolicy.ts";
@@ -665,6 +666,18 @@ const makeWith = Effect.fn("ThreadManagementService.make")(function* (
     }),
     ({ config, path, sql }) => makeScratchThreads({ sql, path, baseDir: config.baseDir }),
   );
+  // Makita ticket 05: a Makita Thread works where its configuration says, never elsewhere.
+  const threadSql = yield* Effect.serviceOption(SqlClient.SqlClient);
+  const isMakitaThread = (threadId: ThreadId) =>
+    Option.match(threadSql, {
+      onNone: () => Effect.succeed(false),
+      onSome: (sql) =>
+        makitaTaskOfThread(sql, threadId).pipe(
+          Effect.map(Option.isSome),
+          // Unknown counts as Makita's: a move refused is safer than one to the wrong machine.
+          Effect.orElseSucceed(() => true),
+        ),
+    });
   const isScratchWorkspace = (projectId: ProjectId, worktreePath: string) =>
     Option.match(scratchThreads, {
       onNone: () => Effect.succeed(false),
@@ -938,7 +951,13 @@ const makeWith = Effect.fn("ThreadManagementService.make")(function* (
     if (Option.isNone(environments)) {
       return Effect.fail(reject("Only the Hub machine runs Threads here."));
     }
-    return orchestrator.getThreadRecords(command.threadId, []).pipe(
+    return isMakitaThread(command.threadId).pipe(
+      Effect.flatMap((makita) =>
+        makita
+          ? Effect.fail("A Makita Thread stays where its configuration says Makita works.")
+          : Effect.void,
+      ),
+      Effect.andThen(orchestrator.getThreadRecords(command.threadId, [])),
       Effect.mapError(reject),
       Effect.flatMap(({ thread }) =>
         environments.value

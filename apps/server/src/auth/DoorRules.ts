@@ -283,6 +283,14 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   html_render: own("the agent's own Thread; images as html_preview"),
   link_pull_request: PULL_REQUEST_LINK,
   link_pull_requests: PULL_REQUEST_LINK,
+  // Makita ticket 05: listed and callable only for a Makita task's Thread (McpInvocationContext.
+  // toolAllowedFor); repository and number are its task's, never the call's.
+  makita_comment: own(
+    "the calling agent's own Thread, which must be a Makita task's; its repository and number only; the configuration's pause, the task's state, the secret mask and the loop guard, checked on the Hub",
+  ),
+  makita_read_issue: own(
+    "the calling agent's own Thread, which must be a Makita task's; its repository and number only",
+  ),
   list_scheduled_tasks: own("visibleScheduledTasks, as scheduledTasksSubscribe"),
   list_thread_pull_requests: VISIBLE_THREAD,
   orchestrator_capabilities: own("the caller's own limits and the Hub's providers; no Space data"),

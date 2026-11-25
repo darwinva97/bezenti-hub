@@ -10,6 +10,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 import type * as Types from "effect/Types";
 import { AiError, McpProtocol, McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
@@ -70,6 +71,9 @@ import {
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 import { requestUrl } from "../requestUrl.ts";
+import { makitaTaskOfThread } from "../makita/makitaRows.ts";
+import * as MakitaHandlers from "./toolkits/makita/handlers.ts";
+import { MakitaToolkit } from "./toolkits/makita/tools.ts";
 
 const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
   requestUrl(request).pipe(
@@ -152,6 +156,31 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const runtimeModeCeiling = serverSettings.managedPolicy?.limits?.maxRuntimeMode;
+  const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+  /**
+   * Makita ticket 05: a Thread that is a Makita task's is marked here, once per request, so the
+   * tool gate lists and runs only its allow-list. A failed read refuses the request.
+   */
+  const markMakita = (scope: McpInvocationContext.McpInvocationScope) =>
+    scope.thread === undefined || Option.isNone(sql)
+      ? Effect.succeedSome(scope)
+      : makitaTaskOfThread(sql.value, scope.thread.threadId).pipe(
+          Effect.map((task) =>
+            Option.some(
+              Option.isNone(task)
+                ? scope
+                : {
+                    ...scope,
+                    makita: { taskId: task.value.taskId, configId: task.value.configId },
+                  },
+            ),
+          ),
+          Effect.catch((cause) =>
+            Effect.logError("could not read whether an MCP caller's Thread is Makita's", {
+              cause,
+            }).pipe(Effect.as(Option.none<McpInvocationContext.McpInvocationScope>())),
+          ),
+        );
   return Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
     const request = yield* HttpServerRequest.HttpServerRequest;
     // No browser Origin is allowed on this transport (DNS rebinding); refuse it before any
@@ -181,7 +210,11 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
         offerOAuth: Option.isSome(clients) && !looksLikeProviderToken(token),
       });
     }
-    const limited = McpInvocationContext.withRuntimeModeCeiling(invocation, runtimeModeCeiling);
+    const marked = yield* markMakita(
+      McpInvocationContext.withRuntimeModeCeiling(invocation, runtimeModeCeiling),
+    );
+    if (Option.isNone(marked)) return HttpServerResponse.empty({ status: 503 });
+    const limited = marked.value;
     return yield* httpEffect.pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, limited),
       Effect.map(normalizeMcpHttpResponse),
@@ -936,8 +969,26 @@ export const layerMcpTransport = <RA, RE, RR>(registrations: Layer.Layer<RA, RE,
     registrations,
   }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
+/** `makita_read_issue`, `makita_comment`: a Makita Thread's agent, on its own task's issue only. */
+const layerMakitaToolkit = toolkitRegistration(MakitaToolkit, MakitaHandlers.layer);
+
+/**
+ * Makita ticket 05: on every registration, a Makita Thread's agent sees and calls only
+ * `MAKITA_ALLOWED_TOOLS` (anything else is an unknown tool to it), and nobody else sees the
+ * `makita_*` tools. The caller's scope is marked by the auth middleware.
+ */
+export const layerMakitaToolGate = McpServer.visibility(
+  (options) =>
+    Effect.map(Effect.serviceOption(McpInvocationContext.McpInvocationContext), (scope) =>
+      McpInvocationContext.toolAllowedFor(Option.getOrUndefined(scope), options.target),
+    ),
+  { global: true },
+).pipe(Layer.provide(McpServer.McpServer.layer));
+
 /** Every tool the T3 MCP server advertises. AgentContextBudget.test.ts measures this set. */
 export const layerTools = Layer.mergeAll(
+  layerMakitaToolGate,
+  layerMakitaToolkit,
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,

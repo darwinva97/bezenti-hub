@@ -2,7 +2,9 @@ import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as OrganizationLifecycle from "../spaces/OrganizationLifecycle.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as AuditLog from "../audit/AuditLog.ts";
 import * as MakitaIntake from "../makita/MakitaIntake.ts";
+import * as MakitaTasks from "../makita/MakitaTasks.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Layer from "effect/Layer";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -562,14 +564,16 @@ export const layerProduction = Layer.mergeAll(
   ),
   layerAgentSessionImporterProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
-  // Makita's intake (Makita ticket 04): Makita's token reads each listened repository's events.
-  MakitaIntake.layerScheduled.pipe(
-    Layer.provide(
-      MakitaIntake.layer.pipe(
-        Layer.provide(ProcessRunner.layer),
-        Layer.provide(SpaceDirectory.layer),
+  // Makita (tickets 04–05): Makita's token reads each listened repository's events, and an
+  // accepted trigger becomes a task whose Thread runs as the configuration's creator.
+  MakitaTasks.layerScheduled.pipe(
+    Layer.provideMerge(
+      MakitaTasks.layer.pipe(
+        Layer.provide(Layer.mergeAll(layerThreadLaunchProvided, AuditLog.layer)),
       ),
     ),
+    Layer.provideMerge(MakitaIntake.layer.pipe(Layer.provide(ProcessRunner.layer))),
+    Layer.provide(SpaceDirectory.layer),
   ),
 ).pipe(
   Layer.provide(

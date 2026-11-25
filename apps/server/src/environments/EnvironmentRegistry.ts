@@ -545,6 +545,11 @@ export class EnvironmentRegistry extends Context.Service<
       readonly spaceId?: SpaceId | undefined;
       /** A Thread that moves: its own Space is the one that counts. */
       readonly threadId?: ThreadId | undefined;
+      /**
+       * Only where the Space's work runs (Makita ticket 05, «Where it works»): no requested
+       * machine and no Project preference count, so never a personal or lent machine.
+       */
+      readonly spaceWorkOnly?: boolean | undefined;
     }) => Effect.Effect<EnvironmentId, ThreadEnvironmentUnavailableError | EnvironmentStorageError>;
     /**
      * The Environment's name when the User may use it for the Thread (`environment.use`: a
@@ -2020,7 +2025,8 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
   const chooseForThread: EnvironmentRegistry["Service"]["chooseForThread"] = Effect.fn(
     "EnvironmentRegistry.chooseForThread",
   )(function* (input) {
-    const { requested } = input;
+    // «Where it works» (Makita): the Space's own work place, whatever was asked or preferred.
+    const requested = input.spaceWorkOnly === true ? undefined : input.requested;
     if (requested === HUB_MACHINE_ENVIRONMENT_ID) {
       if (hubRunsAgents) return requested;
       return yield* new ThreadEnvironmentUnavailableError({
@@ -2033,7 +2039,7 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
       return yield* placeOn({ ...input, environmentId: requested, byHub: false });
     }
     // Nobody chose: the Project's preference while it can take the Thread, as the composer previews.
-    const preferred = yield* preferredFor(input);
+    const preferred = input.spaceWorkOnly === true ? undefined : yield* preferredFor(input);
     if (preferred !== undefined) return preferred;
     // Otherwise where the Space's work runs: its Sandbox (the Hub machine while it runs agents).
     if (hubRunsAgents) return HUB_MACHINE_ENVIRONMENT_ID;

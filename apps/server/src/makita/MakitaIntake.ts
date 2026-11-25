@@ -21,7 +21,6 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ProcessRunner from "../processRunner.ts";
-import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { MakitaGitHub, type MakitaGitHubAnswer, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { listenedProjects, type SpaceProjectRepo, spaceProjectRepos } from "./MakitaRepos.ts";
@@ -279,8 +278,12 @@ const make = Effect.gen(function* () {
   /** 30 s with a trigger in the last 30 minutes (or an open task, ticket 05), else 2 minutes. */
   const cadenceOf = Effect.fn("MakitaIntake.cadenceOf")(function* (repo: string, now: number) {
     const recent = yield* sql<{ readonly n: number }>`
-      SELECT COUNT(*) AS n FROM makita_events
-      WHERE host = ${MAKITA_GITHUB_HOST} AND repo = ${repo} AND seen_at >= ${iso(now - ACTIVE_WINDOW_MS)}
+      SELECT (SELECT COUNT(*) FROM makita_events
+          WHERE host = ${MAKITA_GITHUB_HOST} AND repo = ${repo}
+            AND seen_at >= ${iso(now - ACTIVE_WINDOW_MS)})
+        + (SELECT COUNT(*) FROM makita_tasks
+          WHERE host = ${MAKITA_GITHUB_HOST} AND repo = ${repo}
+            AND state NOT IN ('done', 'stopped', 'failed')) AS n
     `;
     return (recent[0]?.n ?? 0) > 0 ? FAST_POLL_MS : SLOW_POLL_MS;
   });
@@ -339,6 +342,17 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const queued: Array<QueuedEvent> = [];
         for (const event of input.events) {
+          // Ticket 05: an issue closed or locked ends its live task (ticket 06 stops its turn).
+          if ((event.event === "closed" || event.event === "locked") && event.issue !== undefined) {
+            yield* sql`
+              UPDATE makita_tasks SET state = 'stopped', failure = ${`issue-${event.event}`},
+                updated_at = ${iso(input.now)}
+              WHERE host = ${MAKITA_GITHUB_HOST} AND repo = ${input.listened.repo}
+                AND number = ${event.issue.number}
+                AND state NOT IN ('done', 'stopped', 'failed')
+            `;
+            continue;
+          }
           const decision = decideLabeled({
             event,
             listened: input.listened,
@@ -538,14 +552,8 @@ const make = Effect.gen(function* () {
   });
 });
 
-/** Over Makita's GitHub client, the Hub's SQL, its Spaces and a process runner (git remotes). */
+/**
+ * Over Makita's GitHub client, the Hub's SQL, its Spaces and a process runner (git remotes). On
+ * the Scheduler with the tasks (`MakitaTasks.layerScheduled`).
+ */
 export const layer = Layer.effect(MakitaIntake, make);
-
-/** The intake on the Hub's Scheduler: a pass every tick, doing work only when a repository is due. */
-export const layerScheduled = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const scheduler = yield* Scheduler.Scheduler;
-    const intake = yield* MakitaIntake;
-    yield* scheduler.register("makita-intake", intake.pollDue);
-  }),
-);

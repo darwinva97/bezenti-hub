@@ -36,6 +36,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { AI_CREDENTIAL_PREFIX_LENGTH } from "../ai/aiCredentialValue.ts";
 import * as ServerConfig from "../config.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
+import { makitaTaskOfThread } from "../makita/makitaRows.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as VaultReach from "./VaultReach.ts";
 
@@ -414,6 +415,21 @@ const make = Effect.gen(function* () {
     readonly lentMachine?: LentMachine;
   }) {
     const { space } = input;
+    // Makita ticket 05: a Makita Thread reads text anyone on GitHub can write, so it receives no
+    // Vault value at all (workload identity tokens included), whoever its creator is.
+    const makita = yield* makitaTaskOfThread(sql, input.threadId).pipe(
+      Effect.catch(storage("read whether the Thread is Makita's")),
+    );
+    if (Option.isSome(makita)) {
+      return {
+        threadId: input.threadId,
+        spaceId: space.id,
+        projectId: input.projectId,
+        vaults: [],
+        variables: [],
+        withheld: [],
+      } satisfies EffectiveSet;
+    }
     // A Thread without a Project (the scratch Project's) takes no Project's choices.
     const projectId =
       input.projectId === null ||

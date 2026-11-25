@@ -637,6 +637,9 @@ it.effect(
         "makita.config.pause",
         "makita.config.resume",
         "makita.github.label",
+        // makita/MakitaTasks.test.ts (Makita ticket 05: a task and Makita's comments)
+        "makita.task.start",
+        "makita.github.comment",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

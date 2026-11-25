@@ -3,12 +3,57 @@
  * others (a permission taken back, a User removed): no service of their own, no cycle between
  * MakitaPermissions and MakitaConfigs.
  */
-import { SpaceId, type UserId } from "@t3tools/contracts";
+import { SpaceId, UserId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
+
+/** A Thread's Makita task: what makes it a Makita Thread (ticket 05). */
+export interface MakitaThreadTask {
+  readonly taskId: string;
+  readonly configId: string;
+  readonly spaceId: SpaceId;
+  readonly state: string;
+  /** The configuration's creator: the Thread is theirs and runs as them. */
+  readonly createdBy: UserId;
+}
+
+/**
+ * The Makita task whose Thread this is, if any: one indexed read. The row exists before the
+ * Thread does, so every turn, tool call and gateway request of a Makita Thread finds it. Read by
+ * EffectiveVaults (no Vault values), the MCP door (the tool allow-list), the Thread moves (it
+ * stays where it works) and, from tickets 06–07, the gateway (pause, usage).
+ */
+export const makitaTaskOfThread = Effect.fn("makitaRows.makitaTaskOfThread")(function* (
+  sql: SqlClient.SqlClient,
+  threadId: string,
+) {
+  const rows = yield* sql<{
+    readonly taskId: string;
+    readonly configId: string;
+    readonly spaceId: string;
+    readonly state: string;
+    readonly createdBy: string;
+  }>`
+    SELECT t.task_id AS "taskId", t.config_id AS "configId", t.space_id AS "spaceId",
+      t.state, c.created_by AS "createdBy"
+    FROM makita_tasks t JOIN makita_configs c ON c.config_id = t.config_id
+    WHERE t.thread_id = ${threadId}
+  `;
+  const row = rows[0];
+  return row === undefined
+    ? Option.none<MakitaThreadTask>()
+    : Option.some<MakitaThreadTask>({
+        taskId: row.taskId,
+        configId: row.configId,
+        spaceId: SpaceId.make(row.spaceId),
+        state: row.state,
+        createdBy: UserId.make(row.createdBy),
+      });
+});
 
 /** Whether a User holds «may use Makita» in a Space (whether it takes effect is the policy's). */
 export const permittedIn = Effect.fn("makitaRows.permittedIn")(function* (
@@ -36,7 +81,7 @@ export const pauseCreatorConfigsWithin = Effect.fn("makitaRows.pauseCreatorConfi
       readonly pausedBy: UserId | null;
       readonly creator: UserId;
       readonly spaceId: SpaceId | null;
-      readonly reason: "permission-revoked" | "creator-left";
+      readonly reason: "permission-revoked" | "creator-left" | "creator-disabled";
     },
   ) {
     const at = DateTime.formatIso(yield* DateTime.now);

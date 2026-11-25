@@ -776,6 +776,8 @@ describe("every door of the Hub declares its rule", () => {
       // Ticket 04: what the intake read and decided.
       ["makita_repo_cursors", "166_MakitaIntake"],
       ["makita_events", "166_MakitaIntake"],
+      // Ticket 05: the tasks; others ask makitaRows.makitaTaskOfThread.
+      ["makita_tasks", "167_MakitaTasks"],
     ] as const) {
       expect(
         files
@@ -788,9 +790,14 @@ describe("every door of the Hub declares its rule", () => {
     }
     for (const { file, text } of toolModules) {
       expect(text, file).not.toMatch(
-        /MakitaAccount|MakitaTokenStore|MakitaPermissions|MakitaConfigs|MakitaIntake/u,
+        /MakitaAccount|MakitaTokenStore|MakitaPermissions|MakitaConfigs|MakitaIntake|MakitaGitHub/u,
       );
     }
+    // Ticket 05: two MCP tools, for a Makita task's Thread only; no tool takes a repository.
+    expect(Object.keys(MCP_TOOL_RULES).filter((name) => name.startsWith("makita_"))).toEqual([
+      "makita_comment",
+      "makita_read_issue",
+    ]);
   });
 
   it("reads AI usage over one WS RPC only, counts only: no HTTP, raw route or MCP door, tables read by AiUsage alone (spec 4 ticket 05)", () => {

@@ -1033,3 +1033,46 @@ it.effect(
       assert.deepEqual([...(yield* now())].sort(), ["GLOBEX_KEY", "GUS_TOKEN"]);
     }),
 );
+
+it.effect(
+  "a Makita task's Thread receives no Vault value at all, whoever its creator (Makita ticket 05)",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const first = yield* h.ownersVault("Acme first", [["SHARED", VALUES[0]!]]);
+      yield* h.lend(first, h.acmeId);
+      yield* h.vaults
+        .setSpaceDefaults({ spaceId: h.acmeId, vaultIds: [first] })
+        .pipe(h.as(h.ada.id));
+      const web = yield* h.project(h.ada.cookie, "acme-web", h.acmeId);
+      const normal = yield* h.thread("thread:grace-normal", h.grace.id, h.acmeId, web);
+      const makita = yield* h.thread("thread:grace-makita", h.grace.id, h.acmeId, web);
+      assert.deepEqual(
+        h.names(yield* h.effective.forThread({ threadId: makita, actingUserId: h.grace.id })),
+        ["SHARED"],
+      );
+      // The task row marks the Thread as Makita's (written before its Thread exists).
+      const at = "2026-11-24T00:00:00.000Z";
+      yield* h.server.sql`
+      INSERT INTO makita_configs (config_id, space_id, name, created_by, created_at, updated_at,
+        repos_json, triggers_json, callers_mode, model_selection_json)
+      VALUES ('mk_vault', ${h.acmeId}, 'Bugs', ${h.grace.id}, ${at}, ${at}, '{"all":true}',
+        '{"label":"makita","assigned":false,"mention":false}', 'list',
+        '{"instanceId":"claudeAgent","model":"claude-sonnet-5-5"}')
+    `;
+      yield* h.server.sql`
+      INSERT INTO makita_tasks (task_id, config_id, space_id, project_id, host, repo, number, kind,
+        thread_id, caller_github_id, caller_login, state, created_at, updated_at)
+      VALUES ('mkt_vault', 'mk_vault', ${h.acmeId}, ${web}, 'github.com', 'acme/widgets', 12,
+        'issue', ${makita}, 1, 'octocat', 'running', ${at}, ${at})
+    `;
+      const set = yield* h.effective.forThread({ threadId: makita, actingUserId: h.grace.id });
+      assert.deepEqual([set.vaults, set.variables, set.withheld], [[], [], []]);
+      assert.notInclude(JSON.stringify(set), VALUES[0]!);
+      // Her other Threads keep theirs.
+      assert.deepEqual(
+        h.names(yield* h.effective.forThread({ threadId: normal, actingUserId: h.grace.id })),
+        ["SHARED"],
+      );
+    }),
+);

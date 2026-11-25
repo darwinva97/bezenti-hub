@@ -111,6 +111,11 @@ export interface ThreadLaunchInput {
   readonly spaceId?: SpaceId;
   /** The Environment the User chose; the Hub checks it, and picks one when absent. */
   readonly activeEnvironmentId?: EnvironmentId;
+  /**
+   * `space-work`: only where the Space's work runs (a Makita Thread, Makita ticket 05), whatever
+   * `activeEnvironmentId` or the Project's preference say. Set by the server only.
+   */
+  readonly placement?: "space-work";
 }
 
 type PreparationInput = Pick<
@@ -883,6 +888,7 @@ const make = Effect.gen(function* () {
             projectId: input.projectId,
             providerInstanceId: input.modelSelection.instanceId,
             spaceId: claimed?.spaceId ?? input.spaceId,
+            ...(input.placement === "space-work" ? { spaceWorkOnly: true } : {}),
           })
           .pipe(Effect.mapError(mapError(input, "create-thread")));
         if (placed !== HUB_MACHINE_ENVIRONMENT_ID && input.workspaceStrategy.type !== "root") {

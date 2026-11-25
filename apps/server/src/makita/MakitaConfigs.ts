@@ -180,6 +180,15 @@ export class MakitaConfigs extends Context.Service<
     readonly removeForSession: (input: MakitaConfigRef) => Effect.Effect<MakitaConfig, MakitaError>;
     readonly pauseForSession: (input: MakitaConfigRef) => Effect.Effect<MakitaConfig, MakitaError>;
     readonly resumeForSession: (input: MakitaConfigRef) => Effect.Effect<MakitaConfig, MakitaError>;
+    /**
+     * Ticket 05, at each task's start: the AI account and model still a gateway one the creator
+     * may use in the Space, serving the model (the same check as saving). Answers its name.
+     */
+    readonly checkSelection: (
+      creator: UserId,
+      spaceId: SpaceId,
+      selection: ModelSelection,
+    ) => Effect.Effect<string, MakitaError>;
   }
 >()("t3/makita/MakitaConfigs") {}
 
@@ -1113,6 +1122,7 @@ const make = Effect.gen(function* () {
     act(input, "makita.resume");
 
   return MakitaConfigs.of({
+    checkSelection: checkedSelection,
     list,
     create,
     update,

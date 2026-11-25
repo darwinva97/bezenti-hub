@@ -127,7 +127,28 @@ export interface McpInvocationScope {
    * Space (its Sandbox, a dedicated machine): every agent there can read the others' tokens.
    */
   readonly spaceLimit?: SpaceId;
+  /**
+   * The caller's Thread is a Makita task's (Makita ticket 05), set by the MCP door from its task
+   * row: only `MAKITA_ALLOWED_TOOLS` are listed or callable.
+   */
+  readonly makita?: { readonly taskId: string; readonly configId: string };
 }
+
+/**
+ * What the agent of a Makita Thread reaches (spec «Amenazas de prompt injection»): its own
+ * `makita_*` tools, its own Thread's history and the background wait. Nothing that launches,
+ * changes or reads other things of the Hub.
+ */
+export const MAKITA_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
+  "makita_read_issue",
+  "makita_comment",
+  "thread_history",
+  "t3_background_wait",
+]);
+
+/** Whether `tool` is listed and callable for this caller. */
+export const toolAllowedFor = (scope: McpInvocationScope | undefined, tool: string): boolean =>
+  scope?.makita === undefined ? !tool.startsWith("makita_") : MAKITA_ALLOWED_TOOLS.has(tool);
 
 /**
  * T3 Code renders `t3-thread://` links as thread chips. Other MCP clients cannot open them, so

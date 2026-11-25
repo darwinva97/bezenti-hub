@@ -533,6 +533,9 @@ export const MCP_DOOR_RULES: Record<string, DoorRule> = {
   html_render: none("the calling agent's own work; what it says next is an event (masked)"),
   link_pull_request: none("the calling agent's own work; what it says next is an event (masked)"),
   link_pull_requests: none("the calling agent's own work; what it says next is an event (masked)"),
+  // Makita ticket 05: GitHub's public issue text, framed; no Thread output or Vault value.
+  makita_comment: none("whether Makita posted on its task's issue; never the text it posted"),
+  makita_read_issue: none("a public GitHub issue and its comments, framed as untrusted data"),
   list_scheduled_tasks: none(
     "the calling agent's own work; what it says next is an event (masked)",
   ),

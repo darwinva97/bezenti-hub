@@ -81,6 +81,16 @@ export function createMakitaEnvironmentAtoms<R, E>(
       label: "environment-data:makita:tasks-approve",
       tag: WS_METHODS.makitaTasksApprove,
     }),
+    // Ticket 21: a repository added by name, its Project made or reused.
+    addRepo: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:repos-add",
+      tag: WS_METHODS.makitaReposAdd,
+    }),
+    // Ticket 22: the Owner's ceiling on tasks at once across the Hub.
+    setTaskLimit: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:account-set-task-limit",
+      tag: WS_METHODS.makitaAccountSetTaskLimit,
+    }),
     // What Makita does and spends (ticket 07), read again every 30 s while a screen shows it.
     activity: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:makita:activity",

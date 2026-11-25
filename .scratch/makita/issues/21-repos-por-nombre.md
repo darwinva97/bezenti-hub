@@ -4,7 +4,7 @@
 
 **Blocked by:** 03, 08.
 
-**Status:** in progress (design: `21-design.md`)
+**Status:** done (design: `21-design.md`)
 
 **Tipo:** AFK
 
@@ -14,12 +14,12 @@
 
 Spec: ../spec.md
 
-- [ ] Contracts: `MakitaRepoAddInput { spaceId, repo }`, `MakitaRepoAddResult { project, created, notes }`.
-- [ ] Puerta WS `makita.repos.add`: sesión propia de una persona, `makita.use` en el Space; crear exige además `project.create` (lo mismo que crear uno a mano); scope `source-control:write` como `projectClone.start`. En los barridos de puertas.
-- [ ] `owner/name`, `https://github.com/owner/name(.git)`, `git@github.com:owner/name.git`; cualquier otra cosa se rechaza sin llamar a GitHub.
-- [ ] Reutiliza un Project del Space con ese remoto (sin crear nada, sin pedir `project.create`).
-- [ ] Repositorio privado: solo si la cuenta vinculada de quien lo pide es colaboradora (o es el Owner). Un 404, un 403 y un privado ajeno responden igual.
-- [ ] Crea el Project con el clon del Hub, en el Space de la configuración, como quien lo pide (dueño según las reglas del Space); espera a que el clon tenga su remoto o falle.
-- [ ] Auditoría `makita.repo.add` (con su etiqueta en `AUDIT_ACTION_LABELS`).
-- [ ] Web: en «Repositories», un campo «owner/name» y «Add»; el Project nuevo aparece marcado.
-- [ ] Red-first: un Guest no crea un Project; otro Space no se ve; un privado sin cuenta vinculada colaboradora se responde como inexistente; reutilizar no crea un segundo; quitarlo de la configuración no borra el Project.
+- [x] Contracts: `MakitaRepoAddInput { spaceId, repo }`, `MakitaRepoAddResult { project, created, notes }`.
+- [x] Puerta WS `makita.repos.add`: sesión propia de una persona, `makita.use` en el Space; crear exige además `project.create` (lo mismo que crear uno a mano); scope `source-control:write` como `projectClone.start`. En los barridos de puertas.
+- [x] `owner/name`, `https://github.com/owner/name(.git)`, `git@github.com:owner/name.git`; cualquier otra cosa se rechaza sin llamar a GitHub.
+- [x] Reutiliza un Project del Space con ese remoto (sin crear nada, sin pedir `project.create`).
+- [x] Repositorio privado: solo si la cuenta vinculada de quien lo pide es colaboradora (o es el Owner). Un 404, un 403 y un privado ajeno responden igual.
+- [x] Crea el Project con el clon del Hub, en el Space de la configuración, como quien lo pide (dueño según las reglas del Space); espera a que el clon tenga su remoto o falle.
+- [x] Auditoría `makita.repo.add` (con su etiqueta en `AUDIT_ACTION_LABELS`).
+- [x] Web: en «Repositories», un campo «owner/name» y «Add»; el Project nuevo aparece marcado.
+- [x] Red-first: un Guest, un Admin sin el permiso y otro Space no añaden nada; otro Space no se ve; un privado sin cuenta vinculada colaboradora se responde como inexistente; reutilizar no crea un segundo; quitarlo de la configuración no borra el Project.

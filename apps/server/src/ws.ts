@@ -1,6 +1,7 @@
 import {
   AiAccountChoiceError,
   AiAccountError,
+  MakitaError,
   OrchestrationDispatchCommandError,
   type ThreadSetAiAccountInput,
 } from "@t3tools/contracts";
@@ -222,6 +223,8 @@ import * as ProjectService from "./project/ProjectService.ts";
 import { threadWorkspaceRoot } from "./project/threadWorkspaceRoot.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as CloneDestination from "./project/cloneDestination.ts";
+import * as CloneIntoSpace from "./project/cloneIntoSpace.ts";
+import { projectCloneHooks } from "./project/projectCloneHooks.ts";
 import * as DeviceAccess from "./device/deviceAccess.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
 import { mutateProjectWithClone } from "./project/ProjectMutation.ts";
@@ -273,6 +276,7 @@ import * as MakitaAccount from "./makita/MakitaAccount.ts";
 import * as GitHubIdentities from "./makita/GitHubIdentities.ts";
 import * as MakitaActivity from "./makita/MakitaActivity.ts";
 import * as MakitaConfigs from "./makita/MakitaConfigs.ts";
+import * as MakitaRepoAdd from "./makita/MakitaRepoAdd.ts";
 import * as MakitaPermissions from "./makita/MakitaPermissions.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
@@ -1457,6 +1461,7 @@ export const layerWsRpc = (
       const makitaAccount = yield* MakitaAccount.MakitaAccount;
       const makitaPermissions = yield* MakitaPermissions.MakitaPermissions;
       const makitaConfigs = yield* MakitaConfigs.MakitaConfigs;
+      const makitaRepoAdd = yield* MakitaRepoAdd.MakitaRepoAdd;
       const makitaActivity = yield* MakitaActivity.MakitaActivity;
       const githubIdentities = yield* GitHubIdentities.GitHubIdentities;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
@@ -2017,6 +2022,35 @@ export const layerWsRpc = (
         vcsStatusBroadcaster
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
+      // What a clone into a new Project runs, whoever asks for it (here, or Makita ticket 21).
+      const cloneHookDeps = {
+        projectService,
+        repositoryIdentityResolver,
+        projectEnrichment,
+        refreshGitStatus,
+        verifyDestination: (destinationPath: string) => requireCloneDestination(destinationPath),
+      };
+      // Makita ticket 21: a repository cloned as a new Project of a Space, for this session's
+      // User, into a folder they may root a Project in, as projectClone.start would.
+      const makitaCloner: MakitaRepoAdd.MakitaProjectCloner = (target) =>
+        CloneIntoSpace.cloneIntoSpace(
+          {
+            tracker: projectCloneTracker,
+            hooks: cloneHookDeps,
+            projectsRoot: managedFolders.namedProjectsRoot,
+            requireDestination: (destinationPath) =>
+              requireCloneDestination(destinationPath, { asProject: true }),
+          },
+          target,
+        ).pipe(
+          Effect.mapError(
+            (error) =>
+              new MakitaError({
+                reason: "invalid",
+                message: CloneIntoSpace.cloneFailureMessage(error),
+              }),
+          ),
+        );
 
       const getOrchestrationV2ArchivedShellSnapshot = Effect.gen(function* () {
         const visibility = yield* currentVisibility;
@@ -3016,6 +3050,8 @@ export const layerWsRpc = (
         [WS_METHODS.makitaAccountSet]: (input) => makitaAccount.setForSession(input),
         [WS_METHODS.makitaAccountPauseAll]: () => makitaAccount.pauseAllForSession,
         [WS_METHODS.makitaAccountResumeAll]: () => makitaAccount.resumeAllForSession,
+        [WS_METHODS.makitaAccountSetTaskLimit]: (input) =>
+          makitaAccount.setTaskLimitForSession(input),
         // «May use Makita» per User and Space: the Owner's own session only.
         [WS_METHODS.makitaPermissionsList]: () => makitaPermissions.listForSession,
         [WS_METHODS.makitaPermissionsGrant]: (input) => makitaPermissions.grantForSession(input),
@@ -3030,6 +3066,8 @@ export const layerWsRpc = (
         [WS_METHODS.makitaConfigsLabels]: (input) => makitaConfigs.repoLabelsForSession(input),
         [WS_METHODS.makitaTasksStop]: (input) => makitaConfigs.stopTaskForSession(input),
         [WS_METHODS.makitaTasksApprove]: (input) => makitaConfigs.approveTaskForSession(input),
+        // Ticket 21: a repository by name: `makita.use`, then `project.create` to clone it.
+        [WS_METHODS.makitaReposAdd]: (input) => makitaRepoAdd.addForSession(input, makitaCloner),
         // What Makita does and spends, and the Makita tasks of the Threads one sees (ticket 07).
         [WS_METHODS.makitaActivity]: (input) => makitaActivity.activityForSession(input),
         [WS_METHODS.makitaThreads]: () => makitaActivity.threadsForSession,
@@ -3040,49 +3078,7 @@ export const layerWsRpc = (
         [WS_METHODS.projectCloneStart]: (input) =>
           requireCloneDestination(input.destinationPath, { asProject: true }).pipe(
             Effect.andThen(
-              projectCloneTracker.start(
-                input,
-                {
-                  createProject: (project) =>
-                    projectService
-                      .create({
-                        commandId: CommandId.make(`project-clone-create:${project.projectId}`),
-                        projectId: project.projectId,
-                        title: project.title,
-                        workspaceRoot: project.workspaceRoot,
-                        createWorkspaceRootIfMissing: true,
-                      })
-                      .pipe(
-                        Effect.asVoid,
-                        Effect.mapError(
-                          (cause) =>
-                            new OrchestrationDispatchCommandError({
-                              message: "Failed to create clone project.",
-                              cause,
-                            }),
-                        ),
-                      ),
-                  onCloned: (project) =>
-                    repositoryIdentityResolver
-                      .resolve(project.workspaceRoot, { refresh: true })
-                      .pipe(
-                        Effect.andThen(
-                          projectService.update({
-                            commandId: CommandId.make(`project-clone-done:${project.projectId}`),
-                            projectId: project.projectId,
-                          }),
-                        ),
-                        Effect.andThen(refreshGitStatus(project.workspaceRoot)),
-                        // The folder was empty when the project was created, so the cached
-                        // enrichment says "no repository" and clients cannot group it yet.
-                        Effect.andThen(projectEnrichment.invalidate([project.workspaceRoot])),
-                        Effect.andThen(projectEnrichment.request(project.workspaceRoot)),
-                        Effect.ignoreCause({ log: true }),
-                      ),
-                  verifyDestination: requireCloneDestination,
-                },
-                principal.userId,
-              ),
+              projectCloneTracker.start(input, projectCloneHooks(cloneHookDeps), principal.userId),
             ),
           ),
         [WS_METHODS.projectsEnsureScratch]: () =>

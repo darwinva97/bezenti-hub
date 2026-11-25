@@ -39,6 +39,8 @@ Makita is the Hub's GitHub bot teammate: a normal GitHub account whose token the
 | `makitaCloseRules.ts`   | nothing (pure)                                           | The verdicts, the state each closes with, the input checks, the verdict comment and the tool's description (ticket 26).                   |
 | `MakitaIssueCloses.ts`  | `makita_issue_closes`                                    | `makita_close_issue` and `/makita reopen` (ticket 26).                                                                                    |
 | `MakitaCleanup.ts`      | `makita_tasks.pr_closed_at`                              | The `makita-cleanup` Scheduler source: bad-work labels, the idle pull request sweep and `/makita reopen` (ticket 27).                     |
+| `MakitaRepoAdd.ts`      | nothing (writes through the clone path)                  | `makita.repos.add` (ticket 21): a repository by name, its Space's Project reused or cloned as the person.                                 |
+| `makitaQueue.ts`        | `makita_events` still `queued` (the line)                | The task caps (ticket 22): who may start now, the line shown in the activity, what a stop takes out of it.                                |
 
 Only `makita/` names these tables (`DoorRules.test.ts` checks it). Other modules ask `makitaRows.makitaTaskOfThread`.
 
@@ -178,6 +180,26 @@ Like robobun in oven-sh/bun, a configuration can act without a label or a mentio
 - **Reopening wins.** A `reopened` event by someone the closing configuration answers records `reopened_*` (`via: github`, event `command` / `reopened`). `/makita reopen` as a comment's first line, by someone it answers, is stored `command` / `reopen`; the `makita-cleanup` source reads it again by id, reopens the issue, records it (`via: command`), reacts 👍 and audits `makita.github.reopen_issue`. Strangers, bots, edits and Makita itself: silence.
 - **Idle pull requests (27).** With `closeIdlePrsDays`, the `makita-cleanup` source (at most every 10 minutes, never during «Stop all» or a rate-limit hold) reads the tasks of live, unpaused configurations in open Spaces that have a pull request not seen closed, are not `running`, `awaiting-approval` or `done`, have no pending push, and that the Hub has not touched for N days. GitHub must say the pull request is open, opened by Makita's account, from the task's `makita/…` branch, and idle by its own clock (`updated_at` against the answer's `Date`). Then one comment, `PATCH pulls/{n} state: closed`, the branch deleted, `pr_closed_at`, the task stopped (`pr-idle`), audit `makita.github.close_pull_request` (`reason: idle`, `days`).
 - **The bad-work label (27).** A `labeled` event on a pull request whose label is the `badWorkLabel` of the configuration of the task owning that pull request is stored `command` / `bad-work`. The `makita-cleanup` source acts on it only when the labeller is an approver now (`isApproverNow`; anyone else: `ignored-not-approver`, silence) and nothing is paused: it closes the pull request, deletes the branch, stops the task (`bad-work`) and audits who (`by`, `byId`). No comment.
+
+## A repository by name (ticket 21)
+
+Design note: `.scratch/makita/issues/21-design.md`.
+
+- **`makita.repos.add { spaceId, repo }`** takes `owner/name` or a github.com URL. In order: `makita.use` in the Space; the name parsed (nothing else reaches GitHub); a Project of the Space whose checkout resolves to that repository is reused (no `project.create` needed); otherwise `project.create` there (AccessPolicy, as by hand), then `GET repos/{o}/{r}` with Makita's token.
+- **Private repositories** pass only for the Owner or a person whose linked GitHub account GitHub calls a collaborator (`GET user/{id}`, `GET repos/{o}/{r}/collaborators/{login}`). A 404, a 403 and a private repository that fails the check give the same answer.
+- **The Project** is made by `project/cloneIntoSpace.ts`: `ProjectCloneTracker.start` with the hooks of WS `projectClone.start` (`project/projectCloneHooks.ts`), with the configuration's Space and the person as `ProjectService.create`'s `spaceId` and `actorUserId`, into a new folder of the Hub's Projects folder that `requireCloneDestination(…, { asProject: true })` accepts. The clone uses the Hub's own git access over `https://github.com/<repo>.git`, never Makita's token. The answer waits up to 20 s for the checkout's remote (the save reads it). Audited `makita.repo.add`.
+- Unchoosing a repository in a configuration never touches its Project.
+
+## Tasks at once (ticket 22)
+
+Design note: `.scratch/makita/issues/22-design.md`.
+
+- **Caps.** `makita_configs.max_tasks` (3, 1–20, its creator's) and `makita_account.max_tasks` (10, 1–100, the Owner's, `makita.account.setTaskLimit`, audited `makita.account.limit`). The lower one wins.
+- **What holds a slot:** tasks `running`, `waiting-ci` or `awaiting-approval` (the activity's «Now»). A task waiting for a person holds none.
+- **The line.** `startQueued` asks `makitaQueue.queueGate` about each queued event in arrival order. Only a trigger with no task yet, of an active configuration, on an issue without a live task, ever waits; it stays `queued`. Wakes, commands, approvals, the conversation and merges never wait. At most 20 events are handled per pass; waiting ones do not count.
+- **Out of the line.** `stopTasksWithin` ends the waiting triggers of its scope in the same transaction (`dropWaitingWithin`): `ignored-paused` with the stop's reason, or `ignored-no-config` for an issue closed or locked. A `/makita stop` with no task yet does the same for its configuration's line on that issue (the intake, `github-stop`).
+- **Shown** as `waiting` in `makita.activity`: each item's place in its own configuration's line, never counting another Space's work.
+- **Risk:** a task stuck in `running` (a turn that ended without a comment) holds its slot until someone stops it.
 
 ## What other tickets read
 

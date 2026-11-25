@@ -4,7 +4,7 @@
 
 **Blocked by:** 05, 07.
 
-**Status:** in progress (design: `22-design.md`)
+**Status:** done (design: `22-design.md`)
 
 **Tipo:** AFK
 
@@ -14,10 +14,10 @@
 
 Spec: ../spec.md
 
-- [ ] Migración 172: `makita_configs.max_tasks` (3, 1–20) y `makita_account.max_tasks` (10, 1–100), con test.
-- [ ] `MakitaTasks.startQueued`: solo las tareas nuevas esperan; cuentan las tareas «at work» (las de «Now»: `running`, `waiting-ci`, `awaiting-approval`).
-- [ ] Lo que espera se quita con la pausa, la parada global, el borrado, `/makita stop`, el issue cerrado o bloqueado y la salida del creador (en la transacción de `stopTasksWithin`).
-- [ ] Actividad: `waiting` con repositorio, número, quién lo pidió, desde cuándo y su puesto en la cola de su configuración.
-- [ ] Puerta WS `makita.account.setTaskLimit` (solo el Owner, `makita.manageAccount`), auditada `makita.account.limit`.
-- [ ] Web: el campo en el formulario de la configuración, la fila dice el tope, la actividad lista lo que espera, Platform → Makita el techo.
-- [ ] Red-first: la cuarta etiqueta espera y arranca al acabar una; el orden se respeta; una mención a una tarea viva no espera; el techo del Hub gana; pausar o cerrar el issue quita lo que espera; un reinicio no lo pierde.
+- [x] Migración 174: `makita_configs.max_tasks` (3, 1–20) y `makita_account.max_tasks` (10, 1–100), con test.
+- [x] `MakitaTasks.startQueued`: solo las tareas nuevas esperan; cuentan las tareas «at work» (las de «Now»: `running`, `waiting-ci`, `awaiting-approval`).
+- [x] Lo que espera se quita con la pausa, la parada global, el borrado, `/makita stop`, el issue cerrado o bloqueado y la salida del creador (en la transacción de `stopTasksWithin`).
+- [x] Actividad: `waiting` con repositorio, número, quién lo pidió, desde cuándo y su puesto en la cola de su configuración.
+- [x] Puerta WS `makita.account.setTaskLimit` (solo el Owner, `makita.manageAccount`), auditada `makita.account.limit`.
+- [x] Web: el campo en el formulario de la configuración, la fila dice el tope, la actividad lista lo que espera, Platform → Makita el techo.
+- [x] Red-first: la cuarta etiqueta espera y arranca al acabar una; el orden se respeta; una mención a una tarea viva no espera; el techo del Hub gana; pausar o cerrar el issue quita lo que espera; un reinicio no lo pierde.

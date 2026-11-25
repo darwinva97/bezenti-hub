@@ -200,6 +200,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "makita.github.close_issue": "Makita closed an issue with a verdict",
   "makita.github.reopen_issue": "Makita reopened an issue it had closed",
   "makita.github.close_pull_request": "Makita closed one of its pull requests",
+  "makita.repo.add": "Added a repository to Makita",
+  "makita.account.limit": "Changed how many Makita tasks run at once",
   "secret_provider.create": "Connected a secret provider",
   "secret_provider.update": "Changed a secret provider",
   "secret_provider.delete": "Removed a secret provider",

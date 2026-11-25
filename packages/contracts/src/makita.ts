@@ -62,8 +62,20 @@ export const MakitaAccountView = Schema.Struct({
   globalPausedByName: Schema.NullOr(Schema.String),
   updatedAt: Schema.String,
   warnings: Schema.Array(MakitaAccountWarning),
+  /** Ticket 22: Makita tasks at work at once across every configuration of the Hub. */
+  maxTasks: Schema.Number,
 });
 export type MakitaAccountView = typeof MakitaAccountView.Type;
+
+/** Ticket 22: a configuration's tasks at work at once, by default and at most. */
+export const MAKITA_CONFIG_DEFAULT_MAX_TASKS = 3;
+export const MAKITA_CONFIG_MAX_TASKS_LIMIT = 20;
+/** Ticket 22: the Hub-wide ceiling, by default and at most. */
+export const MAKITA_HUB_DEFAULT_MAX_TASKS = 10;
+export const MAKITA_HUB_MAX_TASKS_LIMIT = 100;
+
+export const MakitaTaskLimitInput = Schema.Struct({ maxTasks: Schema.Number });
+export type MakitaTaskLimitInput = typeof MakitaTaskLimitInput.Type;
 
 export const MakitaAccountGetInput = Schema.Struct({
   /** «Check now»: ask GitHub again with the stored token before answering. */
@@ -246,6 +258,8 @@ export const MakitaConfig = Schema.Struct({
   pausedBy: Schema.NullOr(UserId),
   pausedByName: Schema.NullOr(Schema.String),
   pausedReason: Schema.NullOr(MakitaPausedReason),
+  /** Ticket 22: its tasks at work at once; more wait in line. */
+  maxTasks: Schema.Number,
   warnings: Schema.Array(MakitaConfigWarning),
   /** What the viewer may do with it (the Hub decides again on each door). */
   canEdit: Schema.Boolean,
@@ -275,6 +289,8 @@ const MakitaConfigFields = {
   labels: Schema.optionalKey(Schema.Array(Schema.String)),
   /** Tickets 25–27; left out: everything off on create, unchanged on update. */
   autonomy: Schema.optionalKey(MakitaAutonomy),
+  /** Ticket 22: absent keeps it (3 for a new one). */
+  maxTasks: Schema.optionalKey(Schema.Number),
 };
 
 export const MakitaConfigInput = Schema.Struct({ spaceId: SpaceId, ...MakitaConfigFields });

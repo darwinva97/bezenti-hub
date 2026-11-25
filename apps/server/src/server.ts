@@ -234,6 +234,7 @@ import * as MakitaAccount from "./makita/MakitaAccount.ts";
 import * as GitHubIdentities from "./makita/GitHubIdentities.ts";
 import * as MakitaActivity from "./makita/MakitaActivity.ts";
 import * as MakitaConfigs from "./makita/MakitaConfigs.ts";
+import * as MakitaRepoAdd from "./makita/MakitaRepoAdd.ts";
 import * as MakitaGitHub from "./makita/MakitaGitHub.ts";
 import * as MakitaPermissions from "./makita/MakitaPermissions.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
@@ -605,6 +606,8 @@ const layerAuth = Layer.mergeAll(
             MakitaAccount.layer,
             MakitaPermissions.layer,
             MakitaConfigs.layer,
+            // A repository added by name (Makita ticket 21); WS hands it the Hub's clone path.
+            MakitaRepoAdd.layer,
             // What Makita does and spends (Makita ticket 07): reads the usage log below.
             MakitaActivity.layer,
             // Each User's linked GitHub account (Makita ticket 08).

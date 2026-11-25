@@ -53,6 +53,7 @@ import {
 } from "./makitaFeeds.ts";
 import { MakitaGitHub, type MakitaGitHubAnswer, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { listenedProjects, type SpaceProjectRepo, spaceProjectRepos } from "./MakitaRepos.ts";
+import { dropWaitingWithin } from "./makitaQueue.ts";
 import { stopTasksWithin } from "./makitaRows.ts";
 
 const SECOND = 1_000;
@@ -765,6 +766,17 @@ const make = Effect.gen(function* () {
         now: input.now,
         decision,
       });
+      // Ticket 22: `/makita stop` before a task exists takes the issue out of the line.
+      if (inserted && decision.outcome === "command" && decision.detail === "nothing-to-stop") {
+        yield* dropWaitingWithin(
+          sql,
+          {
+            issue: { host: MAKITA_GITHUB_HOST, repo: input.listened.repo, number: comment.number },
+            configId: decision.configId,
+          },
+          "github-stop",
+        );
+      }
       if (inserted && decision.outcome === "queued") {
         queued.push({
           eventKey: comment.eventKey,

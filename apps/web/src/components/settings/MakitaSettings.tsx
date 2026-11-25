@@ -44,6 +44,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { InfoTip } from "./InfoTip";
 import { MakitaOwnerActivity } from "./MakitaActivity";
+import { MakitaHubTaskLimit } from "./MakitaTaskLimit";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 
 type AccountAnswer = AtomCommandResult<MakitaAccountGetResult, unknown>;
@@ -553,6 +554,9 @@ function MakitaAccountPanel({ environmentId }: { readonly environmentId: Environ
               : `Stopped by ${account.globalPausedByName ?? "the Owner"} on ${formatWhen(account.globalPausedAt)}. Nothing runs until you resume it.`}
           </p>
         </SettingsSection>
+      )}
+      {account === undefined || account === null ? null : (
+        <MakitaHubTaskLimit environmentId={environmentId} account={account} onSaved={setAccount} />
       )}
       {editing ? (
         <TokenDialog

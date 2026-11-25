@@ -273,6 +273,10 @@ export const makeFakeGitHub = () => {
     });
     return [...found, ...searchInjected];
   };
+  /** Ticket 21: private repositories, those Makita may only read, and each one's collaborators. */
+  const privateRepos = new Set<string>();
+  const readOnlyRepos = new Set<string>();
+  const collaborators = new Map<string, Set<string>>();
 
   const touch = (repo: string) => feedVersions.set(repo, (feedVersions.get(repo) ?? 0) + 1);
   /** Ticket 25: `owner/name` → how many times its issues list changed (its ETag). */
@@ -790,8 +794,27 @@ export const makeFakeGitHub = () => {
             allow_merge_commit: settings.merge,
             allow_squash_merge: settings.squash,
             allow_rebase_merge: true,
+            // Ticket 21: whether it is private, and what Makita's account may do there.
+            private: privateRepos.has(repo),
+            permissions: { pull: true, push: !readOnlyRepos.has(repo) },
           })
         : json(request, 404, { message: "Not Found" });
+    }
+    // Ticket 21: a collaborator check, and a user by numeric id.
+    const collaboratorMatch = /^repos\/([^/]+)\/([^/]+)\/collaborators\/([^/]+)$/u.exec(route);
+    if (request.method === "GET" && collaboratorMatch !== null) {
+      const repo = `${collaboratorMatch[1]}/${collaboratorMatch[2]}`;
+      const login = decodeURIComponent(collaboratorMatch[3]!).toLowerCase();
+      return repos.has(repo) && (collaborators.get(repo)?.has(login) ?? false)
+        ? json(request, 204, null)
+        : json(request, 404, { message: "Not Found" });
+    }
+    const userByIdMatch = /^user\/(\d+)$/u.exec(route);
+    if (request.method === "GET" && userByIdMatch !== null) {
+      const user = [...users.values()].find((entry) => entry.id === Number(userByIdMatch[1]));
+      return user === undefined
+        ? json(request, 404, { message: "Not Found" })
+        : json(request, 200, { login: user.login, id: user.id, type: user.type ?? "User" });
     }
     const headOf = (repo: string, pr: FakePullRequest) =>
       hooks.branchTip(repo, pr.head) ?? pr.headSha;
@@ -1136,6 +1159,9 @@ export const makeFakeGitHub = () => {
     deletedBranches,
     searchInjected,
     issueLabels,
+    privateRepos,
+    readOnlyRepos,
+    collaborators,
     addEvent,
     label,
     comment,

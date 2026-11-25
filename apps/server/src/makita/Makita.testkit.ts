@@ -3,6 +3,7 @@
  * Acme; Gus of Globex) and a fake GitHub. Each test gets its own Hub and its own fake. The
  * Thread launch and the secret masker are recorders: what Makita asked for, as whom.
  */
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { OrchestrationV2ServerCommand, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -27,6 +28,7 @@ import * as MakitaPermissions from "./MakitaPermissions.ts";
 import { makeGitWorld } from "./MakitaPush.testkit.ts";
 import * as MakitaPullRequests from "./MakitaPullRequests.ts";
 import * as MakitaPushes from "./MakitaPushes.ts";
+import * as MakitaRepoAdd from "./MakitaRepoAdd.ts";
 import * as MakitaStops from "./MakitaStops.ts";
 import * as MakitaTasks from "./MakitaTasks.ts";
 import * as MakitaTriage from "./MakitaTriage.ts";
@@ -108,6 +110,8 @@ export const makitaHub = Effect.gen(function* () {
           MakitaConfigs.layer,
           MakitaIntake.layer,
           GitHubIdentities.layer,
+          // Ticket 21: a repository by name (each test hands it a clone path).
+          MakitaRepoAdd.layer.pipe(Layer.provide(NodeServices.layer)),
         ),
       ),
       Layer.provide(Layer.mergeAll(launcher, masker, threads, gitWorld.machines)),
@@ -139,6 +143,7 @@ export const makitaHub = Effect.gen(function* () {
     makitaCleanup: Context.get(context, MakitaCleanup.MakitaCleanup),
     gitWorld,
     githubIdentities: Context.get(context, GitHubIdentities.GitHubIdentities),
+    makitaRepoAdd: Context.get(context, MakitaRepoAdd.MakitaRepoAdd),
   };
 });
 

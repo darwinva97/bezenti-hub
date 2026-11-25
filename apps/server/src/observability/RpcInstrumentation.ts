@@ -197,6 +197,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.makitaConfigsLabels]: "server",
   [WS_METHODS.makitaTasksStop]: "server",
   [WS_METHODS.makitaTasksApprove]: "server",
+  [WS_METHODS.makitaReposAdd]: "source-control",
+  [WS_METHODS.makitaAccountSetTaskLimit]: "server",
   [WS_METHODS.makitaActivity]: "server",
   [WS_METHODS.makitaThreads]: "server",
   [WS_METHODS.githubIdentityGet]: "server",

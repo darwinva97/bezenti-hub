@@ -11,6 +11,7 @@ import type * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
 import { storedAutonomyOf } from "./makitaAutonomy.ts";
+import { dropWaitingWithin } from "./makitaQueue.ts";
 
 /** A Thread's Makita task: what makes it a Makita Thread (ticket 05). */
 export interface MakitaThreadTask {
@@ -185,6 +186,8 @@ export const stopTasksWithin = Effect.fn("makitaRows.stopTasksWithin")(function*
       },
     });
   }
+  // Ticket 22: what waits for a slot in that scope goes with it.
+  yield* dropWaitingWithin(sql, scope, input.reason);
   return stopped.map((row): StoppedMakitaTask => ({ taskId: row.taskId, threadId: row.threadId }));
 });
 

@@ -124,6 +124,10 @@ export const AuditAction = Schema.Literals([
   "makita.github.reopen_issue",
   // Makita ticket 27: one of Makita's pull requests closed (idle, or an approver's bad-work label).
   "makita.github.close_pull_request",
+  // Makita ticket 21: a repository added to a Space by name (its Project made or reused).
+  "makita.repo.add",
+  // Makita ticket 22: the Owner's ceiling on Makita tasks at once across the Hub.
+  "makita.account.limit",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -509,6 +513,10 @@ export const AUDIT_DETAIL_KEYS = {
     "by",
     "byId",
   ],
+  /** A repository (`owner/name`, public to whoever added it) and its Project, made or reused. */
+  "makita.repo.add": ["space", "repo", "project", "created"],
+  /** The Hub-wide ceiling of Makita tasks at once, before and after. */
+  "makita.account.limit": ["from", "to"],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

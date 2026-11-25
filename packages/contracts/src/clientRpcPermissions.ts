@@ -83,6 +83,10 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.makitaConfigsLabels]: AuthOrchestrationOperateScope,
   [WS_METHODS.makitaTasksStop]: AuthOrchestrationOperateScope,
   [WS_METHODS.makitaTasksApprove]: AuthOrchestrationOperateScope,
+  // Makita ticket 21: it may clone a repository as a new Project, as projectClone.start does.
+  [WS_METHODS.makitaReposAdd]: AuthSourceControlWriteScope,
+  // Makita ticket 22: the Owner's Hub-wide ceiling, with Makita's account.
+  [WS_METHODS.makitaAccountSetTaskLimit]: AuthAccessWriteScope,
   [WS_METHODS.githubIdentityLinkCode]: AuthAccessWriteScope,
   [WS_METHODS.githubIdentityUnlink]: AuthAccessWriteScope,
   [WS_METHODS.projectCloneStart]: AuthSourceControlWriteScope,

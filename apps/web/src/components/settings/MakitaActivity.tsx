@@ -32,6 +32,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { InfoTip } from "./InfoTip";
+import { MakitaWaitingList } from "./MakitaWaiting";
 import { SettingsSection } from "./settingsLayout";
 
 /**
@@ -378,13 +379,16 @@ function ActivityBody({
         ))}
       </ToggleGroup>
       {tab === "now" ? (
-        activity.now.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Makita is not working on anything now.</p>
-        ) : (
-          <ul aria-label="Makita now" className="divide-y divide-border/50">
-            {activity.now.map(row)}
-          </ul>
-        )
+        <>
+          {activity.now.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Makita is not working on anything now.</p>
+          ) : (
+            <ul aria-label="Makita now" className="divide-y divide-border/50">
+              {activity.now.map(row)}
+            </ul>
+          )}
+          <MakitaWaitingList waiting={activity.waiting} nameOf={nameOf} />
+        </>
       ) : tab === "tasks" ? (
         activity.tasks.length === 0 ? (
           <p className="text-sm text-muted-foreground">No task yet.</p>

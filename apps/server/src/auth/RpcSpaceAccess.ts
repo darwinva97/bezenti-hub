@@ -202,6 +202,7 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.makitaAccountSet]: MAKITA_ACCOUNT,
   [WS_METHODS.makitaAccountPauseAll]: MAKITA_ACCOUNT,
   [WS_METHODS.makitaAccountResumeAll]: MAKITA_ACCOUNT,
+  [WS_METHODS.makitaAccountSetTaskLimit]: MAKITA_ACCOUNT,
   [WS_METHODS.makitaPermissionsList]: MAKITA_PERMISSIONS,
   [WS_METHODS.makitaPermissionsGrant]: MAKITA_PERMISSIONS,
   [WS_METHODS.makitaPermissionsRevoke]: MAKITA_PERMISSIONS,
@@ -214,6 +215,8 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.makitaConfigsLabels]: MAKITA_CONFIGS,
   [WS_METHODS.makitaTasksStop]: MAKITA_CONFIGS,
   [WS_METHODS.makitaTasksApprove]: MAKITA_CONFIGS,
+  // Ticket 21: `makita.use` on the named Space, then `project.create` to make a Project there.
+  [WS_METHODS.makitaReposAdd]: MAKITA_CONFIGS,
   [WS_METHODS.makitaActivity]: MAKITA_ACTIVITY,
   [WS_METHODS.makitaThreads]: MAKITA_THREADS,
   [WS_METHODS.githubIdentityGet]: GITHUB_IDENTITY,

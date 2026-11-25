@@ -718,6 +718,8 @@ describe("every door of the Hub declares its rule", () => {
       "makita.account.pauseAll",
       "makita.account.resumeAll",
       "makita.account.set",
+      // Ticket 22: the Owner's ceiling on tasks at once.
+      "makita.account.setTaskLimit",
       // Ticket 07: reads of what Makita does and spends, and of the viewer's Makita Threads.
       "makita.activity",
       "makita.configs.create",
@@ -731,6 +733,8 @@ describe("every door of the Hub declares its rule", () => {
       "makita.permissions.grant",
       "makita.permissions.list",
       "makita.permissions.revoke",
+      // Ticket 21: a repository added by name (`makita.use`, then `project.create`).
+      "makita.repos.add",
       // Ticket 11: the Owner approves a task's waiting push, `makita.approve`.
       "makita.tasks.approve",
       // Ticket 06: stop one task, `makita.pause` on its configuration.
@@ -779,9 +783,16 @@ describe("every door of the Hub declares its rule", () => {
     }
     // The tables: named under makita/ and by their migrations; removals call makita/'s functions.
     for (const entry of [
-      ["makita_account", "163_MakitaAccount"],
+      // Ticket 22: the task caps.
+      ["makita_account", "163_MakitaAccount", "174_MakitaTaskCaps"],
       ["makita_permissions", "164_MakitaPermissions"],
-      ["makita_configs", "165_MakitaConfigs", "172_MakitaTriage", "173_MakitaAutonomy"],
+      [
+        "makita_configs",
+        "165_MakitaConfigs",
+        "172_MakitaTriage",
+        "173_MakitaAutonomy",
+        "174_MakitaTaskCaps",
+      ],
       // Ticket 04: what the intake read and decided.
       ["makita_repo_cursors", "166_MakitaIntake"],
       ["makita_events", "166_MakitaIntake"],

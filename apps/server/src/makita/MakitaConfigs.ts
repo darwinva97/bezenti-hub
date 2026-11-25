@@ -10,7 +10,9 @@ import * as NodeCrypto from "node:crypto";
 import {
   AI_GATEWAY_DRIVERS,
   type AiAccountId,
+  MAKITA_CONFIG_DEFAULT_MAX_TASKS,
   MAKITA_CONFIG_MAX_PER_SPACE,
+  MAKITA_CONFIG_MAX_TASKS_LIMIT,
   MAKITA_GITHUB_HOST,
   type MakitaAiAccountOption,
   type MakitaConfig,
@@ -141,6 +143,7 @@ interface ConfigRow {
   readonly pausedReason: MakitaConfig["pausedReason"];
   /** Tickets 25–27 (`makitaAutonomy.ts`). */
   readonly autonomyJson: string;
+  readonly maxTasks: number;
 }
 
 const CONFIG_SELECT = `
@@ -153,7 +156,7 @@ const CONFIG_SELECT = `
     c.environment_id AS "environmentId", c.labels_json AS "labelsJson",
     c.paused_at AS "pausedAt", c.paused_by AS "pausedBy",
     pu.display_name AS "pausedByName", c.paused_reason AS "pausedReason",
-    c.autonomy_json AS "autonomyJson"
+    c.autonomy_json AS "autonomyJson", c.max_tasks AS "maxTasks"
   FROM makita_configs c
   LEFT JOIN users cu ON cu.user_id = c.created_by
   LEFT JOIN users pu ON pu.user_id = c.paused_by`;
@@ -177,6 +180,8 @@ interface Checked {
   readonly mayLand: boolean;
   readonly approval: MakitaConfig["approval"];
   readonly approverLogins: ReadonlyArray<string>;
+  /** Ticket 22: tasks at work at once; null keeps it (3 for a new one). */
+  readonly maxTasks: number | null;
 }
 
 export class MakitaConfigs extends Context.Service<
@@ -324,6 +329,13 @@ const checkedInput = (
     return refused(`«${baseBranch}» is not a branch name.`);
   }
   if (input.modelSelection.model.trim().length === 0) return refused("Choose a model.");
+  const maxTasks = input.maxTasks ?? null;
+  if (
+    maxTasks !== null &&
+    (!Number.isInteger(maxTasks) || maxTasks < 1 || maxTasks > MAKITA_CONFIG_MAX_TASKS_LIMIT)
+  ) {
+    return refused(`Choose from 1 to ${MAKITA_CONFIG_MAX_TASKS_LIMIT} tasks at once.`);
+  }
   return {
     _tag: "ok",
     value: {
@@ -341,6 +353,7 @@ const checkedInput = (
       approverLogins: [
         ...new Map(approverLogins.map((login) => [login.toLowerCase(), login])).values(),
       ],
+      maxTasks,
     },
   };
 };
@@ -727,6 +740,7 @@ const make = Effect.gen(function* () {
         pausedBy: row.pausedBy === null ? null : UserId.make(row.pausedBy),
         pausedByName: row.pausedByName,
         pausedReason: row.pausedReason,
+        maxTasks: row.maxTasks,
         warnings,
         canEdit: may("makita.edit"),
         canPause: row.pausedAt === null && may("makita.pause"),
@@ -965,13 +979,13 @@ const make = Effect.gen(function* () {
             INSERT INTO makita_configs (config_id, space_id, name, created_by, created_at,
               updated_at, repos_json, triggers_json, callers_mode, callers_json, strangers,
               model_selection_json, capability, may_land, approval, approvers_json, base_branch,
-              environment_id, autonomy_json)
+              environment_id, autonomy_json, max_tasks)
             VALUES (${configId}, ${input.spaceId}, ${value.name}, ${input.actorUserId}, ${at},
               ${at}, ${jsonOf(value.repos)},
               ${jsonOf(value.triggers)}, ${value.callersMode},
               ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, ${value.capability},
               ${value.mayLand ? 1 : 0}, ${value.approval}, ${jsonOf(approvers)}, ${value.baseBranch},
-              NULL, ${autonomy.json})
+              NULL, ${autonomy.json}, ${value.maxTasks ?? MAKITA_CONFIG_DEFAULT_MAX_TASKS})
           `;
           yield* sql`
             UPDATE makita_configs SET labels_json = ${jsonOf(labels.labels)}
@@ -1069,6 +1083,7 @@ const make = Effect.gen(function* () {
       approval: found.row.approval,
       approvers: found.row.approversJson,
       labels: found.row.labelsJson,
+      max_tasks: found.row.maxTasks,
     };
     const after = {
       name: value.name,
@@ -1084,6 +1099,8 @@ const make = Effect.gen(function* () {
       approval: value.approval,
       approvers: jsonOf(approvers),
       labels: jsonOf(labels.labels),
+      // Ticket 22: absent from the input keeps it.
+      max_tasks: value.maxTasks ?? found.row.maxTasks,
     };
     const at = DateTime.formatIso(yield* DateTime.now);
     // Tickets 25–27: named in `changed` by option (`new_issues`, `close_issues`, …).
@@ -1112,6 +1129,7 @@ const make = Effect.gen(function* () {
                 capability = ${after.capability}, may_land = ${after.may_land ? 1 : 0},
                 approval = ${after.approval},
                 approvers_json = ${after.approvers}, autonomy_json = ${autonomy.json},
+                max_tasks = ${after.max_tasks},
                 updated_at = ${at}
               WHERE config_id = ${input.configId} AND deleted_at IS NULL
               RETURNING config_id AS id

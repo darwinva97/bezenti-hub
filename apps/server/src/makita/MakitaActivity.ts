@@ -38,6 +38,7 @@ import { periodOf } from "../ai/GrantCaps.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { approvalOf } from "./makitaApprovers.ts";
 import { labelsOf } from "./makitaLabels.ts";
+import { waitingOf } from "./makitaQueue.ts";
 import { permittedIn } from "./makitaRows.ts";
 
 const NOT_YOURS =
@@ -75,6 +76,7 @@ interface ConfigRow {
   readonly createdBy: string;
   readonly pausedAt: string | null;
   readonly pausedReason: string | null;
+  readonly maxTasks: number;
 }
 
 interface TaskRow {
@@ -138,7 +140,7 @@ const make = Effect.gen(function* () {
   const configsWhere = (where: ReturnType<typeof sql.and>) =>
     sql<ConfigRow>`
       SELECT config_id AS "configId", space_id AS "spaceId", name, created_by AS "createdBy",
-        paused_at AS "pausedAt", paused_reason AS "pausedReason"
+        paused_at AS "pausedAt", paused_reason AS "pausedReason", max_tasks AS "maxTasks"
       FROM makita_configs WHERE ${where}
       ORDER BY space_id, created_at, config_id
     `.pipe(Effect.catch(storage("read the configurations")));
@@ -283,8 +285,13 @@ const make = Effect.gen(function* () {
         canStop: yield* mayAct(row),
         // Ticket 11: «Approve» on a waiting push, the Owner's (`makita.approve`).
         canApprove: yield* mayAct(row, "makita.approve"),
+        maxTasks: row.maxTasks,
       });
     }
+    // Ticket 22: what waits for a slot, each placed in its own configuration's line.
+    const waiting = yield* waitingOf(sql, configIds).pipe(
+      Effect.catch(storage("read what waits for Makita")),
+    );
 
     const inConfigs = configIds.length === 0 ? sql`1 = 0` : sql.in("config_id", configIds);
     const live = yield* sql<TaskRow>`
@@ -389,6 +396,7 @@ const make = Effect.gen(function* () {
       configs,
       everyone,
       now: nowTasks,
+      waiting,
       tasks,
       events,
       byRepository: rowsOf(byRepository),

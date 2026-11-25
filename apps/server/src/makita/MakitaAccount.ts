@@ -6,6 +6,7 @@
  */
 import {
   MAKITA_GITHUB_HOST,
+  MAKITA_HUB_MAX_TASKS_LIMIT,
   MAKITA_TOKEN_EXPIRY_WARNING_DAYS,
   type MakitaAccountGetInput,
   type MakitaAccountGetResult,
@@ -14,6 +15,7 @@ import {
   type MakitaAccountView,
   type MakitaAccountWarning,
   MakitaError,
+  type MakitaTaskLimitInput,
   type MakitaTokenKind,
   UserId,
 } from "@t3tools/contracts";
@@ -84,6 +86,8 @@ interface AccountRow {
   readonly updatedAt: string;
   /** Repositories the poller cannot read (ticket 04). */
   readonly unreachableRepos: number;
+  /** Ticket 22: tasks at work at once across the Hub. */
+  readonly maxTasks: number;
 }
 
 export class MakitaAccount extends Context.Service<
@@ -110,6 +114,13 @@ export class MakitaAccount extends Context.Service<
     ) => Effect.Effect<MakitaAccountGetResult, MakitaError>;
     readonly pauseAllForSession: Effect.Effect<MakitaAccountGetResult, MakitaError>;
     readonly resumeAllForSession: Effect.Effect<MakitaAccountGetResult, MakitaError>;
+    /** Ticket 22: the Owner's ceiling on Makita tasks at work at once across the Hub. */
+    readonly setTaskLimit: (
+      input: MakitaTaskLimitInput & { readonly actorUserId: UserId },
+    ) => Effect.Effect<MakitaAccountGetResult, MakitaError>;
+    readonly setTaskLimitForSession: (
+      input: MakitaTaskLimitInput,
+    ) => Effect.Effect<MakitaAccountGetResult, MakitaError>;
   }
 >()("t3/makita/MakitaAccount") {}
 
@@ -159,7 +170,7 @@ const make = Effect.gen(function* () {
       a.token_hint AS hint, a.scopes_json AS "scopesJson", a.token_expires_at AS "expiresAt",
       a.status, a.checked_at AS "checkedAt", a.global_paused_at AS "globalPausedAt",
       a.global_paused_by AS "globalPausedBy", u.display_name AS "globalPausedByName",
-      a.updated_at AS "updatedAt",
+      a.updated_at AS "updatedAt", a.max_tasks AS "maxTasks",
       (SELECT COUNT(*) FROM makita_repo_cursors WHERE unreachable_since IS NOT NULL)
         AS "unreachableRepos"
     FROM makita_account a
@@ -210,6 +221,7 @@ const make = Effect.gen(function* () {
       globalPausedByName: row.globalPausedByName,
       updatedAt: row.updatedAt,
       warnings,
+      maxTasks: row.maxTasks,
     };
   };
 
@@ -391,6 +403,48 @@ const make = Effect.gen(function* () {
     return actor.userId;
   });
 
+  /** Ticket 22: the ceiling across the Hub, 1–100; audited when it changes. */
+  const setTaskLimit = Effect.fn("MakitaAccount.setTaskLimit")(function* (
+    input: MakitaTaskLimitInput & { readonly actorUserId: UserId },
+  ) {
+    yield* ownerOnly(input.actorUserId);
+    const next = input.maxTasks;
+    if (!Number.isInteger(next) || next < 1 || next > MAKITA_HUB_MAX_TASKS_LIMIT) {
+      return yield* fail(
+        "invalid",
+        `Choose from 1 to ${MAKITA_HUB_MAX_TASKS_LIMIT} tasks at once across the Hub.`,
+      );
+    }
+    const at = DateTime.formatIso(yield* DateTime.now);
+    const outcome = yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const [row] = yield* sql<{ readonly login: string; readonly maxTasks: number }>`
+            SELECT login, max_tasks AS "maxTasks" FROM makita_account
+            WHERE account_id = ${ACCOUNT_ID}
+          `;
+          if (row === undefined) return "none" as const;
+          if (row.maxTasks === next) return "unchanged" as const;
+          yield* sql`
+            UPDATE makita_account SET max_tasks = ${next}, updated_at = ${at}
+            WHERE account_id = ${ACCOUNT_ID}
+          `;
+          yield* audit.record({
+            actor: AuditLog.userActor(input.actorUserId),
+            action: "makita.account.limit",
+            target: { kind: "makita_account", id: ACCOUNT_ID, name: row.login },
+            detail: { from: row.maxTasks, to: next },
+          });
+          return "changed" as const;
+        }),
+      )
+      .pipe(Effect.catch(storage("change how many tasks run at once")));
+    if (outcome === "none") {
+      return yield* fail("invalid", "Register Makita's GitHub account first.");
+    }
+    return yield* answer;
+  });
+
   const pauseAll = (input: { readonly actorUserId: UserId }) => setPaused(input.actorUserId, true);
   const resumeAll = (input: { readonly actorUserId: UserId }) =>
     setPaused(input.actorUserId, false);
@@ -416,6 +470,12 @@ const make = Effect.gen(function* () {
     resumeAllForSession: sessionUser.pipe(
       Effect.flatMap((actorUserId) => resumeAll({ actorUserId })),
     ),
+    setTaskLimit,
+    setTaskLimitForSession: Effect.fn("MakitaAccount.setTaskLimitAsSession")(function* (
+      input: MakitaTaskLimitInput,
+    ) {
+      return yield* setTaskLimit({ ...input, actorUserId: yield* sessionUser });
+    }),
   });
 });
 

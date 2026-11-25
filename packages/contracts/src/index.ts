@@ -94,6 +94,7 @@ export * from "./accessKeys.ts";
 export * from "./makita.ts";
 export * from "./makitaActivity.ts";
 export * from "./makitaAutonomy.ts";
+export * from "./makitaRepoAdd.ts";
 export * from "./githubIdentity.ts";
 export * from "./aiGatewaySession.ts";
 export * from "./aiAccounts.ts";

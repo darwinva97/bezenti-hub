@@ -143,6 +143,7 @@ import * as MakitaAccount from "./makita/MakitaAccount.ts";
 import * as GitHubIdentities from "./makita/GitHubIdentities.ts";
 import * as MakitaActivity from "./makita/MakitaActivity.ts";
 import * as MakitaConfigs from "./makita/MakitaConfigs.ts";
+import * as MakitaRepoAdd from "./makita/MakitaRepoAdd.ts";
 import * as MakitaPermissions from "./makita/MakitaPermissions.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
@@ -902,6 +903,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(MakitaAccount.MakitaAccount)({}),
   Layer.mock(MakitaPermissions.MakitaPermissions)({}),
   Layer.mock(MakitaConfigs.MakitaConfigs)({}),
+  Layer.mock(MakitaRepoAdd.MakitaRepoAdd)({}),
   Layer.mock(MakitaActivity.MakitaActivity)({}),
   Layer.mock(GitHubIdentities.GitHubIdentities)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),

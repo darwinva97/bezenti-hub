@@ -90,8 +90,26 @@ export const MakitaActivityConfig = Schema.Struct({
   canStop: Schema.Boolean,
   /** Ticket 11: whether the viewer may approve its waiting pushes from the Hub (the Owner). */
   canApprove: Schema.Boolean,
+  /** Ticket 22: its tasks at work at once. */
+  maxTasks: Schema.Number,
 });
 export type MakitaActivityConfig = typeof MakitaActivityConfig.Type;
+
+/**
+ * Ticket 22: an issue waiting for a free slot of its configuration, oldest first. `position` is
+ * its place in that configuration's line only (other Spaces' work is never counted here).
+ */
+export const MakitaWaitingItem = Schema.Struct({
+  configId: Schema.String,
+  repo: Schema.String,
+  number: NonNegativeInt,
+  kind: MakitaItemKind,
+  /** The GitHub login that asked (public on GitHub). */
+  actorLogin: Schema.NullOr(Schema.String),
+  since: Schema.String,
+  position: NonNegativeInt,
+});
+export type MakitaWaitingItem = typeof MakitaWaitingItem.Type;
 
 export const MakitaActivityTask = Schema.Struct({
   taskId: Schema.String,
@@ -177,6 +195,8 @@ export const MakitaActivityResult = Schema.Struct({
   everyone: Schema.Boolean,
   /** Tasks at work now: running, waiting for CI, or with a push waiting for an approval. */
   now: Schema.Array(MakitaActivityTask),
+  /** Ticket 22: issues waiting for a free slot, in the order they will start. */
+  waiting: Schema.Array(MakitaWaitingItem),
   /** The most recent tasks, newest first. */
   tasks: Schema.Array(MakitaActivityTask),
   /** The most recent events and what became of each, newest first. */

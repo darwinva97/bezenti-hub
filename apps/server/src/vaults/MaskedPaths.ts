@@ -208,6 +208,8 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "makita.configs.labels": none("public label names of the chosen Projects' GitHub repositories"),
   "makita.tasks.stop": none("whether a Makita task was stopped"),
   "makita.tasks.approve": none("whether a Makita task's waiting push was approved"),
+  "makita.repos.add": none("the Project of a repository added by name: its title and owner/name"),
+  "makita.account.setTaskLimit": none("Makita's account, with its new ceiling"),
   "makita.activity": none(
     "Makita's tasks, events and usage counts: repositories, GitHub logins, outcomes, never issue text",
   ),

@@ -60,6 +60,7 @@ import { labelsOf } from "./makitaLabels.ts";
 import { MakitaLanding } from "./MakitaLanding.ts";
 import { LAND_INSTRUCTIONS, landingNote, MERGE_DETAIL } from "./makitaLandingRules.ts";
 import { MakitaPushes } from "./MakitaPushes.ts";
+import { queueGate } from "./makitaQueue.ts";
 import { pauseCreatorConfigsWithin, permittedIn, stopTasksWithin } from "./makitaRows.ts";
 import { liveTasksIn } from "./MakitaTriage.ts";
 import { lookAroundText, reportRefusal } from "./makitaTriageText.ts";
@@ -80,6 +81,9 @@ const MAX_COMMENT_IN_PROMPT = 4_000;
 const GIVE_UP_MS = 30 * 60 * 1_000;
 const FRAME_TAG = "github-data";
 const LIVE_STATES = ["running", "waiting-ci", "waiting-reply"] as const;
+/** Queued events handled per pass, and how many are read to find them past those waiting. */
+const PER_PASS = 20;
+const QUEUE_READ = 500;
 /** Text with the shape of a token never goes out, masked or not. */
 const TOKEN_SHAPE =
   /(?:t3gk_|t3ak_|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/u;
@@ -1038,11 +1042,17 @@ const make = Effect.gen(function* () {
         seen_at AS "seenAt", detail
       FROM makita_events WHERE outcome = 'queued' AND config_id IS NOT NULL
         AND (detail IS NULL OR detail <> ${MERGE_DETAIL})
-      ORDER BY seen_at, rowid LIMIT 20
+      ORDER BY seen_at, rowid LIMIT ${QUEUE_READ}
     `;
+    // Ticket 22: a new task waits while its configuration or the Hub is full; nothing else does.
+    const gate = yield* queueGate(sql);
+    let handled = 0;
     for (const row of rows) {
       // Ticket 10: its worktree is being made off the tick; nothing to do for it yet.
       if (preparing.has(row.eventKey)) continue;
+      if (gate.admit(row.eventKey) === "wait") continue;
+      if (handled >= PER_PASS) break;
+      handled += 1;
       const guarded = <A, E>(work: Effect.Effect<A, E>) =>
         work.pipe(
           Effect.asVoid,

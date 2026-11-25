@@ -662,6 +662,10 @@ it.effect(
         "makita.github.reopen_issue",
         // makita/MakitaCleanup.test.ts (Makita ticket 27: idle or bad-work pull requests closed)
         "makita.github.close_pull_request",
+        // makita/MakitaRepoAdd.test.ts (Makita ticket 21: a repository added by name)
+        "makita.repo.add",
+        // makita/MakitaQueue.test.ts (Makita ticket 22: the Hub-wide ceiling)
+        "makita.account.limit",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

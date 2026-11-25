@@ -6,12 +6,15 @@ import {
   type AiAccountId,
   type EnvironmentId,
   MAKITA_AUTONOMY_OFF,
+  MAKITA_CONFIG_DEFAULT_MAX_TASKS,
+  MAKITA_CONFIG_MAX_TASKS_LIMIT,
   MAKITA_DEFAULT_LABEL,
   type MakitaConfig,
   type MakitaConfigInput,
   type MakitaConfigSaveResult,
   type MakitaConfigsListResult,
   type MakitaActivityInput,
+  type MakitaProjectRepo,
   type MakitaUsage,
   type ProjectId,
   ProviderInstanceId,
@@ -53,6 +56,7 @@ import { InfoTip } from "./InfoTip";
 import { MakitaActivityDialog, makitaUsageText, useMakitaActivity } from "./MakitaActivity";
 import { labelNamesOf, MakitaLabelsField } from "./MakitaLabelsField";
 import { autonomyText, MakitaAutonomyFields } from "./MakitaAutonomyFields";
+import { MakitaRepoAddField } from "./MakitaRepoAdd";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useSettingsSpace } from "./useSettingsSpace";
 
@@ -421,7 +425,7 @@ function ConfigRow(props: {
           <span className="text-xs text-muted-foreground">{`On its own: ${autonomyText(config.autonomy)}`}</span>
         )}
         <span className="text-xs text-muted-foreground">
-          {`${config.aiAccountName ?? "An AI account that no longer exists"} · ${config.modelSelection.model}${config.baseBranch === null ? "" : ` · base ${config.baseBranch}`} · Space Sandbox`}
+          {`${config.aiAccountName ?? "An AI account that no longer exists"} · ${config.modelSelection.model}${config.baseBranch === null ? "" : ` · base ${config.baseBranch}`} · Space Sandbox · up to ${config.maxTasks} at once`}
         </span>
         <span className="text-xs text-muted-foreground">
           {`By ${config.createdByName ?? config.createdBy}`}
@@ -549,6 +553,14 @@ function ConfigDialog(props: {
   const [chosen, setChosen] = useState<ReadonlyArray<ProjectId>>(
     config !== null && "projects" in config.repos ? config.repos.projects : [],
   );
+  // Ticket 21: Projects made or found by «Add» while the dialog is open.
+  const [added, setAdded] = useState<ReadonlyArray<MakitaProjectRepo>>([]);
+  const projects = [
+    ...options.projects,
+    ...added.filter(
+      (project) => !options.projects.some((known) => known.projectId === project.projectId),
+    ),
+  ];
   const [label, setLabel] = useState(
     config === null ? MAKITA_DEFAULT_LABEL : (config.triggers.label ?? ""),
   );
@@ -583,6 +595,15 @@ function ConfigDialog(props: {
   const [labels, setLabels] = useState(config?.labels.join(", ") ?? "");
   // Tickets 25–27: what it does on its own, every option off until ticked.
   const [autonomy, setAutonomy] = useState(config?.autonomy ?? MAKITA_AUTONOMY_OFF);
+  // Ticket 22: tasks at work at once; more wait in line.
+  const [maxTasks, setMaxTasks] = useState(
+    String(config?.maxTasks ?? MAKITA_CONFIG_DEFAULT_MAX_TASKS),
+  );
+  const maxTasksValue = Number(maxTasks);
+  const maxTasksValid =
+    Number.isInteger(maxTasksValue) &&
+    maxTasksValue >= 1 &&
+    maxTasksValue <= MAKITA_CONFIG_MAX_TASKS_LIMIT;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -599,6 +620,7 @@ function ConfigDialog(props: {
     (callersMode !== "list" || logins.length > 0) &&
     account !== null &&
     model.trim().length > 0 &&
+    maxTasksValid &&
     (capability !== "push" || !mayLand || landConfirmed);
   const landsOn = baseBranch.trim().length === 0 ? "the default branch" : baseBranch.trim();
 
@@ -645,6 +667,7 @@ function ConfigDialog(props: {
                   environmentId: null,
                   labels: labelNamesOf(labels),
                   autonomy,
+                  maxTasks: maxTasksValue,
                 },
                 config?.configId ?? null,
               )
@@ -692,10 +715,10 @@ function ConfigDialog(props: {
                   </p>
                 ) : (
                   <ul className="flex flex-col gap-1 font-normal" aria-label="Projects">
-                    {options.projects.length === 0 ? (
+                    {projects.length === 0 ? (
                       <li className="text-muted-foreground">No Project in this Space.</li>
                     ) : null}
-                    {options.projects.map((project) => {
+                    {projects.map((project) => {
                       const usable = project.state === "ok";
                       return (
                         <li key={project.projectId}>
@@ -726,6 +749,24 @@ function ConfigDialog(props: {
                     })}
                   </ul>
                 )}
+                <MakitaRepoAddField
+                  environmentId={props.environmentId}
+                  spaceId={props.spaceId}
+                  disabled={pending}
+                  onAdded={(project) => {
+                    setAdded((current) => [
+                      ...current.filter((entry) => entry.projectId !== project.projectId),
+                      project,
+                    ]);
+                    if (project.state === "ok" && !allRepos) {
+                      setChosen((current) =>
+                        current.includes(project.projectId)
+                          ? current
+                          : [...current, project.projectId],
+                      );
+                    }
+                  }}
+                />
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="flex flex-col gap-1 text-xs font-medium">
@@ -1000,6 +1041,26 @@ function ConfigDialog(props: {
                 disabled={pending}
                 onChange={setAutonomy}
               />
+              <div className="flex flex-col gap-1 text-xs">
+                <label className="flex items-center gap-2 font-medium">
+                  At most
+                  <Input
+                    aria-label="Tasks at once"
+                    className="w-16"
+                    nativeInput
+                    type="number"
+                    min={1}
+                    max={MAKITA_CONFIG_MAX_TASKS_LIMIT}
+                    disabled={pending}
+                    value={maxTasks}
+                    onChange={(event) => setMaxTasks(event.currentTarget.value)}
+                  />
+                  tasks at once
+                </label>
+                <span className="text-muted-foreground">
+                  {`From 1 to ${MAKITA_CONFIG_MAX_TASKS_LIMIT}. More issues wait in line and start as tasks end; a reply on an issue Makita already works on never waits. The Owner may set a lower limit for the whole Hub.`}
+                </span>
+              </div>
               <div className="flex flex-col gap-1 text-xs">
                 <span className="font-medium">Where it works</span>
                 <span>Space Sandbox (recommended)</span>

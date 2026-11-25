@@ -78,6 +78,7 @@ import {
   MakitaTaskRef,
   MakitaTaskStopResult,
   MakitaTaskApproveResult,
+  MakitaTaskLimitInput,
 } from "./makita.ts";
 import {
   MakitaActivityInput,
@@ -85,6 +86,7 @@ import {
   MakitaThreadsInput,
   MakitaThreadsResult,
 } from "./makitaActivity.ts";
+import { MakitaRepoAddInput, MakitaRepoAddResult } from "./makitaRepoAdd.ts";
 import {
   GitHubIdentityUnlinkInput,
   GitHubIdentityView,
@@ -816,6 +818,10 @@ export const WS_METHODS = {
   makitaTasksStop: "makita.tasks.stop",
   // Makita ticket 11: the Owner approves a task's waiting push.
   makitaTasksApprove: "makita.tasks.approve",
+  // Makita ticket 21: a repository added to a Space by name, its Project made or reused.
+  makitaReposAdd: "makita.repos.add",
+  // Makita ticket 22: the Owner's ceiling on Makita tasks at once across the Hub.
+  makitaAccountSetTaskLimit: "makita.account.setTaskLimit",
   // Makita ticket 07: what Makita does and spends; the Makita tasks of the Threads one sees.
   makitaActivity: "makita.activity",
   makitaThreads: "makita.threads",
@@ -1610,6 +1616,16 @@ const WsMakitaTasksStopRpc = Rpc.make(WS_METHODS.makitaTasksStop, {
 const WsMakitaTasksApproveRpc = Rpc.make(WS_METHODS.makitaTasksApprove, {
   payload: MakitaTaskRef,
   success: MakitaTaskApproveResult,
+  error: MakitaErrors,
+});
+const WsMakitaReposAddRpc = Rpc.make(WS_METHODS.makitaReposAdd, {
+  payload: MakitaRepoAddInput,
+  success: MakitaRepoAddResult,
+  error: MakitaErrors,
+});
+const WsMakitaAccountSetTaskLimitRpc = Rpc.make(WS_METHODS.makitaAccountSetTaskLimit, {
+  payload: MakitaTaskLimitInput,
+  success: MakitaAccountGetResult,
   error: MakitaErrors,
 });
 const WsMakitaActivityRpc = Rpc.make(WS_METHODS.makitaActivity, {
@@ -2776,6 +2792,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsMakitaConfigsLabelsRpc,
   WsMakitaTasksStopRpc,
   WsMakitaTasksApproveRpc,
+  WsMakitaReposAddRpc,
+  WsMakitaAccountSetTaskLimitRpc,
   WsMakitaActivityRpc,
   WsMakitaThreadsRpc,
   WsGitHubIdentityGetRpc,

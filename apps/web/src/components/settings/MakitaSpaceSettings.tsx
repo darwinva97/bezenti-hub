@@ -10,6 +10,8 @@ import {
   type MakitaConfigInput,
   type MakitaConfigSaveResult,
   type MakitaConfigsListResult,
+  type MakitaActivityInput,
+  type MakitaUsage,
   type ProjectId,
   ProviderInstanceId,
   type SpaceId,
@@ -47,6 +49,7 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { InfoTip } from "./InfoTip";
+import { MakitaActivityDialog, makitaUsageText, useMakitaActivity } from "./MakitaActivity";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useSettingsSpace } from "./useSettingsSpace";
 
@@ -125,6 +128,15 @@ function MakitaConfigsPanel({
   const [editing, setEditing] = useState<MakitaConfig | "new" | null>(null);
   const [deleting, setDeleting] = useState<MakitaConfig | null>(null);
   const [pending, setPending] = useState(false);
+  // Makita ticket 07: today's usage on each row, and the activity of one or all of them.
+  const activity = useMakitaActivity(hidden ? null : environmentId, { spaceId });
+  const todayOf = new Map(
+    (activity.data?.configs ?? []).map((entry) => [entry.configId, entry.usage?.today ?? null]),
+  );
+  const [showing, setShowing] = useState<{
+    readonly input: MakitaActivityInput;
+    readonly title: string;
+  } | null>(null);
 
   const showListed = (result: ListAnswer) => {
     if (result._tag === "Success") {
@@ -179,12 +191,25 @@ function MakitaConfigsPanel({
         </InfoTip>
       }
       headerAction={
-        options?.canCreate === true ? (
-          <Button size="xs" onClick={() => setEditing("new")}>
-            <PlusIcon />
-            New configuration
-          </Button>
-        ) : null
+        <div className="flex items-center gap-1">
+          {listed === null || listed.configs.length === 0 ? null : (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() =>
+                setShowing({ input: { spaceId }, title: "Every configuration in this Space." })
+              }
+            >
+              Activity
+            </Button>
+          )}
+          {options?.canCreate === true ? (
+            <Button size="xs" onClick={() => setEditing("new")}>
+              <PlusIcon />
+              New configuration
+            </Button>
+          ) : null}
+        </div>
       }
     >
       {error === null ? null : (
@@ -225,6 +250,10 @@ function MakitaConfigsPanel({
                 <ConfigRow
                   key={config.configId}
                   config={config}
+                  today={todayOf.get(config.configId) ?? null}
+                  onActivity={() =>
+                    setShowing({ input: { configId: config.configId }, title: config.name })
+                  }
                   disabled={pending}
                   onEdit={
                     config.canEdit && options?.canCreate === true ? () => setEditing(config) : null
@@ -245,6 +274,14 @@ function MakitaConfigsPanel({
             </ul>
           )}
         </>
+      )}
+      {showing === null ? null : (
+        <MakitaActivityDialog
+          environmentId={environmentId}
+          input={showing.input}
+          title={showing.title}
+          onClose={() => setShowing(null)}
+        />
       )}
       {editing === null || options === null ? null : (
         <ConfigDialog
@@ -316,6 +353,9 @@ const stripSpace = ({ spaceId: _spaceId, ...rest }: MakitaConfigInput) => rest;
 /** One configuration, dense: its name and state; repositories; whom it answers; what it spends. */
 function ConfigRow(props: {
   readonly config: MakitaConfig;
+  /** Today's usage; null while unknown or not the viewer's to see. */
+  readonly today: MakitaUsage | null;
+  readonly onActivity: () => void;
   readonly disabled: boolean;
   readonly onEdit: (() => void) | null;
   readonly onPause: (() => void) | null;
@@ -323,11 +363,6 @@ function ConfigRow(props: {
   readonly onDelete: (() => void) | null;
 }) {
   const { config } = props;
-  const hasMenu =
-    props.onEdit !== null ||
-    props.onPause !== null ||
-    props.onResume !== null ||
-    props.onDelete !== null;
   const repos = config.projects
     .filter((project) => project.repo !== null)
     .map((project) => project.repo);
@@ -365,6 +400,7 @@ function ConfigRow(props: {
         </span>
         <span className="text-xs text-muted-foreground">
           {`By ${config.createdByName ?? config.createdBy}`}
+          {props.today === null ? "" : ` · Today: ${makitaUsageText(props.today)}`}
           {config.pausedAt === null
             ? ""
             : ` · ${config.pausedReason === null ? "paused" : PAUSE_REASONS[config.pausedReason]}${config.pausedByName === null ? "" : ` (${config.pausedByName}`}${config.pausedByName === null ? "" : `, ${formatWhen(config.pausedAt)})`}`}
@@ -375,65 +411,71 @@ function ConfigRow(props: {
           </span>
         ))}
       </div>
-      {hasMenu ? (
-        <div className="flex shrink-0 items-center gap-1">
-          {props.onPause === null ? null : (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={props.disabled}
-              aria-label={`Stop ${config.name} now`}
-              title="Stops its running work too. Makita writes nothing on GitHub about it."
-              onClick={props.onPause}
+      <div className="flex shrink-0 items-center gap-1">
+        <Button
+          size="xs"
+          variant="ghost"
+          aria-label={`Activity of ${config.name}`}
+          onClick={props.onActivity}
+        >
+          Activity
+        </Button>
+        {props.onPause === null ? null : (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={props.disabled}
+            aria-label={`Stop ${config.name} now`}
+            title="Stops its running work too. Makita writes nothing on GitHub about it."
+            onClick={props.onPause}
+          >
+            Stop now
+          </Button>
+        )}
+        {props.onResume === null ? null : (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={props.disabled}
+            aria-label={`Resume ${config.name}`}
+            onClick={props.onResume}
+          >
+            Resume
+          </Button>
+        )}
+        {props.onEdit === null && props.onDelete === null ? null : (
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button
+                  aria-label={`Actions for ${config.name}`}
+                  size="icon-xs"
+                  type="button"
+                  variant="ghost"
+                />
+              }
             >
-              Stop now
-            </Button>
-          )}
-          {props.onResume === null ? null : (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={props.disabled}
-              aria-label={`Resume ${config.name}`}
-              onClick={props.onResume}
-            >
-              Resume
-            </Button>
-          )}
-          {props.onEdit === null && props.onDelete === null ? null : (
-            <Menu>
-              <MenuTrigger
-                render={
-                  <Button
-                    aria-label={`Actions for ${config.name}`}
-                    size="icon-xs"
-                    type="button"
-                    variant="ghost"
-                  />
-                }
-              >
-                <EllipsisIcon />
-              </MenuTrigger>
-              <MenuPopup align="end" sideOffset={6}>
-                {props.onEdit === null ? null : (
-                  <MenuItem aria-label={`Edit ${config.name}`} onClick={props.onEdit}>
-                    Edit…
-                  </MenuItem>
-                )}
-                {props.onDelete === null ? null : (
-                  <MenuItem
-                    aria-label={`Delete ${config.name}`}
-                    variant="destructive"
-                    onClick={props.onDelete}
-                  >
-                    Delete…
-                  </MenuItem>
-                )}
-              </MenuPopup>
-            </Menu>
-          )}
-        </div>
-      ) : null}
+              <EllipsisIcon />
+            </MenuTrigger>
+            <MenuPopup align="end" sideOffset={6}>
+              {props.onEdit === null ? null : (
+                <MenuItem aria-label={`Edit ${config.name}`} onClick={props.onEdit}>
+                  Edit…
+                </MenuItem>
+              )}
+              {props.onDelete === null ? null : (
+                <MenuItem
+                  aria-label={`Delete ${config.name}`}
+                  variant="destructive"
+                  onClick={props.onDelete}
+                >
+                  Delete…
+                </MenuItem>
+              )}
+            </MenuPopup>
+          </Menu>
+        )}
+      </div>
     </li>
   );
 }

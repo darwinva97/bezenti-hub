@@ -8,6 +8,7 @@ import {
 import type { ThreadAiAccountLabel } from "@t3tools/client-runtime/ai-account-picker";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { ThreadTab } from "@t3tools/client-runtime/thread-tabs";
+import { MakitaThreadBadge } from "./MakitaThreadBadge";
 import { ThreadMoveBadge } from "./MoveThreadDialog";
 import { ThreadTabStrip } from "./ThreadTabStrip";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
@@ -388,6 +389,7 @@ export const ChatHeader = memo(function ChatHeader({
   );
   const statusBadges = (
     <>
+      {renamingTitle === null ? <MakitaThreadBadge threadId={activeThreadId} /> : null}
       {renamingTitle === null && activeEnvironment?.needsEnvironment ? (
         <Tooltip>
           <TooltipTrigger

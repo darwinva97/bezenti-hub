@@ -12,8 +12,9 @@ Makita is the Hub's GitHub bot teammate: a normal GitHub account whose token the
 | `MakitaConfigs.ts`     | `makita_configs`                                         | A Space's configurations (repositories from each Project's checkout, callers by numeric id, a gateway AI account).                        |
 | `MakitaIntake.ts`      | `makita_repo_cursors`, `makita_events`                   | The poller (ticket 04).                                                                                                                   |
 | `MakitaTasks.ts`       | `makita_tasks`                                           | Tasks and their Threads, and the agent's GitHub writes (ticket 05).                                                                       |
-| `makitaRows.ts`        | shared reads                                             | `permittedIn`, `pauseCreatorConfigsWithin`, `stopTasksWithin`, `makitaTaskOfThread` (the seam other modules read).                        |
+| `makitaRows.ts`        | shared reads                                             | `permittedIn`, `pauseCreatorConfigsWithin`, `stopTasksWithin`, `makitaTaskOfThread` (the seam other modules read), `configNames`.         |
 | `MakitaStops.ts`       | nothing (reads `makita_tasks`)                           | Interrupts the turn of each stopped task (ticket 06).                                                                                     |
+| `MakitaActivity.ts`    | nothing (reads)                                          | `makita.activity` and `makita.threads` (ticket 07): what Makita does and spends.                                                          |
 
 Only `makita/` names these tables (`DoorRules.test.ts` checks it). Other modules ask `makitaRows.makitaTaskOfThread`.
 
@@ -53,6 +54,16 @@ The Scheduler runs `makita-intake` every tick: `MakitaIntake.pollDue`, then `Mak
 - **Its account.** `AiAccountChoice.settle` refuses, on a Makita Thread, a model selection whose provider instance or AI account differs from the one the Thread has, and any delegated task from it. A creator therefore cannot move a Makita Thread to a direct account and get out of the pause and the usage attribution.
 - **Resuming** replays nothing. Stopped tasks stay stopped and the next trigger makes a new task. Events that came while a configuration was paused are `ignored-paused`. While Makita is stopped no cursor is kept, so each repository starts from now.
 - **GitHub** hears nothing about a stop.
+
+## Usage and activity (ticket 07)
+
+Makita has no token limits, so its use is always visible.
+
+- **Attribution.** `AiGatewayKeys.authorize` reads `makitaTaskOfThread` for a Thread key and puts `makitaConfigId` on the caller. `AiUsage` writes it to `ai_usage.makita_config_id` and to `ai_usage_daily`, where it is part of the key (migration 169). `user_id` stays the creator's: the tokens count on the creator and on the configuration. Until the usage log writes a request, `AiGatewayActivity` holds it under `makita-config:<id>` and `makita-thread:<threadId>`, so «Now» includes it.
+- **Usage screen.** `AiUsage.summary` rows carry `makitaConfigId`, and the labels name the configuration, shown as «Makita: <name>» beside Users and access keys. Which rows a session sees does not change. The name goes only to the Owner, to whoever reads that Space's usage and to the creator; on a row a lender sees through a Grant, the configuration is left out.
+- **`makita.activity {configId | spaceId}`.** A person's own session only. `makita.view` on the configuration's Space; another Space's configuration answers not-found, another Space by id forbidden. Without either it is the Owner's view of every configuration. The answer has the configurations (usage today, this week and this month), «Now», recent tasks, recent events with their outcome and detail, and usage per repository and per caller. Usage is null except for the creator, whoever reads the Space's AI usage, and the Owner. A task's Thread id is given only if its Space is one the viewer sees. The numbers come from `AiUsage.makitaUsage`, which reads the usage tables; Makita's tables are read in `makita/`.
+- **`makita.threads {}`.** The Makita tasks of the Threads the viewer may see, for the Thread header («Makita · repo#n · asked by @caller», linked to the issue) and the Thread list's «Makita» filter.
+- **Web.** Space settings → Makita shows today's tokens on each configuration and «Activity». Platform → Makita shows the Hub-wide activity next to «Stop all Makita work».
 
 ## What other tickets read
 

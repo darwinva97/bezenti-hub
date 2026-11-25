@@ -59,6 +59,9 @@ export function formatTokens(count: number): string {
 export function groupUsage(summary: AiUsageSummary, by: UsageGrouping): ReadonlyArray<UsageGroup> {
   const users = new Map(summary.labels.users.map((user) => [user.id, user.name]));
   const accessKeys = new Map((summary.labels.accessKeys ?? []).map((key) => [key.id, key.label]));
+  const makitaConfigs = new Map(
+    (summary.labels.makitaConfigs ?? []).map((config) => [config.id, config.name]),
+  );
   const spaces = new Map(summary.labels.spaces.map((space) => [space.id, space.name]));
   const accounts = new Map(summary.labels.accounts.map((account) => [account.id, account]));
   const groups = new Map<string, UsageGroup>();
@@ -67,13 +70,19 @@ export function groupUsage(summary: AiUsageSummary, by: UsageGrouping): Readonly
       by === "day"
         ? [row.day, row.day]
         : by === "user"
-          ? row.userId === null
-            ? // An access key's requests are its Space's: the key stands beside the Users.
+          ? row.makitaConfigId !== undefined && row.makitaConfigId !== null
+            ? // A Makita configuration's requests (its creator's): beside Users and access keys.
               [
-                `access-key:${row.accessKeyId ?? ""}`,
-                `Access key: ${accessKeys.get(row.accessKeyId ?? "") ?? "removed"}`,
+                `makita:${row.makitaConfigId}`,
+                `Makita: ${makitaConfigs.get(row.makitaConfigId) ?? "removed configuration"}`,
               ]
-            : [row.userId, users.get(row.userId) ?? "Removed User"]
+            : row.userId === null
+              ? // An access key's requests are its Space's: the key stands beside the Users.
+                [
+                  `access-key:${row.accessKeyId ?? ""}`,
+                  `Access key: ${accessKeys.get(row.accessKeyId ?? "") ?? "removed"}`,
+                ]
+              : [row.userId, users.get(row.userId) ?? "Removed User"]
           : by === "space"
             ? [
                 row.spaceId,

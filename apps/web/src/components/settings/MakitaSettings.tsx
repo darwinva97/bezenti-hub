@@ -43,6 +43,7 @@ import {
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { InfoTip } from "./InfoTip";
+import { MakitaOwnerActivity } from "./MakitaActivity";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 
 type AccountAnswer = AtomCommandResult<MakitaAccountGetResult, unknown>;
@@ -92,6 +93,7 @@ export function PlatformMakitaSection() {
       {environmentId === null ? null : (
         <>
           <MakitaAccountPanel environmentId={environmentId} />
+          <MakitaOwnerActivity environmentId={environmentId} />
           <MakitaPermissionsPanel environmentId={environmentId} />
         </>
       )}

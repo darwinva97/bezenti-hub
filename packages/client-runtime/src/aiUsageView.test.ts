@@ -188,3 +188,31 @@ describe("access keys in the usage view (access-keys ticket 04)", () => {
     );
   });
 });
+
+describe("Makita in the usage view (Makita ticket 07)", () => {
+  it("groups a Makita configuration's rows beside Users and access keys as «Makita: <name>»", () => {
+    const withMakita = {
+      ...summary,
+      rows: [
+        ...summary.rows,
+        {
+          day: "2026-11-02",
+          userId: "ada",
+          makitaConfigId: "mk_1",
+          spaceId: "acme",
+          accountId: "a1",
+          model: "m",
+          ...totals(4, 40, 20),
+          estimatedUsd: null,
+        },
+      ],
+      labels: { ...summary.labels, makitaConfigs: [{ id: "mk_1", name: "Widget bugs" }] },
+    } as unknown as AiUsageSummary;
+    const byUser = groupUsage(withMakita, "user");
+    const makita = byUser.find((group) => group.key === "makita:mk_1");
+    expect(makita?.label).toBe("Makita: Widget bugs");
+    expect(makita?.totals.requests).toBe(4);
+    // Ada's own use stays hers, apart from her configuration's.
+    expect(byUser.find((group) => group.key === "ada")?.totals.requests).toBe(3);
+  });
+});

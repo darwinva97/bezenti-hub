@@ -320,7 +320,6 @@ const migrationEntries = [
   [168, "AiUsageMakita", Migration0168],
   [169, "MakitaTaskWorkspace", Migration0169],
   [170, "GitHubIdentities", Migration0170],
-  [170, "GitHubIdentities", Migration0170],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

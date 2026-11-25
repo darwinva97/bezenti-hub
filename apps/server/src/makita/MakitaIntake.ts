@@ -133,6 +133,15 @@ const IssueEvent = Schema.Struct({
   assignee: Schema.optional(
     Schema.NullOr(Schema.Struct({ login: Schema.String, id: Schema.Number })),
   ),
+  assigner: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        login: Schema.String,
+        id: Schema.Number,
+        type: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
   created_at: Schema.optional(Schema.String),
   issue: Schema.optional(
     Schema.Struct({
@@ -142,6 +151,14 @@ const IssueEvent = Schema.Struct({
   ),
 });
 type IssueEvent = typeof IssueEvent.Type;
+/**
+ * GitHub names the assignee as an `assigned` event's `actor`; who assigned is its `assigner`.
+ * The person who acted is the one Makita answers, so an assignment is read with its assigner.
+ */
+const whoActed = (event: IssueEvent): IssueEvent =>
+  event.event === "assigned" && event.assigner != null
+    ? { ...event, actor: event.assigner }
+    : event;
 const decodeEvents = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Array(Schema.Unknown)),
 );
@@ -875,7 +892,7 @@ const make = Effect.gen(function* () {
     const raw = Option.getOrElse(decodeEvents(body), () => []);
     const items = raw.flatMap((entry) => {
       const decoded = decodeEvent(entry);
-      return Option.isSome(decoded) ? [decoded.value] : [];
+      return Option.isSome(decoded) ? [whoActed(decoded.value)] : [];
     });
     return { items, size: raw.length };
   };

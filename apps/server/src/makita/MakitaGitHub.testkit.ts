@@ -462,8 +462,10 @@ export const makeFakeGitHub = () => {
     }
     return addEvent(repo, {
       event: "assigned",
-      actor: { login: actor.login, id: actor.id, type: actor.type ?? "User" },
+      // As GitHub answers: the event's `actor` is the assignee, who assigned is its `assigner`.
+      actor: { login: assignee.login, id: assignee.id, type: assignee.type ?? "User" },
       assignee: { login: assignee.login, id: assignee.id },
+      assigner: { login: actor.login, id: actor.id, type: actor.type ?? "User" },
       issue: {
         number,
         title: issues.get(key)!.title,

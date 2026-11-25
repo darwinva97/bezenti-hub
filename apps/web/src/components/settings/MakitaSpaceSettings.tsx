@@ -403,7 +403,7 @@ function ConfigRow(props: {
           {repos.length === 0 ? "none" : repos.join(", ")}
         </span>
         <span className="text-xs text-muted-foreground">
-          {`${triggersText(config.triggers)} · answers ${config.callers.map((caller) => `@${caller.login}`).join(", ")}`}
+          {`${triggersText(config.triggers)} · answers ${callersText(config)}`}
         </span>
         <span className="text-xs text-muted-foreground">
           {`${config.aiAccountName ?? "An AI account that no longer exists"} · ${config.modelSelection.model}${config.baseBranch === null ? "" : ` · base ${config.baseBranch}`} · Space Sandbox`}
@@ -490,6 +490,16 @@ function ConfigRow(props: {
   );
 }
 
+/** Whom a configuration answers, in the list's words (ticket 08: its creator or the Members). */
+const callersText = (config: MakitaConfig) =>
+  config.callersMode === "creator"
+    ? `only ${config.createdByName ?? "its creator"}`
+    : config.callersMode === "members"
+      ? "Members with a linked GitHub account"
+      : config.callers.map((caller) => `@${caller.login}`).join(", ");
+
+type CallersChoice = "creator" | "list" | "members";
+
 /** «New configuration» or «Edit»: batch 1's choices, the rest said as coming later. */
 function ConfigDialog(props: {
   readonly spaceId: SpaceId;
@@ -509,6 +519,11 @@ function ConfigDialog(props: {
   );
   const [assigned, setAssigned] = useState(config?.triggers.assigned ?? false);
   const [mention, setMention] = useState(config?.triggers.mention ?? false);
+  const [callersMode, setCallersMode] = useState<CallersChoice>(
+    config?.callersMode === "creator" || config?.callersMode === "members"
+      ? config.callersMode
+      : "list",
+  );
   const [callers, setCallers] = useState(
     config?.callers.map((caller) => caller.login).join(", ") ?? "",
   );
@@ -536,7 +551,7 @@ function ConfigDialog(props: {
     name.trim().length > 0 &&
     (allRepos || chosen.length > 0) &&
     (label.trim().length > 0 || assigned || mention) &&
-    logins.length > 0 &&
+    (callersMode !== "list" || logins.length > 0) &&
     account !== null &&
     model.trim().length > 0;
 
@@ -567,8 +582,8 @@ function ConfigDialog(props: {
                     assigned,
                     mention,
                   },
-                  callersMode: "list",
-                  callers: logins,
+                  callersMode,
+                  callers: callersMode === "list" ? logins : [],
                   strangers: "ignore",
                   modelSelection: {
                     instanceId: ProviderInstanceId.make(agent),
@@ -594,7 +609,7 @@ function ConfigDialog(props: {
             </DialogTitle>
             <DialogDescription>
               Makita runs as you, in a Thread of yours, with the AI account you choose. It answers
-              only the people you list.
+              only the people you choose.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
@@ -712,21 +727,43 @@ function ConfigDialog(props: {
                   mention by someone it answers continues that work, and «/makita stop» stops it.
                 </p>
               </div>
-              <label className="flex flex-col gap-1 text-xs font-medium">
-                It answers: a list of GitHub users
-                <Input
-                  aria-label="GitHub users it answers"
-                  nativeInput
-                  disabled={pending}
-                  placeholder="octocat, another-login"
-                  value={callers}
-                  onChange={(event) => setCallers(event.currentTarget.value)}
-                />
+              <div className="flex flex-col gap-2 text-xs font-medium">
+                It answers
+                <ToggleGroup
+                  aria-label="It answers"
+                  size="sm"
+                  value={[callersMode]}
+                  onValueChange={(next) => {
+                    const choice = next[0];
+                    if (choice === "creator" || choice === "list" || choice === "members") {
+                      setCallersMode(choice);
+                    }
+                  }}
+                >
+                  <Toggle value="creator">Only me</Toggle>
+                  <Toggle value="list">A list of GitHub users</Toggle>
+                  <Toggle value="members">
+                    Members of this Space with a linked GitHub account
+                  </Toggle>
+                </ToggleGroup>
+                {callersMode === "list" ? (
+                  <Input
+                    aria-label="GitHub users it answers"
+                    nativeInput
+                    disabled={pending}
+                    placeholder="octocat, another-login"
+                    value={callers}
+                    onChange={(event) => setCallers(event.currentTarget.value)}
+                  />
+                ) : null}
                 <span className="font-normal text-muted-foreground">
-                  Others are ignored. Answering Members with a linked GitHub account, or anyone,
-                  comes later.
+                  {callersMode === "list"
+                    ? "Your own linked GitHub account counts too. Others are ignored; answering anyone comes later."
+                    : callersMode === "creator"
+                      ? "Your GitHub account as linked in User settings → Account. Link it there first."
+                      : "Admins and Members of this Space who linked their GitHub account in User settings → Account, read at each event: whoever leaves the Space or unlinks stops counting at once. Guests do not count."}
                 </span>
-              </label>
+              </div>
               <div className="grid gap-3 sm:grid-cols-3">
                 <label className="flex flex-col gap-1 text-xs font-medium">
                   Agent

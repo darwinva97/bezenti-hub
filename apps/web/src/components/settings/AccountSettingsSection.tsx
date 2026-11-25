@@ -19,6 +19,7 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { QRCodeSvg } from "../ui/qr-code";
+import { GitHubAccountRow } from "./GitHubAccountRow";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
@@ -109,6 +110,8 @@ export function AccountSettingsSection() {
           }
         />
       ) : null}
+      {/* Makita ticket 08: the User's own linked GitHub account. */}
+      <GitHubAccountRow />
       <SettingsRow
         title="Sign out"
         description={signOutDescription(load.status === "loaded" ? load.account : null)}

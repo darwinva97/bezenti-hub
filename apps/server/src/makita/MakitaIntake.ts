@@ -1,8 +1,7 @@
 /**
- * Makita's intake (Makita ticket 04): reads, with Makita's token and conditional requests, the
- * issue events of every repository an active configuration listens to, and decides each trigger
- * once, by its natural key: who asked, whether they may, which configuration takes it. The only
- * writer of `makita_repo_cursors` and `makita_events`. Text of issues never passes through here.
+ * Makita's intake (tickets 04, 09): reads, with Makita's token and conditional requests, the issue
+ * events and comments of every listened repository, and decides each trigger once, by its natural
+ * key. The only writer of `makita_repo_cursors` and `makita_events`; no text is stored.
  */
 import {
   MAKITA_GITHUB_HOST,
@@ -22,12 +21,26 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import {
+  commandOf,
+  type CommentCursor,
+  commentPath,
+  decideComment,
+  decodeCommentPage,
+  FEED_PAGE,
+  type FeedComment,
+  formatCommentCursor,
+  isAfter,
+  MAKITA_FEEDS,
+  MAX_FEED_PAGES,
+  type MakitaFeed,
+  mentions,
+  parseCommentCursor,
+} from "./makitaFeeds.ts";
 import { MakitaGitHub, type MakitaGitHubAnswer, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { listenedProjects, type SpaceProjectRepo, spaceProjectRepos } from "./MakitaRepos.ts";
 import { stopTasksWithin } from "./makitaRows.ts";
 
-/** The one feed batch 1 reads. */
-const ISSUE_EVENTS_FEED = "issue-events";
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
 /** A repository with a trigger in the last 30 minutes is read every 30 s; others every 2 min. */
@@ -49,7 +62,9 @@ export type MakitaEventOutcome =
   | "ignored-bot"
   | "ignored-self"
   | "ignored-paused"
-  | "ignored-no-config";
+  | "ignored-no-config"
+  | "ignored-edited"
+  | "command";
 
 /** A configuration as the intake reads it for one repository. */
 export interface ListeningConfig {
@@ -58,6 +73,10 @@ export interface ListeningConfig {
   readonly projectId: string;
   /** Lower case. */
   readonly label: string | null;
+  /** Assigning an issue to Makita starts a task (ticket 09). */
+  readonly assigned: boolean;
+  /** Mentioning Makita starts a task (ticket 09). */
+  readonly mention: boolean;
   readonly callerIds: ReadonlySet<number>;
   /** Lower-case logins it never answers (other bots that are normal accounts). */
   readonly ignore: ReadonlySet<string>;
@@ -91,6 +110,9 @@ const IssueEvent = Schema.Struct({
     }),
   ),
   label: Schema.optional(Schema.Struct({ name: Schema.String })),
+  assignee: Schema.optional(
+    Schema.NullOr(Schema.Struct({ login: Schema.String, id: Schema.Number })),
+  ),
   created_at: Schema.optional(Schema.String),
   issue: Schema.optional(
     Schema.Struct({
@@ -112,11 +134,11 @@ const decodeUsers = Schema.decodeUnknownOption(
 const decodeLogins = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 /**
- * The decision for one `labeled` event of a repository (spec «Quién lo pide y si puede»): Makita
- * itself, bots, then the oldest active configuration whose label matches and whose list holds the
- * actor's numeric id. None when no configuration uses that label: the event is not stored.
+ * The decision for one `labeled` or `assigned` event (spec «Quién lo pide y si puede»): Makita
+ * itself, bots, then the oldest active configuration with that trigger whose list holds the actor's
+ * numeric id. None when no configuration has that trigger: the event is not stored.
  */
-const decideLabeled = (input: {
+const decideIssueEvent = (input: {
   readonly event: IssueEvent;
   readonly listened: ListenedRepo;
   readonly makitaUserId: number;
@@ -128,9 +150,19 @@ const decideLabeled = (input: {
     }
   | undefined => {
   const { event, listened } = input;
-  const label = event.label?.name.toLowerCase();
-  if (event.event !== "labeled" || label === undefined || event.issue === undefined) return;
-  const candidates = listened.configs.filter((config) => config.label === label);
+  if (event.issue === undefined) return;
+  let candidates: ReadonlyArray<ListeningConfig>;
+  let trigger: "label" | "assigned";
+  if (event.event === "labeled" && event.label !== undefined) {
+    const label = event.label.name.toLowerCase();
+    candidates = listened.configs.filter((config) => config.label === label);
+    trigger = "label";
+  } else if (event.event === "assigned" && event.assignee?.id === input.makitaUserId) {
+    candidates = listened.configs.filter((config) => config.assigned);
+    trigger = "assigned";
+  } else {
+    return;
+  }
   const oldest = candidates[0];
   if (oldest === undefined) return;
   const actor = event.actor;
@@ -154,7 +186,7 @@ const decideLabeled = (input: {
   const taker = active.find((config) => config.callerIds.has(actor.id));
   return taker === undefined
     ? decided("ignored-not-allowed", first.configId)
-    : decided("queued", taker.configId);
+    : decided("queued", taker.configId, trigger);
 };
 
 export class MakitaIntake extends Context.Service<
@@ -170,8 +202,24 @@ export class MakitaIntake extends Context.Service<
   }
 >()("t3/makita/MakitaIntake") {}
 
+/** Issues and pull requests whose task ended: anything else is live. */
+const ENDED_STATES: ReadonlyArray<string> = ["done", "stopped", "failed"];
+
+/** Whether a comment mentions Makita or holds a `/makita` command: only those are decided. */
+const speaksToMakita = (comment: FeedComment, login: string) =>
+  commandOf(comment.body) !== undefined || mentions(comment.body, login);
+
+interface CursorWrite {
+  readonly repo: string;
+  readonly feed: MakitaFeed;
+  readonly etag: string | null;
+  readonly cursor: string | null;
+  readonly nextPollAt: number;
+}
+
 interface CursorRow {
   readonly repo: string;
+  readonly feed: string;
   readonly etag: string | null;
   readonly cursor: string | null;
   readonly nextPollAt: string | null;
@@ -240,6 +288,8 @@ const make = Effect.gen(function* () {
       if (Option.isNone(repos)) continue;
       const triggers = decodeTriggers(row.triggersJson);
       const label = Option.isSome(triggers) ? (triggers.value.label?.toLowerCase() ?? null) : null;
+      const assigned = Option.isSome(triggers) && triggers.value.assigned;
+      const mention = Option.isSome(triggers) && triggers.value.mention;
       const callerIds = new Set(
         Option.getOrElse(decodeUsers(row.callersJson), () => []).map((user) => user.id),
       );
@@ -259,6 +309,8 @@ const make = Effect.gen(function* () {
             spaceId,
             projectId: project.projectId,
             label,
+            assigned,
+            mention,
             callerIds,
             ignore,
             active,
@@ -271,12 +323,12 @@ const make = Effect.gen(function* () {
   });
 
   const readCursors = sql<CursorRow>`
-    SELECT repo, etag, cursor, next_poll_at AS "nextPollAt",
+    SELECT repo, feed, etag, cursor, next_poll_at AS "nextPollAt",
       unreachable_since AS "unreachableSince"
-    FROM makita_repo_cursors WHERE host = ${MAKITA_GITHUB_HOST} AND feed = ${ISSUE_EVENTS_FEED}
+    FROM makita_repo_cursors WHERE host = ${MAKITA_GITHUB_HOST}
   `;
 
-  /** 30 s with a trigger in the last 30 minutes (or an open task, ticket 05), else 2 minutes. */
+  /** 30 s with a trigger in the last 30 minutes or a live task, else 2 minutes. */
   const cadenceOf = Effect.fn("MakitaIntake.cadenceOf")(function* (repo: string, now: number) {
     const recent = yield* sql<{ readonly n: number }>`
       SELECT (SELECT COUNT(*) FROM makita_events
@@ -295,15 +347,10 @@ const make = Effect.gen(function* () {
     return Number.isFinite(seconds) && seconds > 0 ? seconds * SECOND : 0;
   };
 
-  const saveCursor = (input: {
-    readonly repo: string;
-    readonly etag: string | null;
-    readonly cursor: string | null;
-    readonly nextPollAt: number;
-  }) => sql`
+  const saveCursor = (input: CursorWrite) => sql`
     INSERT INTO makita_repo_cursors (host, repo, feed, etag, cursor, next_poll_at, last_error,
       unreachable_since)
-    VALUES (${MAKITA_GITHUB_HOST}, ${input.repo}, ${ISSUE_EVENTS_FEED}, ${input.etag},
+    VALUES (${MAKITA_GITHUB_HOST}, ${input.repo}, ${input.feed}, ${input.etag},
       ${input.cursor}, ${iso(input.nextPollAt)}, NULL, NULL)
     ON CONFLICT (host, repo, feed) DO UPDATE SET etag = excluded.etag, cursor = excluded.cursor,
       next_poll_at = excluded.next_poll_at, last_error = NULL, unreachable_since = NULL
@@ -311,13 +358,14 @@ const make = Effect.gen(function* () {
 
   const saveFailure = (input: {
     readonly repo: string;
+    readonly feed: MakitaFeed;
     readonly reason: MakitaGitHubError["reason"];
     readonly unreachable: boolean;
     readonly now: number;
     readonly nextPollAt: number;
   }) => sql`
     INSERT INTO makita_repo_cursors (host, repo, feed, next_poll_at, last_error, unreachable_since)
-    VALUES (${MAKITA_GITHUB_HOST}, ${input.repo}, ${ISSUE_EVENTS_FEED}, ${iso(input.nextPollAt)},
+    VALUES (${MAKITA_GITHUB_HOST}, ${input.repo}, ${input.feed}, ${iso(input.nextPollAt)},
       ${input.reason}, ${input.unreachable ? iso(input.now) : null})
     ON CONFLICT (host, repo, feed) DO UPDATE SET next_poll_at = excluded.next_poll_at,
       last_error = excluded.last_error,
@@ -326,78 +374,250 @@ const make = Effect.gen(function* () {
         ELSE makita_repo_cursors.unreachable_since END
   `;
 
-  /**
-   * One batch of a repository's new events and its cursor, in one transaction: a crash before the
-   * commit re-reads the batch, one after finds every key taken.
-   */
-  const writeBatch = Effect.fn("MakitaIntake.writeBatch")(function* (input: {
-    readonly listened: ListenedRepo;
-    readonly events: ReadonlyArray<IssueEvent>;
-    readonly makitaUserId: number;
-    readonly etag: string | null;
-    readonly cursor: string;
+  /** One decided event, inserted once by its key; answers whether this insert took it. */
+  const insertEvent = (input: {
+    readonly eventKey: string;
+    readonly repo: string;
+    readonly number: number;
+    readonly kind: "issue" | "pull";
+    readonly actor: { readonly id: number; readonly login: string } | null;
+    readonly createdAtGithub: string | null;
     readonly now: number;
-    readonly nextPollAt: number;
-  }) {
-    return yield* sql.withTransaction(
+    readonly decision: {
+      readonly outcome: MakitaEventOutcome;
+      readonly configId: string;
+      readonly detail: string | null;
+    };
+  }) =>
+    sql<{ readonly key: string }>`
+      INSERT INTO makita_events (event_key, host, repo, number, kind, actor_github_id,
+        actor_login, created_at_github, seen_at, config_id, outcome, detail)
+      VALUES (${input.eventKey}, ${MAKITA_GITHUB_HOST}, ${input.repo}, ${input.number},
+        ${input.kind}, ${input.actor?.id ?? null}, ${input.actor?.login ?? null},
+        ${input.createdAtGithub}, ${iso(input.now)}, ${input.decision.configId},
+        ${input.decision.outcome}, ${input.decision.detail})
+      ON CONFLICT (event_key) DO NOTHING
+      RETURNING event_key AS key
+    `.pipe(Effect.map((rows) => rows.length > 0));
+
+  /**
+   * One batch of a feed and its cursor, in one transaction: a crash before the commit re-reads the
+   * batch, one after finds every key taken.
+   */
+  const inBatch = <E, R>(
+    cursor: CursorWrite,
+    body: Effect.Effect<ReadonlyArray<QueuedEvent>, E, R>,
+  ) =>
+    sql.withTransaction(
       Effect.gen(function* () {
-        const queued: Array<QueuedEvent> = [];
-        for (const event of input.events) {
-          // An issue closed or locked stops its live task; MakitaStops interrupts its turn.
-          if ((event.event === "closed" || event.event === "locked") && event.issue !== undefined) {
-            yield* stopTasksWithin(sql, {
-              actor: { source: "system" },
-              scope: {
-                issue: {
-                  host: MAKITA_GITHUB_HOST,
-                  repo: input.listened.repo,
-                  number: event.issue.number,
-                },
-              },
-              reason: event.event === "closed" ? "issue-closed" : "issue-locked",
-            });
-            continue;
-          }
-          const decision = decideLabeled({
-            event,
-            listened: input.listened,
-            makitaUserId: input.makitaUserId,
-          });
-          if (decision === undefined || event.issue === undefined) continue;
-          const eventKey = `gh:issue-event:${event.id}`;
-          const inserted = yield* sql<{ readonly key: string }>`
-            INSERT INTO makita_events (event_key, host, repo, number, kind, actor_github_id,
-              actor_login, created_at_github, seen_at, config_id, outcome, detail)
-            VALUES (${eventKey}, ${MAKITA_GITHUB_HOST}, ${input.listened.repo},
-              ${event.issue.number}, ${event.issue.pull_request === undefined ? "issue" : "pull"},
-              ${event.actor?.id ?? null}, ${event.actor?.login ?? null},
-              ${event.created_at ?? null}, ${iso(input.now)}, ${decision.configId},
-              ${decision.outcome}, ${decision.detail})
-            ON CONFLICT (event_key) DO NOTHING
-            RETURNING event_key AS key
-          `;
-          if (inserted.length > 0 && decision.outcome === "queued") {
-            queued.push({
-              eventKey,
-              repo: input.listened.repo,
-              number: event.issue.number,
-              configId: decision.configId,
-            });
-          }
-        }
-        yield* saveCursor({
-          repo: input.listened.repo,
-          etag: input.etag,
-          cursor: input.cursor,
-          nextPollAt: input.nextPollAt,
-        });
+        const queued = yield* body;
+        yield* saveCursor(cursor);
         return queued;
       }),
     );
+
+  /** Issue events: closed or locked issues stop their task; labels and assignments trigger. */
+  const handleIssueEvents = Effect.fn("MakitaIntake.handleIssueEvents")(function* (input: {
+    readonly listened: ListenedRepo;
+    readonly events: ReadonlyArray<IssueEvent>;
+    readonly makitaUserId: number;
+    readonly now: number;
+  }) {
+    const queued: Array<QueuedEvent> = [];
+    for (const event of input.events) {
+      // An issue closed or locked stops its live task; MakitaStops interrupts its turn.
+      if ((event.event === "closed" || event.event === "locked") && event.issue !== undefined) {
+        yield* stopTasksWithin(sql, {
+          actor: { source: "system" },
+          scope: {
+            issue: {
+              host: MAKITA_GITHUB_HOST,
+              repo: input.listened.repo,
+              number: event.issue.number,
+            },
+          },
+          reason: event.event === "closed" ? "issue-closed" : "issue-locked",
+        });
+        continue;
+      }
+      const decision = decideIssueEvent({
+        event,
+        listened: input.listened,
+        makitaUserId: input.makitaUserId,
+      });
+      if (decision === undefined || event.issue === undefined) continue;
+      const eventKey = `gh:issue-event:${event.id}`;
+      const inserted = yield* insertEvent({
+        eventKey,
+        repo: input.listened.repo,
+        number: event.issue.number,
+        kind: event.issue.pull_request === undefined ? "issue" : "pull",
+        actor: event.actor,
+        createdAtGithub: event.created_at ?? null,
+        now: input.now,
+        decision,
+      });
+      if (inserted && decision.outcome === "queued") {
+        queued.push({
+          eventKey,
+          repo: input.listened.repo,
+          number: event.issue.number,
+          configId: decision.configId,
+        });
+      }
+    }
+    return queued as ReadonlyArray<QueuedEvent>;
   });
 
-  /** Reads one repository's feed; answers what it queued, or `stop` when nothing more may run. */
-  const pollRepo = Effect.fn("MakitaIntake.pollRepo")(function* (input: {
+  /** An issue's tasks: the live one's configuration, or the newest one's when it failed. */
+  const tasksOf = (repo: string, number: number) =>
+    sql<{ readonly configId: string; readonly state: string }>`
+      SELECT config_id AS "configId", state FROM makita_tasks
+      WHERE host = ${MAKITA_GITHUB_HOST} AND repo = ${repo} AND number = ${number}
+      ORDER BY created_at DESC, task_id DESC
+    `.pipe(
+      Effect.map((rows) => {
+        const live = rows.find((row) => !ENDED_STATES.includes(row.state));
+        const newest = rows[0];
+        return {
+          live: live?.configId ?? null,
+          failed: live === undefined && newest?.state === "failed" ? newest.configId : null,
+        };
+      }),
+    );
+
+  /** Comments: mentions of Makita and `/makita` commands, each decided once (ticket 09). */
+  const handleComments = Effect.fn("MakitaIntake.handleComments")(function* (input: {
+    readonly listened: ListenedRepo;
+    readonly comments: ReadonlyArray<FeedComment>;
+    readonly makita: { readonly id: number; readonly login: string };
+    readonly now: number;
+  }) {
+    const queued: Array<QueuedEvent> = [];
+    for (const comment of input.comments) {
+      if (!speaksToMakita(comment, input.makita.login)) continue;
+      const decision = decideComment({
+        comment,
+        configs: input.listened.configs,
+        makita: input.makita,
+        tasks: yield* tasksOf(input.listened.repo, comment.number),
+      });
+      if (decision === undefined) continue;
+      const inserted = yield* insertEvent({
+        eventKey: comment.eventKey,
+        repo: input.listened.repo,
+        number: comment.number,
+        kind: comment.kind,
+        actor: comment.author,
+        createdAtGithub: comment.createdAt,
+        now: input.now,
+        decision,
+      });
+      if (inserted && decision.outcome === "queued") {
+        queued.push({
+          eventKey: comment.eventKey,
+          repo: input.listened.repo,
+          number: comment.number,
+          configId: decision.configId,
+        });
+      }
+    }
+    return queued as ReadonlyArray<QueuedEvent>;
+  });
+
+  /** A read GitHub refused: marks the feed; `stop` when nothing more may run this pass. */
+  const onFailure = Effect.fn("MakitaIntake.onFailure")(function* (input: {
+    readonly repo: string;
+    readonly feed: MakitaFeed;
+    readonly error: MakitaGitHubError;
+    readonly now: number;
+  }) {
+    const { repo, feed, error, now } = input;
+    yield* Effect.logWarning("Makita could not read a repository's feed", {
+      repo,
+      feed,
+      reason: error.reason,
+    });
+    switch (error.reason) {
+      case "unauthorized":
+      case "no-token":
+        return "stop" as const;
+      case "rate-limited": {
+        yield* Ref.set(holdUntil, Math.max(error.retryAt ?? 0, now + RATE_LIMIT_MIN_MS));
+        return "stop" as const;
+      }
+      case "forbidden":
+      case "not-found":
+        yield* saveFailure({
+          repo,
+          feed,
+          reason: error.reason,
+          unreachable: true,
+          now,
+          nextPollAt: now + UNREACHABLE_RETRY_MS,
+        });
+        return [] as ReadonlyArray<QueuedEvent>;
+      default:
+        yield* saveFailure({
+          repo,
+          feed,
+          reason: error.reason,
+          unreachable: false,
+          now,
+          nextPollAt: now + SLOW_POLL_MS,
+        });
+        return [] as ReadonlyArray<QueuedEvent>;
+    }
+  });
+
+  const read = (operation: string, path: string, etag?: string | null) =>
+    github
+      .rest({ operation, path, ...(etag == null ? {} : { ifNoneMatch: etag }) })
+      .pipe(Effect.result);
+
+  /** Repeats a page read while `more` says the next page is needed, up to the page cap. */
+  const nextPages = Effect.fn("MakitaIntake.nextPages")(function* <T>(input: {
+    readonly operation: string;
+    readonly pathOf: (page: number) => string;
+    readonly first: ReadonlyArray<T>;
+    readonly decode: (body: string) => {
+      readonly items: ReadonlyArray<T>;
+      readonly size: number;
+    };
+    readonly firstSize: number;
+    readonly more: (items: ReadonlyArray<T>, size: number) => boolean;
+  }) {
+    const items = [...input.first];
+    let size = input.firstSize;
+    let last: ReadonlyArray<T> = input.first;
+    let page = 1;
+    while (page < MAX_FEED_PAGES && input.more(last, size)) {
+      page += 1;
+      const answer = yield* read(input.operation, input.pathOf(page));
+      if (answer._tag === "Failure") return { _tag: "failed", error: answer.failure } as const;
+      const decoded = input.decode(answer.success.body);
+      last = decoded.items;
+      size = decoded.size;
+      items.push(...decoded.items);
+    }
+    return {
+      _tag: "read",
+      items: items as ReadonlyArray<T>,
+      capped: page >= MAX_FEED_PAGES && input.more(last, size),
+    } as const;
+  });
+
+  const decodeEventPage = (body: string) => {
+    const raw = Option.getOrElse(decodeEvents(body), () => []);
+    const items = raw.flatMap((entry) => {
+      const decoded = decodeEvent(entry);
+      return Option.isSome(decoded) ? [decoded.value] : [];
+    });
+    return { items, size: raw.length };
+  };
+
+  /** The issue events feed: newest first, read page by page down to the cursor (ticket 09). */
+  const pollIssueEvents = Effect.fn("MakitaIntake.pollIssueEvents")(function* (input: {
     readonly listened: ListenedRepo;
     readonly row: CursorRow | undefined;
     readonly makitaUserId: number;
@@ -405,84 +625,163 @@ const make = Effect.gen(function* () {
   }) {
     const { listened, row, now } = input;
     const repo = listened.repo;
-    const answer = yield* github
-      .rest({
-        operation: "issue-events",
-        path: `repos/${repo}/issues/events?per_page=100`,
-        ...(row?.etag == null ? {} : { ifNoneMatch: row.etag }),
-      })
-      .pipe(Effect.result);
+    const feed = "issue-events" as const;
+    const pathOf = (page: number) =>
+      `repos/${repo}/issues/events?per_page=${FEED_PAGE}${page > 1 ? `&page=${page}` : ""}`;
+    const answer = yield* read("issue-events", pathOf(1), row?.etag);
     if (answer._tag === "Failure") {
-      const error = answer.failure;
-      yield* Effect.logWarning("Makita could not read a repository's issue events", {
-        repo,
-        reason: error.reason,
-      });
-      switch (error.reason) {
-        case "unauthorized":
-        case "no-token":
-          return "stop" as const;
-        case "rate-limited": {
-          yield* Ref.set(holdUntil, Math.max(error.retryAt ?? 0, now + RATE_LIMIT_MIN_MS));
-          return "stop" as const;
-        }
-        case "forbidden":
-        case "not-found":
-          yield* saveFailure({
-            repo,
-            reason: error.reason,
-            unreachable: true,
-            now,
-            nextPollAt: now + UNREACHABLE_RETRY_MS,
-          });
-          return [] as ReadonlyArray<QueuedEvent>;
-        default:
-          yield* saveFailure({
-            repo,
-            reason: error.reason,
-            unreachable: false,
-            now,
-            nextPollAt: now + SLOW_POLL_MS,
-          });
-          return [] as ReadonlyArray<QueuedEvent>;
-      }
+      return yield* onFailure({ repo, feed, error: answer.failure, now });
     }
     const etag = answer.success.headers["etag"] ?? null;
     const asked = askedInterval(answer.success);
     if (answer.success.status === 304) {
       const nextPollAt = now + Math.max(yield* cadenceOf(repo, now), asked);
       // Nothing new: no event, the cursor stays; only when to ask again.
-      yield* saveCursor({ repo, etag: row?.etag ?? etag, cursor: row?.cursor ?? null, nextPollAt });
+      yield* saveCursor({
+        repo,
+        feed,
+        etag: row?.etag ?? etag,
+        cursor: row?.cursor ?? null,
+        nextPollAt,
+      });
       return [] as ReadonlyArray<QueuedEvent>;
     }
-    const events = Option.getOrElse(decodeEvents(answer.success.body), () => []).flatMap((raw) => {
-      const decoded = decodeEvent(raw);
-      return Option.isSome(decoded) ? [decoded.value] : [];
-    });
-    const newest = events.reduce((max, event) => Math.max(max, event.id), 0);
+    const first = decodeEventPage(answer.success.body);
     const known = row?.cursor == null ? undefined : Number(row.cursor);
     if (known === undefined || !Number.isFinite(known)) {
       // Read for the first time (or again after a pause): from now on, nothing older replayed.
+      const newest = first.items.reduce((max, event) => Math.max(max, event.id), 0);
       const nextPollAt = now + Math.max(yield* cadenceOf(repo, now), asked);
-      yield* saveCursor({ repo, etag, cursor: String(newest), nextPollAt });
+      yield* saveCursor({ repo, feed, etag, cursor: String(newest), nextPollAt });
       return [] as ReadonlyArray<QueuedEvent>;
     }
-    const fresh = events.filter((event) => event.id > known).toSorted((a, b) => a.id - b.id);
+    // More than a page since the last poll: older pages until the cursor is reached.
+    const pages = yield* nextPages({
+      operation: "issue-events",
+      pathOf,
+      first: first.items,
+      firstSize: first.size,
+      decode: decodeEventPage,
+      more: (items, size) => size >= FEED_PAGE && items.every((event) => event.id > known),
+    });
+    if (pages._tag === "failed") {
+      return yield* onFailure({ repo, feed, error: pages.error, now });
+    }
+    if (pages.capped) {
+      yield* Effect.logWarning("Makita read the most pages it reads of a repository's events", {
+        repo,
+        feed,
+      });
+    }
+    const byId = new Map(pages.items.map((event) => [event.id, event]));
+    const fresh = [...byId.values()]
+      .filter((event) => event.id > known)
+      .toSorted((a, b) => a.id - b.id);
+    const newest = fresh.reduce((max, event) => Math.max(max, event.id), known);
     // A trigger in this batch counts as recent activity already.
     const triggered = fresh.some(
-      (event) => decideLabeled({ event, listened, makitaUserId: input.makitaUserId }) !== undefined,
+      (event) =>
+        decideIssueEvent({ event, listened, makitaUserId: input.makitaUserId }) !== undefined,
     );
     const nextPollAt =
       now + Math.max(triggered ? FAST_POLL_MS : yield* cadenceOf(repo, now), asked);
-    return yield* writeBatch({
-      listened,
-      events: fresh,
-      makitaUserId: input.makitaUserId,
-      etag,
-      cursor: String(Math.max(known, newest)),
-      now,
-      nextPollAt,
+    return yield* inBatch(
+      { repo, feed, etag, cursor: String(newest), nextPollAt },
+      handleIssueEvents({ listened, events: fresh, makitaUserId: input.makitaUserId, now }),
+    );
+  });
+
+  /**
+   * A comment feed (`issue-comments`, `review-comments`): oldest change first since the cursor,
+   * page by page; what the page cap leaves comes next poll, as the cursor only passes what was read.
+   */
+  const pollComments = Effect.fn("MakitaIntake.pollComments")(function* (input: {
+    readonly listened: ListenedRepo;
+    readonly feed: "issue-comments" | "review-comments";
+    readonly row: CursorRow | undefined;
+    readonly makita: { readonly id: number; readonly login: string };
+    readonly now: number;
+  }) {
+    const { listened, feed, row, now } = input;
+    const repo = listened.repo;
+    const base = commentPath(repo, feed);
+    const decode = (body: string) => {
+      const page = decodeCommentPage(feed, body);
+      return { items: page.comments, size: page.size };
+    };
+    const cursor = parseCommentCursor(row?.cursor ?? null);
+    if (cursor === undefined) {
+      // Read for the first time: start after the newest comment, nothing older replayed.
+      const answer = yield* read(feed, `${base}?sort=updated&direction=desc&per_page=1`);
+      if (answer._tag === "Failure") {
+        return yield* onFailure({ repo, feed, error: answer.failure, now });
+      }
+      const newest = decode(answer.success.body).items[0];
+      const start: CommentCursor =
+        newest === undefined ? { at: "", id: 0 } : { at: newest.updatedAt, id: newest.id };
+      yield* saveCursor({
+        repo,
+        feed,
+        etag: null,
+        cursor: formatCommentCursor(start),
+        nextPollAt: now + Math.max(yield* cadenceOf(repo, now), askedInterval(answer.success)),
+      });
+      return [] as ReadonlyArray<QueuedEvent>;
+    }
+    const since = cursor.at === "" ? "" : `&since=${encodeURIComponent(cursor.at)}`;
+    const pathOf = (page: number) =>
+      `${base}?sort=updated&direction=asc&per_page=${FEED_PAGE}${since}${page > 1 ? `&page=${page}` : ""}`;
+    const answer = yield* read(feed, pathOf(1), row?.etag);
+    if (answer._tag === "Failure") {
+      return yield* onFailure({ repo, feed, error: answer.failure, now });
+    }
+    const etag = answer.success.headers["etag"] ?? null;
+    const asked = askedInterval(answer.success);
+    if (answer.success.status === 304) {
+      const nextPollAt = now + Math.max(yield* cadenceOf(repo, now), asked);
+      yield* saveCursor({
+        repo,
+        feed,
+        etag: row?.etag ?? etag,
+        cursor: row?.cursor ?? null,
+        nextPollAt,
+      });
+      return [] as ReadonlyArray<QueuedEvent>;
+    }
+    const first = decode(answer.success.body);
+    const pages = yield* nextPages({
+      operation: feed,
+      pathOf,
+      first: first.items,
+      firstSize: first.size,
+      decode,
+      more: (_items, size) => size >= FEED_PAGE,
     });
+    if (pages._tag === "failed") {
+      return yield* onFailure({ repo, feed, error: pages.error, now });
+    }
+    const byKey = new Map(pages.items.map((comment) => [comment.eventKey, comment]));
+    const fresh = [...byKey.values()]
+      .filter((comment) => isAfter(comment, cursor))
+      .toSorted((a, b) =>
+        a.updatedAt === b.updatedAt ? a.id - b.id : a.updatedAt < b.updatedAt ? -1 : 1,
+      );
+    const last = fresh.at(-1);
+    const moved = last === undefined ? cursor : { at: last.updatedAt, id: last.id };
+    const triggered = fresh.some((comment) => speaksToMakita(comment, input.makita.login));
+    const nextPollAt =
+      now + Math.max(pages.capped || triggered ? FAST_POLL_MS : yield* cadenceOf(repo, now), asked);
+    return yield* inBatch(
+      // Capped: the ETag of the first page would hide the rest, so none is kept.
+      {
+        repo,
+        feed,
+        etag: pages.capped ? null : etag,
+        cursor: formatCommentCursor(moved),
+        nextPollAt,
+      },
+      handleComments({ listened, comments: fresh, makita: input.makita, now }),
+    );
   });
 
   const pollDue = Effect.gen(function* () {
@@ -493,10 +792,11 @@ const make = Effect.gen(function* () {
     }
     const [account] = yield* sql<{
       readonly githubUserId: number;
+      readonly login: string;
       readonly status: string;
       readonly globalPausedAt: string | null;
     }>`
-      SELECT github_user_id AS "githubUserId", status, global_paused_at AS "globalPausedAt"
+      SELECT github_user_id AS "githubUserId", login, status, global_paused_at AS "globalPausedAt"
       FROM makita_account WHERE account_id = 'makita'
     `;
     if (account === undefined || account.globalPausedAt !== null) {
@@ -518,20 +818,23 @@ const make = Effect.gen(function* () {
           DELETE FROM makita_repo_cursors
           WHERE host = ${MAKITA_GITHUB_HOST} AND NOT (${sql.in("repo", repos)})
         `;
-    const cursors = new Map((yield* readCursors).map((row) => [row.repo.toLowerCase(), row]));
+    const cursors = new Map(
+      (yield* readCursors).map((row) => [`${row.repo.toLowerCase()}|${row.feed}`, row]),
+    );
+    const makita = { id: account.githubUserId, login: account.login };
     const queued: Array<QueuedEvent> = [];
-    for (const entry of listened.values()) {
-      const row = cursors.get(entry.repo.toLowerCase());
-      const due = millisOf(row?.nextPollAt ?? null);
-      if (due !== undefined && due > now) continue;
-      const result = yield* pollRepo({
-        listened: entry,
-        row,
-        makitaUserId: account.githubUserId,
-        now,
-      });
-      if (result === "stop") break;
-      queued.push(...result);
+    poll: for (const entry of listened.values()) {
+      for (const feed of MAKITA_FEEDS) {
+        const row = cursors.get(`${entry.repo.toLowerCase()}|${feed}`);
+        const due = millisOf(row?.nextPollAt ?? null);
+        if (due !== undefined && due > now) continue;
+        const result =
+          feed === "issue-events"
+            ? yield* pollIssueEvents({ listened: entry, row, makitaUserId: makita.id, now })
+            : yield* pollComments({ listened: entry, feed, row, makita, now });
+        if (result === "stop") break poll;
+        queued.push(...result);
+      }
     }
     return queued as ReadonlyArray<QueuedEvent>;
   }).pipe(

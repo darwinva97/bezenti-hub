@@ -104,6 +104,8 @@ export const AuditAction = Schema.Literals([
   "makita.github.comment",
   // Makita ticket 06: a task stopped (a pause, the Owner's stop, its issue closed, by hand).
   "makita.task.stop",
+  // Makita ticket 09: the reaction that answers `/makita stop` on GitHub.
+  "makita.github.reaction",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -421,6 +423,8 @@ export const AUDIT_DETAIL_KEYS = {
    * `makita-paused`, the creator's (`permission-revoked`, …) or its issue's (`issue-closed`, …).
    */
   "makita.task.stop": ["space", "repo", "number", "makita", "reason"],
+  /** A reaction Makita put on a comment (`/makita stop` heard): its content, never the text. */
+  "makita.github.reaction": ["space", "repo", "number", "makita", "content"],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

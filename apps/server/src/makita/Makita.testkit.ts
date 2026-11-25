@@ -35,6 +35,12 @@ export interface RecordedCommand {
   readonly actor: CommandActor.Actor;
 }
 
+/** A message Makita sent to a task's Thread (ticket 09: a mention woke it), and as whom. */
+export interface RecordedSend {
+  readonly input: ThreadManagementService.ThreadManagementSendInput;
+  readonly actor: CommandActor.Actor;
+}
+
 export const makitaHub = Effect.gen(function* () {
   const setup = yield* hub;
   const github = makeFakeGitHub();
@@ -52,10 +58,16 @@ export const makitaHub = Effect.gen(function* () {
       }),
   });
   const commands: Array<RecordedCommand> = [];
+  const sends: Array<RecordedSend> = [];
   const threads = Layer.mock(ThreadManagementService.ThreadManagementService)({
     dispatch: (command) =>
       Effect.gen(function* () {
         commands.push({ command, actor: yield* CommandActor.resolve });
+        return {} as never;
+      }),
+    sendToThread: (input) =>
+      Effect.gen(function* () {
+        sends.push({ input, actor: yield* CommandActor.resolve });
         return {} as never;
       }),
   });
@@ -89,6 +101,7 @@ export const makitaHub = Effect.gen(function* () {
     github,
     launches,
     commands,
+    sends,
     launchState,
     creatorSecrets,
     makitaAccount: Context.get(context, MakitaAccount.MakitaAccount),

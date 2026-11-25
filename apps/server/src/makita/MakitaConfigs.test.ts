@@ -305,7 +305,7 @@ it.live.skipIf(!posix || platform === undefined)(
         ["landing", { capability: "push" as const, mayLand: true }],
         ["anyone", { callersMode: "anyone" as const }],
         ["replies to strangers", { strangers: "reply" as const }],
-        ["mentions", { triggers: { label: "makita", assigned: false, mention: true } }],
+        ["an empty label", { triggers: { label: " ", assigned: false, mention: true } }],
         ["no label", { triggers: { label: null, assigned: false, mention: false } }],
         ["no caller", { callers: [] }],
         ["an unknown login", { callers: ["nobody-here"] }],

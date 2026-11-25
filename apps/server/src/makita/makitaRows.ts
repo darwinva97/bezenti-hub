@@ -85,7 +85,9 @@ export type MakitaTaskStopReason =
   | "creator-left"
   | "creator-disabled"
   | "issue-closed"
-  | "issue-locked";
+  | "issue-locked"
+  // Ticket 09: an allowed person wrote `/makita stop` on the issue.
+  | "github-stop";
 
 /** A task just stopped: what the turn interrupt and the answers need. */
 interface StoppedMakitaTask {

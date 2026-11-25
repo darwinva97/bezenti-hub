@@ -143,7 +143,9 @@ const CONFIG_SELECT = `
 interface Checked {
   readonly name: string;
   readonly repos: MakitaRepos;
-  readonly label: string;
+  /** Null when only an assignment or a mention starts a task (ticket 09). */
+  readonly label: string | null;
+  readonly triggers: MakitaTriggers;
   readonly logins: ReadonlyArray<string>;
   readonly modelSelection: ModelSelection;
   readonly baseBranch: string | null;
@@ -207,7 +209,7 @@ const fail = (reason: MakitaError["reason"], message: string) =>
 
 /**
  * The values batch 1 takes (the table holds the spec's others for later tickets): a list of GitHub
- * users, the label trigger, «Comment and analyse», no landing, the default approval, the Sandbox.
+ * users, any trigger, «Comment and analyse», no landing, the default approval, the Sandbox.
  */
 const checkedInput = (
   input: Omit<MakitaConfigInput, "spaceId">,
@@ -226,11 +228,14 @@ const checkedInput = (
     }
     if (new Set(projects).size !== projects.length) return refused("Each Project once.");
   }
-  if (input.triggers.assigned || input.triggers.mention) {
-    return refused("Assigning an issue to Makita and mentioning it come later; use the label.");
+  // Ticket 09: the label, an assignment to Makita, a mention; at least one.
+  const { assigned, mention } = input.triggers;
+  const raw = input.triggers.label ?? "";
+  const label = raw.trim();
+  if (label.length === 0 && raw.length === 0 && !assigned && !mention) {
+    return refused("Choose what hands an issue to Makita: a label, assigning it, or a mention.");
   }
-  const label = (input.triggers.label ?? "").trim();
-  if (label.length === 0 || label.length > 50 || label !== (input.triggers.label ?? "")) {
+  if ((label.length === 0 && raw.length > 0) || label.length > 50 || label !== raw) {
     return refused("Name the label that hands an issue to Makita (up to 50 characters).");
   }
   if (input.callersMode !== "list") {
@@ -264,7 +269,8 @@ const checkedInput = (
     value: {
       name,
       repos: input.repos,
-      label,
+      label: label.length === 0 ? null : label,
+      triggers: { label: label.length === 0 ? null : label, assigned, mention },
       logins: [...new Map(logins.map((login) => [login.toLowerCase(), login])).values()],
       modelSelection: input.modelSelection,
       baseBranch: baseBranch === null || baseBranch.length === 0 ? null : baseBranch,
@@ -482,21 +488,22 @@ const make = Effect.gen(function* () {
     readonly configId: string;
     readonly configName: string;
     readonly spaceId: SpaceId;
-    readonly label: string;
+    readonly label: string | null;
     readonly repos: ReadonlyArray<string>;
     readonly actorUserId: UserId;
   }) {
     const notes: Array<string> = [];
+    const label = input.label;
+    // No label trigger (ticket 09): nothing to make.
+    if (label === null) return notes as ReadonlyArray<string>;
     for (const repo of new Set(input.repos)) {
-      const labelPath = `repos/${repo}/labels/${encodeURIComponent(input.label)}`;
+      const labelPath = `repos/${repo}/labels/${encodeURIComponent(label)}`;
       const found = yield* github
         .rest({ operation: "label-get", path: labelPath })
         .pipe(Effect.result);
       if (found._tag === "Success") continue;
       if (found.failure.reason !== "not-found") {
-        notes.push(
-          `Could not check the label «${input.label}» in ${repo}: ${found.failure.message}`,
-        );
+        notes.push(`Could not check the label «${label}» in ${repo}: ${found.failure.message}`);
         continue;
       }
       const made = yield* github
@@ -504,12 +511,12 @@ const make = Effect.gen(function* () {
           operation: "label-create",
           method: "POST",
           path: `repos/${repo}/labels`,
-          body: { name: input.label, color: LABEL_COLOR, description: LABEL_DESCRIPTION },
+          body: { name: label, color: LABEL_COLOR, description: LABEL_DESCRIPTION },
         })
         .pipe(Effect.result);
       if (made._tag === "Failure") {
         notes.push(
-          `Could not create the label «${input.label}» in ${repo}: ${made.failure.message} Create it there by hand.`,
+          `Could not create the label «${label}» in ${repo}: ${made.failure.message} Create it there by hand.`,
         );
         continue;
       }
@@ -519,7 +526,7 @@ const make = Effect.gen(function* () {
           action: "makita.github.label",
           spaceId: input.spaceId,
           target: { kind: "makita_config", id: input.configId, name: input.configName },
-          detail: { space: input.spaceId, repo, label: input.label, outcome: "created" },
+          detail: { space: input.spaceId, repo, label: label, outcome: "created" },
         })
         .pipe(Effect.catch(storage("audit the label")));
     }
@@ -883,7 +890,7 @@ const make = Effect.gen(function* () {
               environment_id)
             VALUES (${configId}, ${input.spaceId}, ${value.name}, ${input.actorUserId}, ${at},
               ${at}, ${jsonOf(value.repos)},
-              ${jsonOf({ label: value.label, assigned: false, mention: false })}, 'list',
+              ${jsonOf(value.triggers)}, 'list',
               ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, 'comment', 0,
               'others', '[]', ${value.baseBranch}, NULL)
           `;
@@ -966,7 +973,7 @@ const make = Effect.gen(function* () {
     const after = {
       name: value.name,
       repos: jsonOf(value.repos),
-      triggers: jsonOf({ label: value.label, assigned: false, mention: false }),
+      triggers: jsonOf(value.triggers),
       callers: jsonOf(callers),
       modelSelection: jsonOf(value.modelSelection),
       baseBranch: value.baseBranch,

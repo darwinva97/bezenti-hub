@@ -5,6 +5,7 @@
  * which tokens exist and what each may do, and records every request without its token. Tokens are
  * built at run time so no token-shaped text sits in the sources.
  */
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
@@ -48,6 +49,8 @@ export interface FakeIssueEvent {
   readonly event: string;
   readonly actor: { readonly login: string; readonly id: number; readonly type: string } | null;
   readonly label?: { readonly name: string };
+  /** Who was assigned, on an `assigned` event (ticket 09). */
+  readonly assignee?: { readonly login: string; readonly id: number };
   readonly created_at: string;
   readonly issue: {
     readonly number: number;
@@ -75,7 +78,20 @@ export interface FakeComment {
   readonly updated_at: string;
 }
 
+/** A reaction Makita put on a comment (ticket 09), and which feed the comment belongs to. */
+export interface FakeReaction {
+  readonly repo: string;
+  readonly feed: "issues" | "pulls";
+  readonly commentId: number;
+  readonly content: string;
+}
+
 const API = "https://api.github.com/";
+
+const millisOf = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
+/** A time as GitHub writes it: ISO, to the second (ticket 09). */
+export const gitHubTime = (millis: number) =>
+  DateTime.formatIso(DateTime.makeUnsafe(millis)).replace(/\.\d{3}Z$/u, "Z");
 const FEED_PAGE = 100;
 
 export const makeFakeGitHub = () => {
@@ -101,6 +117,11 @@ export const makeFakeGitHub = () => {
   /** `owner/name#n` → the issue; `…#n` → its comments, oldest first. */
   const issues = new Map<string, FakeIssue>();
   const comments = new Map<string, Array<FakeComment>>();
+  /** `owner/name#n` → a pull request's review comments, oldest first (ticket 09). */
+  const reviewComments = new Map<string, Array<FakeComment>>();
+  const reactions: Array<FakeReaction> = [];
+  /** `owner/name` → how many times its comments changed: the comment feeds' ETag. */
+  const commentVersions = new Map<string, number>();
   let nextEventId = 1_000;
   let nextCommentId = 5_000;
   /** What the fake stamps on events and comments it makes. */
@@ -163,7 +184,133 @@ export const makeFakeGitHub = () => {
     };
     const key = `${repo}#${number}`;
     comments.set(key, [...(comments.get(key) ?? []), made]);
+    commentVersions.set(repo, (commentVersions.get(repo) ?? 0) + 1);
     return made;
+  };
+
+  /** An issue (made if missing) where `user` writes a comment: what a mention needs (ticket 09). */
+  const commentOn = (
+    repo: string,
+    number: number,
+    user: FakeGitHubUser,
+    body: string,
+    options: {
+      readonly pull?: boolean;
+      readonly title?: string;
+      readonly author?: FakeGitHubUser;
+    } = {},
+  ) => {
+    const key = `${repo}#${number}`;
+    if (!issues.has(key)) {
+      issues.set(key, {
+        number,
+        title: options.title ?? `Issue ${number}`,
+        body: "Something is broken.",
+        user: options.author ?? user,
+        state: "open",
+        locked: false,
+        ...(options.pull === true ? { pull: true } : {}),
+      });
+    }
+    return comment(repo, number, user, body);
+  };
+
+  /** A review comment by `user` on pull request `number` (made if missing) of `repo`. */
+  const reviewComment = (repo: string, number: number, user: FakeGitHubUser, body: string) => {
+    const key = `${repo}#${number}`;
+    if (!issues.has(key)) {
+      issues.set(key, {
+        number,
+        title: `Pull request ${number}`,
+        body: "A change.",
+        user,
+        state: "open",
+        locked: false,
+        pull: true,
+      });
+    }
+    nextCommentId += 1;
+    const made: FakeComment = {
+      id: nextCommentId,
+      body,
+      user,
+      created_at: clock.now,
+      updated_at: clock.now,
+    };
+    reviewComments.set(key, [...(reviewComments.get(key) ?? []), made]);
+    commentVersions.set(repo, (commentVersions.get(repo) ?? 0) + 1);
+    return made;
+  };
+
+  /** Edits a comment: a new body and a later `updated_at`, as GitHub does. */
+  const editComment = (repo: string, id: number, body: string) => {
+    for (const store of [comments, reviewComments]) {
+      for (const [key, list] of store) {
+        if (!key.startsWith(`${repo}#`)) continue;
+        const index = list.findIndex((entry) => entry.id === id);
+        if (index < 0) continue;
+        const old = list[index]!;
+        const later = Math.max(millisOf(old.updated_at), millisOf(clock.now)) + 60_000;
+        const edited = { ...old, body, updated_at: gitHubTime(later) };
+        store.set(key, list.toSpliced(index, 1, edited));
+        commentVersions.set(repo, (commentVersions.get(repo) ?? 0) + 1);
+        return edited;
+      }
+    }
+    throw new Error(`no comment ${id} in ${repo}`);
+  };
+
+  /** `actor` assigns issue `number` (made if missing) of `repo` to `assignee` (ticket 09). */
+  const assign = (
+    repo: string,
+    number: number,
+    assignee: FakeGitHubUser,
+    actor: FakeGitHubUser,
+    options: { readonly pull?: boolean } = {},
+  ) => {
+    const key = `${repo}#${number}`;
+    if (!issues.has(key)) {
+      issues.set(key, {
+        number,
+        title: `Issue ${number}`,
+        body: "Something is broken.",
+        user: actor,
+        state: "open",
+        locked: false,
+        ...(options.pull === true ? { pull: true } : {}),
+      });
+    }
+    return addEvent(repo, {
+      event: "assigned",
+      actor: { login: actor.login, id: actor.id, type: actor.type ?? "User" },
+      assignee: { login: assignee.login, id: assignee.id },
+      issue: {
+        number,
+        title: issues.get(key)!.title,
+        ...(options.pull === true
+          ? { pull_request: { url: `${API}repos/${repo}/pulls/${number}` } }
+          : {}),
+      },
+    });
+  };
+
+  /** Every comment of one feed of a repository, with what GitHub adds to each. */
+  const feedComments = (repo: string, feed: "issues" | "pulls") => {
+    const store = feed === "issues" ? comments : reviewComments;
+    return [...store.entries()]
+      .filter(([key]) => key.startsWith(`${repo}#`))
+      .flatMap(([key, list]) => {
+        const number = Number(key.slice(repo.length + 1));
+        const pull = feed === "pulls" || issues.get(key)?.pull === true;
+        return list.map((entry) => ({
+          ...entry,
+          user: { login: entry.user.login, id: entry.user.id, type: entry.user.type ?? "User" },
+          html_url: `https://github.com/${repo}/${pull ? "pull" : "issues"}/${number}#comment-${entry.id}`,
+          ...(feed === "issues"
+            ? { issue_url: `${API}repos/${repo}/issues/${number}` }
+            : { pull_request_url: `${API}repos/${repo}/pulls/${number}` }),
+        }));
+      });
   };
 
   const json = (
@@ -216,6 +363,7 @@ export const makeFakeGitHub = () => {
     }
     if (held === undefined) return json(request, 401, { message: "Bad credentials" });
     const route = path.split("?")[0]!;
+    const query = new URLSearchParams(path.split("?")[1] ?? "");
     if (request.method === "GET" && route === "user") {
       const headers: Record<string, string> = {};
       if (held.scopes !== undefined && held.scopes !== null) {
@@ -266,8 +414,50 @@ export const makeFakeGitHub = () => {
       const interval = pollIntervals.get(repo);
       if (interval !== undefined) headers["x-poll-interval"] = String(interval);
       if (ifNoneMatch === etag) return json(request, 304, null, headers);
-      const events = (issueEvents.get(repo) ?? []).toReversed().slice(0, FEED_PAGE);
+      const page = Number(query.get("page") ?? "1");
+      const events = (issueEvents.get(repo) ?? [])
+        .toReversed()
+        .slice((page - 1) * FEED_PAGE, page * FEED_PAGE);
       return json(request, 200, events, headers);
+    }
+    // Ticket 09: a repository's issue comments and review comments, oldest change first.
+    const commentFeedMatch = /^repos\/([^/]+)\/([^/]+)\/(issues|pulls)\/comments$/u.exec(route);
+    if (request.method === "GET" && commentFeedMatch !== null) {
+      const repo = `${commentFeedMatch[1]}/${commentFeedMatch[2]}`;
+      if (!repos.has(repo)) return json(request, 404, { message: "Not Found" });
+      const feed = commentFeedMatch[3] as "issues" | "pulls";
+      const etag = `W/"${repo}-${feed}-comments-${commentVersions.get(repo) ?? 0}-${query.toString()}"`;
+      const headers: Record<string, string> = { etag };
+      const interval = pollIntervals.get(repo);
+      if (interval !== undefined) headers["x-poll-interval"] = String(interval);
+      if (ifNoneMatch === etag) return json(request, 304, null, headers);
+      const since = query.get("since");
+      const perPage = Number(query.get("per_page") ?? "30");
+      const page = Number(query.get("page") ?? "1");
+      const ordered = feedComments(repo, feed)
+        .filter((entry) => since === null || entry.updated_at >= since)
+        .toSorted((a, b) =>
+          a.updated_at === b.updated_at ? a.id - b.id : a.updated_at < b.updated_at ? -1 : 1,
+        );
+      const sorted = query.get("direction") === "desc" ? ordered.toReversed() : ordered;
+      return json(request, 200, sorted.slice((page - 1) * perPage, page * perPage), headers);
+    }
+    const oneCommentMatch =
+      /^repos\/([^/]+)\/([^/]+)\/(issues|pulls)\/comments\/(\d+)(\/reactions)?$/u.exec(route);
+    if (oneCommentMatch !== null) {
+      const repo = `${oneCommentMatch[1]}/${oneCommentMatch[2]}`;
+      const feed = oneCommentMatch[3] as "issues" | "pulls";
+      const id = Number(oneCommentMatch[4]);
+      const found = feedComments(repo, feed).find((entry) => entry.id === id);
+      if (found === undefined) return json(request, 404, { message: "Not Found" });
+      if (request.method === "GET" && oneCommentMatch[5] === undefined) {
+        return json(request, 200, found);
+      }
+      if (request.method === "POST" && oneCommentMatch[5] !== undefined) {
+        const content = (bodyOf(request) as { readonly content?: string } | null)?.content ?? "";
+        reactions.push({ repo, feed, commentId: id, content });
+        return json(request, 201, { id: reactions.length, content });
+      }
     }
     const issueMatch = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)(\/comments)?$/u.exec(route);
     if (issueMatch !== null) {
@@ -356,10 +546,16 @@ export const makeFakeGitHub = () => {
     failures,
     issues,
     comments,
+    reviewComments,
+    reactions,
     clock,
     addEvent,
     label,
     comment,
+    commentOn,
+    reviewComment,
+    editComment,
+    assign,
     /** The comments a login wrote on an issue, as they read on GitHub. */
     commentsBy: (repo: string, number: number, login: string) =>
       (comments.get(`${repo}#${number}`) ?? [])

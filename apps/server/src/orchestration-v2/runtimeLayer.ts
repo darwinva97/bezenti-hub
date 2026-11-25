@@ -570,7 +570,9 @@ export const layerProduction = Layer.mergeAll(
   MakitaTasks.layerScheduled.pipe(
     Layer.provideMerge(
       MakitaTasks.layer.pipe(
-        Layer.provide(Layer.mergeAll(layerThreadLaunchProvided, AuditLog.layer)),
+        Layer.provide(
+          Layer.mergeAll(layerThreadLaunchProvided, layerThreadManagementProvided, AuditLog.layer),
+        ),
       ),
     ),
     Layer.provideMerge(MakitaIntake.layer.pipe(Layer.provide(ProcessRunner.layer))),

@@ -70,6 +70,11 @@ export interface FakeIssue {
   readonly pull?: boolean;
   /** Ticket 23: when it was closed (a closed one without it: closed now). */
   closedAt?: string;
+  /** Ticket 25: when it was opened and its id, as the issues list gives them. */
+  readonly createdAt?: string;
+  readonly id?: number;
+  /** Ticket 26: why it was closed (`completed`, `not_planned`), as `PATCH` set it. */
+  stateReason?: string | null;
 }
 
 /** Ticket 23: an item a search answers as it is, whatever it asked (another repository's). */
@@ -126,6 +131,8 @@ export interface FakePullRequest {
   mergeable?: boolean | null;
   mergeableState?: string;
   merged?: boolean;
+  /** Ticket 27: its last activity as GitHub says it (the fake's clock unless set). */
+  updatedAt?: string;
 }
 
 /** Ticket 13: a merge GitHub made, as `PUT pulls/{n}/merge` asked for it. */
@@ -268,6 +275,10 @@ export const makeFakeGitHub = () => {
   };
 
   const touch = (repo: string) => feedVersions.set(repo, (feedVersions.get(repo) ?? 0) + 1);
+  /** Ticket 25: `owner/name` → how many times its issues list changed (its ETag). */
+  const issueListVersions = new Map<string, number>();
+  const touchIssues = (repo: string) =>
+    issueListVersions.set(repo, (issueListVersions.get(repo) ?? 0) + 1);
 
   /** Adds one event to a repository's feed (an id larger than every earlier one). */
   const addEvent = (repo: string, event: Omit<FakeIssueEvent, "id" | "created_at">) => {
@@ -459,6 +470,55 @@ export const makeFakeGitHub = () => {
     });
   };
 
+  /** Ticket 25: `author` opens issue (or, `pull`, pull request) `number` of `repo` now. */
+  const openIssue = (
+    repo: string,
+    number: number,
+    author: FakeGitHubUser,
+    options: { readonly pull?: boolean; readonly title?: string; readonly body?: string } = {},
+  ) => {
+    const made: FakeIssue = {
+      number,
+      id: 700_000 + number,
+      createdAt: clock.now,
+      title: options.title ?? `Issue ${number}`,
+      body: options.body ?? "Something is broken.",
+      user: author,
+      state: "open",
+      locked: false,
+      ...(options.pull === true ? { pull: true } : {}),
+    };
+    issues.set(`${repo}#${number}`, made);
+    touchIssues(repo);
+    return made;
+  };
+
+  /** Ticket 26: `actor` closes or reopens issue `number` on GitHub, with its event. */
+  const setIssueState = (
+    repo: string,
+    number: number,
+    state: "open" | "closed",
+    actor: FakeGitHubUser,
+    stateReason: string | null = null,
+  ) => {
+    const issue = issues.get(`${repo}#${number}`);
+    if (issue === undefined) throw new Error(`no issue ${number} in ${repo}`);
+    issue.state = state;
+    issue.stateReason = state === "closed" ? stateReason : null;
+    touchIssues(repo);
+    return addEvent(repo, {
+      event: state === "closed" ? "closed" : "reopened",
+      actor: { login: actor.login, id: actor.id, type: actor.type ?? "User" },
+      issue: {
+        number,
+        title: issue.title,
+        ...(issue.pull === true
+          ? { pull_request: { url: `${API}repos/${repo}/pulls/${number}` } }
+          : {}),
+      },
+    });
+  };
+
   /** Every comment of one feed of a repository, with what GitHub adds to each. */
   const feedComments = (repo: string, feed: "issues" | "pulls") => {
     const store = feed === "issues" ? comments : reviewComments;
@@ -488,7 +548,8 @@ export const makeFakeGitHub = () => {
       request,
       new Response(body === null ? null : JSON.stringify(body), {
         status,
-        headers: { "content-type": "application/json", ...headers },
+        // Ticket 27: GitHub's own clock, as every answer carries it (ISO here, RFC 1123 there).
+        headers: { "content-type": "application/json", date: clock.now, ...headers },
       }),
     );
 
@@ -633,6 +694,32 @@ export const makeFakeGitHub = () => {
         return json(request, 201, { id: reactions.length, content });
       }
     }
+    // Ticket 25: a repository's issues and pull requests, newest first, with an ETag.
+    const issueListMatch = /^repos\/([^/]+)\/([^/]+)\/issues$/u.exec(route);
+    if (request.method === "GET" && issueListMatch !== null) {
+      const repo = `${issueListMatch[1]}/${issueListMatch[2]}`;
+      if (!repos.has(repo)) return json(request, 404, { message: "Not Found" });
+      const etag = `W/"${repo}-issues-${issueListVersions.get(repo) ?? 0}-${query.toString()}"`;
+      if (ifNoneMatch === etag) return json(request, 304, null, { etag });
+      const perPage = Number(query.get("per_page") ?? "30");
+      const page = Number(query.get("page") ?? "1");
+      const listed = [...issues.entries()]
+        .filter(([key]) => key.startsWith(`${repo}#`))
+        .map(([, issue]) => issue)
+        .toSorted((a, b) => b.number - a.number)
+        .map((issue) => ({
+          id: issue.id ?? 700_000 + issue.number,
+          number: issue.number,
+          title: issue.title,
+          state: issue.state,
+          created_at: issue.createdAt ?? "2026-01-01T00:00:00Z",
+          user: { login: issue.user.login, id: issue.user.id, type: issue.user.type ?? "User" },
+          ...(issue.pull === true
+            ? { pull_request: { url: `${API}repos/${repo}/pulls/${issue.number}` } }
+            : {}),
+        }));
+      return json(request, 200, listed.slice((page - 1) * perPage, page * perPage), { etag });
+    }
     const issueMatch = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)(\/comments)?$/u.exec(route);
     if (issueMatch !== null) {
       const key = `${issueMatch[1]}/${issueMatch[2]}#${issueMatch[3]}`;
@@ -655,6 +742,23 @@ export const makeFakeGitHub = () => {
             ? { pull_request: { url: `${API}repos/${key.replace("#", "/pulls/")}` } }
             : {}),
         });
+      }
+      // Ticket 26: closing (with its reason) or reopening, as the token's account.
+      if (request.method === "PATCH" && issueMatch[4] === undefined) {
+        const input = (bodyOf(request) ?? {}) as {
+          readonly state?: "open" | "closed";
+          readonly state_reason?: string;
+        };
+        if (input.state !== undefined) {
+          setIssueState(
+            `${issueMatch[1]}/${issueMatch[2]}`,
+            issue.number,
+            input.state,
+            held.user,
+            input.state_reason ?? null,
+          );
+        }
+        return json(request, 200, { number: issue.number, state: issue.state });
       }
       if (request.method === "GET" && issueMatch[4] !== undefined) {
         return json(
@@ -697,6 +801,7 @@ export const makeFakeGitHub = () => {
       body: pr.body,
       state: pr.state,
       merged: pr.merged ?? false,
+      updated_at: pr.updatedAt ?? clock.now,
       mergeable: pr.mergeable === undefined ? true : pr.mergeable,
       mergeable_state: pr.mergeableState ?? "clean",
       html_url: `https://github.com/${repo}/pull/${pr.number}`,
@@ -771,6 +876,17 @@ export const makeFakeGitHub = () => {
         return pr === undefined
           ? json(request, 404, { message: "Not Found" })
           : json(request, 200, pullOf(repo, pr));
+      }
+      // Ticket 27: a pull request closed without a merge.
+      if (request.method === "PATCH" && pullsMatch[3] !== undefined) {
+        const pr = pulls.get(`${repo}#${pullsMatch[3]}`);
+        if (pr === undefined) return json(request, 404, { message: "Not Found" });
+        const input = (bodyOf(request) ?? {}) as { readonly state?: "open" | "closed" };
+        if (input.state !== undefined) {
+          pr.state = input.state;
+          setIssueState(repo, pr.number, input.state, held.user);
+        }
+        return json(request, 200, pullOf(repo, pr));
       }
       if (request.method === "GET") {
         const head = query.get("head")?.split(":")[1];
@@ -1029,6 +1145,8 @@ export const makeFakeGitHub = () => {
     reviews,
     editComment,
     assign,
+    openIssue,
+    setIssueState,
     /** The comments a login wrote on an issue, as they read on GitHub. */
     commentsBy: (repo: string, number: number, login: string) =>
       (comments.get(`${repo}#${number}`) ?? [])

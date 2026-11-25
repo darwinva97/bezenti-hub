@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { AiAccountId } from "./aiAccounts.ts";
 import { EnvironmentId, ProjectId, SpaceId, UserId } from "./baseSchemas.ts";
+import { MakitaAutonomy } from "./makitaAutonomy.ts";
 import { ModelSelection } from "./modelSelection.ts";
 
 /**
@@ -239,6 +240,8 @@ export const MakitaConfig = Schema.Struct({
   environmentId: Schema.NullOr(EnvironmentId),
   /** Ticket 24: the labels Makita may add or remove on its issue or PR; empty: it never labels. */
   labels: Schema.Array(Schema.String),
+  /** Tickets 25–27: what it does on its own. */
+  autonomy: MakitaAutonomy,
   pausedAt: Schema.NullOr(Schema.String),
   pausedBy: Schema.NullOr(UserId),
   pausedByName: Schema.NullOr(Schema.String),
@@ -270,6 +273,8 @@ const MakitaConfigFields = {
   environmentId: Schema.NullOr(EnvironmentId),
   /** Ticket 24: absent on an update keeps the list; on a new configuration, none. */
   labels: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** Tickets 25–27; left out: everything off on create, unchanged on update. */
+  autonomy: Schema.optionalKey(MakitaAutonomy),
 };
 
 export const MakitaConfigInput = Schema.Struct({ spaceId: SpaceId, ...MakitaConfigFields });

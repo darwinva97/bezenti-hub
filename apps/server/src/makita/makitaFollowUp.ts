@@ -4,12 +4,19 @@
  */
 import { frameUntrusted } from "../scheduledTasks/webhookTemplate.ts";
 
-/** What made a task: the label, an assignment to Makita, a mention, or `/makita retry`. */
-export type MakitaTrigger = "label" | "assigned" | "mention" | "retry";
+/**
+ * What made a task: the label, an assignment to Makita, a mention, `/makita retry`, or (ticket 25)
+ * an issue opened by someone the configuration answers.
+ */
+export type MakitaTrigger = "label" | "assigned" | "mention" | "retry" | "new-issue";
 
 /** A queued event's trigger, from its `detail` (null: the label, as ticket 04 queued it). */
 export const triggerOf = (detail: string | null): MakitaTrigger | "stop" =>
-  detail === "assigned" || detail === "mention" || detail === "retry" || detail === "stop"
+  detail === "assigned" ||
+  detail === "mention" ||
+  detail === "retry" ||
+  detail === "stop" ||
+  detail === "new-issue"
     ? detail
     : "label";
 
@@ -33,6 +40,8 @@ export const askedText = (input: {
       return `${who} mentioned you in a comment on the ${item} below.`;
     case "retry":
       return `${who} asked you to try the ${item} below again: an earlier attempt failed.`;
+    case "new-issue":
+      return `${who} opened the ${item} below; this repository hands every new issue of theirs to you.`;
   }
 };
 

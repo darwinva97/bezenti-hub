@@ -119,6 +119,11 @@ export const AuditAction = Schema.Literals([
   "makita.github.merge",
   // Makita ticket 24: labels Makita added or removed on its task's issue or pull request.
   "makita.github.labels",
+  // Makita ticket 26: a task's issue closed with a verdict, and reopened by `/makita reopen`.
+  "makita.github.close_issue",
+  "makita.github.reopen_issue",
+  // Makita ticket 27: one of Makita's pull requests closed (idle, or an approver's bad-work label).
+  "makita.github.close_pull_request",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -413,8 +418,16 @@ export const AUDIT_DETAIL_KEYS = {
    * A configuration's Space, repositories (`all` or how many Projects), whom it answers and what
    * it may do; `changed` names the fields an update changed. Never a login list or a model's text.
    */
-  "makita.config.create": ["space", "repos", "callersMode", "capability", "mayLand", "aiAccount"],
-  "makita.config.update": ["space", "changed", "capability", "mayLand", "aiAccount"],
+  "makita.config.create": [
+    "space",
+    "repos",
+    "callersMode",
+    "capability",
+    "mayLand",
+    "aiAccount",
+    "autonomy",
+  ],
+  "makita.config.update": ["space", "changed", "capability", "mayLand", "aiAccount", "autonomy"],
   "makita.config.delete": ["space"],
   /** `manual` by its creator or an Admin, `owner`, or the Hub's (`permission-revoked`, …). */
   "makita.config.pause": ["space", "reason"],
@@ -469,6 +482,32 @@ export const AUDIT_DETAIL_KEYS = {
     "orderedByUser",
     "orderComment",
     "via",
+  ],
+  /** A verdict Makita closed its task's issue with (as the creator's agent); never the reason. */
+  "makita.github.close_issue": [
+    "space",
+    "repo",
+    "number",
+    "makita",
+    "verdict",
+    "ref",
+    "confidence",
+    "stateReason",
+  ],
+  /** An issue Makita closed, reopened on `/makita reopen` by `by` (a public login). */
+  "makita.github.reopen_issue": ["space", "repo", "number", "makita", "by"],
+  /** `idle` for `days`, or `bad-work` by an approver (`by`, `byId`); the branch deleted. */
+  "makita.github.close_pull_request": [
+    "space",
+    "repo",
+    "number",
+    "makita",
+    "pr",
+    "branch",
+    "reason",
+    "days",
+    "by",
+    "byId",
   ],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],

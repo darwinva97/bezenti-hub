@@ -17,6 +17,19 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { linkCodeOf, linkFromCommentWithin } from "./GitHubIdentities.ts";
+import { storedAutonomyOf } from "./makitaAutonomy.ts";
+import {
+  decideBadWorkLabel,
+  decideReopenComment,
+  isReopenCommand,
+  recordReopenWithin,
+} from "./makitaAutonomyRows.ts";
+import {
+  decideNewIssue,
+  decodeOpenedPage,
+  NEW_ISSUES_FEED,
+  newIssuesPath,
+} from "./makitaNewIssues.ts";
 import { decideApprovalComment, isApprovalCommand, liveTaskOfItem } from "./makitaApprovers.ts";
 import { decideMergeComment, isMergeCommand } from "./makitaLandingRules.ts";
 import { allowedCallerIds } from "./makitaCallers.ts";
@@ -83,6 +96,11 @@ export interface ListeningConfig {
   readonly ignore: ReadonlySet<string>;
   /** Not paused, in an open Space. */
   readonly active: boolean;
+  /** Ticket 25: «Every new issue», and since when (Hub time). */
+  readonly newIssues: boolean;
+  readonly newIssuesSince: string | null;
+  /** Ticket 27: its bad-work label, lower case; null: none. */
+  readonly badWorkLabel: string | null;
 }
 
 /** One repository and the configurations listening to it, oldest first. */
@@ -212,6 +230,7 @@ const speaksToMakita = (comment: FeedComment, login: string) =>
   commandOf(comment.body) !== undefined ||
   isApprovalCommand(comment.body) ||
   isMergeCommand(comment.body) ||
+  isReopenCommand(comment.body) ||
   mentions(comment.body, login);
 
 /** A reaction owed to a link command once its batch commits (ticket 08). */
@@ -223,9 +242,12 @@ interface LinkReaction {
   readonly content: "+1" | "confused";
 }
 
+/** Ticket 25: the `new-issues` feed has a cursor row too, read only while an option needs it. */
+type CursorFeed = MakitaFeed | typeof NEW_ISSUES_FEED;
+
 interface CursorWrite {
   readonly repo: string;
-  readonly feed: MakitaFeed;
+  readonly feed: CursorFeed;
   readonly etag: string | null;
   readonly cursor: string | null;
   readonly nextPollAt: number;
@@ -287,11 +309,12 @@ const make = Effect.gen(function* () {
       readonly callersJson: string;
       readonly ignoreJson: string;
       readonly pausedAt: string | null;
+      readonly autonomyJson: string;
     }>`
       SELECT config_id AS "configId", space_id AS "spaceId", repos_json AS "reposJson",
         triggers_json AS "triggersJson", created_by AS "createdBy",
         callers_mode AS "callersMode", callers_json AS "callersJson",
-        ignore_json AS "ignoreJson", paused_at AS "pausedAt"
+        ignore_json AS "ignoreJson", paused_at AS "pausedAt", autonomy_json AS "autonomyJson"
       FROM makita_configs WHERE deleted_at IS NULL
       ORDER BY created_at, config_id
     `;
@@ -318,6 +341,7 @@ const make = Effect.gen(function* () {
         ),
       );
       const active = row.pausedAt === null && !space.resource.archived && !space.resource.frozen;
+      const ownWay = storedAutonomyOf(row.autonomyJson);
       for (const project of listenedProjects(repos.value, yield* projectsOf(spaceId, now))) {
         const key = project.repo.toLowerCase();
         const entry = byRepo.get(key) ?? { repo: project.repo, configs: [] };
@@ -333,6 +357,9 @@ const make = Effect.gen(function* () {
             callerIds,
             ignore,
             active,
+            newIssues: ownWay.newIssues,
+            newIssuesSince: ownWay.newIssuesSince,
+            badWorkLabel: ownWay.badWorkLabel?.toLowerCase() ?? null,
           });
         }
         byRepo.set(key, entry);
@@ -377,7 +404,7 @@ const make = Effect.gen(function* () {
 
   const saveFailure = (input: {
     readonly repo: string;
-    readonly feed: MakitaFeed;
+    readonly feed: CursorFeed;
     readonly reason: MakitaGitHubError["reason"];
     readonly unreachable: boolean;
     readonly now: number;
@@ -476,6 +503,34 @@ const make = Effect.gen(function* () {
               : pull
                 ? "pr-locked"
                 : "issue-locked",
+        });
+        continue;
+      }
+      // Tickets 26–27: an approver's bad-work label on Makita's pull request, an issue Makita
+      // closed reopened by a person; acted on by MakitaCleanup once this batch is written.
+      const ownWay =
+        (yield* decideBadWorkLabel(sql, {
+          repo: input.listened.repo,
+          event,
+          configs: input.listened.configs,
+          makitaId: input.makitaUserId,
+        })) ??
+        (yield* recordReopenWithin(sql, {
+          repo: input.listened.repo,
+          event,
+          configs: input.listened.configs,
+          makitaId: input.makitaUserId,
+        }));
+      if (ownWay !== undefined && event.issue !== undefined) {
+        yield* insertEvent({
+          eventKey: `gh:issue-event:${event.id}`,
+          repo: input.listened.repo,
+          number: event.issue.number,
+          kind: event.issue.pull_request === undefined ? "issue" : "pull",
+          actor: event.actor,
+          createdAtGithub: event.created_at ?? null,
+          now: input.now,
+          decision: ownWay,
         });
         continue;
       }
@@ -639,6 +694,26 @@ const make = Effect.gen(function* () {
         });
         continue;
       }
+      // Ticket 26: `/makita reopen` on an issue Makita closed (MakitaCleanup reopens it).
+      const reopen = yield* decideReopenComment(sql, {
+        repo: input.listened.repo,
+        comment,
+        configs: input.listened.configs,
+        makitaId: input.makita.id,
+      });
+      if (reopen !== undefined) {
+        yield* insertEvent({
+          eventKey: comment.eventKey,
+          repo: input.listened.repo,
+          number: comment.number,
+          kind: comment.kind,
+          actor: comment.author,
+          createdAtGithub: comment.createdAt,
+          now: input.now,
+          decision: reopen,
+        });
+        continue;
+      }
       // Ticket 11: `/makita ok` in an issue or pull request conversation, for its live task.
       const approval =
         isApprovalCommand(comment.body) && comment.eventKey.startsWith("gh:issue-comment:")
@@ -705,7 +780,7 @@ const make = Effect.gen(function* () {
   /** A read GitHub refused: marks the feed; `stop` when nothing more may run this pass. */
   const onFailure = Effect.fn("MakitaIntake.onFailure")(function* (input: {
     readonly repo: string;
-    readonly feed: MakitaFeed;
+    readonly feed: CursorFeed;
     readonly error: MakitaGitHubError;
     readonly now: number;
   }) {
@@ -1049,6 +1124,96 @@ const make = Effect.gen(function* () {
     return queued as ReadonlyArray<QueuedEvent>;
   });
 
+  /**
+   * Ticket 25: the issues opened in a repository, newest first, down to the cursor (the highest
+   * number seen). The first read only sets the cursor: no issue older than the switch is taken.
+   */
+  const pollNewIssues = Effect.fn("MakitaIntake.pollNewIssues")(function* (input: {
+    readonly listened: ListenedRepo;
+    readonly row: CursorRow | undefined;
+    readonly makitaId: number;
+    readonly now: number;
+  }) {
+    const { listened, row, now } = input;
+    const repo = listened.repo;
+    const feed = NEW_ISSUES_FEED;
+    const pathOf = (page: number) => newIssuesPath(repo, FEED_PAGE, page);
+    const decode = decodeOpenedPage;
+    const answer = yield* read(feed, pathOf(1), row?.etag);
+    if (answer._tag === "Failure") {
+      return yield* onFailure({ repo, feed, error: answer.failure, now });
+    }
+    const etag = answer.success.headers["etag"] ?? null;
+    const asked = askedInterval(answer.success);
+    const known = row?.cursor == null ? undefined : Number(row.cursor);
+    if (answer.success.status === 304) {
+      const nextPollAt = now + Math.max(yield* cadenceOf(repo, now), asked);
+      yield* saveCursor({
+        repo,
+        feed,
+        etag: row?.etag ?? etag,
+        cursor: row?.cursor ?? null,
+        nextPollAt,
+      });
+      return [] as ReadonlyArray<QueuedEvent>;
+    }
+    const first = decode(answer.success.body);
+    if (known === undefined || !Number.isFinite(known)) {
+      const newest = first.items.reduce((max, item) => Math.max(max, item.number), 0);
+      const nextPollAt = now + Math.max(yield* cadenceOf(repo, now), asked);
+      yield* saveCursor({ repo, feed, etag, cursor: String(newest), nextPollAt });
+      return [] as ReadonlyArray<QueuedEvent>;
+    }
+    const pages = yield* nextPages({
+      operation: feed,
+      pathOf,
+      first: first.items,
+      firstSize: first.size,
+      decode,
+      more: (items, size) => size >= FEED_PAGE && items.every((item) => item.number > known),
+    });
+    if (pages._tag === "failed") {
+      return yield* onFailure({ repo, feed, error: pages.error, now });
+    }
+    const fresh = [...new Map(pages.items.map((item) => [item.number, item])).values()]
+      .filter((item) => item.number > known)
+      .toSorted((a, b) => a.number - b.number);
+    const newest = fresh.reduce((max, item) => Math.max(max, item.number), known);
+    const decisions = fresh.flatMap((item) => {
+      const decision = decideNewIssue({
+        item,
+        configs: listened.configs,
+        makitaId: input.makitaId,
+      });
+      return decision === undefined ? [] : [{ item, decision }];
+    });
+    const nextPollAt =
+      now + Math.max(decisions.length > 0 ? FAST_POLL_MS : yield* cadenceOf(repo, now), asked);
+    return yield* inBatch(
+      { repo, feed, etag: pages.capped ? null : etag, cursor: String(newest), nextPollAt },
+      Effect.gen(function* () {
+        const queued: Array<QueuedEvent> = [];
+        for (const { item, decision } of decisions) {
+          const eventKey = `gh:new-issue:${item.id}`;
+          const inserted = yield* insertEvent({
+            eventKey,
+            repo,
+            number: item.number,
+            kind: "issue",
+            actor: item.author,
+            createdAtGithub: item.createdAt,
+            now,
+            decision,
+          });
+          if (inserted && decision.outcome === "queued") {
+            queued.push({ eventKey, repo, number: item.number, configId: decision.configId });
+          }
+        }
+        return queued as ReadonlyArray<QueuedEvent>;
+      }),
+    );
+  });
+
   const pollDue = Effect.gen(function* () {
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     if (now - (yield* Ref.get(lastPrune)) >= PRUNE_EVERY_MS) {
@@ -1106,6 +1271,29 @@ const make = Effect.gen(function* () {
           queued.push(...reviews);
         }
       }
+      // Ticket 25: read only while a configuration takes every new issue; otherwise forgotten,
+      // so switching it on starts from «now».
+      const opened = cursors.get(`${entry.repo.toLowerCase()}|${NEW_ISSUES_FEED}`);
+      if (!entry.configs.some((config) => config.newIssues)) {
+        if (opened !== undefined) {
+          yield* sql`
+            DELETE FROM makita_repo_cursors
+            WHERE host = ${MAKITA_GITHUB_HOST} AND repo = ${opened.repo}
+              AND feed = ${NEW_ISSUES_FEED}
+          `;
+        }
+        continue;
+      }
+      const openedDue = millisOf(opened?.nextPollAt ?? null);
+      if (openedDue !== undefined && openedDue > now) continue;
+      const fresh = yield* pollNewIssues({
+        listened: entry,
+        row: opened,
+        makitaId: makita.id,
+        now,
+      });
+      if (fresh === "stop") break poll;
+      queued.push(...fresh);
     }
     return queued as ReadonlyArray<QueuedEvent>;
   }).pipe(

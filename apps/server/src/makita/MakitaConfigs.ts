@@ -56,6 +56,13 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { approveFromHubWithin } from "./makitaApprovalFlow.ts";
+import {
+  autonomyNames,
+  autonomyView,
+  checkAutonomy,
+  nextAutonomy,
+  storedAutonomyOf,
+} from "./makitaAutonomy.ts";
 import { MakitaGitHub, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { checkedLabels, labelsOf, repoLabelNames } from "./makitaLabels.ts";
 import { resolveProjectRepo, type ResolvedRepo } from "./MakitaRepos.ts";
@@ -132,6 +139,8 @@ interface ConfigRow {
   readonly pausedBy: string | null;
   readonly pausedByName: string | null;
   readonly pausedReason: MakitaConfig["pausedReason"];
+  /** Tickets 25–27 (`makitaAutonomy.ts`). */
+  readonly autonomyJson: string;
 }
 
 const CONFIG_SELECT = `
@@ -143,7 +152,8 @@ const CONFIG_SELECT = `
     c.approval, c.approvers_json AS "approversJson", c.base_branch AS "baseBranch",
     c.environment_id AS "environmentId", c.labels_json AS "labelsJson",
     c.paused_at AS "pausedAt", c.paused_by AS "pausedBy",
-    pu.display_name AS "pausedByName", c.paused_reason AS "pausedReason"
+    pu.display_name AS "pausedByName", c.paused_reason AS "pausedReason",
+    c.autonomy_json AS "autonomyJson"
   FROM makita_configs c
   LEFT JOIN users cu ON cu.user_id = c.created_by
   LEFT JOIN users pu ON pu.user_id = c.paused_by`;
@@ -265,7 +275,14 @@ const checkedInput = (
   const { assigned, mention } = input.triggers;
   const raw = input.triggers.label ?? "";
   const label = raw.trim();
-  if (label.length === 0 && raw.length === 0 && !assigned && !mention) {
+  // Ticket 25: «Every new issue» may be the only trigger.
+  if (
+    label.length === 0 &&
+    raw.length === 0 &&
+    !assigned &&
+    !mention &&
+    input.autonomy?.newIssues !== true
+  ) {
     return refused("Choose what hands an issue to Makita: a label, assigning it, or a mention.");
   }
   if ((label.length === 0 && raw.length > 0) || label.length > 50 || label !== raw) {
@@ -705,6 +722,7 @@ const make = Effect.gen(function* () {
         baseBranch: row.baseBranch,
         environmentId: row.environmentId as MakitaConfig["environmentId"],
         labels: labelsOf(row.labelsJson),
+        autonomy: autonomyView(storedAutonomyOf(row.autonomyJson)),
         pausedAt: row.pausedAt,
         pausedBy: row.pausedBy === null ? null : UserId.make(row.pausedBy),
         pausedByName: row.pausedByName,
@@ -915,12 +933,17 @@ const make = Effect.gen(function* () {
     // Ticket 24: the labels Makita may set; none unless named.
     const labels = checkedLabels(input.labels ?? [], value.label);
     if (labels._tag === "refused") return yield* fail("invalid", labels.message);
+    // Tickets 25–27: what it does on its own, every option off unless sent.
+    const ownWay =
+      input.autonomy === undefined ? undefined : checkAutonomy(input.autonomy, value.label);
+    if (ownWay?._tag === "refused") return yield* fail("invalid", ownWay.message);
     yield* checkedSelection(input.actorUserId, input.spaceId, value.modelSelection);
     yield* checkedProjects(input.spaceId, value.repos);
     const callers = yield* resolvedCallers(value.logins, []);
     const approvers = yield* resolvedCallers(value.approverLogins, []);
     const configId = newConfigId();
     const at = DateTime.formatIso(yield* DateTime.now);
+    const autonomy = nextAutonomy(null, ownWay?.value, at);
     const outcome = yield* sql
       .withTransaction(
         Effect.gen(function* () {
@@ -942,13 +965,13 @@ const make = Effect.gen(function* () {
             INSERT INTO makita_configs (config_id, space_id, name, created_by, created_at,
               updated_at, repos_json, triggers_json, callers_mode, callers_json, strangers,
               model_selection_json, capability, may_land, approval, approvers_json, base_branch,
-              environment_id)
+              environment_id, autonomy_json)
             VALUES (${configId}, ${input.spaceId}, ${value.name}, ${input.actorUserId}, ${at},
               ${at}, ${jsonOf(value.repos)},
               ${jsonOf(value.triggers)}, ${value.callersMode},
               ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, ${value.capability},
               ${value.mayLand ? 1 : 0}, ${value.approval}, ${jsonOf(approvers)}, ${value.baseBranch},
-              NULL)
+              NULL, ${autonomy.json})
           `;
           yield* sql`
             UPDATE makita_configs SET labels_json = ${jsonOf(labels.labels)}
@@ -966,6 +989,7 @@ const make = Effect.gen(function* () {
               capability: value.capability,
               mayLand: value.mayLand,
               aiAccount: value.modelSelection.aiAccountId ?? null,
+              autonomy: autonomyNames(autonomy.view),
             },
           });
           return { _tag: "made", principal } as const;
@@ -1021,6 +1045,9 @@ const make = Effect.gen(function* () {
     // Ticket 24: an update without `labels` keeps the list (checked again: the trigger may move).
     const labels = checkedLabels(input.labels ?? labelsOf(found.row.labelsJson), value.label);
     if (labels._tag === "refused") return yield* fail("invalid", labels.message);
+    const ownWay =
+      input.autonomy === undefined ? undefined : checkAutonomy(input.autonomy, value.label);
+    if (ownWay?._tag === "refused") return yield* fail("invalid", ownWay.message);
     yield* checkedSelection(input.actorUserId, spaceId, value.modelSelection);
     yield* checkedProjects(spaceId, value.repos);
     const known = Option.getOrElse(decodeUsers(found.row.callersJson), () => []);
@@ -1058,10 +1085,15 @@ const make = Effect.gen(function* () {
       approvers: jsonOf(approvers),
       labels: jsonOf(labels.labels),
     };
-    const changed = (Object.keys(after) as Array<keyof typeof after>).filter(
-      (key) => before[key] !== after[key],
-    );
     const at = DateTime.formatIso(yield* DateTime.now);
+    // Tickets 25–27: named in `changed` by option (`new_issues`, `close_issues`, …).
+    const autonomy = nextAutonomy(found.row.autonomyJson, ownWay?.value, at);
+    const changed = [
+      ...(Object.keys(after) as Array<keyof typeof after>).filter(
+        (key) => before[key] !== after[key],
+      ),
+      ...autonomy.changed,
+    ];
     if (changed.length > 0) {
       const outcome = yield* sql
         .withTransaction(
@@ -1079,7 +1111,8 @@ const make = Effect.gen(function* () {
                 model_selection_json = ${after.modelSelection}, base_branch = ${after.baseBranch},
                 capability = ${after.capability}, may_land = ${after.may_land ? 1 : 0},
                 approval = ${after.approval},
-                approvers_json = ${after.approvers}, updated_at = ${at}
+                approvers_json = ${after.approvers}, autonomy_json = ${autonomy.json},
+                updated_at = ${at}
               WHERE config_id = ${input.configId} AND deleted_at IS NULL
               RETURNING config_id AS id
             `;
@@ -1099,6 +1132,7 @@ const make = Effect.gen(function* () {
                 capability: value.capability,
                 mayLand: value.mayLand,
                 aiAccount: value.modelSelection.aiAccountId ?? null,
+                autonomy: autonomyNames(autonomy.view),
               },
             });
             return "changed" as const;

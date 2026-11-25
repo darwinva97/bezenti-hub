@@ -5,6 +5,7 @@ import {
 import {
   type AiAccountId,
   type EnvironmentId,
+  MAKITA_AUTONOMY_OFF,
   MAKITA_DEFAULT_LABEL,
   type MakitaConfig,
   type MakitaConfigInput,
@@ -51,6 +52,7 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { InfoTip } from "./InfoTip";
 import { MakitaActivityDialog, makitaUsageText, useMakitaActivity } from "./MakitaActivity";
 import { labelNamesOf, MakitaLabelsField } from "./MakitaLabelsField";
+import { autonomyText, MakitaAutonomyFields } from "./MakitaAutonomyFields";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useSettingsSpace } from "./useSettingsSpace";
 
@@ -415,6 +417,9 @@ function ConfigRow(props: {
         {config.capability === "push" ? (
           <span className="text-xs text-muted-foreground">{approvalText(config)}</span>
         ) : null}
+        {autonomyText(config.autonomy).length === 0 ? null : (
+          <span className="text-xs text-muted-foreground">{`On its own: ${autonomyText(config.autonomy)}`}</span>
+        )}
         <span className="text-xs text-muted-foreground">
           {`${config.aiAccountName ?? "An AI account that no longer exists"} · ${config.modelSelection.model}${config.baseBranch === null ? "" : ` · base ${config.baseBranch}`} · Space Sandbox`}
         </span>
@@ -576,6 +581,8 @@ function ConfigDialog(props: {
   const [landConfirmed, setLandConfirmed] = useState(config?.mayLand ?? false);
   // Ticket 24: the labels Makita may set, as names separated by commas.
   const [labels, setLabels] = useState(config?.labels.join(", ") ?? "");
+  // Tickets 25–27: what it does on its own, every option off until ticked.
+  const [autonomy, setAutonomy] = useState(config?.autonomy ?? MAKITA_AUTONOMY_OFF);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -588,7 +595,7 @@ function ConfigDialog(props: {
   const ready =
     name.trim().length > 0 &&
     (allRepos || chosen.length > 0) &&
-    (label.trim().length > 0 || assigned || mention) &&
+    (label.trim().length > 0 || assigned || mention || autonomy.newIssues) &&
     (callersMode !== "list" || logins.length > 0) &&
     account !== null &&
     model.trim().length > 0 &&
@@ -637,6 +644,7 @@ function ConfigDialog(props: {
                   baseBranch: baseBranch.trim().length === 0 ? null : baseBranch.trim(),
                   environmentId: null,
                   labels: labelNamesOf(labels),
+                  autonomy,
                 },
                 config?.configId ?? null,
               )
@@ -985,6 +993,12 @@ function ConfigDialog(props: {
                 value={labels}
                 onChange={setLabels}
                 disabled={pending}
+              />
+              <MakitaAutonomyFields
+                value={autonomy}
+                pushes={capability === "push"}
+                disabled={pending}
+                onChange={setAutonomy}
               />
               <div className="flex flex-col gap-1 text-xs">
                 <span className="font-medium">Where it works</span>

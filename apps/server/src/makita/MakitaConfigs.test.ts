@@ -202,6 +202,7 @@ it.live.skipIf(!posix || platform === undefined)(
         capability: "comment",
         mayLand: false,
         aiAccount: ctx.accounts.acmeClaude,
+        autonomy: "none",
       });
 
       // The Space's list: the configuration and, for her, the form's choices.

@@ -14,6 +14,7 @@ import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
+import * as GitHubIdentities from "./GitHubIdentities.ts";
 import * as MakitaAccount from "./MakitaAccount.ts";
 import * as MakitaConfigs from "./MakitaConfigs.ts";
 import * as MakitaGitHub from "./MakitaGitHub.ts";
@@ -93,6 +94,7 @@ export const makitaHub = Effect.gen(function* () {
           MakitaPermissions.layer,
           MakitaConfigs.layer,
           MakitaIntake.layer,
+          GitHubIdentities.layer,
         ),
       ),
       Layer.provide(Layer.mergeAll(launcher, masker, threads, gitWorld.machines)),
@@ -118,6 +120,7 @@ export const makitaHub = Effect.gen(function* () {
     makitaStops: Context.get(context, MakitaStops.MakitaStops),
     makitaPushes: Context.get(context, MakitaPushes.MakitaPushes),
     gitWorld,
+    githubIdentities: Context.get(context, GitHubIdentities.GitHubIdentities),
   };
 });
 

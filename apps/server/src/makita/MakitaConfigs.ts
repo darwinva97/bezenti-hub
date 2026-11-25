@@ -146,6 +146,9 @@ interface Checked {
   /** Null when only an assignment or a mention starts a task (ticket 09). */
   readonly label: string | null;
   readonly triggers: MakitaTriggers;
+  /** Ticket 08: also the creator alone, or the Space's Members, by their linked accounts. */
+  readonly callersMode: "creator" | "list" | "members";
+  /** Only for `list`. */
   readonly logins: ReadonlyArray<string>;
   readonly modelSelection: ModelSelection;
   readonly baseBranch: string | null;
@@ -211,9 +214,9 @@ const fail = (reason: MakitaError["reason"], message: string) =>
   Effect.fail(new MakitaError({ reason, message }));
 
 /**
- * The values taken so far (the table holds the spec's others for later tickets): a list of GitHub
- * users, any trigger, «Comment and analyse» or (ticket 10) «Also push branches» with the default
- * approval or none, no landing, the Sandbox.
+ * The values taken so far (the table holds the spec's others for later tickets): the creator, a
+ * list of GitHub users or the Members (ticket 08), any trigger, «Comment and analyse» or
+ * (ticket 10) «Also push branches» with the default approval or none, no landing, the Sandbox.
  */
 const checkedInput = (
   input: Omit<MakitaConfigInput, "spaceId">,
@@ -242,11 +245,16 @@ const checkedInput = (
   if ((label.length === 0 && raw.length > 0) || label.length > 50 || label !== raw) {
     return refused("Name the label that hands an issue to Makita (up to 50 characters).");
   }
-  if (input.callersMode !== "list") {
-    return refused("For now Makita answers only a list of GitHub users.");
+  const callersMode = input.callersMode;
+  if (callersMode === "anyone") {
+    return refused(
+      "For now Makita answers only you, a list of GitHub users, or this Space's Members with a linked GitHub account.",
+    );
   }
-  const logins = input.callers.map((login) => login.trim().replace(/^@/u, ""));
-  if (logins.length === 0 || logins.length > MAX_CALLERS) {
+  // «Only me» and «Members» keep no list: they read the linked accounts at each event.
+  const logins =
+    callersMode === "list" ? input.callers.map((login) => login.trim().replace(/^@/u, "")) : [];
+  if (callersMode === "list" && (logins.length === 0 || logins.length > MAX_CALLERS)) {
     return refused(`Name 1 to ${MAX_CALLERS} GitHub users it answers.`);
   }
   const bad = logins.find((login) => !validLogin(login));
@@ -275,6 +283,7 @@ const checkedInput = (
       repos: input.repos,
       label: label.length === 0 ? null : label,
       triggers: { label: label.length === 0 ? null : label, assigned, mention },
+      callersMode,
       logins: [...new Map(logins.map((login) => [login.toLowerCase(), login])).values()],
       modelSelection: input.modelSelection,
       baseBranch: baseBranch === null || baseBranch.length === 0 ? null : baseBranch,
@@ -896,7 +905,7 @@ const make = Effect.gen(function* () {
               environment_id)
             VALUES (${configId}, ${input.spaceId}, ${value.name}, ${input.actorUserId}, ${at},
               ${at}, ${jsonOf(value.repos)},
-              ${jsonOf(value.triggers)}, 'list',
+              ${jsonOf(value.triggers)}, ${value.callersMode},
               ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, ${value.capability}, 0,
               ${value.approval}, '[]', ${value.baseBranch}, NULL)
           `;
@@ -908,7 +917,7 @@ const make = Effect.gen(function* () {
             detail: {
               space: input.spaceId,
               repos: "all" in value.repos ? "all" : value.repos.projects.length,
-              callersMode: "list",
+              callersMode: value.callersMode,
               capability: value.capability,
               mayLand: false,
               aiAccount: value.modelSelection.aiAccountId ?? null,
@@ -972,6 +981,7 @@ const make = Effect.gen(function* () {
       name: found.row.name,
       repos: found.row.reposJson,
       triggers: found.row.triggersJson,
+      callersMode: found.row.callersMode,
       callers: found.row.callersJson,
       modelSelection: found.row.modelSelectionJson,
       baseBranch: found.row.baseBranch,
@@ -982,6 +992,7 @@ const make = Effect.gen(function* () {
       name: value.name,
       repos: jsonOf(value.repos),
       triggers: jsonOf(value.triggers),
+      callersMode: value.callersMode,
       callers: jsonOf(callers),
       modelSelection: jsonOf(value.modelSelection),
       baseBranch: value.baseBranch,
@@ -1004,7 +1015,8 @@ const make = Effect.gen(function* () {
             if (decision._tag === "Deny") return "denied" as const;
             const updated = yield* sql<{ readonly id: string }>`
               UPDATE makita_configs SET name = ${after.name}, repos_json = ${after.repos},
-                triggers_json = ${after.triggers}, callers_json = ${after.callers},
+                triggers_json = ${after.triggers}, callers_mode = ${after.callersMode},
+                callers_json = ${after.callers},
                 model_selection_json = ${after.modelSelection}, base_branch = ${after.baseBranch},
                 capability = ${after.capability}, approval = ${after.approval}, updated_at = ${at}
               WHERE config_id = ${input.configId} AND deleted_at IS NULL

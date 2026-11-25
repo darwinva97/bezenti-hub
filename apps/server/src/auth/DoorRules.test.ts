@@ -808,6 +808,54 @@ describe("every door of the Hub declares its rule", () => {
     ]);
   });
 
+  it("links a User's GitHub account over the session's WS RPCs only: no HTTP, raw route or MCP door, the code in one answer, its tables GitHubIdentities' (Makita ticket 08)", () => {
+    const identityRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
+      /^githubIdentity\./u.test(rpc._tag),
+    );
+    expect(identityRpcs.map((rpc) => rpc._tag).toSorted()).toEqual([
+      "githubIdentity.get",
+      "githubIdentity.linkCode",
+      "githubIdentity.unlink",
+    ]);
+    // Decided in GitHubIdentities for the session's own person, by AccessPolicy.
+    for (const rpc of identityRpcs) {
+      expect(typeof spaceAccessForRpcMethod(rpc._tag), rpc._tag).toBe("object");
+    }
+    expect(
+      [
+        ...Object.keys(HTTP_ENDPOINT_RULES),
+        ...Object.keys(MCP_TOOL_RULES),
+        ...Object.keys(RAW_ROUTE_RULES),
+        ...rawRoutes,
+        ...mcpTools,
+        ...endpoints,
+      ].filter((name) => /github[-_ ]?identit|link[-_ ]?code/iu.test(name)),
+    ).toEqual([]);
+    // Only `linkCode` answers with the code; no answer carries its hash.
+    for (const rpc of identityRpcs) {
+      const fields = successFields(rpc.successSchema.ast);
+      expect(fields.has("code"), rpc._tag).toBe(rpc._tag === "githubIdentity.linkCode");
+      for (const secret of ["hash", "codeHash", "secret", "token"]) {
+        expect(fields, rpc._tag).not.toContain(secret);
+      }
+    }
+    // The tables: named by GitHubIdentities and its migration alone.
+    for (const table of ["github_identities", "github_link_codes"]) {
+      expect(
+        files
+          .filter(({ text }) => new RegExp(`\\b${table}\\b`, "u").test(text))
+          .map(({ file }) => file)
+          // The door inventory names the code among the credentials.
+          .filter((file) => file !== "auth/DoorRules.ts")
+          .toSorted(),
+        table,
+      ).toEqual(["makita/GitHubIdentities.ts", "persistence/Migrations/169_GitHubIdentities.ts"]);
+    }
+    for (const { file, text } of toolModules) {
+      expect(text, file).not.toMatch(/GitHubIdentities/u);
+    }
+  });
+
   it("reads AI usage over one WS RPC only, counts only: no HTTP, raw route or MCP door, tables read by AiUsage alone (spec 4 ticket 05)", () => {
     const usageRpcs = [...WsRpcGroup.requests.values()].filter((rpc) =>
       /^aiUsage\./u.test(rpc._tag),

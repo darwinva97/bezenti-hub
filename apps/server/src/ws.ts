@@ -270,6 +270,7 @@ import { withHubAiAccountLimits } from "./usage/hubAiAccountLimits.ts";
 import { withHubGatewayUsage } from "./usage/hubGatewayUsage.ts";
 import * as AccessKeys from "./ai/AccessKeys.ts";
 import * as MakitaAccount from "./makita/MakitaAccount.ts";
+import * as GitHubIdentities from "./makita/GitHubIdentities.ts";
 import * as MakitaActivity from "./makita/MakitaActivity.ts";
 import * as MakitaConfigs from "./makita/MakitaConfigs.ts";
 import * as MakitaPermissions from "./makita/MakitaPermissions.ts";
@@ -1457,6 +1458,7 @@ export const layerWsRpc = (
       const makitaPermissions = yield* MakitaPermissions.MakitaPermissions;
       const makitaConfigs = yield* MakitaConfigs.MakitaConfigs;
       const makitaActivity = yield* MakitaActivity.MakitaActivity;
+      const githubIdentities = yield* GitHubIdentities.GitHubIdentities;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const triage = yield* TriageService.TriageService;
@@ -3029,6 +3031,10 @@ export const layerWsRpc = (
         // What Makita does and spends, and the Makita tasks of the Threads one sees (ticket 07).
         [WS_METHODS.makitaActivity]: (input) => makitaActivity.activityForSession(input),
         [WS_METHODS.makitaThreads]: () => makitaActivity.threadsForSession,
+        // The session's own linked GitHub account (Makita ticket 08).
+        [WS_METHODS.githubIdentityGet]: () => githubIdentities.getForSession,
+        [WS_METHODS.githubIdentityLinkCode]: (input) => githubIdentities.linkCodeForSession(input),
+        [WS_METHODS.githubIdentityUnlink]: (input) => githubIdentities.unlinkForSession(input),
         [WS_METHODS.projectCloneStart]: (input) =>
           requireCloneDestination(input.destinationPath, { asProject: true }).pipe(
             Effect.andThen(

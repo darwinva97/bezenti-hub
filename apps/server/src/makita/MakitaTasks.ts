@@ -12,7 +12,6 @@ import {
   DEFAULT_RUNTIME_MODE,
   MAKITA_GITHUB_HOST,
   MakitaError,
-  MakitaGitHubUser,
   MakitaTriggers,
   MessageId,
   ModelSelection,
@@ -40,6 +39,7 @@ import { frameUntrusted } from "../scheduledTasks/webhookTemplate.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
+import { allowedCallerIds } from "./makitaCallers.ts";
 import { MakitaConfigs } from "./MakitaConfigs.ts";
 import { commentOfKey, commentPath, decodeOneComment } from "./makitaFeeds.ts";
 import { askedText, followUpText, type MakitaTrigger, triggerOf } from "./makitaFollowUp.ts";
@@ -93,9 +93,6 @@ const Comment = Schema.Struct({
 type Comment = typeof Comment.Type;
 const decodeIssue = Schema.decodeUnknownOption(Schema.fromJsonString(Issue));
 const decodeComments = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(Comment)));
-const decodeUsers = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Array(MakitaGitHubUser)),
-);
 const decodeSelection = Schema.decodeUnknownOption(Schema.fromJsonString(ModelSelection));
 const decodeTriggers = Schema.decodeUnknownOption(Schema.fromJsonString(MakitaTriggers));
 
@@ -183,6 +180,7 @@ interface ConfigRow {
   readonly name: string;
   readonly createdBy: string;
   readonly triggersJson: string;
+  readonly callersMode: string;
   readonly callersJson: string;
   readonly modelSelectionJson: string;
   readonly capability: string;
@@ -201,6 +199,7 @@ interface TaskRow {
   readonly state: string;
   readonly replies: number;
   readonly createdBy: string;
+  readonly callersMode: string;
   readonly callersJson: string;
   readonly configPausedAt: string | null;
   readonly configDeletedAt: string | null;
@@ -576,7 +575,8 @@ const make = Effect.gen(function* () {
   ) {
     const [config] = yield* sql<ConfigRow>`
       SELECT config_id AS "configId", space_id AS "spaceId", name, created_by AS "createdBy",
-        triggers_json AS "triggersJson", callers_json AS "callersJson",
+        triggers_json AS "triggersJson", callers_mode AS "callersMode",
+        callers_json AS "callersJson",
         model_selection_json AS "modelSelectionJson", capability, base_branch AS "baseBranch",
         paused_at AS "pausedAt", deleted_at AS "deletedAt"
       FROM makita_configs WHERE config_id = ${row.configId}
@@ -742,9 +742,9 @@ const make = Effect.gen(function* () {
           ? null
           : { branch, base: config.baseBranch, cwd: workspace.success.cwd };
 
-      const allowed = new Set(
-        Option.getOrElse(decodeUsers(config.callersJson), () => []).map((user) => user.id),
-      );
+      // Ticket 08: whom it answers now, linked accounts included.
+      const allowed =
+        (yield* allowedCallerIds(sql, [config])).get(config.configId) ?? new Set<number>();
       const triggers = decodeTriggers(config.triggersJson);
       const label = Option.isSome(triggers) ? (triggers.value.label ?? "makita") : "makita";
       const text = issueText({
@@ -910,7 +910,8 @@ const make = Effect.gen(function* () {
       SELECT t.task_id AS "taskId", t.config_id AS "configId", t.space_id AS "spaceId", t.repo,
         t.number, t.thread_id AS "threadId", t.state,
         t.replies_without_person AS replies, c.created_by AS "createdBy",
-        c.callers_json AS "callersJson", c.paused_at AS "configPausedAt",
+        c.callers_mode AS "callersMode", c.callers_json AS "callersJson",
+        c.paused_at AS "configPausedAt",
         c.deleted_at AS "configDeletedAt"
       FROM makita_tasks t JOIN makita_configs c ON c.config_id = t.config_id
       WHERE t.thread_id = ${threadId}
@@ -938,9 +939,10 @@ const make = Effect.gen(function* () {
     const { issue, comments } = yield* readIssue(task.repo, task.number).pipe(
       Effect.catch(githubRefusal("read the issue")),
     );
-    const allowed = new Set(
-      Option.getOrElse(decodeUsers(task.callersJson), () => []).map((user) => user.id),
-    );
+    const allowed =
+      (yield* allowedCallerIds(sql, [task]).pipe(
+        Effect.catch(storage("read whom Makita answers")),
+      )).get(task.configId) ?? new Set<number>();
     return {
       repo: task.repo,
       number: task.number,

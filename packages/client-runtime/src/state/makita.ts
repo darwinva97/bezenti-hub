@@ -78,6 +78,19 @@ export function createMakitaEnvironmentAtoms<R, E>(
       idleTtlMs: 0,
       refreshIntervalMs: 30_000,
     }),
+    // Ticket 08: the session's own linked GitHub account (User settings → Account).
+    getGitHubIdentity: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:github-identity-get",
+      tag: WS_METHODS.githubIdentityGet,
+    }),
+    githubLinkCode: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:github-identity-link-code",
+      tag: WS_METHODS.githubIdentityLinkCode,
+    }),
+    unlinkGitHub: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:github-identity-unlink",
+      tag: WS_METHODS.githubIdentityUnlink,
+    }),
     // The Makita tasks of the Threads one sees: the Thread header and the list's «Makita» filter.
     threads: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:makita:threads",

@@ -231,6 +231,7 @@ import * as AiGatewayKeyRevocation from "./ai/AiGatewayKeyRevocation.ts";
 import * as ProviderKeyMigration from "./ai/ProviderKeyMigration.ts";
 import * as AccessKeys from "./ai/AccessKeys.ts";
 import * as MakitaAccount from "./makita/MakitaAccount.ts";
+import * as GitHubIdentities from "./makita/GitHubIdentities.ts";
 import * as MakitaActivity from "./makita/MakitaActivity.ts";
 import * as MakitaConfigs from "./makita/MakitaConfigs.ts";
 import * as MakitaGitHub from "./makita/MakitaGitHub.ts";
@@ -606,6 +607,8 @@ const layerAuth = Layer.mergeAll(
             MakitaConfigs.layer,
             // What Makita does and spends (Makita ticket 07): reads the usage log below.
             MakitaActivity.layer,
+            // Each User's linked GitHub account (Makita ticket 08).
+            GitHubIdentities.layer,
           ).pipe(
             Layer.provideMerge(MakitaGitHub.layer),
             Layer.provide(FetchHttpClient.layer),

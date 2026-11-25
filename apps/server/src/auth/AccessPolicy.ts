@@ -173,7 +173,14 @@ export interface MakitaConfigResource {
   readonly pausedByOwner: boolean;
 }
 
+/** A User's linked GitHub account (Makita ticket 08), as someone reads or changes it. */
+export interface GitHubIdentityResource {
+  readonly kind: "github-identity";
+  readonly userId: UserId;
+}
+
 export type Resource =
+  | GitHubIdentityResource
   | MakitaSpaceResource
   | MakitaConfigResource
   | GrantResource
@@ -368,6 +375,12 @@ export type Action =
   | "makita.resume"
   | "makita.edit"
   | "makita.delete"
+  /**
+   * A linked GitHub account (Makita ticket 08), on a `GitHubIdentityResource`. Manage (read it,
+   * ask for a code): its own User only. Unlink: its own User or the Owner.
+   */
+  | "githubIdentity.manage"
+  | "githubIdentity.unlink"
   // Grants (`GrantResource`; see `decideGrant`).
   /** Lend one's resource to a Space; decided on the resource's owner and the destination. */
   | "grant.give"
@@ -1120,6 +1133,18 @@ const decideGrant = (principal: Principal, action: Action, grant: GrantResource)
 
 export function decide(principal: Principal, action: Action, resource: Resource): Decision {
   if (principal.inactive === true) return deny("user-inactive");
+  if (
+    action === "githubIdentity.manage" ||
+    action === "githubIdentity.unlink" ||
+    resource.kind === "github-identity"
+  ) {
+    if (action !== "githubIdentity.manage" && action !== "githubIdentity.unlink") {
+      return deny("wrong-resource");
+    }
+    if (resource.kind !== "github-identity") return deny("wrong-resource");
+    if (resource.userId === principal.userId) return allow;
+    return action === "githubIdentity.unlink" && principal.isOwner ? allow : deny("not-yours");
+  }
   if (action === "makita.use" || action === "makita.view" || resource.kind === "makita-space") {
     return (action === "makita.use" || action === "makita.view") && resource.kind === "makita-space"
       ? decideMakita(principal, action, resource)

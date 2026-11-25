@@ -25,6 +25,7 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import { forgetIdentityWithin } from "./GitHubIdentities.ts";
 import { pauseCreatorConfigsWithin } from "./makitaRows.ts";
 
 const NOT_YOURS =
@@ -60,6 +61,8 @@ export const forgetUserWithin = Effect.fn("MakitaPermissions.forgetUserWithin")(
     spaceId: null,
     reason: "creator-left",
   });
+  // Ticket 08: their linked GitHub account goes with them.
+  yield* forgetIdentityWithin(sql, actor, userId);
 });
 
 export class MakitaPermissions extends Context.Service<

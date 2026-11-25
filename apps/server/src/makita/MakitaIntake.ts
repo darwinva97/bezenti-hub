@@ -3,13 +3,7 @@
  * events and comments of every listened repository, and decides each trigger once, by its natural
  * key. The only writer of `makita_repo_cursors` and `makita_events`; no text is stored.
  */
-import {
-  MAKITA_GITHUB_HOST,
-  MakitaGitHubUser,
-  MakitaRepos,
-  MakitaTriggers,
-  SpaceId,
-} from "@t3tools/contracts";
+import { MAKITA_GITHUB_HOST, MakitaRepos, MakitaTriggers, SpaceId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -19,11 +13,15 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as AuditLog from "../audit/AuditLog.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import { linkCodeOf, linkFromCommentWithin } from "./GitHubIdentities.ts";
+import { allowedCallerIds } from "./makitaCallers.ts";
 import {
   commandOf,
   type CommentCursor,
+  commentOfKey,
   commentPath,
   decideComment,
   decodeCommentPage,
@@ -128,9 +126,6 @@ const decodeEvents = Schema.decodeUnknownOption(
 const decodeEvent = Schema.decodeUnknownOption(IssueEvent);
 const decodeRepos = Schema.decodeUnknownOption(Schema.fromJsonString(MakitaRepos));
 const decodeTriggers = Schema.decodeUnknownOption(Schema.fromJsonString(MakitaTriggers));
-const decodeUsers = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Array(MakitaGitHubUser)),
-);
 const decodeLogins = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 /**
@@ -209,6 +204,15 @@ const ENDED_STATES: ReadonlyArray<string> = ["done", "stopped", "failed"];
 const speaksToMakita = (comment: FeedComment, login: string) =>
   commandOf(comment.body) !== undefined || mentions(comment.body, login);
 
+/** A reaction owed to a link command once its batch commits (ticket 08). */
+interface LinkReaction {
+  readonly repo: string;
+  readonly number: number;
+  readonly eventKey: string;
+  readonly userId: string;
+  readonly content: "+1" | "confused";
+}
+
 interface CursorWrite {
   readonly repo: string;
   readonly feed: MakitaFeed;
@@ -266,16 +270,21 @@ const make = Effect.gen(function* () {
       readonly spaceId: string;
       readonly reposJson: string;
       readonly triggersJson: string;
+      readonly createdBy: string;
+      readonly callersMode: string;
       readonly callersJson: string;
       readonly ignoreJson: string;
       readonly pausedAt: string | null;
     }>`
       SELECT config_id AS "configId", space_id AS "spaceId", repos_json AS "reposJson",
-        triggers_json AS "triggersJson", callers_json AS "callersJson",
+        triggers_json AS "triggersJson", created_by AS "createdBy",
+        callers_mode AS "callersMode", callers_json AS "callersJson",
         ignore_json AS "ignoreJson", paused_at AS "pausedAt"
       FROM makita_configs WHERE deleted_at IS NULL
       ORDER BY created_at, config_id
     `;
+    // Ticket 08: whom each answers, read fresh on every pass (links and Members change).
+    const allowed = yield* allowedCallerIds(sql, rows);
     const spaceIds = [...new Set(rows.map((row) => SpaceId.make(row.spaceId)))];
     const found = yield* spaces.spacesById(spaceIds);
     const byRepo = new Map<string, { repo: string; configs: Array<ListeningConfig> }>();
@@ -290,9 +299,7 @@ const make = Effect.gen(function* () {
       const label = Option.isSome(triggers) ? (triggers.value.label?.toLowerCase() ?? null) : null;
       const assigned = Option.isSome(triggers) && triggers.value.assigned;
       const mention = Option.isSome(triggers) && triggers.value.mention;
-      const callerIds = new Set(
-        Option.getOrElse(decodeUsers(row.callersJson), () => []).map((user) => user.id),
-      );
+      const callerIds = allowed.get(row.configId) ?? new Set<number>();
       const ignore = new Set(
         Option.getOrElse(decodeLogins(row.ignoreJson), () => []).map((login) =>
           login.toLowerCase(),
@@ -385,7 +392,8 @@ const make = Effect.gen(function* () {
     readonly now: number;
     readonly decision: {
       readonly outcome: MakitaEventOutcome;
-      readonly configId: string;
+      /** Null for a link command (ticket 08): no Space's activity shows it. */
+      readonly configId: string | null;
       readonly detail: string | null;
     };
   }) =>
@@ -486,16 +494,108 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * Ticket 08: `@<makita> link <code>` from a new comment by a person links its author's account
+   * to the code's User (GitHubIdentities decides). Never a task; the event names no configuration.
+   */
+  const handleLink = Effect.fn("MakitaIntake.handleLink")(function* (input: {
+    readonly repo: string;
+    readonly comment: FeedComment;
+    readonly code: string;
+    readonly makitaId: number;
+    readonly now: number;
+    readonly reactions: Array<LinkReaction>;
+  }) {
+    const { comment } = input;
+    const author = comment.author;
+    const outcome: MakitaEventOutcome =
+      author === null || author.type === "Bot"
+        ? "ignored-bot"
+        : author.id === input.makitaId
+          ? "ignored-self"
+          : comment.updatedAt !== comment.createdAt
+            ? "ignored-edited"
+            : "command";
+    const inserted = yield* insertEvent({
+      eventKey: comment.eventKey,
+      repo: input.repo,
+      number: comment.number,
+      kind: comment.kind,
+      actor: author,
+      createdAtGithub: comment.createdAt,
+      now: input.now,
+      decision: { outcome, configId: null, detail: "link" },
+    });
+    if (!inserted || outcome !== "command" || author === null) return;
+    const linked = yield* linkFromCommentWithin(sql, {
+      code: input.code,
+      author,
+      repo: input.repo,
+      now: input.now,
+    });
+    if (linked.outcome !== "refused") {
+      input.reactions.push({
+        repo: input.repo,
+        number: comment.number,
+        eventKey: comment.eventKey,
+        userId: linked.userId,
+        content: linked.outcome === "linked" ? "+1" : "confused",
+      });
+    }
+  });
+
+  /** After the batch commits: Makita's reaction to each link command it decided (best effort). */
+  const react = Effect.fn("MakitaIntake.react")(function* (reaction: LinkReaction) {
+    const ref = commentOfKey(reaction.eventKey);
+    if (ref === undefined) return;
+    yield* github
+      .rest({
+        operation: "comment-reaction",
+        method: "POST",
+        path: `${commentPath(reaction.repo, ref.feed, ref.id)}/reactions`,
+        body: { content: reaction.content },
+      })
+      .pipe(
+        Effect.andThen(
+          AuditLog.write(sql)({
+            actor: { source: "system" },
+            action: "makita.github.reaction",
+            target: { kind: "user", id: reaction.userId },
+            detail: { repo: reaction.repo, number: reaction.number, content: reaction.content },
+          }),
+        ),
+        Effect.catch((error) =>
+          Effect.logWarning("Makita could not react to a link command", {
+            repo: reaction.repo,
+            reason: "reason" in error ? error.reason : "storage",
+          }),
+        ),
+      );
+  });
+
   /** Comments: mentions of Makita and `/makita` commands, each decided once (ticket 09). */
   const handleComments = Effect.fn("MakitaIntake.handleComments")(function* (input: {
     readonly listened: ListenedRepo;
     readonly comments: ReadonlyArray<FeedComment>;
     readonly makita: { readonly id: number; readonly login: string };
     readonly now: number;
+    readonly reactions: Array<LinkReaction>;
   }) {
     const queued: Array<QueuedEvent> = [];
     for (const comment of input.comments) {
       if (!speaksToMakita(comment, input.makita.login)) continue;
+      const code = linkCodeOf(comment.body, input.makita.login);
+      if (code !== undefined) {
+        yield* handleLink({
+          repo: input.listened.repo,
+          comment,
+          code,
+          makitaId: input.makita.id,
+          now: input.now,
+          reactions: input.reactions,
+        });
+        continue;
+      }
       const decision = decideComment({
         comment,
         configs: input.listened.configs,
@@ -771,7 +871,8 @@ const make = Effect.gen(function* () {
     const triggered = fresh.some((comment) => speaksToMakita(comment, input.makita.login));
     const nextPollAt =
       now + Math.max(pages.capped || triggered ? FAST_POLL_MS : yield* cadenceOf(repo, now), asked);
-    return yield* inBatch(
+    const reactions: Array<LinkReaction> = [];
+    const queued = yield* inBatch(
       // Capped: the ETag of the first page would hide the rest, so none is kept.
       {
         repo,
@@ -780,8 +881,10 @@ const make = Effect.gen(function* () {
         cursor: formatCommentCursor(moved),
         nextPollAt,
       },
-      handleComments({ listened, comments: fresh, makita: input.makita, now }),
+      handleComments({ listened, comments: fresh, makita: input.makita, now, reactions }),
     );
+    yield* Effect.forEach(reactions, react, { discard: true });
+    return queued;
   });
 
   const pollDue = Effect.gen(function* () {

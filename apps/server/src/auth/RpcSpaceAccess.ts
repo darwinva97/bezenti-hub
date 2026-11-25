@@ -122,6 +122,11 @@ const MAKITA_THREADS = {
   unscoped:
     "Makita Threads: MakitaActivity answers a person's own session only (never an agent, the Hub's shell or a one-Space session) with the Makita tasks whose Space is among those the person sees (SpaceDirectory.viewableSpaces; the Owner all): repository, number, GitHub caller login and state, nothing of a configuration",
 };
+/** Makita ticket 08: a User's linked GitHub account, decided in GitHubIdentities. */
+const GITHUB_IDENTITY = {
+  unscoped:
+    "Linked GitHub account: GitHubIdentities answers a person's own session only (never an agent, the Hub's shell or a one-Space session) with that User's own link and pending code state, never another's (AccessPolicy `githubIdentity.manage`); `linkCode` answers the new code once; `unlink` the User's own or, for the Owner, anyone's (`githubIdentity.unlink`; another's answers like a missing one)",
+};
 /** A Space's Makita configurations: MakitaConfigs decides each on its Space. */
 const MAKITA_CONFIGS = {
   unscoped:
@@ -209,6 +214,9 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.makitaTasksStop]: MAKITA_CONFIGS,
   [WS_METHODS.makitaActivity]: MAKITA_ACTIVITY,
   [WS_METHODS.makitaThreads]: MAKITA_THREADS,
+  [WS_METHODS.githubIdentityGet]: GITHUB_IDENTITY,
+  [WS_METHODS.githubIdentityLinkCode]: GITHUB_IDENTITY,
+  [WS_METHODS.githubIdentityUnlink]: GITHUB_IDENTITY,
   // Spec 5 ticket 03. Allowances and a Space's defaults: AccessPolicy `vault.manage` and
   // `vault.choose` in Vaults. A Project's choices and a Thread's names: the named Project or
   // Thread must be visible first, then the same rules (EffectiveVaults for the Thread).

@@ -648,6 +648,11 @@ export const KEYCLOAK_SESSION_CREDENTIALS: Readonly<Record<string, LoginCredenti
     outlivesLogin:
       "a Space's key, not a session's or a User's (access-keys spec): it lives until it expires (at most 366 days) or whoever manages the Space, or the Owner, revokes it; its issuer leaving or signing out changes nothing",
   },
+  "GitHub link codes": {
+    where: ["github_link_codes.code_hash"],
+    outlivesLogin:
+      "not a way into the Hub (Makita ticket 08): one code links one named GitHub account to its User, single-use, 15 minutes at most, ended by a newer code or an unlink; the proof is a comment that account writes",
+  },
   "the master key backup": {
     where: [],
     outlivesLogin: "data, not a way in: it leaves once, audited, after a strong factor",

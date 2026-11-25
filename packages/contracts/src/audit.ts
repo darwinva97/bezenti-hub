@@ -108,6 +108,9 @@ export const AuditAction = Schema.Literals([
   "makita.github.reaction",
   // Makita ticket 10: a branch Makita pushed to GitHub for a task.
   "makita.github.push",
+  // Makita ticket 08: a User's GitHub account linked (proved from it) or unlinked.
+  "github_identity.link",
+  "github_identity.unlink",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -429,6 +432,10 @@ export const AUDIT_DETAIL_KEYS = {
   "makita.github.reaction": ["space", "repo", "number", "makita", "content"],
   /** A push to the task's own `makita/…` branch (as the creator's agent): never a diff. */
   "makita.github.push": ["space", "repo", "number", "makita", "branch", "sha", "commits"],
+  /** The GitHub account by numeric id and login (public), and the repository it was proved in. */
+  "github_identity.link": ["githubUserId", "login", "repo"],
+  /** Which account and why: `user` (its User), `owner`, `replaced` or `user-removed`. */
+  "github_identity.unlink": ["githubUserId", "login", "reason"],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

@@ -83,6 +83,12 @@ import {
   MakitaThreadsResult,
 } from "./makitaActivity.ts";
 import {
+  GitHubIdentityUnlinkInput,
+  GitHubIdentityView,
+  GitHubLinkCode,
+  GitHubLinkCodeInput,
+} from "./githubIdentity.ts";
+import {
   AiGatewayError,
   AiGatewayKeyCreateInput,
   AiGatewayKeyCreateResult,
@@ -807,6 +813,10 @@ export const WS_METHODS = {
   // Makita ticket 07: what Makita does and spends; the Makita tasks of the Threads one sees.
   makitaActivity: "makita.activity",
   makitaThreads: "makita.threads",
+  // Makita ticket 08: the session's own linked GitHub account.
+  githubIdentityGet: "githubIdentity.get",
+  githubIdentityLinkCode: "githubIdentity.linkCode",
+  githubIdentityUnlink: "githubIdentity.unlink",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1594,6 +1604,21 @@ const WsMakitaActivityRpc = Rpc.make(WS_METHODS.makitaActivity, {
 const WsMakitaThreadsRpc = Rpc.make(WS_METHODS.makitaThreads, {
   payload: MakitaThreadsInput,
   success: MakitaThreadsResult,
+  error: MakitaErrors,
+});
+const WsGitHubIdentityGetRpc = Rpc.make(WS_METHODS.githubIdentityGet, {
+  payload: Schema.Struct({}),
+  success: GitHubIdentityView,
+  error: MakitaErrors,
+});
+const WsGitHubIdentityLinkCodeRpc = Rpc.make(WS_METHODS.githubIdentityLinkCode, {
+  payload: GitHubLinkCodeInput,
+  success: GitHubLinkCode,
+  error: MakitaErrors,
+});
+const WsGitHubIdentityUnlinkRpc = Rpc.make(WS_METHODS.githubIdentityUnlink, {
+  payload: GitHubIdentityUnlinkInput,
+  success: GitHubIdentityView,
   error: MakitaErrors,
 });
 const WsAiAccountsCreateRpc = Rpc.make(WS_METHODS.aiAccountsCreate, {
@@ -2735,6 +2760,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsMakitaTasksStopRpc,
   WsMakitaActivityRpc,
   WsMakitaThreadsRpc,
+  WsGitHubIdentityGetRpc,
+  WsGitHubIdentityLinkCodeRpc,
+  WsGitHubIdentityUnlinkRpc,
   WsProjectCloneStartRpc,
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,

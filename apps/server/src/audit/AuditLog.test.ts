@@ -657,6 +657,11 @@ it.effect(
         "makita.github.merge",
         // makita/MakitaTriage.test.ts (Makita ticket 24: labels from the configuration's list)
         "makita.github.labels",
+        // makita/MakitaIssueCloses.test.ts (Makita ticket 26: a verdict, and /makita reopen)
+        "makita.github.close_issue",
+        "makita.github.reopen_issue",
+        // makita/MakitaCleanup.test.ts (Makita ticket 27: idle or bad-work pull requests closed)
+        "makita.github.close_pull_request",
         // vaults/SecretProviderScopes.test.ts (Vaults ticket 03)
         "secret_provider.create",
         "secret_provider.update",

@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
+import { storedAutonomyOf } from "./makitaAutonomy.ts";
 
 /** A Thread's Makita task: what makes it a Makita Thread (ticket 05). */
 export interface MakitaThreadTask {
@@ -30,6 +31,8 @@ export interface MakitaThreadTask {
   readonly mayLand: boolean;
   /** Ticket 24: whether its configuration lists labels Makita may set (`makita_label`). */
   readonly labels: boolean;
+  /** Ticket 26: whether its configuration may close issues (`makita_close_issue`). */
+  readonly mayCloseIssues: boolean;
 }
 
 /** The states in which a task still works (or waits to); anything else has ended. */
@@ -56,10 +59,11 @@ export const makitaTaskOfThread = Effect.fn("makitaRows.makitaTaskOfThread")(fun
     readonly capability: string;
     readonly mayLand: number;
     readonly labels: number;
+    readonly autonomyJson: string;
   }>`
     SELECT t.task_id AS "taskId", t.config_id AS "configId", t.space_id AS "spaceId",
       t.state, c.created_by AS "createdBy", c.capability, c.may_land AS "mayLand",
-      (c.labels_json <> '[]') AS labels,
+      (c.labels_json <> '[]') AS labels, c.autonomy_json AS "autonomyJson",
       (c.paused_at IS NOT NULL OR c.deleted_at IS NOT NULL) AS "configPaused",
       COALESCE((SELECT global_paused_at IS NOT NULL FROM makita_account
         WHERE account_id = 'makita'), 1) AS "makitaPaused"
@@ -78,6 +82,7 @@ export const makitaTaskOfThread = Effect.fn("makitaRows.makitaTaskOfThread")(fun
         capability: row.capability,
         mayLand: row.mayLand === 1,
         labels: row.labels === 1,
+        mayCloseIssues: storedAutonomyOf(row.autonomyJson).closeIssues,
         halted: row.makitaPaused
           ? "makita-paused"
           : row.configPaused
@@ -103,7 +108,10 @@ export type MakitaTaskStopReason =
   | "github-stop"
   // Ticket 14: Makita's pull request closed without a merge, or locked.
   | "pr-closed"
-  | "pr-locked";
+  | "pr-locked"
+  // Ticket 27: its pull request closed by the Hub: idle for days, or an approver's bad-work label.
+  | "pr-idle"
+  | "bad-work";
 
 /** A task just stopped: what the turn interrupt and the answers need. */
 interface StoppedMakitaTask {

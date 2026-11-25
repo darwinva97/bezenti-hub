@@ -316,6 +316,10 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   makita_label: own(
     "the calling agent's own Thread, which must be a Makita task's whose configuration lists labels; adds or removes only those labels, never the trigger label, on its own issue or pull request only; the pause, the task's state and a per-task limit, checked on the Hub",
   ),
+  // Makita ticket 26: listed only when its configuration may close issues. The Hub decides.
+  makita_close_issue: own(
+    "the calling agent's own Thread, which must be a Makita task's whose configuration may close issues; only its own open issue, whose author the configuration answers or whose task an allowed person started, at or above the confidence threshold, once per issue ever, within the daily limit, while nothing is paused",
+  ),
   list_scheduled_tasks: own("visibleScheduledTasks, as scheduledTasksSubscribe"),
   list_thread_pull_requests: VISIBLE_THREAD,
   orchestrator_capabilities: own("the caller's own limits and the Hub's providers; no Space data"),

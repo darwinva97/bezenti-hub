@@ -555,6 +555,8 @@ export const MCP_DOOR_RULES: Record<string, DoorRule> = {
   makita_label: none("which public labels Makita set on its issue or pull request"),
   // Makita ticket 13: whether the Hub merged, the commit it made, or why not; no GitHub text.
   makita_request_merge: none("whether the Hub merged Makita's pull request: the commit, why not"),
+  // Makita ticket 26: whether the Hub closed the task's issue, or why not; no GitHub text.
+  makita_close_issue: none("whether the Hub closed the task's issue with its verdict, why not"),
   list_scheduled_tasks: none(
     "the calling agent's own work; what it says next is an event (masked)",
   ),

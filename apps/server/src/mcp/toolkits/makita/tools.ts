@@ -2,6 +2,12 @@ import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
+import {
+  CLOSE_ISSUE_DESCRIPTION,
+  CLOSE_VERDICTS,
+  MAX_CLOSE_REASON,
+} from "../../../makita/makitaCloseRules.ts";
+import { MakitaIssueCloses } from "../../../makita/MakitaIssueCloses.ts";
 import { MakitaLanding } from "../../../makita/MakitaLanding.ts";
 import {
   MERGE_REQUEST_KINDS,
@@ -222,6 +228,31 @@ const MakitaLabelTool = Tool.make("makita_label", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true);
 
+// Makita ticket 26: listed only where the configuration may close issues. The issue is the task's;
+// the Hub checks everything and posts the verdict before closing.
+const MakitaCloseIssueTool = Tool.make("makita_close_issue", {
+  description: CLOSE_ISSUE_DESCRIPTION,
+  parameters: Schema.Struct({
+    verdict: Schema.Literals(CLOSE_VERDICTS),
+    ref: Schema.optional(Schema.Number),
+    confidence: Schema.Number,
+    reason: Schema.String.check(Schema.isMaxLength(MAX_CLOSE_REASON)),
+  }),
+  success: Schema.Struct({ closed: Schema.Boolean, message: Schema.String }),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    MakitaIssueCloses,
+    ThreadManagementService.ThreadManagementService,
+  ],
+})
+  .annotate(Tool.Title, "Close your Makita task's issue with a verdict")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, true);
+
 export const MakitaToolkit = Toolkit.make(
   MakitaReadIssueTool,
   MakitaCommentTool,
@@ -231,4 +262,5 @@ export const MakitaToolkit = Toolkit.make(
   MakitaRequestMergeTool,
   MakitaSearchTool,
   MakitaLabelTool,
+  MakitaCloseIssueTool,
 );

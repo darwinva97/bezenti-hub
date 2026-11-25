@@ -21,7 +21,7 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 
 const caller = (
-  makita: "comment" | "push" | "land" | "label" | null,
+  makita: "comment" | "push" | "land" | "label" | "close" | null,
 ): McpInvocationContext.McpInvocationScope => ({
   environmentId: EnvironmentId.make("environment"),
   requestNamespace: "provider:thread",
@@ -42,6 +42,8 @@ const caller = (
           push: makita === "push" || makita === "land",
           land: makita === "land",
           label: makita === "label",
+          // Ticket 26: a configuration that only comments may still close issues.
+          close: makita === "close",
         },
       }),
 });
@@ -68,6 +70,7 @@ const NAMES = [
   "makita_request_merge",
   "makita_search",
   "makita_label",
+  "makita_close_issue",
   "merge_pull_request",
   "thread_history",
   "t3_background_wait",
@@ -113,12 +116,14 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
     const asPusher: Record<string, boolean> = {};
     const asLander: Record<string, boolean> = {};
     const asLabeler: Record<string, boolean> = {};
+    const asCloser: Record<string, boolean> = {};
     const asOther: Record<string, boolean> = {};
     for (const name of NAMES) {
       asMakita[name] = yield* reached(caller("comment"), name);
       asPusher[name] = yield* reached(caller("push"), name);
       asLander[name] = yield* reached(caller("land"), name);
       asLabeler[name] = yield* reached(caller("label"), name);
+      asCloser[name] = yield* reached(caller("close"), name);
       asOther[name] = yield* reached(caller(null), name);
     }
     // A scope that says land without push still gets no merge request.
@@ -141,6 +146,7 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       // Ticket 23: every Makita Thread may search its own repository; 24: labels only when listed.
       makita_search: true,
       makita_label: false,
+      makita_close_issue: false,
       merge_pull_request: false,
       thread_history: true,
       t3_background_wait: true,
@@ -161,6 +167,8 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
     // Ticket 13: only a configuration that may land sees the merge request; still no merge tool.
     expect(asLander).toEqual({ ...asPusher, makita_request_merge: true });
     expect(asLabeler).toEqual({ ...asMakita, makita_label: true });
+    // Ticket 26: only a configuration that may close issues sees the close request.
+    expect(asCloser).toEqual({ ...asMakita, makita_close_issue: true });
     expect(asOther).toEqual({
       makita_comment: false,
       makita_read_issue: false,
@@ -170,6 +178,7 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       makita_request_merge: false,
       makita_search: false,
       makita_label: false,
+      makita_close_issue: false,
       merge_pull_request: true,
       thread_history: true,
       t3_background_wait: true,
@@ -183,6 +192,7 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
     });
     expect([...McpInvocationContext.MAKITA_ALLOWED_TOOLS].toSorted()).toEqual([
       "makita_ci_logs",
+      "makita_close_issue",
       "makita_comment",
       "makita_label",
       "makita_open_pull_request",

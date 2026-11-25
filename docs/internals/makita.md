@@ -4,24 +4,26 @@ Makita is the Hub's GitHub bot teammate: a normal GitHub account whose token the
 
 ## Pieces (`apps/server/src/makita/`)
 
-| Module                 | Owns                                                     | Notes                                                                                                                                     |
-| ---------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `MakitaGitHub.ts`      | the only reader of the sealed token (`MakitaTokenStore`) | Its own REST client over the Hub's `HttpClient`, never Source Control's credential; tracing off; a 401 marks the account `token-invalid`. |
-| `MakitaAccount.ts`     | `makita_account`                                         | The Owner's: register or replace the token, «Stop all Makita work».                                                                       |
-| `MakitaPermissions.ts` | `makita_permissions`                                     | «May use Makita» per User and Space, the Owner's.                                                                                         |
-| `MakitaConfigs.ts`     | `makita_configs`                                         | A Space's configurations (repositories from each Project's checkout, callers by numeric id, a gateway AI account).                        |
-| `MakitaIntake.ts`      | `makita_repo_cursors`, `makita_events`                   | The poller (ticket 04).                                                                                                                   |
-| `MakitaTasks.ts`       | `makita_tasks`                                           | Tasks and their Threads, and the agent's GitHub writes (ticket 05).                                                                       |
-| `makitaRows.ts`        | shared reads                                             | `permittedIn`, `pauseCreatorConfigsWithin`, `stopTasksWithin`, `makitaTaskOfThread` (the seam other modules read), `configNames`.         |
-| `MakitaStops.ts`       | nothing (reads `makita_tasks`)                           | Interrupts the turn of each stopped task (ticket 06).                                                                                     |
-| `MakitaActivity.ts`    | nothing (reads)                                          | `makita.activity` and `makita.threads` (ticket 07): what Makita does and spends.                                                          |
-| `makitaFeeds.ts`       | nothing (pure)                                           | The comment feeds, mentions, `/makita` commands and their decision (ticket 09).                                                           |
-| `makitaFollowUp.ts`    | nothing (pure)                                           | How each trigger reads in the first message, and the message that wakes a Thread (ticket 09).                                             |
-| `MakitaPushes.ts`      | `makita_tasks.workspace_json`, `head_sha`, push state    | A pushing task's worktree and `makita_push` (ticket 10): validates and pushes through `MakitaGitHub`.                                     |
-| `MakitaMachines.ts`    | nothing                                                  | The machine side of a push over executor calls every machine serves (`move.fetch`, `move.prepare`, `captureCheckpoint`, upload).          |
-| `makitaBranch.ts`      | nothing                                                  | Names built by the Hub: `makita/<n>-<slug>`, its refs in the Hub repository, the bot's `noreply` identity, the worktree setup command.    |
-| `GitHubIdentities.ts`  | `github_identities`, `github_link_codes`                 | Each User's linked GitHub account and the one-time codes that prove it (ticket 08).                                                       |
-| `makitaCallers.ts`     | nothing (reads)                                          | Whom each configuration answers now, by numeric GitHub id (ticket 08).                                                                    |
+| Module                  | Owns                                                     | Notes                                                                                                                                     |
+| ----------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `MakitaGitHub.ts`       | the only reader of the sealed token (`MakitaTokenStore`) | Its own REST client over the Hub's `HttpClient`, never Source Control's credential; tracing off; a 401 marks the account `token-invalid`. |
+| `MakitaAccount.ts`      | `makita_account`                                         | The Owner's: register or replace the token, «Stop all Makita work».                                                                       |
+| `MakitaPermissions.ts`  | `makita_permissions`                                     | «May use Makita» per User and Space, the Owner's.                                                                                         |
+| `MakitaConfigs.ts`      | `makita_configs`                                         | A Space's configurations (repositories from each Project's checkout, callers by numeric id, a gateway AI account).                        |
+| `MakitaIntake.ts`       | `makita_repo_cursors`, `makita_events`                   | The poller (ticket 04).                                                                                                                   |
+| `MakitaTasks.ts`        | `makita_tasks`                                           | Tasks and their Threads, and the agent's GitHub writes (ticket 05).                                                                       |
+| `makitaRows.ts`         | shared reads                                             | `permittedIn`, `pauseCreatorConfigsWithin`, `stopTasksWithin`, `makitaTaskOfThread` (the seam other modules read), `configNames`.         |
+| `MakitaStops.ts`        | nothing (reads `makita_tasks`)                           | Interrupts the turn of each stopped task (ticket 06).                                                                                     |
+| `MakitaActivity.ts`     | nothing (reads)                                          | `makita.activity` and `makita.threads` (ticket 07): what Makita does and spends.                                                          |
+| `makitaFeeds.ts`        | nothing (pure)                                           | The comment feeds, mentions, `/makita` commands and their decision (ticket 09).                                                           |
+| `makitaFollowUp.ts`     | nothing (pure)                                           | How each trigger reads in the first message, and the message that wakes a Thread (ticket 09).                                             |
+| `MakitaPushes.ts`       | `makita_tasks.workspace_json`, `head_sha`, push state    | A pushing task's worktree and `makita_push` (ticket 10): validates and pushes through `MakitaGitHub`.                                     |
+| `MakitaMachines.ts`     | nothing                                                  | The machine side of a push over executor calls every machine serves (`move.fetch`, `move.prepare`, `captureCheckpoint`, upload).          |
+| `makitaBranch.ts`       | nothing                                                  | Names built by the Hub: `makita/<n>-<slug>`, its refs in the Hub repository, the bot's `noreply` identity, the worktree setup command.    |
+| `GitHubIdentities.ts`   | `github_identities`, `github_link_codes`                 | Each User's linked GitHub account and the one-time codes that prove it (ticket 08).                                                       |
+| `makitaCallers.ts`      | nothing (reads)                                          | Whom each configuration answers now, by numeric GitHub id (ticket 08).                                                                    |
+| `MakitaPullRequests.ts` | `makita_tasks.pr_number`, `ci_*`, `ci_fix_attempts`      | A pushing task's pull request (`makita_open_pull_request`), the CI watch (`makita-ci`) and `makita_ci_logs` (ticket 12).                  |
+| `makitaCi.ts`           | nothing (pure)                                           | A commit's CI verdict, the pull request's required sections and footer, what Makita says about CI.                                        |
 
 Only `makita/` names these tables (`DoorRules.test.ts` checks it). Other modules ask `makitaRows.makitaTaskOfThread`.
 
@@ -98,8 +100,20 @@ A configuration with «Also push branches» (`capability: push`) lets its tasks 
 - **The token.** Only `MakitaGitHub` reads it. Its git commands run on the Hub host in the Hub's bare repository, naming GitHub by URL, with the token in the environment of that one process through `HubRepository.withEnvironmentCredential`'s helper: never in an argument, a URL, a config file or a log.
 - **Stopping.** Every push reads the task again under a per-Thread lock and once more right before `git push`; a stop clears `pending_push_json`.
 
+## The pull request and its CI (ticket 12)
+
+- **`makita_open_pull_request { title, body }`.** Listed only when the configuration may push. The task must be an issue's, its branch already pushed, and without a PR yet (one per task). The body needs the headings Problem, Fix, Verified and Downsides, each with text; a missing one is refused by name. Title and body go through the creator's secret mask, anything token-shaped is refused, and so is a link to the Hub. The Hub opens the PR from the task's `makita/…` branch into `base_branch` (else GitHub's default branch) and appends «Opened by Makita for @<caller> (#<n>)». If GitHub already has one from a restart, it is adopted only when Makita's account opened it. The task records `pr_number` and goes `waiting-ci`. Audited `makita.github.pull_request`; linked to the Thread with `thread.pull-request.link`.
+- **The watch.** `MakitaPullRequests.watchCi` is a Scheduler source (`makita-ci`). It reads every task with `ci_state = pending` at most every 30 s, and never while the intake's rate-limit hold lasts; a rate limit here sets that same hold. It skips paused configurations, a stopped Makita and ended tasks. It reads `commits/{ci_sha}/check-runs` and `/status`: the exact commit Makita pushed. A `makita_push` with the PR open makes the new head the watched commit.
+  - **GREEN:** every check run completed with success, neutral or skipped, and every status success (`ciVerdictOf`, the rule ticket 13 lands on). Makita says so once on the issue, the fix count resets, and the task waits.
+  - **RED:** everything finished, something failed. The Thread is woken (`sendToThread`, queue, as the creator, `CommandId` `makita-ci:<taskId>:<sha>`) with the failing checks' names framed. At most 3 times in a row; the fourth RED does not wake it, and Makita says once on the PR «CI is still failing after 3 fixes; I'm stopping here.»
+  - **No CI:** no check 10 minutes after the push. **Timeout:** checks still running after 90 minutes. Each is said once on the PR, and the task waits for a person.
+  - A PR closed meanwhile (`closed`) or moved by someone else (`moved`) ends the watch without a word. Every Hub comment goes through the loop guard.
+- **`makita_ci_logs { job }`.** Only a failing check of the last RED, and only a GitHub Actions job. `MakitaGitHub.tail` streams the job's log and keeps its last 64 KiB. The text is masked, colour codes removed, and framed.
+
 ## What other tickets read
 
 - The gateway: `makitaTaskOfThread` on the Thread of a gateway key gives the configuration and `halted`. `GatewayCaller.makitaConfigId` carries the configuration.
 - Usage (ticket 07): `GatewayCaller.makitaConfigId` gives `makita_config_id`.
 - Approvers (ticket 11): `GitHubIdentities.linkedUserOf(sql, githubUserId)` names the Hub User who linked a GitHub id; `linkedIdsOf(sql, userIds)` the ids these Users linked. Whether the User may still act is the caller's check.
+- Landing (ticket 13): `MakitaPullRequests.ciOf(repo, sha)` gives the verdict of one commit («GREEN on the exact head»); the row has `pr_number`, `head_sha` and `last_push_at`.
+- The PR conversation (ticket 14): `pr_number` names Makita's own PR.

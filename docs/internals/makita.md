@@ -15,6 +15,8 @@ Makita is the Hub's GitHub bot teammate: a normal GitHub account whose token the
 | `makitaRows.ts`        | shared reads                                             | `permittedIn`, `pauseCreatorConfigsWithin`, `stopTasksWithin`, `makitaTaskOfThread` (the seam other modules read), `configNames`.         |
 | `MakitaStops.ts`       | nothing (reads `makita_tasks`)                           | Interrupts the turn of each stopped task (ticket 06).                                                                                     |
 | `MakitaActivity.ts`    | nothing (reads)                                          | `makita.activity` and `makita.threads` (ticket 07): what Makita does and spends.                                                          |
+| `makitaFeeds.ts`       | nothing (pure)                                           | The comment feeds, mentions, `/makita` commands and their decision (ticket 09).                                                           |
+| `makitaFollowUp.ts`    | nothing (pure)                                           | How each trigger reads in the first message, and the message that wakes a Thread (ticket 09).                                             |
 
 Only `makita/` names these tables (`DoorRules.test.ts` checks it). Other modules ask `makitaRows.makitaTaskOfThread`.
 
@@ -39,6 +41,14 @@ The Scheduler runs `makita-intake` every tick: `MakitaIntake.pollDue`, then `Mak
 - **The issue text** is framed with `webhookTemplate.frameUntrusted`: an unpredictable tag per request, with mentions broken. Each author is marked `allowed` or `not allowed`.
 - **`makita_comment`** posts only on its task's issue. The Hub refuses it when Makita or the configuration is paused or the task has ended. It masks every value the creator's Threads hold (`SecretMasker.forUser`) and refuses anything shaped like a token. It allows at most 5 Makita comments in a row without a person in between (the sixth does not go out; the Hub posts «Waiting for a person before I continue.» once) and at most 30 per issue in 24 hours. Every comment is audited as `makita.github.comment`.
 - **A closed or locked issue** stops its live task.
+
+## Mentions, assignment and commands (ticket 09)
+
+- **Three feeds per repository**, each with its own cursor row, ETag and cadence: issue events, `issues/comments` and `pulls/comments` (both with `since`, oldest change first). Every feed is read page by page, at most 10 pages a poll. A comment feed's cursor is the `updated_at` and id of the last comment handled; what the cap leaves is read on the next poll. The issue events feed is read down to its cursor; past 10 pages the rest is lost and logged.
+- **What is decided.** A comment is decided only when it mentions Makita (`@login` as a whole word, outside a `>` quote) or its first line is `/makita stop` or `/makita retry`. Keys are `gh:issue-comment:<id>` and `gh:review-comment:<id>`. A comment edited before Makita saw it is `ignored-edited`. Makita, bots and logins in `ignore_json` are ignored. An `assigned` event whose assignee is Makita's account starts a task for configurations with `triggers.assigned`, with the assigner as the caller.
+- **Who decides.** With a live task on the issue, that task's configuration and its list decide. Without one, the oldest active configuration with `triggers.mention` whose list holds the author's numeric id takes it. A mention on a pull request starts a comment-only task of kind `pull`.
+- **Continuing.** A mention by someone on the list, on an issue with a live task, wakes that task's Thread instead of starting a second one. The checks of a start run first. The comment is read again from GitHub by id and must be unedited and by the same author. It is framed like the first message and sent with `sendToThread` in mode `queue`, as the creator, with `CommandId` `makita:<event_key>`. The task goes `running` with `replies_without_person = 0`, and the event becomes `started` / `continued`.
+- **Commands.** `/makita stop` stops the issue's live task (`github-stop`, through `stopTasksWithin`). Makita answers with a 👍 reaction, audited as `makita.github.reaction`, and no text. `/makita retry` starts a new task only when the issue's newest task `failed`. Otherwise the event is `command` / `nothing-to-stop` or `nothing-to-retry`.
 
 ## Stopping (ticket 06)
 

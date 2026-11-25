@@ -61,6 +61,16 @@ const CI_NOTE =
 const NOT_ALLOWED =
   "You may not use Makita in this Space. The Owner gives that permission in Platform → Makita.";
 
+/** What hands an issue to a configuration, in one line (Makita ticket 09). */
+const triggersText = (triggers: MakitaConfig["triggers"]) =>
+  [
+    triggers.label === null ? null : `Label «${triggers.label}»`,
+    triggers.assigned ? "assigned to Makita" : null,
+    triggers.mention ? "a mention" : null,
+  ]
+    .filter((part) => part !== null)
+    .join(", ");
+
 const formatWhen = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
@@ -186,8 +196,8 @@ function MakitaConfigsPanel({
         <InfoTip label="About Makita configurations">
           Makita is this Hub's GitHub teammate. A configuration says which repositories it listens
           to, whom it answers, which of your AI accounts it spends and what it may do. When an
-          allowed person labels an issue, Makita analyses it in a Thread of yours and answers on the
-          issue.
+          allowed person labels an issue, assigns it to Makita or mentions Makita, Makita analyses
+          it in a Thread of yours and answers on GitHub.
         </InfoTip>
       }
       headerAction={
@@ -393,7 +403,7 @@ function ConfigRow(props: {
           {repos.length === 0 ? "none" : repos.join(", ")}
         </span>
         <span className="text-xs text-muted-foreground">
-          {`Label «${config.triggers.label ?? MAKITA_DEFAULT_LABEL}» · answers ${config.callers.map((caller) => `@${caller.login}`).join(", ")}`}
+          {`${triggersText(config.triggers)} · answers ${config.callers.map((caller) => `@${caller.login}`).join(", ")}`}
         </span>
         <span className="text-xs text-muted-foreground">
           {`${config.aiAccountName ?? "An AI account that no longer exists"} · ${config.modelSelection.model}${config.baseBranch === null ? "" : ` · base ${config.baseBranch}`} · Space Sandbox`}
@@ -494,7 +504,11 @@ function ConfigDialog(props: {
   const [chosen, setChosen] = useState<ReadonlyArray<ProjectId>>(
     config !== null && "projects" in config.repos ? config.repos.projects : [],
   );
-  const [label, setLabel] = useState(config?.triggers.label ?? MAKITA_DEFAULT_LABEL);
+  const [label, setLabel] = useState(
+    config === null ? MAKITA_DEFAULT_LABEL : (config.triggers.label ?? ""),
+  );
+  const [assigned, setAssigned] = useState(config?.triggers.assigned ?? false);
+  const [mention, setMention] = useState(config?.triggers.mention ?? false);
   const [callers, setCallers] = useState(
     config?.callers.map((caller) => caller.login).join(", ") ?? "",
   );
@@ -517,7 +531,7 @@ function ConfigDialog(props: {
   const ready =
     name.trim().length > 0 &&
     (allRepos || chosen.length > 0) &&
-    label.trim().length > 0 &&
+    (label.trim().length > 0 || assigned || mention) &&
     logins.length > 0 &&
     account !== null &&
     model.trim().length > 0;
@@ -544,7 +558,11 @@ function ConfigDialog(props: {
                   spaceId: props.spaceId,
                   name: name.trim(),
                   repos: allRepos ? { all: true } : { projects: chosen },
-                  triggers: { label: label.trim(), assigned: false, mention: false },
+                  triggers: {
+                    label: label.trim().length === 0 ? null : label.trim(),
+                    assigned,
+                    mention,
+                  },
                   callersMode: "list",
                   callers: logins,
                   strangers: "ignore",
@@ -664,6 +682,31 @@ function ConfigDialog(props: {
                     onChange={(event) => setBaseBranch(event.currentTarget.value)}
                   />
                 </label>
+              </div>
+              <div className="flex flex-col gap-1 text-xs font-medium">
+                Also hands an issue to Makita
+                <label className="flex items-center gap-2 font-normal">
+                  <Checkbox
+                    aria-label="Assigning it to Makita"
+                    disabled={pending}
+                    checked={assigned}
+                    onCheckedChange={(checked) => setAssigned(checked === true)}
+                  />
+                  Assigning it to Makita
+                </label>
+                <label className="flex items-center gap-2 font-normal">
+                  <Checkbox
+                    aria-label="Mentioning Makita"
+                    disabled={pending}
+                    checked={mention}
+                    onCheckedChange={(checked) => setMention(checked === true)}
+                  />
+                  Mentioning Makita in a comment on an issue or a pull request
+                </label>
+                <p className="font-normal text-muted-foreground">
+                  Leave the label empty to use only these. On an issue Makita already works on, a
+                  mention by someone it answers continues that work, and «/makita stop» stops it.
+                </p>
               </div>
               <label className="flex flex-col gap-1 text-xs font-medium">
                 It answers: a list of GitHub users

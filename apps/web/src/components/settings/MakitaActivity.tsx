@@ -311,7 +311,11 @@ function ActivityBody({
                 >
                   {event.repo}#{event.number}
                 </a>
-                <span>{OUTCOME_LABEL[event.outcome]}</span>
+                <span>
+                  {event.outcome === "started" && event.detail === "continued"
+                    ? "Continued a task"
+                    : OUTCOME_LABEL[event.outcome]}
+                </span>
                 <span className="text-muted-foreground">
                   {event.actorLogin === null ? "" : `@${event.actorLogin} · `}
                   {formatWhen(event.seenAt)}

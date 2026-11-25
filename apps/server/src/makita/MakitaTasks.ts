@@ -33,6 +33,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
+import { environmentRefusalMessage } from "../environments/EnvironmentRegistry.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { frameUntrusted } from "../scheduledTasks/webhookTemplate.ts";
@@ -947,7 +948,12 @@ const make = Effect.gen(function* () {
         .pipe(CommandActor.actAsResolved({ _tag: "User", userId: creator }), Effect.exit);
       const done = yield* nowIso;
       if (launched._tag === "Failure") {
-        const reason = oneLine(Cause.pretty(launched.cause), 300);
+        // Where it could not run is said in the Environment's own words, not as a stack.
+        const reason = oneLine(
+          environmentRefusalMessage(Cause.squash(launched.cause)) ??
+            Cause.pretty(launched.cause),
+          300,
+        );
         yield* Effect.logWarning("Makita could not start a task's Thread", {
           taskId: placed.taskId,
           repo: row.repo,

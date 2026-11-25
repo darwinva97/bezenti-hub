@@ -17,6 +17,9 @@ Makita is the Hub's GitHub bot teammate: a normal GitHub account whose token the
 | `MakitaActivity.ts`    | nothing (reads)                                          | `makita.activity` and `makita.threads` (ticket 07): what Makita does and spends.                                                          |
 | `makitaFeeds.ts`       | nothing (pure)                                           | The comment feeds, mentions, `/makita` commands and their decision (ticket 09).                                                           |
 | `makitaFollowUp.ts`    | nothing (pure)                                           | How each trigger reads in the first message, and the message that wakes a Thread (ticket 09).                                             |
+| `MakitaPushes.ts`      | `makita_tasks.workspace_json`, `head_sha`, push state    | A pushing task's worktree and `makita_push` (ticket 10): validates and pushes through `MakitaGitHub`.                                     |
+| `MakitaMachines.ts`    | nothing                                                  | The machine side of a push over executor calls every machine serves (`move.fetch`, `move.prepare`, `captureCheckpoint`, upload).          |
+| `makitaBranch.ts`      | nothing                                                  | Names built by the Hub: `makita/<n>-<slug>`, its refs in the Hub repository, the bot's `noreply` identity, the worktree setup command.    |
 
 Only `makita/` names these tables (`DoorRules.test.ts` checks it). Other modules ask `makitaRows.makitaTaskOfThread`.
 
@@ -35,7 +38,7 @@ The Scheduler runs `makita-intake` every tick: `MakitaIntake.pollDue`, then `Mak
 - **Order.** The task row goes first, holding a Thread id derived from the event key. Then `ThreadLaunchService.launch` runs as the creator (`CommandActor.actAsResolved`), with `CommandId` `makita:<event_key>`. The Thread is placed with `placement: "space-work"`: where the Space's work runs, never a requested machine and never the Project's preference. Last, Makita comments «On it. I'll report back here.», once per task. A restart before the launch replays it with the same ids.
 - **What the agent never has.**
   - Vault values: `EffectiveVaults` returns an empty set for a Makita Thread, so no workload identity is signed either.
-  - Other MCP tools: the MCP auth middleware marks the scope `makita`, and `layerMakitaToolGate` (an `McpServer.visibility` gate) lists and runs only `makita_read_issue`, `makita_comment`, `thread_history` and `t3_background_wait`. Nobody else sees `makita_*`.
+  - Other MCP tools: the MCP auth middleware marks the scope `makita`, and `layerMakitaToolGate` (an `McpServer.visibility` gate) lists and runs only `makita_read_issue`, `makita_comment`, `thread_history` and `t3_background_wait`, plus `makita_push` when its configuration may push (ticket 10). Nobody else sees `makita_*`.
   - Makita's token.
   - A move to another machine: `thread.move` is refused for a Makita Thread.
 - **The issue text** is framed with `webhookTemplate.frameUntrusted`: an unpredictable tag per request, with mentions broken. Each author is marked `allowed` or `not allowed`.
@@ -74,6 +77,16 @@ Makita has no token limits, so its use is always visible.
 - **`makita.activity {configId | spaceId}`.** A person's own session only. `makita.view` on the configuration's Space; another Space's configuration answers not-found, another Space by id forbidden. Without either it is the Owner's view of every configuration. The answer has the configurations (usage today, this week and this month), «Now», recent tasks, recent events with their outcome and detail, and usage per repository and per caller. Usage is null except for the creator, whoever reads the Space's AI usage, and the Owner. A task's Thread id is given only if its Space is one the viewer sees. The numbers come from `AiUsage.makitaUsage`, which reads the usage tables; Makita's tables are read in `makita/`.
 - **`makita.threads {}`.** The Makita tasks of the Threads the viewer may see, for the Thread header («Makita · repo#n · asked by @caller», linked to the issue) and the Thread list's «Makita» filter.
 - **Web.** Space settings → Makita shows today's tokens on each configuration and «Activity». Platform → Makita shows the Hub-wide activity next to «Stop all Makita work».
+
+## Pushing branches (ticket 10)
+
+A configuration with «Also push branches» (`capability: push`) lets its tasks change code. The agent never holds Makita's token.
+
+- **Its own worktree.** Before the launch, the Hub fetches the base (`base_branch`, else GitHub's default) with Makita's token into the Project's Hub repository at `refs/t3/project/makita/<taskId>/base`. On the Space's work place (`chooseForThread` with `spaceWorkOnly`), `move.fetch` brings it into the Project's checkout and `move.prepare` makes a worktree there whose setup command checks out `makita/<n>-<slug>` at the base and sets the bot as author in that worktree's config only (`extensions.worktreeConfig`). The task row keeps it in `workspace_json`, so a restart never makes it twice. The Thread launches with `existing_worktree`: `ThreadLaunchService` and `ThreadManagementService.placeThread` allow a worktree off the Hub machine only for that `space-work` launch of a pushing Makita Thread, and the Project's setup script does not run for it.
+- **`makita_push {}`.** Listed only when the configuration may push. The Thread's machine captures its worktree into `refs/t3/threads/<threadId>/makita/push` (a commit whose parent is `HEAD`) and uploads it with its own credential; `gitRoute.ts` already lets only the Thread's Active environment write there. In the Hub's bare repository the Hub takes the capture's parent and checks: it descends from the last pushed tip (else the start commit); the new commits are at most 100 and about 64 MiB, each authored and committed by the bot's `noreply` address, none changing `.github/workflows/**`, and their messages and added lines pass the creator's secret mask and the token-shape refusal. Then GitHub's branch must be where Makita left it, and `MakitaGitHub.pushBranch` pushes `<sha>:refs/heads/makita/…` without `+`. Audited `makita.github.push`.
+- **Approval seam (ticket 11).** With `approval: others`, the first push for a caller who is not an approver is kept in `pending_push_json` and not sent.
+- **The token.** Only `MakitaGitHub` reads it. Its git commands run on the Hub host in the Hub's bare repository, naming GitHub by URL, with the token in the environment of that one process through `HubRepository.withEnvironmentCredential`'s helper: never in an argument, a URL, a config file or a log.
+- **Stopping.** Every push reads the task again under a per-Thread lock and once more right before `git push`; a stop clears `pending_push_json`.
 
 ## What other tickets read
 

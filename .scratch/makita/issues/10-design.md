@@ -1,0 +1,45 @@
+# 10 design: push `makita/*` branches
+
+Ticket: `10-empujar-ramas-makita.md`. Spec: `../spec.md` («Empujar la rama: el Hub hace de relevo», «Aprobación», «Amenazas de prompt injection», «Parar», «Puertas»). Builds on 05 (task row before the Thread, `space-work` placement, `makita_comment`'s mask and token-shape refusal) and 06 (`halted`, `stopTasksWithin`).
+
+## What changes
+
+- **Configuration.** `capability: push` is accepted («Also push branches»; opening the pull request is ticket 12). `approval` takes `others` (default) or `never`; `always`, approvers and `may_land` stay refused. The web form gains both choices; the row says «Comment and analyse» or «Also pushes branches».
+- **Migration `170_MakitaTaskWorkspace`**: `makita_tasks.workspace_json` (`{ environmentId, cwd, startSha }`), written once the task's worktree exists, so a restart never makes (or resets) it twice.
+- **The task's own checkout** (only for `push`; `comment` keeps `root`). Ticket 05 used `root` because a Sandbox cannot make a worktree through `ThreadLaunchService`. The Hub now makes one itself, before the launch, on the Space's work place, with two executor calls every machine already serves (a Thread move uses them): no new wire operation, no new contract for joined machines.
+  1. The task row gets `branch = makita/<n>-<slug of the title>` (ASCII, at most 50 characters) and `base_branch`.
+  2. The Hub fetches the base (`base_branch`, else GitHub's `HEAD`) with Makita's token into the Project's Hub repository at `refs/t3/project/makita/<taskId>/base`. Under `refs/t3/project/` only the Hub writes and every machine that may work in the Project reads; the checkout copy's prune never touches it.
+  3. On the machine `chooseForThread(spaceWorkOnly)` picks: `move.fetch` brings that ref into the Project's checkout (cloned there if missing), and `move.prepare` makes a detached worktree at the machine's planned path with a Hub-written setup command: `git checkout -B <branch> <base ref>`, `extensions.worktreeConfig`, and `git config --worktree user.name <bot login>` / `user.email <id>+<login>@users.noreply.github.com`. The shared checkout's branches and config are untouched (the extension only lets each worktree have its own config).
+  4. The launch uses `existing_worktree` with that path. The two guards that keep worktrees on the Hub machine (`ThreadLaunchService`, `ThreadManagementService.placeThread`) let through only a `space-work` launch of a Makita Thread; the Project's setup script is not run for it (it would run in a terminal on the Hub host). The agent follows the repository's `AGENTS.md` (`vp i` in `bezenti-hub`).
+- **`makita_push {}`** (no input: the agent never names a repository, branch or ref). On the Hub, one push per task at a time:
+  1. Checks: the Thread is a Makita task's; Makita and the configuration not paused; the task live; capability `push`; at most 30 pushes per task in 24 hours.
+  2. Upload: the Thread's Active environment captures its worktree into `refs/t3/threads/<threadId>/makita/push` (`captureCheckpoint`: a commit whose parent is `HEAD`) and uploads it to the Hub repository (`hubRepository.push`, the channel of `CheckpointUploadService`). `gitRoute.ts` already lets only the Thread's Active environment write under `refs/t3/threads/<threadId>/`, so no new write prefix is needed. The Hub pushes the capture's parent, the agent's `HEAD`; uncommitted changes stay on the Hub and the answer says they were not pushed.
+  3. Validation, in the Hub's bare repository, after fetching the base again: `HEAD` descends from the last pushed tip (else from the start commit); the new commits (`HEAD` not reachable from that tip nor the current base) are at most 100, about 64 MiB at most, each authored and committed by the bot's `noreply` address, none changing `.github/workflows/**` (merges by combined diff), and their patches and messages pass the same secret mask (`SecretMasker.forUser(creator)`) and token-shape refusal as `makita_comment`.
+  4. Approval seam (ticket 11): with `approval: others` and a caller who is not an approver (`approvers_json`; the creator's linked account comes with ticket 08), the first push is not sent: `pending_push_json` keeps `{ sha, branch, commits, files, additions, deletions, at }` and the agent is told it waits for an approver. Ticket 11 posts the request and sends it.
+  5. The Hub reads the remote branch (REST); if it is not where Makita left it (absent before the first push, `head_sha` after) the push is refused: «Someone else pushed to this branch.» Then `git push <url> <sha>:refs/heads/<branch>` from the bare repository, never `+`, never a refspec from the agent; a non-fast-forward rejection gets the same answer.
+  6. `head_sha`, `last_push_at` updated, `pending_push_json` cleared; audit `makita.github.push` (`agent` as the creator; `repo`, `number`, `makita`, `branch`, `sha`, `commits`).
+- **First message** for `push`: its worktree and branch, commit with plain git, publish only with `makita_push`, never `git push`, never touch `.github/workflows`, and that nothing reaches the base or default branch.
+- **MCP gate**: `makita_push` is listed and callable only for a Makita Thread whose configuration has `push` (`makitaTaskOfThread` gains `capability`; the scope carries it). A `comment` configuration's agent does not see it.
+
+## Where the token lives during a push
+
+In the Hub process only. `MakitaGitHub` (still the only reader of `MakitaTokenStore`) runs the two git commands that need it (fetch the base, push the branch) on the Hub host, in the Hub's bare repository, naming GitHub by URL. The token goes to that short-lived `git` child through the environment variable `HubRepository.withEnvironmentCredential` already uses for the Hub repository's credential helper: never on a command line, never in a URL, never in any git config file, and the helper answers only for `github.com`. The agent cannot read it: it runs in the Space's Sandbox (another container, which sees neither the Hub's processes nor its state folder) and talks to the Hub only through MCP tools and the gateway; the machine side of a push uploads to the Hub with the Environment's own credential and never receives anything from GitHub. Git's stderr is passed on only after the token-shape scrub; logs name repository and outcome, never a header. (Where the Hub machine itself runs agents, there is no Sandbox and no isolation from the Hub's user at all: Makita there is as trusted as the Hub.)
+
+## Who may do it
+
+Only a Makita Thread's agent, for its own task, through `makita_push`; nobody by RPC. What reaches GitHub is decided on the Hub: destination built from the task row, contents validated, no force.
+
+## How it is undone
+
+Turn the capability off (the tool disappears at once) or pause the configuration. Stopping a task (06) clears `pending_push_json` and makes the next check refuse: every step re-reads `halted`, the last one right before `git push`; a push already on the wire cannot be recalled. A pushed branch is ordinary: delete it on GitHub. The worktree stays on the machine like a moved Thread's (cleanup with the creator lifecycle, ticket 17). The migration adds a nullable column.
+
+## Deviations (conservative)
+
+- `refs/t3/threads/<threadId>/makita/push` instead of a new `refs/t3/makita/<taskId>/` write prefix in `gitRoute.ts`: the existing prefix is already written only by the Thread's Active environment.
+- Size: 100 commits and about 64 MiB of new objects, below the Hub repository's upload limit (2 GiB): a Makita branch is a pull request.
+- Author enforced, not rewritten: a commit that is not the bot's is refused with the command that fixes it (`git rebase -r <tip> --exec "git commit --amend --no-edit --reset-author"`). Rewriting would change SHAs under the agent.
+- `makita_push` takes no `message`.
+
+## Tests (red-first)
+
+`makita/MakitaPushes.test.ts` over the Makita testkit, the fake GitHub's git receiver (a local bare repository) and a fake machine (a local checkout and worktree uploading to a local Hub repository): a commit is pushed to `makita/12-…`, audited, `head_sha` set; there is no way to name `main`, the base or another branch (no input; a branch made on the machine is ignored); a commit touching `.github/workflows/ci.yml` is refused and nothing reaches GitHub; a non-bot author is refused; a token-shaped line or a creator's Vault value is refused; a non-fast-forward (agent rewrote history) and a remote branch moved by someone else are refused; a paused configuration, a stopped task and a `comment` configuration push nothing; `approval: others` with a non-approver leaves `pending_push_json` and pushes nothing; the token is in no git argument, in nothing the machine side received, in its checkout or home, in the database or the audit. MCP gate: `makita_push` absent for `comment`, present for `push`. Config: `push` + `never` accepted, `may_land` refused. Migration test for 170. Door sweeps list `makita_push`; `agentContextBudget.json` measured.

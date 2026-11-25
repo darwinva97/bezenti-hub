@@ -1,4 +1,4 @@
-# Makita (t3code fork)
+# Bezenti Hub
 
 A self-hosted, multi-user extension of T3 Code: one Owner runs one installation for themselves and the people who work with them, giving each scoped access to projects, threads, AI accounts, vaults and environments. Base T3 Code vocabulary lives in `docs/internals/glossary.md`; a term defined here overrides it.
 
@@ -11,6 +11,14 @@ _Avoid_: Tenant, instance, workspace
 **Owner**:
 The single person who runs the Installation and holds every permission in it.
 _Avoid_: Superadmin, root
+
+**Makita**:
+The Hub's GitHub bot teammate: a normal GitHub account, registered once by the Owner, behind which a Hub agent answers issues in the repositories a Makita configuration listens to. Its work runs as the configuration's creator; its token never leaves the Hub. Only the bot is called Makita, never the product.
+_Avoid_: the bot account, GitHub App, Makita principal
+
+**Makita configuration**:
+What one person who may use Makita in a Space set up for it: which repositories it listens to, whom it answers (by numeric GitHub id), with which of their AI accounts and model, and what it may do.
+_Avoid_: Makita setup, bot config, webhook
 
 **User**:
 A person with a sign-in on the Installation's Hub.

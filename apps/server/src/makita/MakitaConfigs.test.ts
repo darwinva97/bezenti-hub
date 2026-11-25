@@ -24,6 +24,7 @@ import * as Redacted from "effect/Redacted";
 import * as CommandActor from "../auth/CommandActor.ts";
 import { platform, posix } from "../ai/AiGatewayRoute.testkit.ts";
 import { makitaHub, type MakitaHub } from "./Makita.testkit.ts";
+import { makitaMachines, moveMachineToGlobex } from "./MakitaFixtures.testkit.ts";
 import { classicToken } from "./MakitaGitHub.testkit.ts";
 
 const MODEL = "claude-sonnet-5-5";
@@ -261,6 +262,69 @@ it.live.skipIf(!posix || platform === undefined)(
 );
 
 it.live.skipIf(!posix || platform === undefined)(
+  "Where it works (ticket 15): the Sandbox or a machine dedicated to Acme, never a personal, lent or Globex machine; a machine no longer Acme's is said and not kept",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* ready;
+      const { setup } = ctx;
+      const m = yield* makitaMachines(setup);
+      const listed = yield* setup.makitaConfigs
+        .listForSession({ spaceId: setup.acmeId })
+        .pipe(asGrace(setup));
+      assert.deepEqual(listed.space!.machines, [{ environmentId: m.box, name: "Acme box" }]);
+      // This test Hub runs Threads on its own machine, so nothing says Sandboxes are missing.
+      assert.isUndefined(listed.space!.sandboxesUnavailable);
+      for (const [why, environmentId] of [
+        ["her own personal machine", m.laptop],
+        ["a machine lent to Acme by a Grant", m.lent],
+        ["a machine dedicated to Globex", m.globexBox],
+      ] as const) {
+        const refused = yield* setup.makitaConfigs
+          .createForSession(input(ctx, { environmentId }))
+          .pipe(asGrace(setup), Effect.flip);
+        assert.deepEqual(
+          [refused.reason, refused.message],
+          ["invalid", "Choose the Space's Sandbox or a machine dedicated to this Space."],
+          why,
+        );
+      }
+
+      const saved = yield* setup.makitaConfigs
+        .createForSession(input(ctx, { environmentId: m.box }))
+        .pipe(asGrace(setup));
+      assert.equal(saved.config.environmentId, m.box);
+      assert.equal(saved.config.environmentName, "Acme box");
+      assert.deepEqual(saved.config.warnings, []);
+      const created = yield* auditOf(setup, "makita.config.create");
+      assert.equal(JSON.parse(created[0]!.detail).environment, m.box);
+
+      // Dedicated to Globex now: the configuration says so, and keeping it is refused.
+      yield* moveMachineToGlobex(setup, m.box);
+      const after = yield* setup.makitaConfigs
+        .listForSession({ spaceId: setup.acmeId })
+        .pipe(asGrace(setup));
+      assert.deepEqual(after.configs[0]!.warnings, ["machine-not-dedicated"]);
+      assert.isUndefined(after.configs[0]!.environmentName);
+      assert.deepEqual(after.space!.machines, []);
+      const kept = yield* setup.makitaConfigs
+        .updateForSession({
+          ...input(ctx, { environmentId: m.box }),
+          configId: saved.config.configId,
+        })
+        .pipe(asGrace(setup), Effect.flip);
+      assert.equal(kept.reason, "invalid");
+      // Her choice of the Sandbox again, audited by field.
+      const back = yield* setup.makitaConfigs
+        .updateForSession({ ...input(ctx), configId: saved.config.configId })
+        .pipe(asGrace(setup));
+      assert.isNull(back.config.environmentId);
+      assert.deepEqual(back.config.warnings, []);
+      const updates = yield* auditOf(setup, "makita.config.update");
+      assert.equal(JSON.parse(updates.at(-1)!.detail).changed, "environment");
+    }).pipe(Effect.scoped),
+);
+
+it.live.skipIf(!posix || platform === undefined)(
   "refuses a Member without the permission, an agent, an AI account she may not use or a direct one, another Space's Project, one with no or two GitHub remotes, and what comes in later batches",
   () =>
     Effect.gen(function* () {
@@ -301,7 +365,7 @@ it.live.skipIf(!posix || platform === undefined)(
         ["Globex's Project", { repos: { projects: [p.globex] } }],
         ["a Project with no GitHub remote", { repos: { projects: [p.local] } }],
         ["a Project with two GitHub remotes", { repos: { projects: [p.twins] } }],
-        ["a machine", { environmentId: EnvironmentId.make("env-dedicated") }],
+        ["a machine Acme does not have", { environmentId: EnvironmentId.make("env-dedicated") }],
         // Ticket 11: approvers are GitHub logins that exist.
         ["an unknown approver", { capability: "push" as const, approvers: ["nobody-here"] }],
         ["a bad approver login", { capability: "push" as const, approvers: ["not a login"] }],

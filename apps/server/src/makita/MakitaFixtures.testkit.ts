@@ -10,6 +10,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  EnvironmentId,
   type MakitaConfigInput,
   ProjectId,
   ProviderInstanceId,
@@ -54,6 +55,46 @@ const project = (setup: MakitaHub, spaceId: SpaceId, title: string, root: string
   });
 
 const asGrace = (setup: MakitaHub) => CommandActor.actAs(setup.people.member);
+
+/**
+ * Ticket 15: machines as the registry keeps them: one dedicated to Acme, Grace's and Gus's
+ * personal ones, Gus's lent to Acme by a Grant (a Sandbox of its own), one dedicated to Globex.
+ */
+export const makitaMachines = (setup: MakitaHub) =>
+  Effect.gen(function* () {
+    const at = "2026-11-24T00:00:00.000Z";
+    yield* setup.server.sql`
+      INSERT INTO environments (environment_id, name, kind, mode, owner_user_id, space_id,
+        credential_hash, credential_issued_at, registered_at)
+      VALUES
+        ('acme-box', 'Acme box', 'external', 'dedicated', NULL, ${setup.acmeId},
+          'hash-acme-box', ${at}, ${at}),
+        ('grace-laptop', 'Grace laptop', 'external', 'personal', ${setup.people.member}, NULL,
+          'hash-grace-laptop', ${at}, ${at}),
+        ('gus-laptop', 'Gus laptop', 'external', 'personal', ${setup.people.globexMember}, NULL,
+          'hash-gus-laptop', ${at}, ${at}),
+        ('globex-box', 'Globex box', 'external', 'dedicated', NULL, ${setup.globexId},
+          'hash-globex-box', ${at}, ${at})
+    `;
+    yield* setup.server.sql`
+      INSERT INTO environments (environment_id, name, kind, mode, space_id, registered_at,
+        grant_id, host_environment_id)
+      VALUES ('lent:gus-to-acme', 'Gus laptop for Acme', 'sandbox', 'lent', ${setup.acmeId},
+        ${at}, 'gus-to-acme', 'gus-laptop')
+    `;
+    return {
+      box: EnvironmentId.make("acme-box"),
+      laptop: EnvironmentId.make("grace-laptop"),
+      lent: EnvironmentId.make("lent:gus-to-acme"),
+      globexBox: EnvironmentId.make("globex-box"),
+    };
+  });
+
+/** The Owner dedicates the machine to Globex instead: it is no longer Acme's. */
+export const moveMachineToGlobex = (setup: MakitaHub, environmentId: EnvironmentId) =>
+  setup.server.sql`
+    UPDATE environments SET space_id = ${setup.globexId} WHERE environment_id = ${environmentId}
+  `;
 
 /** Makita ready in Acme; no configuration yet. */
 export const makitaReady = Effect.gen(function* () {

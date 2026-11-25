@@ -11,7 +11,12 @@ import * as Effect from "effect/Effect";
 
 import { platform, posix } from "../ai/AiGatewayRoute.testkit.ts";
 import { classicToken } from "./MakitaGitHub.testkit.ts";
-import { makitaReady, OCTOCAT } from "./MakitaFixtures.testkit.ts";
+import {
+  makitaMachines,
+  makitaReady,
+  moveMachineToGlobex,
+  OCTOCAT,
+} from "./MakitaFixtures.testkit.ts";
 import { MAX_REPLIES_IN_A_ROW, ON_IT, threadIdOf, WAITING_FOR_A_PERSON } from "./MakitaTasks.ts";
 
 const live = it.live.skipIf(!posix || platform === undefined);
@@ -80,6 +85,8 @@ live(
       assert.equal(input.ownerUserId, setup.people.member);
       assert.equal(input.spaceId, setup.acmeId);
       assert.equal(input.placement, "space-work");
+      // Ticket 15: no machine chosen, so the Space's Sandbox.
+      assert.isUndefined(input.spaceWorkOn);
       assert.isUndefined(input.activeEnvironmentId);
       assert.equal(input.commandId, `makita:${eventKey}`);
       assert.equal(input.threadId, ThreadId.make(task.threadId));
@@ -345,4 +352,51 @@ live("an issue closed while its task lives stops the task", () =>
       .pipe(Effect.flip);
     assert.equal(refused.reason, "forbidden");
   }),
+);
+
+live(
+  "Where it works (ticket 15): a task of a configuration on Acme's dedicated machine launches there; once the machine is no longer Acme's the next task fails with the reason, never in the Sandbox",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* makitaReady;
+      const { setup, due } = ctx;
+      const m = yield* makitaMachines(setup);
+      yield* ctx.configure({ environmentId: m.box });
+      yield* setup.makitaIntake.pollDue;
+      setup.github.label(REPO, 12, "makita", OCTOCAT, { title: "Login fails", body: "It fails." });
+      yield* due;
+      yield* setup.makitaIntake.pollDue;
+      yield* setup.makitaTasks.startQueued;
+      assert.lengthOf(setup.launches, 1);
+      const { input, actor } = setup.launches[0]!;
+      assert.deepInclude(actor, { _tag: "User", userId: setup.people.member });
+      assert.equal(input.placement, "space-work");
+      assert.equal(input.spaceWorkOn, m.box);
+      assert.isUndefined(input.activeEnvironmentId);
+      assert.deepEqual(setup.github.commentsBy(REPO, 12, "makita-bot"), [ON_IT]);
+
+      // The Owner dedicates it to Globex: the next issue's task fails, with no Thread or «On it.».
+      yield* moveMachineToGlobex(setup, m.box);
+      setup.github.label(REPO, 13, "makita", OCTOCAT, { title: "Logout fails", body: "Also." });
+      yield* due;
+      yield* setup.makitaIntake.pollDue;
+      yield* setup.makitaTasks.startQueued;
+      assert.lengthOf(setup.launches, 1);
+      const [failed] = yield* setup.server.sql<{
+        readonly state: string;
+        readonly failure: string | null;
+      }>`
+        SELECT state, failure FROM makita_tasks WHERE number = 13
+      `;
+      assert.deepEqual(failed, {
+        state: "failed",
+        failure: "This machine is no longer dedicated to this Space.",
+      });
+      assert.deepEqual(setup.github.commentsBy(REPO, 13, "makita-bot"), []);
+      const decided = (yield* ctx.events).filter((event) => event.number === 13);
+      assert.deepEqual(
+        decided.map((event) => [event.outcome, event.detail]),
+        [["started", "machine-not-dedicated"]],
+      );
+    }),
 );

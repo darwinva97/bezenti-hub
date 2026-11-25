@@ -183,6 +183,7 @@ live(
       const { setup } = ctx;
       yield* ctx.configure({ triggers: { label: null, assigned: true, mention: false } });
       yield* setup.makitaIntake.pollDue;
+      // As on GitHub, each event's `actor` is the assignee; who assigned is its `assigner`.
       setup.github.assign(REPO, 20, MAKITA_BOT, OCTOCAT);
       setup.github.assign(REPO, 21, OCTOCAT, OCTOCAT);
       setup.github.assign(REPO, 22, MAKITA_BOT, STRANGER);

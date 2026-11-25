@@ -51,6 +51,8 @@ export interface FakeIssueEvent {
   readonly label?: { readonly name: string };
   /** Who was assigned, on an `assigned` event (ticket 09). */
   readonly assignee?: { readonly login: string; readonly id: number };
+  /** Who assigned, on an `assigned` event: GitHub's `actor` there is the assignee. */
+  readonly assigner?: { readonly login: string; readonly id: number; readonly type: string };
   readonly created_at: string;
   readonly issue: {
     readonly number: number;

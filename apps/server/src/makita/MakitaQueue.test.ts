@@ -96,6 +96,23 @@ live(
     }),
 );
 
+live("an issue from the new-issues feed (ticket 25) waits in line like any other trigger", () =>
+  Effect.gen(function* () {
+    const ctx = yield* lined(1);
+    yield* ctx.label(12);
+    const seen = DateTime.formatIso(yield* DateTime.now);
+    yield* ctx.setup.server.sql`
+      INSERT INTO makita_events (event_key, host, repo, number, kind, actor_github_id,
+        actor_login, created_at_github, seen_at, config_id, outcome, detail)
+      VALUES ('gh:new-issue:test-15', 'github.com', ${REPO}, 15, 'issue', ${OCTOCAT.id},
+        ${OCTOCAT.login}, ${seen}, ${seen}, ${ctx.config.configId}, 'queued', 'new-issue')
+    `;
+    yield* ctx.setup.makitaTasks.startQueued;
+    assert.deepEqual(ctx.started(), ["12"]);
+    assert.deepEqual(yield* ctx.line(), [[15, 1]]);
+  }),
+);
+
 live(
   "a task whose turn ended without a comment gives its slot back once its grace passed; one whose turn goes on keeps it",
   () =>

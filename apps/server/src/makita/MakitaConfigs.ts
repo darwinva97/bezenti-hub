@@ -3,13 +3,14 @@
  * Makita configurations (Makita ticket 03): who may use Makita in a Space says which repositories
  * it listens to, whom it answers, with which of their AI accounts and what it may do. The only
  * writer of `makita_configs` (pauses inside others' transactions go through makitaRows).
- * Batch 1 accepts a list of GitHub users, «Comment and analyse» and the Space's Sandbox only.
+ * Where it works: the Space's Sandbox, or (ticket 15) a machine dedicated to the Space.
  */
 import * as NodeCrypto from "node:crypto";
 
 import {
   AI_GATEWAY_DRIVERS,
   type AiAccountId,
+  EnvironmentId,
   MAKITA_CONFIG_DEFAULT_MAX_TASKS,
   MAKITA_CONFIG_MAX_PER_SPACE,
   MAKITA_CONFIG_MAX_TASKS_LIMIT,
@@ -54,6 +55,7 @@ import * as CommandActor from "../auth/CommandActor.ts";
 import * as AiAccounts from "../ai/AiAccounts.ts";
 import * as AllowedAiAccounts from "../ai/AllowedAiAccounts.ts";
 import { chooseAiAccount } from "../ai/chooseAiAccount.ts";
+import * as EnvironmentRegistry from "../environments/EnvironmentRegistry.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
@@ -74,6 +76,7 @@ const NOT_YOURS =
   "Makita is set up by a person in Platform settings or Space settings, not by an agent.";
 const NO_SUCH_CONFIG = "No such Makita configuration.";
 const NO_SUCH_TASK = "No such Makita task.";
+const NOT_A_SPACE_MACHINE = "Choose the Space's Sandbox or a machine dedicated to this Space.";
 const MAX_NAME = 80;
 const MAX_CALLERS = 50;
 const MAX_APPROVERS = 20;
@@ -182,6 +185,8 @@ interface Checked {
   readonly approverLogins: ReadonlyArray<string>;
   /** Ticket 22: tasks at work at once; null keeps it (3 for a new one). */
   readonly maxTasks: number | null;
+  /** Ticket 15: a machine dedicated to the Space (checked on save); null, its Sandbox. */
+  readonly environmentId: EnvironmentId | null;
 }
 
 export class MakitaConfigs extends Context.Service<
@@ -248,6 +253,14 @@ export class MakitaConfigs extends Context.Service<
       spaceId: SpaceId,
       selection: ModelSelection,
     ) => Effect.Effect<string, MakitaError>;
+    /**
+     * Ticket 15, at each task's start: whether the configuration's machine is still dedicated
+     * to its Space (`environment.dedicate`); a personal, lent or other Space's one never is.
+     */
+    readonly machineDedicated: (
+      spaceId: SpaceId,
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<boolean, MakitaError>;
   }
 >()("t3/makita/MakitaConfigs") {}
 
@@ -257,7 +270,8 @@ const fail = (reason: MakitaError["reason"], message: string) =>
 /**
  * The values taken so far (the table holds the spec's others for later tickets): the creator, a
  * list of GitHub users or the Members (ticket 08), any trigger, «Comment and analyse» or
- * (ticket 10) «Also push branches», any approval and approvers (ticket 11), no landing, the Sandbox.
+ * (ticket 10) «Also push branches», any approval and approvers (ticket 11), the Sandbox or
+ * (ticket 15) a machine, which `checkedMachine` checks against the Space.
  */
 const checkedInput = (
   input: Omit<MakitaConfigInput, "spaceId">,
@@ -321,9 +335,6 @@ const checkedInput = (
   }
   const badApprover = approverLogins.find((login) => !validLogin(login));
   if (badApprover !== undefined) return refused(`«${badApprover}» is not a GitHub login.`);
-  if (input.environmentId !== null) {
-    return refused("For now Makita works only in the Space's Sandbox.");
-  }
   const baseBranch = input.baseBranch === null ? null : input.baseBranch.trim();
   if (baseBranch !== null && baseBranch.length > 0 && !validBranch(baseBranch)) {
     return refused(`«${baseBranch}» is not a branch name.`);
@@ -354,6 +365,7 @@ const checkedInput = (
         ...new Map(approverLogins.map((login) => [login.toLowerCase(), login])).values(),
       ],
       maxTasks,
+      environmentId: input.environmentId,
     },
   };
 };
@@ -367,11 +379,38 @@ const make = Effect.gen(function* () {
   const github = yield* MakitaGitHub;
   const processes = yield* ProcessRunner.ProcessRunner;
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const environments = yield* Effect.serviceOption(EnvironmentRegistry.EnvironmentRegistry);
 
   const storage = (what: string) => (cause: unknown) =>
     Effect.logError(`MakitaConfigs: could not ${what}`, { cause }).pipe(
       Effect.andThen(fail("storage", `Could not ${what}. Try again.`)),
     );
+
+  /** Ticket 15: the machines dedicated to a Space now (none where the Hub has no Environments). */
+  const machinesOf = (spaceId: SpaceId) =>
+    Option.isNone(environments)
+      ? Effect.succeed([] as ReadonlyArray<{ readonly id: EnvironmentId; readonly name: string }>)
+      : environments.value
+          .dedicatedMachines(spaceId)
+          .pipe(Effect.catch(storage("read the machines dedicated to this Space")));
+
+  const machineDedicated = Effect.fn("MakitaConfigs.machineDedicated")(function* (
+    spaceId: SpaceId,
+    environmentId: EnvironmentId,
+  ) {
+    return (yield* machinesOf(spaceId)).some((machine) => machine.id === environmentId);
+  });
+
+  /** On save: the Sandbox, or a machine dedicated to the Space; never a personal or lent one. */
+  const checkedMachine = Effect.fn("MakitaConfigs.checkedMachine")(function* (
+    spaceId: SpaceId,
+    environmentId: EnvironmentId | null,
+  ) {
+    if (environmentId === null) return;
+    if (!(yield* machineDedicated(spaceId, environmentId))) {
+      return yield* fail("invalid", NOT_A_SPACE_MACHINE);
+    }
+  });
 
   const principalFor = (userId: UserId) =>
     spaces.principalOf(userId).pipe(Effect.catch(storage("read who you are")));
@@ -643,6 +682,13 @@ const make = Effect.gen(function* () {
     const found = yield* spaces.spacesById(spaceIds).pipe(Effect.catch(storage("read the Spaces")));
     const projectsBySpace = new Map<string, ReadonlyArray<MakitaProjectRepo>>();
     for (const spaceId of spaceIds) projectsBySpace.set(spaceId, yield* projectsOf(spaceId));
+    // Ticket 15: the dedicated machines of each Space where a configuration chose one.
+    const machinesBySpace = new Map<string, ReadonlyMap<string, string>>();
+    for (const spaceId of spaceIds) {
+      if (!rows.some((row) => row.spaceId === spaceId && row.environmentId !== null)) continue;
+      const machines = yield* machinesOf(spaceId);
+      machinesBySpace.set(spaceId, new Map(machines.map((machine) => [machine.id, machine.name])));
+    }
     const accountIds = [
       ...new Set(
         rows.flatMap((row) => {
@@ -701,6 +747,13 @@ const make = Effect.gen(function* () {
           Effect.orElseSucceed(() => false),
         ));
       if (!usable) warnings.push("ai-account-unavailable");
+      const machineName =
+        row.environmentId === null
+          ? undefined
+          : machinesBySpace.get(row.spaceId)?.get(row.environmentId);
+      if (row.environmentId !== null && machineName === undefined) {
+        warnings.push("machine-not-dedicated");
+      }
       const resource =
         space === undefined ? undefined : yield* configResource(viewer.userId, row, space.resource);
       const may = (action: AccessPolicy.Action) =>
@@ -733,7 +786,8 @@ const make = Effect.gen(function* () {
         approval: row.approval,
         approvers: Option.getOrElse(decodeUsers(row.approversJson), () => []),
         baseBranch: row.baseBranch,
-        environmentId: row.environmentId as MakitaConfig["environmentId"],
+        environmentId: row.environmentId === null ? null : EnvironmentId.make(row.environmentId),
+        ...(machineName === undefined ? {} : { environmentName: machineName }),
         labels: labelsOf(row.labelsJson),
         autonomy: autonomyView(storedAutonomyOf(row.autonomyJson)),
         pausedAt: row.pausedAt,
@@ -820,6 +874,12 @@ const make = Effect.gen(function* () {
     const account = yield* sql<{ readonly n: number }>`
       SELECT COUNT(*) AS n FROM makita_account WHERE account_id = 'makita'
     `.pipe(Effect.catch(storage("read Makita's account")));
+    // Ticket 15: «Where it works», and why the Sandbox cannot run here when this Hub has none.
+    const machines = yield* machinesOf(spaceId);
+    const noSandboxes: string | null = Option.match(environments, {
+      onNone: () => null,
+      onSome: (registry) => (registry.hubRunsAgents ? null : registry.sandboxesUnavailable),
+    });
     return {
       accountReady: (account[0]?.n ?? 0) > 0,
       aiAccounts: aiAccountOptions,
@@ -827,6 +887,8 @@ const make = Effect.gen(function* () {
         instanceId,
         label: AGENT_LABELS[instanceId] ?? instanceId,
       })),
+      machines: machines.map((machine) => ({ environmentId: machine.id, name: machine.name })),
+      noSandboxes,
     };
   });
 
@@ -863,7 +925,7 @@ const make = Effect.gen(function* () {
       const configs = yield* shown(principal, yield* read([input.spaceId]));
       const options = canCreate
         ? yield* formOptions(input.actorUserId, input.spaceId)
-        : { accountReady: false, aiAccounts: [], agents: [] };
+        : { accountReady: false, aiAccounts: [], agents: [], machines: [], noSandboxes: null };
       return {
         configs,
         everyone: false,
@@ -873,6 +935,8 @@ const make = Effect.gen(function* () {
           projects: canCreate ? yield* projectsOf(input.spaceId) : [],
           aiAccounts: options.aiAccounts,
           agents: options.agents,
+          machines: options.machines,
+          ...(options.noSandboxes === null ? {} : { sandboxesUnavailable: options.noSandboxes }),
         },
       } satisfies MakitaConfigsListResult;
     }
@@ -953,6 +1017,7 @@ const make = Effect.gen(function* () {
     if (ownWay?._tag === "refused") return yield* fail("invalid", ownWay.message);
     yield* checkedSelection(input.actorUserId, input.spaceId, value.modelSelection);
     yield* checkedProjects(input.spaceId, value.repos);
+    yield* checkedMachine(input.spaceId, value.environmentId);
     const callers = yield* resolvedCallers(value.logins, []);
     const approvers = yield* resolvedCallers(value.approverLogins, []);
     const configId = newConfigId();
@@ -985,7 +1050,8 @@ const make = Effect.gen(function* () {
               ${jsonOf(value.triggers)}, ${value.callersMode},
               ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, ${value.capability},
               ${value.mayLand ? 1 : 0}, ${value.approval}, ${jsonOf(approvers)}, ${value.baseBranch},
-              NULL, ${autonomy.json}, ${value.maxTasks ?? MAKITA_CONFIG_DEFAULT_MAX_TASKS})
+              ${value.environmentId}, ${autonomy.json},
+              ${value.maxTasks ?? MAKITA_CONFIG_DEFAULT_MAX_TASKS})
           `;
           yield* sql`
             UPDATE makita_configs SET labels_json = ${jsonOf(labels.labels)}
@@ -1004,6 +1070,7 @@ const make = Effect.gen(function* () {
               mayLand: value.mayLand,
               aiAccount: value.modelSelection.aiAccountId ?? null,
               autonomy: autonomyNames(autonomy.view),
+              ...(value.environmentId === null ? {} : { environment: value.environmentId }),
             },
           });
           return { _tag: "made", principal } as const;
@@ -1064,6 +1131,7 @@ const make = Effect.gen(function* () {
     if (ownWay?._tag === "refused") return yield* fail("invalid", ownWay.message);
     yield* checkedSelection(input.actorUserId, spaceId, value.modelSelection);
     yield* checkedProjects(spaceId, value.repos);
+    yield* checkedMachine(spaceId, value.environmentId);
     const known = Option.getOrElse(decodeUsers(found.row.callersJson), () => []);
     const callers = yield* resolvedCallers(value.logins, known);
     const approvers = yield* resolvedCallers(
@@ -1084,6 +1152,7 @@ const make = Effect.gen(function* () {
       approvers: found.row.approversJson,
       labels: found.row.labelsJson,
       max_tasks: found.row.maxTasks,
+      environment: found.row.environmentId,
     };
     const after = {
       name: value.name,
@@ -1101,6 +1170,8 @@ const make = Effect.gen(function* () {
       labels: jsonOf(labels.labels),
       // Ticket 22: absent from the input keeps it.
       max_tasks: value.maxTasks ?? found.row.maxTasks,
+      // Ticket 15: where it works.
+      environment: value.environmentId,
     };
     const at = DateTime.formatIso(yield* DateTime.now);
     // Tickets 25–27: named in `changed` by option (`new_issues`, `close_issues`, …).
@@ -1129,7 +1200,7 @@ const make = Effect.gen(function* () {
                 capability = ${after.capability}, may_land = ${after.may_land ? 1 : 0},
                 approval = ${after.approval},
                 approvers_json = ${after.approvers}, autonomy_json = ${autonomy.json},
-                max_tasks = ${after.max_tasks},
+                max_tasks = ${after.max_tasks}, environment_id = ${after.environment},
                 updated_at = ${at}
               WHERE config_id = ${input.configId} AND deleted_at IS NULL
               RETURNING config_id AS id
@@ -1151,6 +1222,7 @@ const make = Effect.gen(function* () {
                 mayLand: value.mayLand,
                 aiAccount: value.modelSelection.aiAccountId ?? null,
                 autonomy: autonomyNames(autonomy.view),
+                ...(value.environmentId === null ? {} : { environment: value.environmentId }),
               },
             });
             return "changed" as const;
@@ -1402,6 +1474,7 @@ const make = Effect.gen(function* () {
 
   return MakitaConfigs.of({
     checkSelection: checkedSelection,
+    machineDedicated,
     list,
     create,
     update,

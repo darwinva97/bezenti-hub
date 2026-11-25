@@ -29,6 +29,8 @@ export interface MakitaWorktreeInput {
   readonly spaceId: SpaceId;
   readonly creator: UserId;
   readonly providerInstanceId: ProviderInstanceId;
+  /** Ticket 15: the machine dedicated to the Space its configuration chose; null, the Sandbox. */
+  readonly machine: EnvironmentId | null;
   /** The base, in the Project's Hub repository (`makitaBaseRef`). */
   readonly baseRef: string;
   /** What the new worktree runs once made: the task's branch and the bot as author. */
@@ -115,7 +117,8 @@ const make = Effect.gen(function* () {
     input: MakitaWorktreeInput,
   ) {
     if (Option.isNone(environments)) return yield* fail("invalid", NOT_HERE);
-    // «Where it works»: the Space's own work place, never a requested or preferred machine.
+    // «Where it works»: the Space's Sandbox, or (ticket 15) the machine dedicated to it that the
+    // configuration chose; never a requested or preferred machine.
     const environmentId = yield* environments.value
       .chooseForThread({
         userId: input.creator,
@@ -124,8 +127,17 @@ const make = Effect.gen(function* () {
         providerInstanceId: input.providerInstanceId,
         spaceId: input.spaceId,
         spaceWorkOnly: true,
+        ...(input.machine === null ? {} : { spaceWorkOn: input.machine }),
       })
-      .pipe(Effect.catch((error) => fail("github", `No place to work: ${why(error)}`)));
+      .pipe(
+        Effect.catch((error) =>
+          fail(
+            "github",
+            EnvironmentRegistry.environmentRefusalMessage(error) ??
+              `No place to work: ${why(error)}`,
+          ),
+        ),
+      );
     const executor = yield* executorOf(environmentId);
     const { move } = executor.workspace;
     const fetched = yield* move

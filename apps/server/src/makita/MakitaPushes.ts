@@ -82,6 +82,8 @@ export interface MakitaWorkspaceInput {
   readonly branch: string;
   /** Null: the repository's default branch. */
   readonly baseBranch: string | null;
+  /** Ticket 15: the machine dedicated to the Space that its configuration chose; null, the Sandbox. */
+  readonly machine: EnvironmentId | null;
 }
 
 export class MakitaPushes extends Context.Service<
@@ -214,6 +216,7 @@ const make = Effect.gen(function* () {
       spaceId: input.spaceId,
       creator: input.creator,
       providerInstanceId: input.providerInstanceId,
+      machine: input.machine,
       baseRef,
       setupCommand,
     });

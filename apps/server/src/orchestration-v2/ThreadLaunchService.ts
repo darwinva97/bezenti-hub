@@ -116,6 +116,11 @@ export interface ThreadLaunchInput {
    * `activeEnvironmentId` or the Project's preference say. Set by the server only.
    */
   readonly placement?: "space-work";
+  /**
+   * With `space-work`: the machine dedicated to the Space that a Makita configuration chose
+   * (ticket 15) instead of the Space's Sandbox; refused once it is no longer dedicated there.
+   */
+  readonly spaceWorkOn?: EnvironmentId;
 }
 
 type PreparationInput = Pick<
@@ -890,7 +895,12 @@ const make = Effect.gen(function* () {
             projectId: input.projectId,
             providerInstanceId: input.modelSelection.instanceId,
             spaceId: claimed?.spaceId ?? input.spaceId,
-            ...(input.placement === "space-work" ? { spaceWorkOnly: true } : {}),
+            ...(input.placement === "space-work"
+              ? {
+                  spaceWorkOnly: true,
+                  ...(input.spaceWorkOn === undefined ? {} : { spaceWorkOn: input.spaceWorkOn }),
+                }
+              : {}),
           })
           .pipe(Effect.mapError(mapError(input, "create-thread")));
         // Makita ticket 10: a `space-work` launch may bring the worktree the Hub made there.

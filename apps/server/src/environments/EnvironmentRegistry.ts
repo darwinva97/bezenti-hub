@@ -142,6 +142,9 @@ export class EnvironmentAccessDeniedError extends Schema.TaggedError<Environment
 export const WORKTREE_UNSUPPORTED_MESSAGE =
   "New worktrees are made only on the Hub machine for now, and this Thread runs elsewhere (a Sandbox or a joined machine cannot make one yet). Start it in the Project's checkout instead.";
 
+/** A Makita configuration's machine that is no longer its Space's (Makita ticket 15). */
+export const NOT_DEDICATED_MESSAGE = "This machine is no longer dedicated to this Space.";
+
 /** Threads still have the machine as their Active environment: they move first. */
 export class EnvironmentModeChangeRefusedError extends Schema.TaggedError<EnvironmentModeChangeRefusedError>()(
   "EnvironmentModeChangeRefusedError",
@@ -174,6 +177,7 @@ export class ThreadEnvironmentUnavailableError extends Schema.TaggedError<Thread
       "sandbox-unavailable",
       "hub-machine",
       "no-environment",
+      "not-dedicated",
     ]),
     providerInstanceId: Schema.optional(Schema.String),
     /** Why a Sandbox did not start, or why this Hub runs no Sandboxes. */
@@ -191,6 +195,8 @@ export class ThreadEnvironmentUnavailableError extends Schema.TaggedError<Thread
         );
       case "not-usable":
         return "You can't run Threads on this Environment.";
+      case "not-dedicated":
+        return NOT_DEDICATED_MESSAGE;
       case "offline":
         return `${name} is offline. Start it, or choose another Environment.`;
       case "provider-missing":
@@ -550,7 +556,22 @@ export class EnvironmentRegistry extends Context.Service<
        * machine and no Project preference count, so never a personal or lent machine.
        */
       readonly spaceWorkOnly?: boolean | undefined;
+      /**
+       * With `spaceWorkOnly`: this machine instead of the Space's Sandbox (Makita ticket 15),
+       * refused (`not-dedicated`) unless it is dedicated to the Thread's Space right now.
+       */
+      readonly spaceWorkOn?: EnvironmentId | undefined;
     }) => Effect.Effect<EnvironmentId, ThreadEnvironmentUnavailableError | EnvironmentStorageError>;
+    /**
+     * The machines dedicated to the Space now (`external`, `dedicated`, not removed): never a
+     * personal machine, a lent one or another Space's. Makita's «Where it works» offers these.
+     */
+    readonly dedicatedMachines: (
+      spaceId: SpaceId,
+    ) => Effect.Effect<
+      ReadonlyArray<{ readonly id: EnvironmentId; readonly name: string }>,
+      EnvironmentStorageError
+    >;
     /**
      * The Environment's name when the User may use it for the Thread (`environment.use`: a
      * personal machine is its owner's alone, a Sandbox its Space's), whether or not it is
@@ -2041,6 +2062,25 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     // Nobody chose: the Project's preference while it can take the Thread, as the composer previews.
     const preferred = input.spaceWorkOnly === true ? undefined : yield* preferredFor(input);
     if (preferred !== undefined) return preferred;
+    // Makita ticket 15: a machine dedicated to the Thread's Space, checked now; never the Sandbox.
+    if (input.spaceWorkOnly === true && input.spaceWorkOn !== undefined) {
+      const machine = input.spaceWorkOn;
+      const row = yield* liveRow(machine);
+      const workSpaceId = yield* workSpaceOf(input);
+      if (
+        row === undefined ||
+        row.kind !== "external" ||
+        row.mode !== "dedicated" ||
+        row.spaceId === null ||
+        row.spaceId !== workSpaceId
+      ) {
+        return yield* new ThreadEnvironmentUnavailableError({
+          environmentId: machine,
+          reason: "not-dedicated",
+        });
+      }
+      return yield* placeOn({ ...input, environmentId: machine, byHub: false });
+    }
     // Otherwise where the Space's work runs: its Sandbox (the Hub machine while it runs agents).
     if (hubRunsAgents) return HUB_MACHINE_ENVIRONMENT_ID;
     const workSpaceId = yield* workSpaceOf(input);
@@ -2059,6 +2099,20 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
       environmentId: sandboxEnvironmentIdOf(workSpaceId),
       byHub: true,
     });
+  });
+
+  const dedicatedMachines: EnvironmentRegistry["Service"]["dedicatedMachines"] = Effect.fn(
+    "EnvironmentRegistry.dedicatedMachines",
+  )(function* (spaceId) {
+    const rows = yield* selectRows([
+      sql`kind = 'external'`,
+      sql`mode = 'dedicated'`,
+      sql`space_id = ${spaceId}`,
+      sql`revoked_at IS NULL`,
+    ]).pipe(Effect.mapError(storageError));
+    return rows
+      .map((row) => ({ id: EnvironmentId.make(row.environmentId), name: row.name }))
+      .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   });
 
   const usableBy: EnvironmentRegistry["Service"]["usableBy"] = Effect.fn(
@@ -2444,6 +2498,7 @@ const make = Effect.fn("EnvironmentRegistry.make")(function* (options: RegistryO
     sandboxAction,
     setSandboxLimits,
     chooseForThread,
+    dedicatedMachines,
     usableBy,
     list,
     overview,

@@ -421,6 +421,7 @@ export const AUDIT_DETAIL_KEYS = {
   /**
    * A configuration's Space, repositories (`all` or how many Projects), whom it answers and what
    * it may do; `changed` names the fields an update changed. Never a login list or a model's text.
+   * `environment`: the machine dedicated to the Space it works on (ticket 15); absent, the Sandbox.
    */
   "makita.config.create": [
     "space",
@@ -430,8 +431,17 @@ export const AUDIT_DETAIL_KEYS = {
     "mayLand",
     "aiAccount",
     "autonomy",
+    "environment",
   ],
-  "makita.config.update": ["space", "changed", "capability", "mayLand", "aiAccount", "autonomy"],
+  "makita.config.update": [
+    "space",
+    "changed",
+    "capability",
+    "mayLand",
+    "aiAccount",
+    "autonomy",
+    "environment",
+  ],
   "makita.config.delete": ["space"],
   /** `manual` by its creator or an Admin, `owner`, or the Hub's (`permission-revoked`, …). */
   "makita.config.pause": ["space", "reason"],

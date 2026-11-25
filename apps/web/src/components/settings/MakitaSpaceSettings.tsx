@@ -94,7 +94,19 @@ const WARNINGS: Readonly<Record<MakitaConfig["warnings"][number], string>> = {
   "no-repository": "No repository to listen to: no Project here has a GitHub remote.",
   "repo-unreachable":
     "Makita cannot read one of its repositories. Check that the bot is a collaborator there.",
+  "machine-not-dedicated":
+    "This machine is no longer dedicated to this Space. No task starts until you choose where it works.",
 };
+
+/** «Where it works» in the list: the Space's Sandbox or its dedicated machine (ticket 15). */
+const whereText = (config: MakitaConfig) =>
+  config.environmentId === null
+    ? "Space Sandbox"
+    : (config.environmentName ?? "a machine no longer dedicated here");
+
+const SANDBOX_CHOICE = "sandbox";
+const SHARED_MACHINE_NOTE =
+  "On a dedicated machine, Makita's Threads run as the same system user as the other Threads running there, so they could read those Threads' files and processes.";
 
 /** Whether a failure is the Hub saying the viewer may not see Makita in this Space. */
 const isForbidden = (result: ListAnswer) => {
@@ -425,7 +437,7 @@ function ConfigRow(props: {
           <span className="text-xs text-muted-foreground">{`On its own: ${autonomyText(config.autonomy)}`}</span>
         )}
         <span className="text-xs text-muted-foreground">
-          {`${config.aiAccountName ?? "An AI account that no longer exists"} · ${config.modelSelection.model}${config.baseBranch === null ? "" : ` · base ${config.baseBranch}`} · Space Sandbox · up to ${config.maxTasks} at once`}
+          {`${config.aiAccountName ?? "An AI account that no longer exists"} · ${config.modelSelection.model}${config.baseBranch === null ? "" : ` · base ${config.baseBranch}`} · ${whereText(config)} · up to ${config.maxTasks} at once`}
         </span>
         <span className="text-xs text-muted-foreground">
           {`By ${config.createdByName ?? config.createdBy}`}
@@ -599,6 +611,14 @@ function ConfigDialog(props: {
   const [maxTasks, setMaxTasks] = useState(
     String(config?.maxTasks ?? MAKITA_CONFIG_DEFAULT_MAX_TASKS),
   );
+  // Ticket 15: the Space's Sandbox, or one of its dedicated machines.
+  const [where, setWhere] = useState<string>(config?.environmentId ?? SANDBOX_CHOICE);
+  const machines = options.machines ?? [];
+  const whereName =
+    where === SANDBOX_CHOICE
+      ? "Space Sandbox (recommended)"
+      : (machines.find((machine) => machine.environmentId === where)?.name ??
+        "A machine no longer dedicated to this Space");
   const maxTasksValue = Number(maxTasks);
   const maxTasksValid =
     Number.isInteger(maxTasksValue) &&
@@ -664,7 +684,7 @@ function ConfigDialog(props: {
                   approval,
                   approvers: loginsOf(approvers),
                   baseBranch: baseBranch.trim().length === 0 ? null : baseBranch.trim(),
-                  environmentId: null,
+                  environmentId: where === SANDBOX_CHOICE ? null : (where as EnvironmentId),
                   labels: labelNamesOf(labels),
                   autonomy,
                   maxTasks: maxTasksValue,
@@ -1061,10 +1081,42 @@ function ConfigDialog(props: {
                   {`From 1 to ${MAKITA_CONFIG_MAX_TASKS_LIMIT}. More issues wait in line and start as tasks end; a reply on an issue Makita already works on never waits. The Owner may set a lower limit for the whole Hub.`}
                 </span>
               </div>
-              <div className="flex flex-col gap-1 text-xs">
-                <span className="font-medium">Where it works</span>
-                <span>Space Sandbox (recommended)</span>
-              </div>
+              <label className="flex flex-col gap-1 text-xs font-medium">
+                Where it works
+                <Select
+                  value={where}
+                  disabled={pending}
+                  onValueChange={(next) => setWhere(String(next ?? where))}
+                >
+                  <SelectTrigger aria-label="Where it works">
+                    <SelectValue>{whereName}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value={SANDBOX_CHOICE}>Space Sandbox (recommended)</SelectItem>
+                    {machines.map((machine) => (
+                      <SelectItem key={machine.environmentId} value={machine.environmentId}>
+                        {machine.name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+                {where === SANDBOX_CHOICE ? (
+                  options.sandboxesUnavailable === undefined ? null : (
+                    <span className="font-normal text-warning-foreground">
+                      {`${options.sandboxesUnavailable} Makita's tasks can't start in the Sandbox here: choose a machine dedicated to this Space.`}
+                    </span>
+                  )
+                ) : (
+                  <span className="font-normal text-warning-foreground">{SHARED_MACHINE_NOTE}</span>
+                )}
+                {machines.length === 0 ? (
+                  <span className="font-normal text-muted-foreground">
+                    This Space has no dedicated machine. Only an Organization has them: the Owner or
+                    one of its Admins dedicates one in Settings → Environments (Change use…), or
+                    with t3 join --dedicated.
+                  </span>
+                ) : null}
+              </label>
               {error === null ? null : (
                 <p className="text-xs text-destructive" role="alert">
                   {error}

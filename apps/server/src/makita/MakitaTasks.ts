@@ -10,6 +10,7 @@ import * as NodeCrypto from "node:crypto";
 import {
   CommandId,
   DEFAULT_RUNTIME_MODE,
+  EnvironmentId,
   MAKITA_GITHUB_HOST,
   MakitaError,
   MakitaTriggers,
@@ -33,7 +34,10 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
-import { environmentRefusalMessage } from "../environments/EnvironmentRegistry.ts";
+import {
+  environmentRefusalMessage,
+  NOT_DEDICATED_MESSAGE,
+} from "../environments/EnvironmentRegistry.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { frameUntrusted } from "../scheduledTasks/webhookTemplate.ts";
@@ -227,6 +231,8 @@ interface ConfigRow {
   readonly baseBranch: string | null;
   /** Ticket 24: the labels Makita may set, named in the first message. */
   readonly labelsJson: string;
+  /** Ticket 15: the machine dedicated to the Space it works on; null, the Sandbox. */
+  readonly environmentId: string | null;
   readonly pausedAt: string | null;
   readonly deletedAt: string | null;
 }
@@ -728,8 +734,8 @@ const make = Effect.gen(function* () {
         triggers_json AS "triggersJson", callers_mode AS "callersMode",
         callers_json AS "callersJson",
         model_selection_json AS "modelSelectionJson", capability, may_land AS "mayLand",
-        base_branch AS "baseBranch", labels_json AS "labelsJson", paused_at AS "pausedAt",
-        deleted_at AS "deletedAt"
+        base_branch AS "baseBranch", labels_json AS "labelsJson",
+        environment_id AS "environmentId", paused_at AS "pausedAt", deleted_at AS "deletedAt"
       FROM makita_configs WHERE config_id = ${row.configId}
     `;
     if (config === undefined || config.deletedAt !== null) {
@@ -848,7 +854,24 @@ const make = Effect.gen(function* () {
       return yield* finish(row.eventKey, "ignored-paused", "task-stopped", placed.taskId);
     }
     const branch = current.branch;
+    const machine = config.environmentId === null ? null : EnvironmentId.make(config.environmentId);
     const launchIt = Effect.gen(function* () {
+      // Ticket 15: its machine is checked again; one no longer dedicated to the Space fails the
+      // task, never sending it to the Sandbox instead.
+      if (machine !== null && !(yield* configs.machineDedicated(spaceId, machine))) {
+        const failedAt = yield* nowIso;
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              UPDATE makita_tasks SET state = 'failed', failure = ${NOT_DEDICATED_MESSAGE},
+                updated_at = ${failedAt}
+              WHERE task_id = ${placed.taskId}
+            `;
+            yield* finish(row.eventKey, "started", "machine-not-dedicated", placed.taskId);
+          }),
+        );
+        return;
+      }
       // Ticket 10: a pushing task works in its own worktree, made by the Hub before its Thread.
       const workspace =
         branch === null
@@ -864,6 +887,7 @@ const make = Effect.gen(function* () {
                 repo: row.repo,
                 branch,
                 baseBranch: config.baseBranch,
+                machine,
               })
               .pipe(Effect.result);
       // Stopped while its worktree was made (that may take minutes): no Thread starts for it.
@@ -944,14 +968,14 @@ const make = Effect.gen(function* () {
           ownerUserId: creator,
           spaceId,
           placement: "space-work",
+          ...(machine === null ? {} : { spaceWorkOn: machine }),
         })
         .pipe(CommandActor.actAsResolved({ _tag: "User", userId: creator }), Effect.exit);
       const done = yield* nowIso;
       if (launched._tag === "Failure") {
         // Where it could not run is said in the Environment's own words, not as a stack.
         const reason = oneLine(
-          environmentRefusalMessage(Cause.squash(launched.cause)) ??
-            Cause.pretty(launched.cause),
+          environmentRefusalMessage(Cause.squash(launched.cause)) ?? Cause.pretty(launched.cause),
           300,
         );
         yield* Effect.logWarning("Makita could not start a task's Thread", {

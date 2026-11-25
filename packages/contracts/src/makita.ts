@@ -220,6 +220,8 @@ export const MakitaConfigWarning = Schema.Literals([
   "no-repository",
   /** Makita ticket 04: GitHub answered 403/404 for one of its repositories. */
   "repo-unreachable",
+  /** Ticket 15: its machine is no longer dedicated to its Space; no task starts there. */
+  "machine-not-dedicated",
 ]);
 export type MakitaConfigWarning = typeof MakitaConfigWarning.Type;
 
@@ -248,8 +250,10 @@ export const MakitaConfig = Schema.Struct({
   approval: MakitaApproval,
   approvers: Schema.Array(MakitaGitHubUser),
   baseBranch: Schema.NullOr(Schema.String),
-  /** Null: the Space's Sandbox. */
+  /** Null: the Space's Sandbox. Else (ticket 15) a machine dedicated to its Space. */
   environmentId: Schema.NullOr(EnvironmentId),
+  /** Ticket 15: that machine's name while it is dedicated to the Space; else absent. */
+  environmentName: Schema.optionalKey(Schema.String),
   /** Ticket 24: the labels Makita may add or remove on its issue or PR; empty: it never labels. */
   labels: Schema.Array(Schema.String),
   /** Tickets 25–27: what it does on its own. */
@@ -343,6 +347,12 @@ export const MakitaConfigsListResult = Schema.Struct({
       aiAccounts: Schema.Array(MakitaAiAccountOption),
       /** The provider instances that go through the AI gateway, for the agent of its Threads. */
       agents: Schema.Array(Schema.Struct({ instanceId: Schema.String, label: Schema.String })),
+      /** Ticket 15: the machines dedicated to this Space, for «Where it works». */
+      machines: Schema.optionalKey(
+        Schema.Array(Schema.Struct({ environmentId: EnvironmentId, name: Schema.String })),
+      ),
+      /** Ticket 15: why this Hub runs no Sandboxes, when it runs none; else absent. */
+      sandboxesUnavailable: Schema.optionalKey(Schema.String),
     }),
   ),
 });

@@ -148,12 +148,21 @@ export const MAKITA_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "makita_read_issue",
   "makita_comment",
   "makita_push",
+  "makita_open_pull_request",
+  "makita_ci_logs",
   "thread_history",
   "t3_background_wait",
 ]);
 
-/** Ticket 10: listed only when the Makita Thread's configuration may push branches. */
-const MAKITA_PUSH_TOOLS: ReadonlySet<string> = new Set(["makita_push"]);
+/**
+ * Ticket 10: listed only when the Makita Thread's configuration may push branches; ticket 12 adds
+ * its pull request and the CI logs.
+ */
+const MAKITA_PUSH_TOOLS: ReadonlySet<string> = new Set([
+  "makita_push",
+  "makita_open_pull_request",
+  "makita_ci_logs",
+]);
 
 /** Whether `tool` is listed and callable for this caller. */
 export const toolAllowedFor = (scope: McpInvocationScope | undefined, tool: string): boolean =>

@@ -86,13 +86,16 @@ interface TaskRow {
   readonly state: MakitaActivityTask["state"];
   readonly callerLogin: string;
   readonly failure: string | null;
+  readonly prNumber: number | null;
+  readonly ciState: MakitaActivityTask["ci"];
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
 const TASK_COLUMNS = `task_id AS "taskId", config_id AS "configId", space_id AS "spaceId",
   thread_id AS "threadId", repo, number, kind, state, caller_login AS "callerLogin", failure,
-  created_at AS "createdAt", updated_at AS "updatedAt"`;
+  pr_number AS "prNumber", ci_state AS "ciState", created_at AS "createdAt",
+  updated_at AS "updatedAt"`;
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -304,6 +307,8 @@ const make = Effect.gen(function* () {
         state: row.state,
         callerLogin: row.callerLogin,
         failure: row.failure,
+        prNumber: row.prNumber,
+        ci: row.ciState,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         threadId: seesThread(row.spaceId) ? ThreadId.make(row.threadId) : null,

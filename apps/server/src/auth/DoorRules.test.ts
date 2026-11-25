@@ -782,7 +782,7 @@ describe("every door of the Hub declares its rule", () => {
       ["makita_repo_cursors", "166_MakitaIntake"],
       ["makita_events", "166_MakitaIntake"],
       // Ticket 05: the tasks; others ask makitaRows.makitaTaskOfThread. Ticket 10: the worktree.
-      ["makita_tasks", "167_MakitaTasks", "169_MakitaTaskWorkspace"],
+      ["makita_tasks", "167_MakitaTasks", "169_MakitaTaskWorkspace", "171_MakitaTaskCi"],
     ] as const) {
       const [table, ...migrations] = entry;
       expect(
@@ -800,11 +800,14 @@ describe("every door of the Hub declares its rule", () => {
       );
     }
     // Ticket 05: MCP tools for a Makita task's Thread only; no tool takes a repository. Ticket
-    // 10: `makita_push`, only where its configuration may push.
+    // 10: `makita_push`, only where its configuration may push. 12: its pull request and the CI
+    // logs, likewise; no merge or approve tool.
     expect(Object.keys(MCP_TOOL_RULES).filter((name) => name.startsWith("makita_"))).toEqual([
       "makita_comment",
       "makita_read_issue",
       "makita_push",
+      "makita_open_pull_request",
+      "makita_ci_logs",
     ]);
   });
 

@@ -60,6 +60,23 @@ export type MakitaEventOutcome = typeof MakitaEventOutcome.Type;
 export const MakitaItemKind = Schema.Literals(["issue", "pull"]);
 export type MakitaItemKind = typeof MakitaItemKind.Type;
 
+/**
+ * Makita ticket 12: the CI of a task's pull request on the commit Makita pushed last: running,
+ * passed, failed (the agent is fixing it), failed after 3 fixes, no CI, unfinished in 90 minutes,
+ * or no longer watched (the PR closed, or someone else pushed to it).
+ */
+export const MakitaCiState = Schema.Literals([
+  "pending",
+  "green",
+  "red",
+  "gave-up",
+  "no-ci",
+  "timeout",
+  "closed",
+  "moved",
+]);
+export type MakitaCiState = typeof MakitaCiState.Type;
+
 /** A configuration in the activity: its usage only to whoever may see it (else null). */
 export const MakitaActivityConfig = Schema.Struct({
   configId: Schema.String,
@@ -84,6 +101,9 @@ export const MakitaActivityTask = Schema.Struct({
   state: MakitaTaskState,
   callerLogin: Schema.String,
   failure: Schema.NullOr(Schema.String),
+  /** Ticket 12: its pull request on GitHub (public), and how its CI went; null before it. */
+  prNumber: Schema.NullOr(NonNegativeInt),
+  ci: Schema.NullOr(MakitaCiState),
   createdAt: Schema.String,
   updatedAt: Schema.String,
   /** Null when the viewer may not see the Thread: no link then. */

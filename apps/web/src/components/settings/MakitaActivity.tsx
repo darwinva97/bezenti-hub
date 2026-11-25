@@ -5,6 +5,7 @@ import {
   type MakitaActivityInput,
   type MakitaActivityResult,
   type MakitaActivityTask,
+  type MakitaCiState,
   type MakitaEventOutcome,
   makitaItemUrl,
   type MakitaUsage,
@@ -50,6 +51,18 @@ const STATE_LABEL: Readonly<Record<MakitaActivityTask["state"], string>> = {
   done: "Done",
   stopped: "Stopped",
   failed: "Failed",
+};
+
+/** Makita ticket 12: its pull request's CI on the commit Makita pushed last. */
+const CI_LABEL: Readonly<Record<MakitaCiState, string>> = {
+  pending: "CI running",
+  green: "CI passed",
+  red: "CI failed: fixing",
+  "gave-up": "CI failed after 3 fixes",
+  "no-ci": "No CI",
+  timeout: "CI unfinished after 90 min",
+  closed: "PR closed",
+  moved: "Someone else pushed",
 };
 
 const OUTCOME_LABEL: Readonly<Record<MakitaEventOutcome, string>> = {
@@ -158,6 +171,26 @@ function TaskRow({
       >
         {STATE_LABEL[task.state]}
       </Badge>
+      {task.prNumber === null ? null : (
+        <a
+          className="hover:underline"
+          href={makitaItemUrl({ repo: task.repo, number: task.prNumber, kind: "pull" })}
+          target="_blank"
+          rel="noreferrer"
+        >
+          PR #{task.prNumber}
+        </a>
+      )}
+      {task.ci === null ? null : (
+        <Badge
+          size="sm"
+          variant={
+            task.ci === "green" ? "success" : task.ci === "pending" ? "secondary" : "warning"
+          }
+        >
+          {CI_LABEL[task.ci]}
+        </Badge>
+      )}
       <span className="text-muted-foreground">
         {`@${task.callerLogin} · since ${formatWhen(task.createdAt)}`}
         {configName === null ? "" : ` · ${configName}`}

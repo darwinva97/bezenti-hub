@@ -974,8 +974,8 @@ export const layerMcpTransport = <RA, RE, RR>(registrations: Layer.Layer<RA, RE,
   }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 /**
- * `makita_read_issue`, `makita_comment`, `makita_push`: a Makita Thread's agent, on its own task's
- * issue and branch only.
+ * `makita_read_issue`, `makita_comment`, `makita_push`, `makita_open_pull_request`, `makita_ci_logs`:
+ * a Makita Thread's agent, on its own task's issue, branch and pull request only.
  */
 const layerMakitaToolkit = toolkitRegistration(MakitaToolkit, MakitaHandlers.layer);
 

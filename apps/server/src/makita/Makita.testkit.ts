@@ -22,6 +22,7 @@ import { makeFakeGitHub } from "./MakitaGitHub.testkit.ts";
 import * as MakitaIntake from "./MakitaIntake.ts";
 import * as MakitaPermissions from "./MakitaPermissions.ts";
 import { makeGitWorld } from "./MakitaPush.testkit.ts";
+import * as MakitaPullRequests from "./MakitaPullRequests.ts";
 import * as MakitaPushes from "./MakitaPushes.ts";
 import * as MakitaStops from "./MakitaStops.ts";
 import * as MakitaTasks from "./MakitaTasks.ts";
@@ -86,7 +87,7 @@ export const makitaHub = Effect.gen(function* () {
   const gitWorld = makeGitWorld();
   yield* Effect.addFinalizer(() => Effect.sync(gitWorld.cleanup));
   const context = yield* Layer.build(
-    Layer.mergeAll(MakitaTasks.layer, MakitaStops.layer).pipe(
+    Layer.mergeAll(MakitaTasks.layer, MakitaStops.layer, MakitaPullRequests.layer).pipe(
       Layer.provideMerge(MakitaPushes.layer),
       Layer.provideMerge(
         Layer.mergeAll(
@@ -119,6 +120,7 @@ export const makitaHub = Effect.gen(function* () {
     makitaTasks: Context.get(context, MakitaTasks.MakitaTasks),
     makitaStops: Context.get(context, MakitaStops.MakitaStops),
     makitaPushes: Context.get(context, MakitaPushes.MakitaPushes),
+    makitaPullRequests: Context.get(context, MakitaPullRequests.MakitaPullRequests),
     gitWorld,
     githubIdentities: Context.get(context, GitHubIdentities.GitHubIdentities),
   };

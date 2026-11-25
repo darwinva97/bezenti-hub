@@ -5,6 +5,7 @@ import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as MakitaIntake from "../makita/MakitaIntake.ts";
 import * as MakitaMachines from "../makita/MakitaMachines.ts";
+import * as MakitaPullRequests from "../makita/MakitaPullRequests.ts";
 import * as MakitaPushes from "../makita/MakitaPushes.ts";
 import * as MakitaStops from "../makita/MakitaStops.ts";
 import * as MakitaTasks from "../makita/MakitaTasks.ts";
@@ -570,6 +571,13 @@ export const layerProduction = Layer.mergeAll(
   // Makita (tickets 04–05): Makita's token reads each listened repository's events, and an
   // accepted trigger becomes a task whose Thread runs as the configuration's creator.
   MakitaTasks.layerScheduled.pipe(
+    // Makita ticket 12: a task's pull request, and the watch of its CI.
+    Layer.merge(MakitaPullRequests.layerScheduled),
+    Layer.provideMerge(
+      MakitaPullRequests.layer.pipe(
+        Layer.provide(Layer.mergeAll(layerThreadManagementProvided, AuditLog.layer)),
+      ),
+    ),
     Layer.provideMerge(
       MakitaTasks.layer.pipe(
         Layer.provide(

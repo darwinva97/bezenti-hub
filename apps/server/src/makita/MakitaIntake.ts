@@ -194,6 +194,10 @@ export class MakitaIntake extends Context.Service<
     readonly pollDue: Effect.Effect<ReadonlyArray<QueuedEvent>>;
     /** The repositories listened to now, by lower-case `owner/name`. */
     readonly listened: Effect.Effect<ReadonlyMap<string, ListenedRepo>>;
+    /** Ticket 12: until when every request of Makita's token waits (epoch ms). */
+    readonly heldUntil: Effect.Effect<number>;
+    /** Ticket 12: a rate limit met elsewhere (the CI watch) holds the intake too. */
+    readonly holdForRateLimit: (retryAt: number | undefined) => Effect.Effect<void>;
   }
 >()("t3/makita/MakitaIntake") {}
 
@@ -951,6 +955,15 @@ const make = Effect.gen(function* () {
 
   return MakitaIntake.of({
     pollDue,
+    heldUntil: Ref.get(holdUntil),
+    holdForRateLimit: Effect.fn("MakitaIntake.holdForRateLimit")(function* (
+      retryAt: number | undefined,
+    ) {
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      yield* Ref.update(holdUntil, (current) =>
+        Math.max(current, retryAt ?? 0, now + RATE_LIMIT_MIN_MS),
+      );
+    }),
     listened: Effect.gen(function* () {
       return yield* listenedAt(DateTime.toEpochMillis(yield* DateTime.now));
     }).pipe(

@@ -53,6 +53,9 @@ const NAMES = [
   "makita_comment",
   "makita_read_issue",
   "makita_push",
+  "makita_open_pull_request",
+  "makita_ci_logs",
+  "merge_pull_request",
   "thread_history",
   "t3_background_wait",
   "t3_thread_launch",
@@ -101,11 +104,15 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       asPusher[name] = yield* reached(caller("push"), name);
       asOther[name] = yield* reached(caller(null), name);
     }
-    // Ticket 10: a configuration that only comments does not see makita_push.
+    // Ticket 10: a configuration that only comments does not see makita_push. Ticket 12: nor
+    // its pull request or the CI logs; nobody's agent has a merge tool.
     expect(asMakita).toEqual({
       makita_comment: true,
       makita_read_issue: true,
       makita_push: false,
+      makita_open_pull_request: false,
+      makita_ci_logs: false,
+      merge_pull_request: false,
       thread_history: true,
       t3_background_wait: true,
       t3_thread_launch: false,
@@ -116,11 +123,19 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       preview_open: false,
       schedule_task: false,
     });
-    expect(asPusher).toEqual({ ...asMakita, makita_push: true });
+    expect(asPusher).toEqual({
+      ...asMakita,
+      makita_push: true,
+      makita_open_pull_request: true,
+      makita_ci_logs: true,
+    });
     expect(asOther).toEqual({
       makita_comment: false,
       makita_read_issue: false,
       makita_push: false,
+      makita_open_pull_request: false,
+      makita_ci_logs: false,
+      merge_pull_request: true,
       thread_history: true,
       t3_background_wait: true,
       t3_thread_launch: true,
@@ -132,7 +147,9 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       schedule_task: true,
     });
     expect([...McpInvocationContext.MAKITA_ALLOWED_TOOLS].toSorted()).toEqual([
+      "makita_ci_logs",
       "makita_comment",
+      "makita_open_pull_request",
       "makita_push",
       "makita_read_issue",
       "t3_background_wait",

@@ -111,6 +111,8 @@ export const AuditAction = Schema.Literals([
   // Makita ticket 08: a User's GitHub account linked (proved from it) or unlinked.
   "github_identity.link",
   "github_identity.unlink",
+  // Makita ticket 12: the pull request Makita opened for a task.
+  "makita.github.pull_request",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -436,6 +438,8 @@ export const AUDIT_DETAIL_KEYS = {
   "github_identity.link": ["githubUserId", "login", "repo"],
   /** Which account and why: `user` (its User), `owner`, `replaced` or `user-removed`. */
   "github_identity.unlink": ["githubUserId", "login", "reason"],
+  /** The pull request opened for a task (as the creator's agent): number, head and base; no text. */
+  "makita.github.pull_request": ["space", "repo", "number", "makita", "pr", "branch", "base"],
   /** The provider's kind and which config fields changed, by name; never a credential. */
   "secret_provider.create": ["kind", "changed"],
   "secret_provider.update": ["kind", "changed"],

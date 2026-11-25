@@ -20,6 +20,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -34,6 +35,8 @@ const REQUEST_HEADERS = {
   "user-agent": "t3code",
 };
 const TIMEOUT = Duration.seconds(30);
+/** Ticket 12: a CI log is streamed whole to keep its tail, so it may take longer. */
+const TAIL_TIMEOUT = Duration.seconds(120);
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 /** GitHub's secondary limits penalize bursts: Makita keeps few requests in flight. */
 const CONCURRENCY = 4;
@@ -115,6 +118,20 @@ export interface MakitaRestInput {
   readonly ifNoneMatch?: string;
 }
 
+/** Ticket 12: a GET whose answer only matters by its end. */
+interface MakitaTailInput {
+  readonly operation: string;
+  readonly path: string;
+  readonly maxBytes: number;
+}
+
+/** Ticket 12: the end of a long answer. */
+export interface MakitaGitHubTail {
+  readonly text: string;
+  /** Whether more came before what was kept. */
+  readonly truncated: boolean;
+}
+
 /**
  * Makita ticket 10: where Makita's git commands reach GitHub, by URL. Tests point it at a folder of
  * local bare repositories.
@@ -174,6 +191,11 @@ export class MakitaGitHub extends Context.Service<
     readonly branchTip: (
       input: Omit<MakitaPushInput, "sha">,
     ) => Effect.Effect<string | null, MakitaGitHubError>;
+    /**
+     * Ticket 12: one GET with the stored token whose answer is read to its end, keeping only its
+     * last `maxBytes` (a CI job's log, behind GitHub's redirect).
+     */
+    readonly tail: (input: MakitaTailInput) => Effect.Effect<MakitaGitHubTail, MakitaGitHubError>;
   }
 >()("t3/makita/MakitaGitHub") {}
 
@@ -236,12 +258,7 @@ const make = Effect.gen(function* () {
   const gitRemote = yield* MakitaGitRemote;
   const vcs = yield* VcsProcess.VcsProcess;
 
-  /** One request as `token`; the answer whatever its status, or `unreachable`. */
-  const send = Effect.fn("MakitaGitHub.send")(function* (
-    token: Redacted.Redacted<string>,
-    input: MakitaRestInput,
-  ) {
-    yield* Effect.annotateCurrentSpan({ "makita.github.operation": input.operation });
+  const requestOf = (token: Redacted.Redacted<string>, input: MakitaRestInput) => {
     const url = `${rest}/${input.path.replace(/^\/+/u, "")}`;
     const base = HttpClientRequest.make(input.method ?? "GET")(url).pipe(
       HttpClientRequest.setHeaders({
@@ -250,8 +267,18 @@ const make = Effect.gen(function* () {
         ...(input.ifNoneMatch === undefined ? {} : { "if-none-match": input.ifNoneMatch }),
       }),
     );
-    const request =
-      input.body === undefined ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(input.body));
+    return input.body === undefined
+      ? base
+      : base.pipe(HttpClientRequest.bodyJsonUnsafe(input.body));
+  };
+
+  /** One request as `token`; the answer whatever its status, or `unreachable`. */
+  const send = Effect.fn("MakitaGitHub.send")(function* (
+    token: Redacted.Redacted<string>,
+    input: MakitaRestInput,
+  ) {
+    yield* Effect.annotateCurrentSpan({ "makita.github.operation": input.operation });
+    const request = requestOf(token, input);
     return yield* slots.withPermit(
       Effect.gen(function* () {
         const response = yield* httpClient
@@ -385,6 +412,77 @@ const make = Effect.gen(function* () {
       (answer.status === 304 && input.ifNoneMatch !== undefined);
     if (!ok) return yield* yield* refusal(answer);
     return answer;
+  });
+
+  /** Ticket 12: the answer streamed to its end, only its last `maxBytes` kept. */
+  const tailWith = Effect.fn("MakitaGitHub.tailWith")(function* (
+    token: Redacted.Redacted<string>,
+    input: MakitaTailInput,
+  ) {
+    yield* Effect.annotateCurrentSpan({ "makita.github.operation": input.operation });
+    const request = requestOf(token, { operation: input.operation, path: input.path });
+    return yield* slots.withPermit(
+      Effect.gen(function* () {
+        const response = yield* httpClient
+          .execute(request)
+          .pipe(Effect.provideService(HttpClient.TracerDisabledWhen, () => true));
+        if (response.status < 200 || response.status >= 300) {
+          const collected = yield* collectUint8StreamText({
+            stream: response.stream,
+            maxBytes: 64 * 1024,
+          }).pipe(Effect.orElseSucceed(() => ({ text: "" })));
+          return yield* yield* refusal({
+            status: response.status,
+            headers: response.headers as Readonly<Record<string, string | undefined>>,
+            body: collected.text,
+          });
+        }
+        const kept = yield* response.stream.pipe(
+          Stream.runFold(
+            () => ({ chunks: [] as Array<Uint8Array>, bytes: 0, dropped: false }),
+            (state, chunk) => {
+              state.chunks.push(chunk);
+              let bytes = state.bytes + chunk.byteLength;
+              let dropped = state.dropped;
+              while (
+                state.chunks.length > 1 &&
+                bytes - state.chunks[0]!.byteLength >= input.maxBytes
+              ) {
+                bytes -= state.chunks.shift()!.byteLength;
+                dropped = true;
+              }
+              return { chunks: state.chunks, bytes, dropped };
+            },
+          ),
+        );
+        const all = new Uint8Array(kept.bytes);
+        let offset = 0;
+        for (const chunk of kept.chunks) {
+          all.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        const cut = all.byteLength > input.maxBytes;
+        const text = new TextDecoder().decode(
+          cut ? all.subarray(all.byteLength - input.maxBytes) : all,
+        );
+        return {
+          // A cut may split a line or a character: what comes before the first line break goes.
+          text: cut ? text.slice(text.indexOf("\n") + 1) : text,
+          truncated: cut || kept.dropped,
+        } satisfies MakitaGitHubTail;
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: TAIL_TIMEOUT,
+          orElse: () => Effect.fail(new MakitaGitHubError({ reason: "unreachable" })),
+        }),
+        // Nothing of the failure travels on: its cause could name the request.
+        Effect.mapError((error) =>
+          error._tag === "MakitaGitHubError"
+            ? error
+            : new MakitaGitHubError({ reason: "unreachable" }),
+        ),
+      ),
+    );
   });
 
   /**
@@ -572,6 +670,9 @@ const make = Effect.gen(function* () {
     }),
     branchTip: Effect.fn("MakitaGitHub.branchTip")(function* (input: Omit<MakitaPushInput, "sha">) {
       return yield* withStored((token) => tipWith(token, input));
+    }),
+    tail: Effect.fn("MakitaGitHub.tail")(function* (input: MakitaTailInput) {
+      return yield* withStored((token) => tailWith(token, input));
     }),
   });
 });

@@ -86,6 +86,31 @@ export interface FakeReaction {
   readonly content: string;
 }
 
+/** A pull request Makita opened (ticket 12). */
+export interface FakePullRequest {
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  readonly head: string;
+  readonly base: string;
+  state: "open" | "closed";
+  readonly user: FakeGitHubUser;
+  /** The head commit when no branch tip is known (`hooks.branchTip`). */
+  headSha: string;
+}
+
+/** A commit's CI as GitHub reports it (ticket 12). */
+export interface FakeCi {
+  readonly checkRuns: ReadonlyArray<{
+    readonly id: number;
+    readonly name: string;
+    readonly status: string;
+    readonly conclusion: string | null;
+    readonly app?: string;
+  }>;
+  readonly statuses: ReadonlyArray<{ readonly context: string; readonly state: string }>;
+}
+
 const API = "https://api.github.com/";
 
 const millisOf = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
@@ -126,6 +151,15 @@ export const makeFakeGitHub = () => {
   let nextCommentId = 5_000;
   /** What the fake stamps on events and comments it makes. */
   const clock = { now: "2026-11-24T10:00:00Z" };
+  /** Ticket 12: `owner/name#n` → a pull request; a commit → its CI; a job id → its log. */
+  const pulls = new Map<string, FakePullRequest>();
+  const ci = new Map<string, FakeCi>();
+  const jobLogs = new Map<number, string>();
+  /** Where a branch is on GitHub's git side (the push testkit's remote), for a PR's head. */
+  const hooks: { branchTip: (repo: string, branch: string) => string | null } = {
+    branchTip: () => null,
+  };
+  let nextPullNumber = 40;
 
   const touch = (repo: string) => feedVersions.set(repo, (feedVersions.get(repo) ?? 0) + 1);
 
@@ -500,6 +534,131 @@ export const makeFakeGitHub = () => {
         return json(request, 201, { ...made, user: userOf(made.user) });
       }
     }
+    // Ticket 12: the repository, its pull requests, a commit's CI and a job's log.
+    const repoOnly = /^repos\/([^/]+)\/([^/]+)$/u.exec(route);
+    if (request.method === "GET" && repoOnly !== null) {
+      const repo = `${repoOnly[1]}/${repoOnly[2]}`;
+      return repos.has(repo)
+        ? json(request, 200, { full_name: repo, default_branch: "main" })
+        : json(request, 404, { message: "Not Found" });
+    }
+    const pullOf = (repo: string, pr: FakePullRequest) => ({
+      number: pr.number,
+      title: pr.title,
+      body: pr.body,
+      state: pr.state,
+      merged: false,
+      html_url: `https://github.com/${repo}/pull/${pr.number}`,
+      user: { login: pr.user.login, id: pr.user.id, type: pr.user.type ?? "User" },
+      head: { ref: pr.head, sha: hooks.branchTip(repo, pr.head) ?? pr.headSha },
+      base: { ref: pr.base },
+    });
+    const pullsMatch = /^repos\/([^/]+)\/([^/]+)\/pulls(?:\/(\d+))?$/u.exec(route);
+    if (pullsMatch !== null) {
+      const repo = `${pullsMatch[1]}/${pullsMatch[2]}`;
+      if (!repos.has(repo)) return json(request, 404, { message: "Not Found" });
+      const mine = [...pulls.entries()]
+        .filter(([key]) => key.startsWith(`${repo}#`))
+        .map(([, pr]) => pr);
+      if (request.method === "GET" && pullsMatch[3] !== undefined) {
+        const pr = pulls.get(`${repo}#${pullsMatch[3]}`);
+        return pr === undefined
+          ? json(request, 404, { message: "Not Found" })
+          : json(request, 200, pullOf(repo, pr));
+      }
+      if (request.method === "GET") {
+        const head = query.get("head")?.split(":")[1];
+        const base = query.get("base");
+        const state = query.get("state") ?? "open";
+        return json(
+          request,
+          200,
+          mine
+            .filter(
+              (pr) =>
+                (state === "all" || pr.state === state) &&
+                (head === undefined || pr.head === head) &&
+                (base === null || pr.base === base),
+            )
+            .map((pr) => pullOf(repo, pr)),
+        );
+      }
+      if (request.method === "POST" && pullsMatch[3] === undefined) {
+        const input = (bodyOf(request) ?? {}) as {
+          readonly title?: string;
+          readonly body?: string;
+          readonly head?: string;
+          readonly base?: string;
+        };
+        if (mine.some((pr) => pr.state === "open" && pr.head === input.head)) {
+          return json(request, 422, {
+            message: "Validation Failed",
+            errors: [{ message: `A pull request already exists for ${input.head}.` }],
+          });
+        }
+        nextPullNumber += 1;
+        const pr: FakePullRequest = {
+          number: nextPullNumber,
+          title: input.title ?? "",
+          body: input.body ?? "",
+          head: input.head ?? "",
+          base: input.base ?? "",
+          state: "open",
+          user: held.user,
+          headSha: "0".repeat(40),
+        };
+        pulls.set(`${repo}#${pr.number}`, pr);
+        issues.set(`${repo}#${pr.number}`, {
+          number: pr.number,
+          title: pr.title,
+          body: pr.body,
+          user: held.user,
+          state: "open",
+          locked: false,
+          pull: true,
+        });
+        return json(request, 201, pullOf(repo, pr));
+      }
+    }
+    const ciMatch = /^repos\/([^/]+)\/([^/]+)\/commits\/([0-9a-f]+)\/(check-runs|status)$/u.exec(
+      route,
+    );
+    if (request.method === "GET" && ciMatch !== null) {
+      const known = ci.get(ciMatch[3]!) ?? { checkRuns: [], statuses: [] };
+      if (ciMatch[4] === "check-runs") {
+        return json(request, 200, {
+          total_count: known.checkRuns.length,
+          check_runs: known.checkRuns.map((run) => ({
+            id: run.id,
+            name: run.name,
+            status: run.status,
+            conclusion: run.conclusion,
+            app: { slug: run.app ?? "github-actions" },
+          })),
+        });
+      }
+      const states = known.statuses.map((status) => status.state);
+      return json(request, 200, {
+        // GitHub answers `pending` when a commit has no status at all.
+        state: states.some((state) => state === "failure" || state === "error")
+          ? "failure"
+          : states.every((state) => state === "success") && states.length > 0
+            ? "success"
+            : "pending",
+        total_count: known.statuses.length,
+        statuses: known.statuses,
+      });
+    }
+    const logMatch = /^repos\/([^/]+)\/([^/]+)\/actions\/jobs\/(\d+)\/logs$/u.exec(route);
+    if (request.method === "GET" && logMatch !== null) {
+      const log = jobLogs.get(Number(logMatch[3]));
+      return log === undefined
+        ? json(request, 404, { message: "Not Found" })
+        : HttpClientResponse.fromWeb(
+            request,
+            new Response(log, { status: 200, headers: { "content-type": "text/plain" } }),
+          );
+    }
     const labelMatch = /^repos\/([^/]+)\/([^/]+)\/labels(?:\/([^/]+))?$/u.exec(route);
     if (labelMatch !== null) {
       const repo = `${labelMatch[1]}/${labelMatch[2]}`;
@@ -549,6 +708,10 @@ export const makeFakeGitHub = () => {
     reviewComments,
     reactions,
     clock,
+    pulls,
+    ci,
+    jobLogs,
+    hooks,
     addEvent,
     label,
     comment,

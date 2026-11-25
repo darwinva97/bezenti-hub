@@ -505,9 +505,15 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catch(githubRefusal("push the branch")));
     if (pushed === "rejected") return notPushed(SOMEONE_ELSE_PUSHED);
     const done = DateTime.formatIso(yield* DateTime.now);
+    // Ticket 12: with its pull request open, CI is watched on the new head from now on.
     yield* sql`
       UPDATE makita_tasks SET head_sha = ${head}, last_push_at = ${done},
-        pending_push_json = NULL, updated_at = ${done}
+        pending_push_json = NULL, updated_at = ${done},
+        ci_sha = CASE WHEN pr_number IS NULL THEN ci_sha ELSE ${head} END,
+        ci_state = CASE WHEN pr_number IS NULL THEN ci_state ELSE 'pending' END,
+        ci_since = CASE WHEN pr_number IS NULL THEN ci_since ELSE ${done} END,
+        ci_failing_json = CASE WHEN pr_number IS NULL THEN ci_failing_json ELSE NULL END,
+        state = CASE WHEN pr_number IS NULL THEN state ELSE 'waiting-ci' END
       WHERE task_id = ${task.taskId}
     `.pipe(Effect.catch(storage("record the push")));
     yield* audit

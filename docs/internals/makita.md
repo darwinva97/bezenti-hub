@@ -20,6 +20,8 @@ Makita is the Hub's GitHub bot teammate: a normal GitHub account whose token the
 | `MakitaPushes.ts`      | `makita_tasks.workspace_json`, `head_sha`, push state    | A pushing task's worktree and `makita_push` (ticket 10): validates and pushes through `MakitaGitHub`.                                     |
 | `MakitaMachines.ts`    | nothing                                                  | The machine side of a push over executor calls every machine serves (`move.fetch`, `move.prepare`, `captureCheckpoint`, upload).          |
 | `makitaBranch.ts`      | nothing                                                  | Names built by the Hub: `makita/<n>-<slug>`, its refs in the Hub repository, the bot's `noreply` identity, the worktree setup command.    |
+| `GitHubIdentities.ts`  | `github_identities`, `github_link_codes`                 | Each User's linked GitHub account and the one-time codes that prove it (ticket 08).                                                       |
+| `makitaCallers.ts`     | nothing (reads)                                          | Whom each configuration answers now, by numeric GitHub id (ticket 08).                                                                    |
 
 Only `makita/` names these tables (`DoorRules.test.ts` checks it). Other modules ask `makitaRows.makitaTaskOfThread`.
 
@@ -52,6 +54,14 @@ The Scheduler runs `makita-intake` every tick: `MakitaIntake.pollDue`, then `Mak
 - **Who decides.** With a live task on the issue, that task's configuration and its list decide. Without one, the oldest active configuration with `triggers.mention` whose list holds the author's numeric id takes it. A mention on a pull request starts a comment-only task of kind `pull`.
 - **Continuing.** A mention by someone on the list, on an issue with a live task, wakes that task's Thread instead of starting a second one. The checks of a start run first. The comment is read again from GitHub by id and must be unedited and by the same author. It is framed like the first message and sent with `sendToThread` in mode `queue`, as the creator, with `CommandId` `makita:<event_key>`. The task goes `running` with `replies_without_person = 0`, and the event becomes `started` / `continued`.
 - **Commands.** `/makita stop` stops the issue's live task (`github-stop`, through `stopTasksWithin`). Makita answers with a 👍 reaction, audited as `makita.github.reaction`, and no text. `/makita retry` starts a new task only when the issue's newest task `failed`. Otherwise the event is `command` / `nothing-to-stop` or `nothing-to-retry`.
+
+## Linked GitHub accounts (ticket 08)
+
+- **The proof.** In User settings → Account → «GitHub account», the User types their GitHub login. The Hub resolves it to its numeric id with Makita's token and makes a code: 8 characters, 15 minutes, one use, kept only as SHA-256, **bound to that id**. A newer code ends the older ones; at most 10 an hour. The User posts `@<makita> link <code>` as the first line of a new comment, from that account, on any issue or pull request of a listened repository.
+- **The intake** handles that line before mentions, so it never starts or wakes a task. Edited comments, bots and Makita itself are ignored. In the batch's transaction the code must be unused, unexpired, bound to the author's id and its User active. A match links the account (replacing the User's earlier one, both audited: `github_identity.link`, `github_identity.unlink` with `replaced`). If another User holds that account, the code ends `taken` and the User's page says «That GitHub account is linked to someone else on this Hub.», never who. After the commit Makita reacts 👍 or 😕; nothing else ever writes to GitHub, so a stranger's or a copied code gets silence. The event row is `command` / `link` with no configuration.
+- **Whom a configuration answers** (`makitaCallers.allowedCallerIds`, read on every intake pass and at each task's framing of «allowed»): `creator`, the creator's linked id; `list`, the list plus the creator's linked id; `members`, the linked ids of the Space's current Admins and Members (not Guests), or the Personal space's User. Only active Users count. Nothing is copied into the configuration, so unlinking, leaving the Space or being disabled counts at the next event.
+- **Unlink**: the User, or the Owner for anyone (WS `githubIdentity.unlink { userId? }`). Removing a User from the Hub deletes their link in the same transaction (`reason: user-removed`).
+- **Doors**: WS `githubIdentity.get`, `.linkCode`, `.unlink`, a person's own session only (AccessPolicy `githubIdentity.manage` and `githubIdentity.unlink`). No door returns another User's link.
 
 ## Stopping (ticket 06)
 

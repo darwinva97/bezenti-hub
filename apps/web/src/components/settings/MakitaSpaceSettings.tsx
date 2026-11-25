@@ -405,6 +405,9 @@ function ConfigRow(props: {
         <span className="text-xs text-muted-foreground">
           {`${triggersText(config.triggers)} · answers ${callersText(config)}`}
         </span>
+        {config.capability === "push" ? (
+          <span className="text-xs text-muted-foreground">{approvalText(config)}</span>
+        ) : null}
         <span className="text-xs text-muted-foreground">
           {`${config.aiAccountName ?? "An AI account that no longer exists"} · ${config.modelSelection.model}${config.baseBranch === null ? "" : ` · base ${config.baseBranch}`} · Space Sandbox`}
         </span>
@@ -498,7 +501,26 @@ const callersText = (config: MakitaConfig) =>
       ? "Members with a linked GitHub account"
       : config.callers.map((caller) => `@${caller.login}`).join(", ");
 
+/** When its pushes wait, and who approves them (ticket 11). */
+const approvalText = (config: MakitaConfig) => {
+  if (config.approval === "never") return "Pushes without approval";
+  const who = [
+    config.createdByName ?? "its creator",
+    ...config.approvers.map((approver) => `@${approver.login}`),
+  ].join(", ");
+  return `${config.approval === "always" ? "Every push waits" : "Pushes for others wait"} for /makita ok from ${who}`;
+};
+
 type CallersChoice = "creator" | "list" | "members";
+
+/** When a push waits for an approver (Makita ticket 11). */
+const APPROVAL_NOTES: Readonly<Record<MakitaConfig["approval"], string>> = {
+  others:
+    "A push after a request from someone who is not an approver waits for /makita ok. A push that fixes CI follows the last approval.",
+  always:
+    "Every push after a new request waits for /makita ok, even yours. A push that fixes CI follows the last approval.",
+  never: "It pushes for anyone it answers without asking.",
+};
 
 /** «New configuration» or «Edit»: batch 1's choices, the rest said as coming later. */
 function ConfigDialog(props: {
@@ -537,16 +559,19 @@ function ConfigDialog(props: {
   const [model, setModel] = useState(config?.modelSelection.model ?? account?.models?.[0] ?? "");
   const [baseBranch, setBaseBranch] = useState(config?.baseBranch ?? "");
   const [capability, setCapability] = useState<"comment" | "push">(config?.capability ?? "comment");
-  const [approval, setApproval] = useState<"others" | "never">(
-    config?.approval === "never" ? "never" : "others",
+  const [approval, setApproval] = useState<MakitaConfig["approval"]>(config?.approval ?? "others");
+  const [approvers, setApprovers] = useState(
+    config?.approvers.map((approver) => approver.login).join(", ") ?? "",
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const logins = callers
-    .split(/[\s,]+/u)
-    .map((login) => login.trim())
-    .filter((login) => login.length > 0);
+  const loginsOf = (text: string) =>
+    text
+      .split(/[\s,]+/u)
+      .map((login) => login.trim())
+      .filter((login) => login.length > 0);
+  const logins = loginsOf(callers);
   const ready =
     name.trim().length > 0 &&
     (allRepos || chosen.length > 0) &&
@@ -593,7 +618,7 @@ function ConfigDialog(props: {
                   capability,
                   mayLand: false,
                   approval,
-                  approvers: [],
+                  approvers: loginsOf(approvers),
                   baseBranch: baseBranch.trim().length === 0 ? null : baseBranch.trim(),
                   environmentId: null,
                 },
@@ -869,18 +894,36 @@ function ConfigDialog(props: {
                       aria-label="Approval before pushing"
                       size="sm"
                       value={[approval]}
-                      onValueChange={(next) =>
-                        setApproval(next[0] === "never" ? "never" : "others")
-                      }
+                      onValueChange={(next) => {
+                        const choice = next[0];
+                        if (choice === "others" || choice === "always" || choice === "never") {
+                          setApproval(choice);
+                        }
+                      }}
                     >
-                      <Toggle value="others">Wait for an approver</Toggle>
-                      <Toggle value="never">Push without approval</Toggle>
+                      <Toggle value="others">When someone else asks</Toggle>
+                      <Toggle value="always">Always</Toggle>
+                      <Toggle value="never">Never</Toggle>
                     </ToggleGroup>
-                    <p className="font-normal text-muted-foreground">
-                      {approval === "others"
-                        ? "Its first push for someone other than an approver waits for /makita ok, which comes in a later version: until then those pushes wait."
-                        : "It pushes for anyone on the list without asking."}
-                    </p>
+                    <p className="font-normal text-muted-foreground">{APPROVAL_NOTES[approval]}</p>
+                    {approval === "never" ? null : (
+                      <>
+                        <Input
+                          aria-label="Other approvers"
+                          nativeInput
+                          disabled={pending}
+                          placeholder="Other approvers: octocat, another-login"
+                          value={approvers}
+                          onChange={(event) => setApprovers(event.currentTarget.value)}
+                        />
+                        <p className="font-normal text-muted-foreground">
+                          You approve with your linked GitHub account. Someone listed here counts
+                          only while the account is linked by an active Admin or Member of this
+                          Space, checked at each /makita ok. Makita asks on the issue, and an
+                          approver replies with a new comment whose first line is /makita ok.
+                        </p>
+                      </>
+                    )}
                   </>
                 ) : null}
                 <span className="font-normal text-muted-foreground">{CI_NOTE}</span>

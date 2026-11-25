@@ -141,18 +141,29 @@ function UsageLine({ total }: { readonly total: MakitaUsagePeriods | null }) {
   );
 }
 
+/** Ticket 11: who approved a task's last push, in the activity's words. */
+const approvedText = (task: MakitaActivityTask) =>
+  task.lastApproval === null
+    ? ""
+    : ` · approved by ${task.lastApproval.login === null ? "the Owner on the Hub" : `@${task.lastApproval.login}`}`;
+
 function TaskRow({
   task,
   configName,
   onStop,
   stopping,
+  onApprove,
 }: {
   readonly task: MakitaActivityTask;
   readonly configName: string | null;
   /** Null when the viewer may not stop it, or it has ended. */
   readonly onStop: (() => void) | null;
+  /** While a stop or an approval of this task is on its way. */
   readonly stopping: boolean;
+  /** Ticket 11: null unless a push waits and the viewer may approve it (the Owner). */
+  readonly onApprove: (() => void) | null;
 }) {
+  const waiting = task.waitingPush;
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-2 text-xs">
       <a
@@ -191,11 +202,20 @@ function TaskRow({
           {CI_LABEL[task.ci]}
         </Badge>
       )}
+      {waiting === null ? null : (
+        <Badge size="sm" variant="warning">
+          {waiting.approved ? "Approved, pushing" : "Push waits for approval"}
+        </Badge>
+      )}
       <span className="text-muted-foreground">
         {`@${task.callerLogin} · since ${formatWhen(task.createdAt)}`}
         {configName === null ? "" : ` · ${configName}`}
         {task.failure === null ? "" : ` · ${task.failure}`}
         {task.usage === null ? "" : ` · ${makitaUsageText(task.usage)}`}
+        {waiting === null
+          ? ""
+          : ` · ${waiting.branch} (+${waiting.additions} −${waiting.deletions} in ${waiting.files} ${waiting.files === 1 ? "file" : "files"})`}
+        {approvedText(task)}
       </span>
       <span className="ms-auto flex items-center gap-2">
         {task.threadId === null ? null : (
@@ -206,6 +226,18 @@ function TaskRow({
           >
             Open Thread
           </Link>
+        )}
+        {onApprove === null ? null : (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={stopping}
+            aria-label={`Approve the push of ${task.repo}#${task.number}`}
+            title="Makita pushes exactly the waiting commit and says on GitHub that it was approved."
+            onClick={onApprove}
+          >
+            Approve
+          </Button>
         )}
         {onStop === null ? null : (
           <Button
@@ -268,17 +300,22 @@ type Tab = (typeof TABS)[number][0];
 function ActivityBody({
   activity,
   onStop,
+  onApprove,
   stopping,
 }: {
   readonly activity: MakitaActivityResult;
   readonly onStop: (task: MakitaActivityTask) => void;
-  /** The task being stopped now, if any. */
+  readonly onApprove: (task: MakitaActivityTask) => void;
+  /** The task being stopped or approved now, if any. */
   readonly stopping: string | null;
 }) {
   const [tab, setTab] = useState<Tab>("now");
   const names = new Map(activity.configs.map((config) => [config.configId, config.name]));
   const stoppable = new Set(
     activity.configs.flatMap((config) => (config.canStop ? [config.configId] : [])),
+  );
+  const approvable = new Set(
+    activity.configs.flatMap((config) => (config.canApprove ? [config.configId] : [])),
   );
   const row = (task: MakitaActivityTask) => (
     <TaskRow
@@ -287,6 +324,14 @@ function ActivityBody({
       configName={nameOf(task.configId)}
       onStop={isLive(task) && stoppable.has(task.configId) ? () => onStop(task) : null}
       stopping={stopping === task.taskId}
+      onApprove={
+        isLive(task) &&
+        task.waitingPush !== null &&
+        !task.waitingPush.approved &&
+        approvable.has(task.configId)
+          ? () => onApprove(task)
+          : null
+      }
     />
   );
   const nameOf = (configId: string) =>
@@ -409,6 +454,15 @@ export function MakitaActivityDialog({
     if (result._tag === "Success") query.refresh();
     else setStopError(errorMessageOf(squashAtomCommandFailure(result), "Could not stop it."));
   };
+  const approveTask = useAtomCommand(makitaEnvironment.approveTask, "approve a Makita push");
+  const approve = async (task: MakitaActivityTask) => {
+    setStopping(task.taskId);
+    setStopError(null);
+    const result = await approveTask({ environmentId, input: { taskId: task.taskId } });
+    setStopping(null);
+    if (result._tag === "Success") query.refresh();
+    else setStopError(errorMessageOf(squashAtomCommandFailure(result), "Could not approve it."));
+  };
   return (
     <Dialog
       open
@@ -441,6 +495,7 @@ export function MakitaActivityDialog({
               <ActivityBody
                 activity={query.data}
                 onStop={(task) => void stop(task)}
+                onApprove={(task) => void approve(task)}
                 stopping={stopping}
               />
             </div>

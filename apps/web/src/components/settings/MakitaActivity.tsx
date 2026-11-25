@@ -207,6 +207,18 @@ function TaskRow({
           {waiting.approved ? "Approved, pushing" : "Push waits for approval"}
         </Badge>
       )}
+      {task.landedSha === null ? null : (
+        <a
+          className="hover:underline"
+          href={`https://github.com/${task.repo}/commit/${task.landedSha}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <Badge size="sm" variant="success">
+            {`Merged ${task.landedSha.slice(0, 12)}`}
+          </Badge>
+        </a>
+      )}
       <span className="text-muted-foreground">
         {`@${task.callerLogin} · since ${formatWhen(task.createdAt)}`}
         {configName === null ? "" : ` · ${configName}`}

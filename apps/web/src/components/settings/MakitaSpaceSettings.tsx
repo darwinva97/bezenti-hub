@@ -396,6 +396,11 @@ function ConfigRow(props: {
           <Badge variant="secondary" size="sm">
             {config.capability === "push" ? "Also pushes branches" : "Comment and analyse"}
           </Badge>
+          {config.mayLand ? (
+            <Badge variant="warning" size="sm">
+              {`May land on ${config.baseBranch ?? "the default branch"}`}
+            </Badge>
+          ) : null}
         </div>
         <span className="text-xs text-muted-foreground">
           {"all" in config.repos ? "All Projects with a GitHub remote" : "Repositories"}
@@ -563,6 +568,9 @@ function ConfigDialog(props: {
   const [approvers, setApprovers] = useState(
     config?.approvers.map((approver) => approver.login).join(", ") ?? "",
   );
+  // Ticket 13: landing, and the confirmation that turning it on asks for (a merge can deploy).
+  const [mayLand, setMayLand] = useState(config?.mayLand ?? false);
+  const [landConfirmed, setLandConfirmed] = useState(config?.mayLand ?? false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -578,7 +586,9 @@ function ConfigDialog(props: {
     (label.trim().length > 0 || assigned || mention) &&
     (callersMode !== "list" || logins.length > 0) &&
     account !== null &&
-    model.trim().length > 0;
+    model.trim().length > 0 &&
+    (capability !== "push" || !mayLand || landConfirmed);
+  const landsOn = baseBranch.trim().length === 0 ? "the default branch" : baseBranch.trim();
 
   return (
     <Dialog
@@ -616,7 +626,7 @@ function ConfigDialog(props: {
                     aiAccountId: account.id as AiAccountId,
                   },
                   capability,
-                  mayLand: false,
+                  mayLand: capability === "push" && mayLand,
                   approval,
                   approvers: loginsOf(approvers),
                   baseBranch: baseBranch.trim().length === 0 ? null : baseBranch.trim(),
@@ -924,6 +934,39 @@ function ConfigDialog(props: {
                         </p>
                       </>
                     )}
+                    <label className="flex items-center gap-2 font-normal">
+                      <Checkbox
+                        aria-label="May land its pull request"
+                        disabled={pending}
+                        checked={mayLand}
+                        onCheckedChange={(checked) => {
+                          setMayLand(checked === true);
+                          if (checked !== true) setLandConfirmed(false);
+                        }}
+                      />
+                      May land its pull request (merge it on an approver's order)
+                    </label>
+                    {mayLand ? (
+                      <div className="flex flex-col gap-1 rounded-md border border-warning/40 bg-warning/8 p-2 font-normal">
+                        <p className="text-warning-foreground">
+                          {`Makita will merge its pull request into ${landsOn} when an approver comments /makita merge on a pull request whose CI passed on its latest commit. If ${landsOn} deploys, that comment is a production deploy.`}
+                        </p>
+                        <p className="text-muted-foreground">
+                          An approver may also say it in their own words; the Hub then reads that
+                          comment again and applies the same checks. A protected base (pull requests
+                          and checks required, no direct pushes) is recommended.
+                        </p>
+                        <label className="flex items-center gap-2">
+                          <Checkbox
+                            aria-label="I understand a merge can be a deploy"
+                            disabled={pending}
+                            checked={landConfirmed}
+                            onCheckedChange={(checked) => setLandConfirmed(checked === true)}
+                          />
+                          I understand that an approver's order can deploy.
+                        </label>
+                      </div>
+                    ) : null}
                   </>
                 ) : null}
                 <span className="font-normal text-muted-foreground">{CI_NOTE}</span>

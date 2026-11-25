@@ -35,7 +35,7 @@ Pausing the configuration, «Stop all», stopping the task, `/makita stop` on th
 
 ## Left for others (not built)
 
-- Ticket 11: a push asked in a review by someone who is not an approver must wait for `/makita ok` (`approved_through`). Every wake is already an event row with its task, its author's id and its time on GitHub, which is what 11 needs to tell whether an approval came after the last instruction. Until 11 lands, pushes after the first follow 10's rule.
+- Ticket 11: a push asked in a review by someone who is not an approver must wait for `/makita ok` (`approved_through`). Every wake is already an event row with its task, its author's id and its time on GitHub, which is what 11 needs to tell whether an approval came after the last instruction. (After rebasing on 11: its `pushNeedsApproval` reads exactly those `started` rows, so this holds with no extra code; a test covers it.)
 - Ticket 13: `/makita merge` and `makita_request_merge` (`kind: review`).
 
 ## Downsides (accepted)

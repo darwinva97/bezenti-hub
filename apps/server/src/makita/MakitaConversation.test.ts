@@ -10,8 +10,11 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import { platform, posix } from "../ai/AiGatewayRoute.testkit.ts";
+import * as CommandActor from "../auth/CommandActor.ts";
+import { pushNeedsApproval } from "./makitaApprovers.ts";
 import {
   DEPENDABOT,
+  GRACE_GH,
   type MakitaReady,
   makitaReady,
   MAKITA_BOT,
@@ -57,10 +60,10 @@ const taskOf = (ctx: MakitaReady, number: number) =>
  * A task on issue `issue` (labelled by octocat) whose pull request `pr` Makita opened. The PR is
  * set on the row as ticket 12 leaves it; how it was opened is MakitaPullRequests.test.ts's.
  */
-const withPull = (ctx: MakitaReady, issue: number, pr: number) =>
+const withPull = (ctx: MakitaReady, issue: number, pr: number, caller = OCTOCAT) =>
   Effect.gen(function* () {
     const { setup } = ctx;
-    setup.github.label(REPO, issue, "makita", OCTOCAT, { title: `Bug ${issue}` });
+    setup.github.label(REPO, issue, "makita", caller, { title: `Bug ${issue}` });
     yield* tick(ctx);
     setup.github.pulls.set(`${REPO}#${pr}`, {
       number: pr,
@@ -122,7 +125,8 @@ live(
       for (let n = 0; n < 5; n += 1) github.commentOn(REPO, 41, CI_HELPER, `Build ${n} done.`);
       github.commentOn(REPO, 41, MAKITA_BOT, "My own note.");
       github.review(REPO, 41, OCTOCAT, "COMMENTED", "");
-      github.commentOn(REPO, 41, OCTOCAT, "/makita ok");
+      // A command Makita does not know yet is left for its ticket (13: `/makita merge`).
+      github.commentOn(REPO, 41, OCTOCAT, "/makita merge");
       github.commentOn(REPO, 41, STRANGER, "/makita stop");
       yield* tick(ctx);
       assert.lengthOf(setup.sends, 0);
@@ -324,6 +328,32 @@ live(
         audited.map((row) => JSON.parse(row.detail).number),
         [12, 41, 41, 12, 41, 12],
       );
+    }),
+);
+
+live(
+  "a review by an allowed person who is not an approver is an instruction: the next push waits for /makita ok (ticket 11)",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* makitaReady;
+      const { setup } = ctx;
+      yield* ctx.configure();
+      yield* setup.makitaIntake.pollDue;
+      // Grace, the creator, links Grace-GH: her account approves and is answered.
+      const code = yield* setup.githubIdentities
+        .linkCodeForSession({ login: GRACE_GH.login })
+        .pipe(CommandActor.actAs(setup.people.member));
+      setup.github.commentOn(REPO, 40, GRACE_GH, code.comment);
+      yield* tick(ctx);
+      const task = yield* withPull(ctx, 12, 41, GRACE_GH);
+      const needs = pushNeedsApproval(setup.server.sql, task.taskId);
+      // Asked by an approver: nothing waits yet.
+      assert.isFalse(yield* needs);
+      later(ctx, 3);
+      setup.github.review(REPO, 41, OCTOCAT, "CHANGES_REQUESTED", "Rename it and push.");
+      yield* tick(ctx);
+      assert.lengthOf(setup.sends, 1);
+      assert.isTrue(yield* needs);
     }),
 );
 

@@ -61,3 +61,17 @@ Where this file and the root `AGENTS.md` disagree, this file wins.
 - **Upstream.** We port selected upstream commits rather than merging. Before porting one, check
   `git log public-hub-1 --grep '#<PR>'` so it is not taken twice, and renumber upstream migrations
   above ours.
+
+## Traps that cost a RED run
+
+- **Lint before committing.** Run `vp lint <changed files>`: the hook enforces repo rules such as
+  `no-low-value-comments` (header comments of four lines at most) and fails the commit.
+- **Audit actions.** A new audit action also needs its label in `AUDIT_ACTION_LABELS`
+  (`packages/client-runtime/src/spaces/spaceDirectory.ts`), or the web and mobile typechecks fail.
+- **MCP tools.** A tool without input leaves `parameters` out (`Tool.EmptyParams`):
+  `Schema.Struct({})` crashes server registration. A new tool also changes
+  `apps/server/src/provider/agentContextBudget.json`; set it to the measured values.
+- **Guarded tables.** `DoorRules` fails on any file that names another module's table. A feature
+  that needs two (for example `ai_usage` and `makita_*`) gets a narrow function in each owning
+  module and joins in memory.
+- **Effect SQL** has no `sql.notIn`: write `NOT (${sql.in(...)})`.

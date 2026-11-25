@@ -117,6 +117,8 @@ export const AuditAction = Schema.Literals([
   "makita.github.pull_request",
   // Makita ticket 13: a task's pull request merged on an approver's order.
   "makita.github.merge",
+  // Makita ticket 24: labels Makita added or removed on its task's issue or pull request.
+  "makita.github.labels",
   // Vaults ticket 03: Secret providers (from the settings) and their Provider scopes.
   "secret_provider.create",
   "secret_provider.update",
@@ -428,7 +430,7 @@ export const AUDIT_DETAIL_KEYS = {
    * A comment Makita posted: by the agent (as the configuration's creator) or by the Hub itself
    * («On it.», the loop guard's notice). Never the comment's text.
    */
-  "makita.github.comment": ["space", "repo", "number", "makita", "by"],
+  "makita.github.comment": ["space", "repo", "number", "makita", "by", "report"],
   /**
    * A task stopped and why: `manual` by a person, `config-paused`, `config-deleted`,
    * `makita-paused`, the creator's (`permission-revoked`, …) or its issue's (`issue-closed`, …).
@@ -444,6 +446,8 @@ export const AUDIT_DETAIL_KEYS = {
   "github_identity.link": ["githubUserId", "login", "repo"],
   /** Which account and why: `user` (its User), `owner`, `replaced` or `user-removed`. */
   "github_identity.unlink": ["githubUserId", "login", "reason"],
+  /** Labels Makita set from its configuration's list (public names), and where. */
+  "makita.github.labels": ["space", "repo", "number", "makita", "added", "removed"],
   /** The pull request opened for a task (as the creator's agent): number, head and base; no text. */
   "makita.github.pull_request": ["space", "repo", "number", "makita", "pr", "branch", "base"],
   /**

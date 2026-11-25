@@ -80,6 +80,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.makitaConfigsDelete]: AuthOrchestrationOperateScope,
   [WS_METHODS.makitaConfigsPause]: AuthOrchestrationOperateScope,
   [WS_METHODS.makitaConfigsResume]: AuthOrchestrationOperateScope,
+  [WS_METHODS.makitaConfigsLabels]: AuthOrchestrationOperateScope,
   [WS_METHODS.makitaTasksStop]: AuthOrchestrationOperateScope,
   [WS_METHODS.makitaTasksApprove]: AuthOrchestrationOperateScope,
   [WS_METHODS.githubIdentityLinkCode]: AuthAccessWriteScope,

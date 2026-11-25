@@ -68,6 +68,18 @@ export interface FakeIssue {
   state: "open" | "closed";
   locked: boolean;
   readonly pull?: boolean;
+  /** Ticket 23: when it was closed (a closed one without it: closed now). */
+  closedAt?: string;
+}
+
+/** Ticket 23: an item a search answers as it is, whatever it asked (another repository's). */
+export interface FakeSearchItem {
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  readonly state: "open" | "closed";
+  readonly repository_url: string;
+  readonly user: { readonly login: string; readonly id: number };
 }
 
 export interface FakeComment {
@@ -200,6 +212,60 @@ export const makeFakeGitHub = () => {
   const mergeSettings = new Map<string, { merge: boolean; squash: boolean }>();
   const merges: Array<FakeMerge> = [];
   const deletedBranches: Array<{ readonly repo: string; readonly branch: string }> = [];
+  /** Ticket 23: what every search answers besides its matches; ticket 24: an item's labels. */
+  const searchInjected: Array<FakeSearchItem> = [];
+  const issueLabels = new Map<string, Set<string>>();
+
+  /**
+   * Ticket 23: `GET /search/issues` as GitHub reads `q`: every `repo:` qualifier (any of them),
+   * `is:open|closed`, `is:issue|pr`, `closed:>=day`, and words all found in the title or body.
+   */
+  const search = (q: string) => {
+    const terms = q.split(/\s+/u).filter((term) => term.length > 0);
+    const reposAsked = terms
+      .filter((term) => term.startsWith("repo:"))
+      .map((term) => term.slice(5).toLowerCase());
+    const has = (term: string) => terms.includes(term);
+    const closedSince = terms.find((term) => term.startsWith("closed:>="))?.slice(9);
+    const words = terms
+      .filter((term) => !term.includes(":"))
+      .map((term) => term.replace(/"/gu, "").toLowerCase());
+    const found = [...issues.entries()].flatMap(([key, issue]) => {
+      const repo = key.slice(0, key.lastIndexOf("#"));
+      if (!reposAsked.includes(repo.toLowerCase())) return [];
+      if (has("is:open") && issue.state !== "open") return [];
+      if (has("is:closed") && issue.state !== "closed") return [];
+      if (has("is:pr") && issue.pull !== true) return [];
+      if (has("is:issue") && issue.pull === true) return [];
+      const closedAt = issue.closedAt ?? clock.now;
+      if (
+        closedSince !== undefined &&
+        issue.state === "closed" &&
+        closedAt.slice(0, 10) < closedSince
+      ) {
+        return [];
+      }
+      const pr = pulls.get(key);
+      const body = pr?.body ?? issue.body ?? "";
+      const text = `${issue.title} ${body}`.toLowerCase();
+      if (!words.every((word) => text.includes(word))) return [];
+      return [
+        {
+          number: issue.number,
+          title: issue.title,
+          body,
+          state: issue.state,
+          closed_at: issue.state === "closed" ? closedAt : null,
+          repository_url: `${API}repos/${repo}`.replace(/\/$/u, ""),
+          user: { login: issue.user.login, id: issue.user.id, type: issue.user.type ?? "User" },
+          ...(issue.pull === true
+            ? { pull_request: { merged_at: pr?.merged === true ? clock.now : null } }
+            : {}),
+        },
+      ];
+    });
+    return [...found, ...searchInjected];
+  };
 
   const touch = (repo: string) => feedVersions.set(repo, (feedVersions.get(repo) ?? 0) + 1);
 
@@ -484,6 +550,15 @@ export const makeFakeGitHub = () => {
       return user === undefined
         ? json(request, 404, { message: "Not Found" })
         : json(request, 200, { login: user.login, id: user.id, type: user.type ?? "User" });
+    }
+    if (request.method === "GET" && route === "search/issues") {
+      const items = search(query.get("q") ?? "");
+      const perPage = Number(query.get("per_page") ?? "30");
+      return json(request, 200, {
+        total_count: items.length,
+        incomplete_results: false,
+        items: items.slice(0, perPage),
+      });
     }
     const repoMatch = /^repos\/([^/]+)\/([^/]+)(?:\/|$)/u.exec(route);
     const failure =
@@ -854,11 +929,43 @@ export const makeFakeGitHub = () => {
             new Response(log, { status: 200, headers: { "content-type": "text/plain" } }),
           );
     }
+    // Ticket 24: an issue's or pull request's labels; adding a missing one makes it, as GitHub does.
+    const issueLabelMatch = /^repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/labels(?:\/([^/]+))?$/u.exec(
+      route,
+    );
+    if (issueLabelMatch !== null) {
+      const repo = `${issueLabelMatch[1]}/${issueLabelMatch[2]}`;
+      const key = `${repo}#${issueLabelMatch[3]}`;
+      if (!issues.has(key)) return json(request, 404, { message: "Not Found" });
+      const set = issueLabels.get(key) ?? new Set<string>();
+      issueLabels.set(key, set);
+      const listed = () => [...set].map((name) => ({ name }));
+      if (request.method === "POST" && issueLabelMatch[4] === undefined) {
+        const names = (bodyOf(request) as { readonly labels?: Array<string> } | null)?.labels ?? [];
+        for (const name of names) {
+          set.add(name);
+          repos.get(repo)?.add(name);
+        }
+        return json(request, 200, listed());
+      }
+      if (request.method === "DELETE" && issueLabelMatch[4] !== undefined) {
+        const name = decodeURIComponent(issueLabelMatch[4]);
+        if (!set.delete(name)) return json(request, 404, { message: "Label does not exist" });
+        return json(request, 200, listed());
+      }
+    }
     const labelMatch = /^repos\/([^/]+)\/([^/]+)\/labels(?:\/([^/]+))?$/u.exec(route);
     if (labelMatch !== null) {
       const repo = `${labelMatch[1]}/${labelMatch[2]}`;
       const labels = repos.get(repo);
       if (labels === undefined) return json(request, 404, { message: "Not Found" });
+      if (request.method === "GET" && labelMatch[3] === undefined) {
+        return json(
+          request,
+          200,
+          [...labels].map((name) => ({ name })),
+        );
+      }
       if (request.method === "GET" && labelMatch[3] !== undefined) {
         const name = decodeURIComponent(labelMatch[3]);
         return labels.has(name)
@@ -911,6 +1018,8 @@ export const makeFakeGitHub = () => {
     mergeSettings,
     merges,
     deletedBranches,
+    searchInjected,
+    issueLabels,
     addEvent,
     label,
     comment,

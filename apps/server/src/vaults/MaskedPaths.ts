@@ -205,6 +205,7 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "makita.configs.delete": none("the deleted Makita configuration"),
   "makita.configs.pause": none("the paused Makita configuration"),
   "makita.configs.resume": none("the resumed Makita configuration"),
+  "makita.configs.labels": none("public label names of the chosen Projects' GitHub repositories"),
   "makita.tasks.stop": none("whether a Makita task was stopped"),
   "makita.tasks.approve": none("whether a Makita task's waiting push was approved"),
   "makita.activity": none(
@@ -550,6 +551,8 @@ export const MCP_DOOR_RULES: Record<string, DoorRule> = {
   // Makita ticket 12: the PR's number and link; a CI log's tail, masked and framed.
   makita_open_pull_request: none("whether Makita opened its task's pull request: number, link"),
   makita_ci_logs: none("a public CI job's log tail, masked with the creator's secrets and framed"),
+  makita_search: none("public issues and pull requests of the task's repository, framed"),
+  makita_label: none("which public labels Makita set on its issue or pull request"),
   // Makita ticket 13: whether the Hub merged, the commit it made, or why not; no GitHub text.
   makita_request_merge: none("whether the Hub merged Makita's pull request: the commit, why not"),
   list_scheduled_tasks: none(

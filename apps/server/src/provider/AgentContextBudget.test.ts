@@ -17,6 +17,7 @@ import { MakitaLanding } from "../makita/MakitaLanding.ts";
 import { MakitaPullRequests } from "../makita/MakitaPullRequests.ts";
 import { MakitaPushes } from "../makita/MakitaPushes.ts";
 import { MakitaTasks } from "../makita/MakitaTasks.ts";
+import { MakitaTriage } from "../makita/MakitaTriage.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import {
@@ -59,6 +60,7 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(MakitaPullRequests)({}),
   Layer.mock(MakitaPushes)({}),
   Layer.mock(MakitaTasks)({}),
+  Layer.mock(MakitaTriage)({}),
   Layer.mock(OrchestratorV2)({}),
   Layer.mock(PreviewAutomationBroker)({}),
   Layer.mock(PreviewBrowser)({}),

@@ -237,6 +237,8 @@ export const MakitaConfig = Schema.Struct({
   baseBranch: Schema.NullOr(Schema.String),
   /** Null: the Space's Sandbox. */
   environmentId: Schema.NullOr(EnvironmentId),
+  /** Ticket 24: the labels Makita may add or remove on its issue or PR; empty: it never labels. */
+  labels: Schema.Array(Schema.String),
   pausedAt: Schema.NullOr(Schema.String),
   pausedBy: Schema.NullOr(UserId),
   pausedByName: Schema.NullOr(Schema.String),
@@ -266,6 +268,8 @@ const MakitaConfigFields = {
   approvers: Schema.Array(Schema.String),
   baseBranch: Schema.NullOr(Schema.String),
   environmentId: Schema.NullOr(EnvironmentId),
+  /** Ticket 24: absent on an update keeps the list; on a new configuration, none. */
+  labels: Schema.optionalKey(Schema.Array(Schema.String)),
 };
 
 export const MakitaConfigInput = Schema.Struct({ spaceId: SpaceId, ...MakitaConfigFields });
@@ -322,6 +326,15 @@ export const MakitaConfigsListResult = Schema.Struct({
   ),
 });
 export type MakitaConfigsListResult = typeof MakitaConfigsListResult.Type;
+
+/** Ticket 24: at most this many labels a configuration lets Makita set. */
+export const MAKITA_MAX_LABELS = 30;
+
+/** Ticket 24: the labels that exist in the repositories of the Projects the form chose. */
+export const MakitaRepoLabelsInput = Schema.Struct({ spaceId: SpaceId, repos: MakitaRepos });
+export type MakitaRepoLabelsInput = typeof MakitaRepoLabelsInput.Type;
+export const MakitaRepoLabelsResult = Schema.Struct({ labels: Schema.Array(Schema.String) });
+export type MakitaRepoLabelsResult = typeof MakitaRepoLabelsResult.Type;
 
 /** One Makita task (ticket 06: stop it now). */
 export const MakitaTaskRef = Schema.Struct({ taskId: Schema.String });

@@ -5,6 +5,7 @@ import { MakitaLanding } from "../../../makita/MakitaLanding.ts";
 import { MakitaPullRequests } from "../../../makita/MakitaPullRequests.ts";
 import { MakitaPushes } from "../../../makita/MakitaPushes.ts";
 import { MakitaTasks } from "../../../makita/MakitaTasks.ts";
+import { MakitaTriage } from "../../../makita/MakitaTriage.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { MakitaToolkit } from "./tools.ts";
@@ -39,6 +40,7 @@ export const layer = McpToolAccess.toLayer(MakitaToolkit, {
         .commentForThread(yield* callerThread, input.body, {
           ...(input.on === undefined ? {} : { on: input.on }),
           ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+          ...(input.report === undefined ? {} : { report: input.report }),
         })
         .pipe(Effect.mapError(asFailure));
     }),
@@ -53,7 +55,35 @@ export const layer = McpToolAccess.toLayer(MakitaToolkit, {
     Effect.gen(function* () {
       const pulls = yield* MakitaPullRequests;
       return yield* pulls
-        .openForThread(yield* callerThread, { title: input.title, body: input.body })
+        .openForThread(yield* callerThread, {
+          title: input.title,
+          body: input.body,
+          ...(input.evidence === undefined ? {} : { evidence: input.evidence }),
+        })
+        .pipe(Effect.mapError(asFailure));
+    }),
+  ),
+  makita_search: McpToolAccess.readsAsCaller((input) =>
+    Effect.gen(function* () {
+      const triage = yield* MakitaTriage;
+      return yield* triage
+        .searchForThread(yield* callerThread, {
+          query: input.query,
+          ...(input.state === undefined ? {} : { state: input.state }),
+          ...(input.kind === undefined ? {} : { kind: input.kind }),
+        })
+        .pipe(Effect.mapError(asFailure));
+    }),
+  ),
+  makita_label: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const triage = yield* MakitaTriage;
+      return yield* triage
+        .labelForThread(yield* callerThread, {
+          ...(input.add === undefined ? {} : { add: input.add }),
+          ...(input.remove === undefined ? {} : { remove: input.remove }),
+          ...(input.on === undefined ? {} : { on: input.on }),
+        })
         .pipe(Effect.mapError(asFailure));
     }),
   ),

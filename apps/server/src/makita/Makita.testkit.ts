@@ -27,6 +27,7 @@ import * as MakitaPullRequests from "./MakitaPullRequests.ts";
 import * as MakitaPushes from "./MakitaPushes.ts";
 import * as MakitaStops from "./MakitaStops.ts";
 import * as MakitaTasks from "./MakitaTasks.ts";
+import * as MakitaTriage from "./MakitaTriage.ts";
 
 /** One `ThreadLaunchService.launch` Makita asked for, and the actor it ran as. */
 export interface RecordedLaunch {
@@ -93,6 +94,7 @@ export const makitaHub = Effect.gen(function* () {
       MakitaStops.layer,
       MakitaPullRequests.layer,
       MakitaLanding.layer,
+      MakitaTriage.layer,
     ).pipe(
       Layer.provideMerge(MakitaPushes.layer),
       Layer.provideMerge(
@@ -128,6 +130,7 @@ export const makitaHub = Effect.gen(function* () {
     makitaPushes: Context.get(context, MakitaPushes.MakitaPushes),
     makitaPullRequests: Context.get(context, MakitaPullRequests.MakitaPullRequests),
     makitaLanding: Context.get(context, MakitaLanding.MakitaLanding),
+    makitaTriage: Context.get(context, MakitaTriage.MakitaTriage),
     gitWorld,
     githubIdentities: Context.get(context, GitHubIdentities.GitHubIdentities),
   };

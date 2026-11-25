@@ -28,6 +28,8 @@ export interface MakitaThreadTask {
   readonly capability: string;
   /** Ticket 13: whether its configuration may land (only `push` sees `makita_request_merge`). */
   readonly mayLand: boolean;
+  /** Ticket 24: whether its configuration lists labels Makita may set (`makita_label`). */
+  readonly labels: boolean;
 }
 
 /** The states in which a task still works (or waits to); anything else has ended. */
@@ -53,9 +55,11 @@ export const makitaTaskOfThread = Effect.fn("makitaRows.makitaTaskOfThread")(fun
     readonly makitaPaused: number;
     readonly capability: string;
     readonly mayLand: number;
+    readonly labels: number;
   }>`
     SELECT t.task_id AS "taskId", t.config_id AS "configId", t.space_id AS "spaceId",
       t.state, c.created_by AS "createdBy", c.capability, c.may_land AS "mayLand",
+      (c.labels_json <> '[]') AS labels,
       (c.paused_at IS NOT NULL OR c.deleted_at IS NOT NULL) AS "configPaused",
       COALESCE((SELECT global_paused_at IS NOT NULL FROM makita_account
         WHERE account_id = 'makita'), 1) AS "makitaPaused"
@@ -73,6 +77,7 @@ export const makitaTaskOfThread = Effect.fn("makitaRows.makitaTaskOfThread")(fun
         createdBy: UserId.make(row.createdBy),
         capability: row.capability,
         mayLand: row.mayLand === 1,
+        labels: row.labels === 1,
         halted: row.makitaPaused
           ? "makita-paused"
           : row.configPaused

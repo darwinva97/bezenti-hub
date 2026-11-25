@@ -176,6 +176,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
                       configId: task.value.configId,
                       push: task.value.capability === "push",
                       land: task.value.capability === "push" && task.value.mayLand,
+                      label: task.value.labels,
                     },
                   },
             ),

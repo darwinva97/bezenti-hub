@@ -288,7 +288,7 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   // Ticket 14: also its own pull request (from the task row), and a review thread GitHub says
   // is on that pull request.
   makita_comment: own(
-    "the calling agent's own Thread, which must be a Makita task's; its issue, or its own pull request and that pull request's review threads, only; the configuration's pause, the task's state, the secret mask and the loop guard, checked on the Hub",
+    "the calling agent's own Thread, which must be a Makita task's; its issue, or its own pull request and that pull request's review threads, only; the configuration's pause, the task's state, the secret mask and the loop guard, checked on the Hub; a reproduction report (ticket 24) must start in the fixed form and name a commit",
   ),
   makita_read_issue: own(
     "the calling agent's own Thread, which must be a Makita task's; its issue and its own pull request only",
@@ -299,7 +299,7 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   ),
   // Makita ticket 12: listed only when its configuration may push; only the text is the agent's.
   makita_open_pull_request: own(
-    "the calling agent's own Thread, which must be a Makita task's whose configuration may push; one pull request from its own pushed makita/ branch into the configuration's base, in its repository only; the pause, the task's state, the four sections, the secret mask, the token shape and Hub links, checked on the Hub",
+    "the calling agent's own Thread, which must be a Makita task's whose configuration may push; one pull request from its own pushed makita/ branch into the configuration's base, in its repository only, refused when another live Makita task's open pull request closes the same issue; the pause, the task's state, the four sections, the evidence placed by the Hub between its own markers, the secret mask, the token shape and Hub links, checked on the Hub",
   ),
   makita_ci_logs: own(
     "the calling agent's own Thread, which must be a Makita task's whose configuration may push; only a failing job of its own pull request's last RED, framed as untrusted data",
@@ -307,6 +307,14 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   // Makita ticket 13: listed only when its configuration may land. It only asks; no tool merges.
   makita_request_merge: own(
     "the calling agent's own Thread, which must be a Makita task's whose configuration may push and land; only requests: the Hub re-reads the cited comment from GitHub and merges its own pull request only if it is a valid approver's order that woke the turn, unused, with the same checks as /makita merge",
+  ),
+  // Makita ticket 23: read-only; the repository is the task's, never the call's.
+  makita_search: own(
+    "the calling agent's own Thread, which must be a Makita task's; a read-only search of its task's repository only (the query's qualifiers removed, every result's repository checked), with the other live Makita tasks of that repository; framed as untrusted data, bounded, and held by the intake's rate-limit hold",
+  ),
+  // Makita ticket 24: listed only when its configuration names labels Makita may set.
+  makita_label: own(
+    "the calling agent's own Thread, which must be a Makita task's whose configuration lists labels; adds or removes only those labels, never the trigger label, on its own issue or pull request only; the pause, the task's state and a per-task limit, checked on the Hub",
   ),
   list_scheduled_tasks: own("visibleScheduledTasks, as scheduledTasksSubscribe"),
   list_thread_pull_requests: VISIBLE_THREAD,

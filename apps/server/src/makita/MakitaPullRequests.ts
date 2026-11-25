@@ -45,7 +45,9 @@ import {
   missingSections,
   pullRequestFooter,
 } from "./makitaCi.ts";
+import { coveringPullRequest } from "./makitaCovering.ts";
 import { MakitaGitHub, MakitaGitHubError } from "./MakitaGitHub.ts";
+import { EVIDENCE_MARKER, evidenceBlock } from "./makitaTriageText.ts";
 import { FAST_POLL_MS, MakitaIntake } from "./MakitaIntake.ts";
 import { MAX_REPLIES_IN_A_ROW, WAITING_FOR_A_PERSON } from "./MakitaTasks.ts";
 
@@ -62,6 +64,8 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 const MAX_LOG_BYTES = 64 * 1024;
 const MAX_TITLE = 200;
 const MAX_BODY = 50_000;
+/** Ticket 24: each half of a pull request's evidence. */
+const MAX_EVIDENCE = 4_000;
 const FRAME_TAG = "github-data";
 const LIVE_STATES = ["running", "waiting-ci", "waiting-reply"];
 /** Text with the shape of a token never goes out, masked or not. */
@@ -87,6 +91,18 @@ const decodeRepository = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ default_branch: Schema.String })),
 );
 
+/** Ticket 24: what was run before and after the change, and what it gave. */
+export interface MakitaEvidence {
+  readonly before: string;
+  readonly after: string;
+}
+
+export interface MakitaPullRequestInput {
+  readonly title: string;
+  readonly body: string;
+  readonly evidence?: MakitaEvidence;
+}
+
 export interface MakitaPullRequestResult {
   readonly opened: boolean;
   readonly message: string;
@@ -107,7 +123,7 @@ export class MakitaPullRequests extends Context.Service<
     /** `makita_open_pull_request`: the calling Thread's task's one pull request, checked here. */
     readonly openForThread: (
       threadId: ThreadId,
-      input: { readonly title: string; readonly body: string },
+      input: MakitaPullRequestInput,
     ) => Effect.Effect<MakitaPullRequestResult, MakitaError>;
     /** `makita_ci_logs`: the tail of one failing job of the task's last RED, framed. */
     readonly ciLogsForThread: (
@@ -263,7 +279,7 @@ const make = Effect.gen(function* () {
 
   const openPullRequest = Effect.fn("MakitaPullRequests.openPullRequest")(function* (
     threadId: ThreadId,
-    input: { readonly title: string; readonly body: string },
+    input: MakitaPullRequestInput,
   ) {
     const { task, botId } = yield* liveTaskOf(threadId);
     if (task.kind !== "issue") {
@@ -295,6 +311,32 @@ const make = Effect.gen(function* () {
         `The body needs the sections Problem, Fix, Verified and Downsides, each a heading with text under it. Missing or empty: ${missing.join(", ")}. Nothing was opened.`,
       );
     }
+    // Ticket 24: the evidence goes between the Hub's own markers, which nobody else writes.
+    const evidence =
+      input.evidence === undefined
+        ? undefined
+        : { before: input.evidence.before.trim(), after: input.evidence.after.trim() };
+    if (
+      evidence !== undefined &&
+      [evidence.before, evidence.after].some(
+        (part) => part.length === 0 || part.length > MAX_EVIDENCE,
+      )
+    ) {
+      return yield* fail(
+        "invalid",
+        `Give the evidence before and after the change, each 1 to ${MAX_EVIDENCE} characters.`,
+      );
+    }
+    if (
+      [body, evidence?.before ?? "", evidence?.after ?? ""].some((text) =>
+        text.includes(EVIDENCE_MARKER),
+      )
+    ) {
+      return yield* fail(
+        "invalid",
+        `«${EVIDENCE_MARKER}» marks the Hub's evidence block; take it out of your text. Nothing was opened.`,
+      );
+    }
     const creator = UserId.make(task.createdBy);
     const secrets = yield* masker
       .forUser(creator)
@@ -304,7 +346,14 @@ const make = Effect.gen(function* () {
         ),
       );
     const maskedTitle = secrets.mask(title);
-    const maskedBody = secrets.mask(body);
+    const maskedBody =
+      evidence === undefined
+        ? secrets.mask(body)
+        : `${secrets.mask(body)}\n\n${evidenceBlock({
+            before: secrets.mask(evidence.before),
+            after: secrets.mask(evidence.after),
+            head: task.headSha,
+          })}`;
     if (TOKEN_SHAPE.test(maskedTitle) || TOKEN_SHAPE.test(maskedBody)) {
       return yield* fail(
         "invalid",
@@ -315,6 +364,25 @@ const make = Effect.gen(function* () {
       return yield* fail(
         "invalid",
         "The pull request links to the Hub, which is private, so it was not opened. Take the link out.",
+      );
+    }
+    // Ticket 23: one Makita pull request per issue, whichever task opened it.
+    const covering = yield* coveringPullRequest(sql, github, {
+      repo: task.repo,
+      issue: task.number,
+      taskId: task.taskId,
+      botId,
+    }).pipe(
+      Effect.catch((error) =>
+        error._tag === "MakitaGitHubError"
+          ? githubRefusal("check Makita's other pull requests")(error)
+          : storage("read Makita's other tasks")(error),
+      ),
+    );
+    if (Option.isSome(covering)) {
+      return yield* fail(
+        "invalid",
+        `#${covering.value} is an open pull request by Makita that covers #${task.number}. Say so on the issue with makita_comment and wait for a person; nothing was opened.`,
       );
     }
     // The base is the configuration's (else the repository's default), never the agent's.
@@ -418,7 +486,7 @@ const make = Effect.gen(function* () {
 
   const openForThread = Effect.fn("MakitaPullRequests.openForThread")(function* (
     threadId: ThreadId,
-    input: { readonly title: string; readonly body: string },
+    input: MakitaPullRequestInput,
   ) {
     return yield* lockOf(threadId).withPermits(1)(openPullRequest(threadId, input));
   });

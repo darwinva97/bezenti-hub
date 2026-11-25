@@ -24,6 +24,8 @@ import {
   MakitaError,
   MakitaGitHubUser,
   type MakitaProjectRepo,
+  type MakitaRepoLabelsInput,
+  type MakitaRepoLabelsResult,
   MakitaRepos,
   type MakitaTaskApproveResult,
   type MakitaTaskRef,
@@ -55,6 +57,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { approveFromHubWithin } from "./makitaApprovalFlow.ts";
 import { MakitaGitHub, type MakitaGitHubError } from "./MakitaGitHub.ts";
+import { checkedLabels, labelsOf, repoLabelNames } from "./makitaLabels.ts";
 import { resolveProjectRepo, type ResolvedRepo } from "./MakitaRepos.ts";
 import { permittedIn, stopTasksWithin } from "./makitaRows.ts";
 
@@ -123,6 +126,8 @@ interface ConfigRow {
   readonly approversJson: string;
   readonly baseBranch: string | null;
   readonly environmentId: string | null;
+  /** Ticket 24: the labels Makita may set. */
+  readonly labelsJson: string;
   readonly pausedAt: string | null;
   readonly pausedBy: string | null;
   readonly pausedByName: string | null;
@@ -136,7 +141,8 @@ const CONFIG_SELECT = `
     c.callers_mode AS "callersMode", c.callers_json AS "callersJson", c.strangers,
     c.model_selection_json AS "modelSelectionJson", c.capability, c.may_land AS "mayLand",
     c.approval, c.approvers_json AS "approversJson", c.base_branch AS "baseBranch",
-    c.environment_id AS "environmentId", c.paused_at AS "pausedAt", c.paused_by AS "pausedBy",
+    c.environment_id AS "environmentId", c.labels_json AS "labelsJson",
+    c.paused_at AS "pausedAt", c.paused_by AS "pausedBy",
     pu.display_name AS "pausedByName", c.paused_reason AS "pausedReason"
   FROM makita_configs c
   LEFT JOIN users cu ON cu.user_id = c.created_by
@@ -184,6 +190,13 @@ export class MakitaConfigs extends Context.Service<
     readonly resume: (
       input: MakitaConfigRef & { readonly actorUserId: UserId },
     ) => Effect.Effect<MakitaConfig, MakitaError>;
+    /** Ticket 24: the labels in the chosen Projects' repositories, for the form (`makita.use`). */
+    readonly repoLabels: (
+      input: MakitaRepoLabelsInput & { readonly actorUserId: UserId },
+    ) => Effect.Effect<MakitaRepoLabelsResult, MakitaError>;
+    readonly repoLabelsForSession: (
+      input: MakitaRepoLabelsInput,
+    ) => Effect.Effect<MakitaRepoLabelsResult, MakitaError>;
     /** The same, for a person's own WS session only (never an agent, the shell or one Space). */
     readonly listForSession: (
       input: MakitaConfigsListInput,
@@ -691,6 +704,7 @@ const make = Effect.gen(function* () {
         approvers: Option.getOrElse(decodeUsers(row.approversJson), () => []),
         baseBranch: row.baseBranch,
         environmentId: row.environmentId as MakitaConfig["environmentId"],
+        labels: labelsOf(row.labelsJson),
         pausedAt: row.pausedAt,
         pausedBy: row.pausedBy === null ? null : UserId.make(row.pausedBy),
         pausedByName: row.pausedByName,
@@ -898,6 +912,9 @@ const make = Effect.gen(function* () {
     const checked = checkedInput(input);
     if (checked._tag === "refused") return yield* fail("invalid", checked.message);
     const value = checked.value;
+    // Ticket 24: the labels Makita may set; none unless named.
+    const labels = checkedLabels(input.labels ?? [], value.label);
+    if (labels._tag === "refused") return yield* fail("invalid", labels.message);
     yield* checkedSelection(input.actorUserId, input.spaceId, value.modelSelection);
     yield* checkedProjects(input.spaceId, value.repos);
     const callers = yield* resolvedCallers(value.logins, []);
@@ -932,6 +949,10 @@ const make = Effect.gen(function* () {
               ${jsonOf(callers)}, 'ignore', ${jsonOf(value.modelSelection)}, ${value.capability},
               ${value.mayLand ? 1 : 0}, ${value.approval}, ${jsonOf(approvers)}, ${value.baseBranch},
               NULL)
+          `;
+          yield* sql`
+            UPDATE makita_configs SET labels_json = ${jsonOf(labels.labels)}
+            WHERE config_id = ${configId}
           `;
           yield* audit.record({
             actor: AuditLog.userActor(input.actorUserId),
@@ -997,6 +1018,9 @@ const make = Effect.gen(function* () {
     const checked = checkedInput(input);
     if (checked._tag === "refused") return yield* fail("invalid", checked.message);
     const value = checked.value;
+    // Ticket 24: an update without `labels` keeps the list (checked again: the trigger may move).
+    const labels = checkedLabels(input.labels ?? labelsOf(found.row.labelsJson), value.label);
+    if (labels._tag === "refused") return yield* fail("invalid", labels.message);
     yield* checkedSelection(input.actorUserId, spaceId, value.modelSelection);
     yield* checkedProjects(spaceId, value.repos);
     const known = Option.getOrElse(decodeUsers(found.row.callersJson), () => []);
@@ -1017,6 +1041,7 @@ const make = Effect.gen(function* () {
       may_land: found.row.mayLand === 1,
       approval: found.row.approval,
       approvers: found.row.approversJson,
+      labels: found.row.labelsJson,
     };
     const after = {
       name: value.name,
@@ -1031,6 +1056,7 @@ const make = Effect.gen(function* () {
       may_land: value.mayLand,
       approval: value.approval,
       approvers: jsonOf(approvers),
+      labels: jsonOf(labels.labels),
     };
     const changed = (Object.keys(after) as Array<keyof typeof after>).filter(
       (key) => before[key] !== after[key],
@@ -1058,6 +1084,10 @@ const make = Effect.gen(function* () {
               RETURNING config_id AS id
             `;
             if (updated.length === 0) return "gone" as const;
+            yield* sql`
+              UPDATE makita_configs SET labels_json = ${after.labels}
+              WHERE config_id = ${input.configId}
+            `;
             yield* audit.record({
               actor: AuditLog.userActor(input.actorUserId),
               action: "makita.config.update",
@@ -1188,6 +1218,39 @@ const make = Effect.gen(function* () {
   });
 
   /** The person behind a WS session: never an agent, the Hub's shell or a one-Space session. */
+  /** Ticket 24: the labels in the chosen Projects' repositories, read with Makita's token. */
+  const repoLabels = Effect.fn("MakitaConfigs.repoLabels")(function* (
+    input: MakitaRepoLabelsInput & { readonly actorUserId: UserId },
+  ) {
+    const space = yield* spaceFor(input.spaceId);
+    const principal = yield* principalFor(input.actorUserId);
+    if (
+      space === undefined ||
+      !AccessPolicy.isAllowed(
+        AccessPolicy.decide(
+          principal,
+          "makita.use",
+          yield* makitaSpace(input.actorUserId, space.resource),
+        ),
+      )
+    ) {
+      return yield* fail("forbidden", "You cannot use Makita in this Space.");
+    }
+    const byLower = new Map<string, string>();
+    for (const repo of [...new Set(yield* reposNow(input.spaceId, input.repos))].slice(0, 20)) {
+      const read = yield* github
+        .rest({ operation: "labels-list", path: `repos/${repo}/labels?per_page=100` })
+        .pipe(Effect.result);
+      if (read._tag === "Failure") continue;
+      for (const name of repoLabelNames(read.success.body)) {
+        if (!byLower.has(name.toLowerCase())) byLower.set(name.toLowerCase(), name);
+      }
+    }
+    return {
+      labels: [...byLower.values()].toSorted((a, b) => a.localeCompare(b)).slice(0, 300),
+    } satisfies MakitaRepoLabelsResult;
+  });
+
   const sessionUser = Effect.gen(function* () {
     const actor = yield* CommandActor.resolve;
     if (actor._tag !== "User" || actor.via !== undefined || actor.spaceLimit !== undefined) {
@@ -1293,6 +1356,12 @@ const make = Effect.gen(function* () {
     remove,
     pause,
     resume,
+    repoLabels,
+    repoLabelsForSession: Effect.fn("MakitaConfigs.repoLabelsAsSession")(function* (
+      input: MakitaRepoLabelsInput,
+    ) {
+      return yield* repoLabels({ ...input, actorUserId: yield* sessionUser });
+    }),
     listForSession: Effect.fn("MakitaConfigs.listAsSession")(function* (
       input: MakitaConfigsListInput,
     ) {

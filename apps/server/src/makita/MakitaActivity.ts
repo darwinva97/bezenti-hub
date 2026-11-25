@@ -37,6 +37,7 @@ import {
 import { periodOf } from "../ai/GrantCaps.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { approvalOf } from "./makitaApprovers.ts";
+import { labelsOf } from "./makitaLabels.ts";
 import { permittedIn } from "./makitaRows.ts";
 
 const NOT_YOURS =
@@ -90,6 +91,9 @@ interface TaskRow {
   readonly prNumber: number | null;
   readonly ciState: MakitaActivityTask["ci"];
   readonly landedSha: string | null;
+  /** Ticket 24: its last reproduction report, and the labels it set. */
+  readonly reproduced: MakitaActivityTask["reproduced"];
+  readonly labelsJson: string;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly pendingJson: string | null;
@@ -99,7 +103,7 @@ interface TaskRow {
 const TASK_COLUMNS = `task_id AS "taskId", config_id AS "configId", space_id AS "spaceId",
   thread_id AS "threadId", repo, number, kind, state, caller_login AS "callerLogin", failure,
   pr_number AS "prNumber", ci_state AS "ciState", landed_sha AS "landedSha",
-  created_at AS "createdAt",
+  reproduced, labels_json AS "labelsJson", created_at AS "createdAt",
   updated_at AS "updatedAt", pending_push_json AS "pendingJson",
   approved_through AS "approvedThrough"`;
 
@@ -322,6 +326,8 @@ const make = Effect.gen(function* () {
         prNumber: row.prNumber,
         ci: row.ciState,
         landedSha: row.landedSha,
+        reproduced: row.reproduced,
+        labels: labelsOf(row.labelsJson),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         threadId: seesThread(row.spaceId) ? ThreadId.make(row.threadId) : null,

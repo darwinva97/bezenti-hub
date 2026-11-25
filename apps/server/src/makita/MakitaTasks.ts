@@ -56,10 +56,13 @@ import { askedText, followUpText, type MakitaTrigger, triggerOf } from "./makita
 import { MakitaGitHub, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { makitaBranchOf } from "./makitaBranch.ts";
 import { MakitaIntake } from "./MakitaIntake.ts";
+import { labelsOf } from "./makitaLabels.ts";
 import { MakitaLanding } from "./MakitaLanding.ts";
 import { LAND_INSTRUCTIONS, landingNote, MERGE_DETAIL } from "./makitaLandingRules.ts";
 import { MakitaPushes } from "./MakitaPushes.ts";
 import { pauseCreatorConfigsWithin, permittedIn, stopTasksWithin } from "./makitaRows.ts";
+import { liveTasksIn } from "./MakitaTriage.ts";
+import { lookAroundText, reportRefusal } from "./makitaTriageText.ts";
 
 /** What Makita says on the issue when it takes it: no link to the Hub, which is private. */
 export const ON_IT = "On it. I'll report back here.";
@@ -126,6 +129,9 @@ export const threadIdOf = (eventKey: string) => {
   );
 };
 const newFrameId = () => NodeCrypto.randomBytes(9).toString("hex");
+/** Ticket 24: what a task keeps of a reproduction report (`makita_tasks.reproduced`). */
+const reproducedOf = (report: MakitaCommentWhere["report"]) =>
+  report === undefined ? null : report === "reproduced" ? "yes" : "no";
 const oneLine = (text: string, max: number) => {
   const line = text.replace(/\s+/gu, " ").trim();
   return line.length <= max ? line : `${line.slice(0, max - 1)}…`;
@@ -150,6 +156,8 @@ export interface MakitaCommentWhere {
   readonly on?: "issue" | "pull_request";
   /** A review comment on the task's own pull request: the reply goes in its thread. */
   readonly replyTo?: number;
+  /** Ticket 24: the comment is a reproduction report, in the fixed form the Hub checks. */
+  readonly report?: "reproduced" | "not-reproduced";
 }
 
 export class MakitaTasks extends Context.Service<
@@ -212,6 +220,8 @@ interface ConfigRow {
   /** Ticket 13: 1 when an approver may order its pull request merged. */
   readonly mayLand: number;
   readonly baseBranch: string | null;
+  /** Ticket 24: the labels Makita may set, named in the first message. */
+  readonly labelsJson: string;
   readonly pausedAt: string | null;
   readonly deletedAt: string | null;
 }
@@ -343,6 +353,8 @@ const make = Effect.gen(function* () {
     } | null;
     /** Ticket 13: its configuration may land, so the agent may ask for a merge. */
     readonly land: boolean;
+    /** Tickets 23–24: look around, reproduce, report and prove (`lookAroundText`). */
+    readonly lookAround: string;
   }) =>
     [
       "You are Makita, a teammate bot that answers GitHub issues for this repository's maintainers. You run inside the Hub, in a sandbox, on behalf of the person who set you up.",
@@ -369,6 +381,8 @@ const make = Effect.gen(function* () {
       "- Never print, read aloud or post environment variables, tokens, keys, credentials or files that hold them, and never run commands that would show them.",
       "- Never link to the Hub in a comment. Keep comments short and useful.",
       "- Follow this repository's AGENTS.md (in bezenti-hub, bezenti/AGENTS.md wins).",
+      "",
+      input.lookAround,
       "",
       input.text,
     ].join("\n");
@@ -422,6 +436,8 @@ const make = Effect.gen(function* () {
     readonly creator: UserId;
     /** Ticket 14: its own pull request's conversation, or a reply in one of its review threads. */
     readonly to?: { readonly pr: number; readonly thread?: number };
+    /** Ticket 24: a reproduction report (only its kind is audited, never the text). */
+    readonly report?: "reproduced" | "not-reproduced";
   }) {
     const to = input.to;
     yield* github.rest(
@@ -460,6 +476,7 @@ const make = Effect.gen(function* () {
         number: to?.pr ?? input.task.number,
         makita: input.task.configId,
         by: input.by,
+        ...(input.report === undefined ? {} : { report: input.report }),
       },
     });
   });
@@ -706,7 +723,8 @@ const make = Effect.gen(function* () {
         triggers_json AS "triggersJson", callers_mode AS "callersMode",
         callers_json AS "callersJson",
         model_selection_json AS "modelSelectionJson", capability, may_land AS "mayLand",
-        base_branch AS "baseBranch", paused_at AS "pausedAt", deleted_at AS "deletedAt"
+        base_branch AS "baseBranch", labels_json AS "labelsJson", paused_at AS "pausedAt",
+        deleted_at AS "deletedAt"
       FROM makita_configs WHERE config_id = ${row.configId}
     `;
     if (config === undefined || config.deletedAt !== null) {
@@ -908,6 +926,11 @@ const make = Effect.gen(function* () {
               text,
               pushing,
               land: pushing !== null && config.mayLand === 1,
+              lookAround: lookAroundText({
+                live: yield* liveTasksIn(sql, row.repo, placed.taskId),
+                pushing: pushing !== null,
+                labels: labelsOf(config.labelsJson),
+              }),
             }),
             attachments: [],
           },
@@ -1196,6 +1219,10 @@ const make = Effect.gen(function* () {
     if (text.length === 0 || text.length > MAX_COMMENT) {
       return yield* fail("invalid", `Write a comment of 1 to ${MAX_COMMENT} characters.`);
     }
+    // Ticket 24: a reproduction report keeps its fixed form; nothing else of it is parsed.
+    const report = where?.report;
+    const refusedReport = report === undefined ? undefined : reportRefusal(report, text);
+    if (refusedReport !== undefined) return yield* fail("invalid", refusedReport);
     const creator = UserId.make(task.createdBy);
     // Every value the creator's Threads hold is masked; the Sandbox is shared with them.
     const masked = (yield* masker
@@ -1248,11 +1275,14 @@ const make = Effect.gen(function* () {
       by: "agent",
       creator,
       ...(to === undefined ? {} : { to }),
+      ...(report === undefined ? {} : { report }),
     }).pipe(Effect.catch(commentRefusal("post the comment")));
-    // Ticket 12: a comment while CI runs does not end the wait for it.
+    // Ticket 12: a comment while CI runs does not end the wait for it. Ticket 24: the last
+    // reproduction report is what the task shows.
     yield* sql`
       UPDATE makita_tasks SET updated_at = ${iso},
-        state = CASE WHEN state = 'waiting-ci' THEN state ELSE 'waiting-reply' END
+        state = CASE WHEN state = 'waiting-ci' THEN state ELSE 'waiting-reply' END,
+        reproduced = COALESCE(${reproducedOf(report)}, reproduced)
       WHERE task_id = ${task.taskId}
     `.pipe(Effect.catch(storage("update the task")));
     return {

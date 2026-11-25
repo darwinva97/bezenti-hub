@@ -138,6 +138,8 @@ export interface McpInvocationScope {
     readonly push?: boolean;
     /** Ticket 13: its configuration may land, so `makita_request_merge` is listed. */
     readonly land?: boolean;
+    /** Ticket 24: its configuration lists labels Makita may set, so `makita_label` is listed. */
+    readonly label?: boolean;
   };
 }
 
@@ -153,6 +155,8 @@ export const MAKITA_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "makita_open_pull_request",
   "makita_ci_logs",
   "makita_request_merge",
+  "makita_search",
+  "makita_label",
   "thread_history",
   "t3_background_wait",
 ]);
@@ -170,13 +174,18 @@ const MAKITA_PUSH_TOOLS: ReadonlySet<string> = new Set([
 /** Ticket 13: listed only when the configuration may push and land. */
 const MAKITA_LAND_TOOLS: ReadonlySet<string> = new Set(["makita_request_merge"]);
 
+/** Ticket 24: listed only when the configuration lists labels Makita may set. */
+const MAKITA_LABEL_TOOLS: ReadonlySet<string> = new Set(["makita_label"]);
+
 /** Whether `tool` is listed and callable for this caller. */
 export const toolAllowedFor = (scope: McpInvocationScope | undefined, tool: string): boolean =>
   scope?.makita === undefined
     ? !tool.startsWith("makita_")
     : MAKITA_ALLOWED_TOOLS.has(tool) &&
       (scope.makita.push === true || !MAKITA_PUSH_TOOLS.has(tool)) &&
-      ((scope.makita.push === true && scope.makita.land === true) || !MAKITA_LAND_TOOLS.has(tool));
+      ((scope.makita.push === true && scope.makita.land === true) ||
+        !MAKITA_LAND_TOOLS.has(tool)) &&
+      (scope.makita.label === true || !MAKITA_LABEL_TOOLS.has(tool));
 
 /**
  * T3 Code renders `t3-thread://` links as thread chips. Other MCP clients cannot open them, so

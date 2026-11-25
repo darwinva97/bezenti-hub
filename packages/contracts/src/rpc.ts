@@ -73,6 +73,8 @@ import {
   MakitaConfigUpdateInput,
   MakitaConfigsListInput,
   MakitaConfigsListResult,
+  MakitaRepoLabelsInput,
+  MakitaRepoLabelsResult,
   MakitaTaskRef,
   MakitaTaskStopResult,
   MakitaTaskApproveResult,
@@ -809,6 +811,7 @@ export const WS_METHODS = {
   makitaConfigsDelete: "makita.configs.delete",
   makitaConfigsPause: "makita.configs.pause",
   makitaConfigsResume: "makita.configs.resume",
+  makitaConfigsLabels: "makita.configs.labels",
   // Makita ticket 06: stop one task now.
   makitaTasksStop: "makita.tasks.stop",
   // Makita ticket 11: the Owner approves a task's waiting push.
@@ -1592,6 +1595,11 @@ const WsMakitaConfigsPauseRpc = Rpc.make(WS_METHODS.makitaConfigsPause, {
 const WsMakitaConfigsResumeRpc = Rpc.make(WS_METHODS.makitaConfigsResume, {
   payload: MakitaConfigRef,
   success: MakitaConfig,
+  error: MakitaErrors,
+});
+const WsMakitaConfigsLabelsRpc = Rpc.make(WS_METHODS.makitaConfigsLabels, {
+  payload: MakitaRepoLabelsInput,
+  success: MakitaRepoLabelsResult,
   error: MakitaErrors,
 });
 const WsMakitaTasksStopRpc = Rpc.make(WS_METHODS.makitaTasksStop, {
@@ -2765,6 +2773,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsMakitaConfigsDeleteRpc,
   WsMakitaConfigsPauseRpc,
   WsMakitaConfigsResumeRpc,
+  WsMakitaConfigsLabelsRpc,
   WsMakitaTasksStopRpc,
   WsMakitaTasksApproveRpc,
   WsMakitaActivityRpc,

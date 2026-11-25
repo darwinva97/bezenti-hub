@@ -10,6 +10,7 @@ import * as MakitaPullRequests from "../makita/MakitaPullRequests.ts";
 import * as MakitaPushes from "../makita/MakitaPushes.ts";
 import * as MakitaStops from "../makita/MakitaStops.ts";
 import * as MakitaTasks from "../makita/MakitaTasks.ts";
+import * as MakitaTriage from "../makita/MakitaTriage.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Layer from "effect/Layer";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -588,6 +589,8 @@ export const layerProduction = Layer.mergeAll(
     ),
     // Makita ticket 13: landing a task's pull request on an approver's order.
     Layer.provideMerge(MakitaLanding.layer.pipe(Layer.provide(layerThreadManagementProvided))),
+    // Makita tickets 23–24: searching the task's repository, and labels from its configuration.
+    Layer.provideMerge(MakitaTriage.layer.pipe(Layer.provide(AuditLog.layer))),
     // Makita ticket 10: a pushing task's worktree on its machine, and `makita_push`.
     Layer.provideMerge(
       MakitaPushes.layer.pipe(

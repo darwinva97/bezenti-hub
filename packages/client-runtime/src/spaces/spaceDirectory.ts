@@ -196,6 +196,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "github_identity.unlink": "Unlinked a GitHub account",
   "makita.github.pull_request": "Makita opened a pull request on GitHub",
   "makita.github.merge": "Makita merged a pull request on an approver's order",
+  "makita.github.labels": "Makita labeled an issue or pull request on GitHub",
   "secret_provider.create": "Connected a secret provider",
   "secret_provider.update": "Changed a secret provider",
   "secret_provider.delete": "Removed a secret provider",

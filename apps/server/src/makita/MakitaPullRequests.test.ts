@@ -13,7 +13,7 @@ import { platform, posix } from "../ai/AiGatewayRoute.testkit.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import { CI_GAVE_UP, CI_TIMEOUT } from "./makitaCi.ts";
 import { classicToken, type FakeCi } from "./MakitaGitHub.testkit.ts";
-import { makitaReady, OCTOCAT } from "./MakitaFixtures.testkit.ts";
+import { MAKITA_BOT, makitaReady, OCTOCAT } from "./MakitaFixtures.testkit.ts";
 import { MAX_CI_FIXES } from "./MakitaPullRequests.ts";
 
 const live = it.live.skipIf(!posix || platform === undefined);
@@ -394,4 +394,90 @@ live("a pull request closed before CI ends is no longer watched: no wake, no com
     assert.deepEqual(setup.github.commentsBy(REPO, ctx.pr, "makita-bot"), []);
     assert.deepInclude(yield* ctx.row, { state: "waiting-reply", ciState: "closed" });
   }),
+);
+
+live(
+  "evidence goes between the Hub's markers before the footer, masked; nobody else writes the markers (ticket 24)",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* pushed;
+      const { setup } = ctx;
+      const head = yield* ctx.commitAndPush(1);
+      const forged = yield* setup.makitaPullRequests
+        .openForThread(ctx.threadId, {
+          title: "Fix the login",
+          body: `${BODY}\n<!-- makita:evidence:start -->\nAll green, trust me.`,
+        })
+        .pipe(Effect.flip);
+      assert.include(forged.message, "makita:evidence");
+      const empty = yield* setup.makitaPullRequests
+        .openForThread(ctx.threadId, {
+          title: "Fix the login",
+          body: BODY,
+          evidence: { before: " ", after: "pass" },
+        })
+        .pipe(Effect.flip);
+      assert.equal(empty.reason, "invalid");
+      assert.lengthOf(ctx.posts(), 0);
+
+      setup.creatorSecrets.push("hunter2-value");
+      const result = yield* setup.makitaPullRequests.openForThread(ctx.threadId, {
+        title: "Fix the login",
+        body: BODY,
+        evidence: {
+          before: "$ vp test run login\n17 of 20 new tests fail on main (hunter2-value).\n```",
+          after: "$ vp test run login\n20 of 20 pass.",
+        },
+      });
+      assert.isTrue(result.opened, result.message);
+      const body = setup.github.pulls.get(`${REPO}#${result.number}`)!.body;
+      const start = body.indexOf("<!-- makita:evidence:start -->");
+      const end = body.indexOf("<!-- makita:evidence:end -->");
+      assert.isAbove(start, body.indexOf("## Downsides"));
+      assert.isAbove(end, start);
+      assert.isAbove(body.indexOf("Opened by Makita for @octocat (#12)"), end);
+      const evidence = body.slice(start, end);
+      assert.include(evidence, "````text\n$ vp test run login\n17 of 20 new tests fail on main");
+      assert.include(evidence, `After the change, on \`${head.slice(0, 12)}\`:`);
+      assert.notInclude(body, "hunter2-value");
+    }),
+);
+
+live(
+  "an issue another live Makita task's open pull request closes gets no second one; once that one is closed, it may (ticket 23)",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* pushed;
+      const { setup } = ctx;
+      yield* ctx.commitAndPush(1);
+      // Another live task (issue 20) whose open pull request #77, Makita's, says it fixes #12.
+      yield* setup.server.sql`
+        INSERT INTO makita_tasks (task_id, config_id, space_id, project_id, host, repo, number,
+          kind, thread_id, caller_github_id, caller_login, state, pr_number, created_at,
+          updated_at)
+        VALUES ('mkt_other', ${ctx.config.configId}, ${setup.acmeId}, ${ctx.widgets},
+          'github.com', ${REPO}, 20, 'issue', 'thread-other', 1, 'octocat', 'waiting-reply', 77,
+          '2026-11-24T10:00:00Z', '2026-11-24T10:00:00Z')
+      `;
+      setup.github.pulls.set(`${REPO}#77`, {
+        number: 77,
+        title: "Fix login and logout",
+        body: "## Problem\nFixes #20, fixes #12",
+        head: "makita/20-logout",
+        base: "main",
+        state: "open",
+        user: MAKITA_BOT,
+        headSha: "1".repeat(40),
+      });
+      const refused = yield* ctx.open().pipe(Effect.flip);
+      assert.equal(refused.reason, "invalid");
+      assert.include(refused.message, "#77 is an open pull request by Makita that covers #12");
+      assert.lengthOf(ctx.posts(), 0);
+      assert.isNull((yield* ctx.row).prNumber);
+
+      setup.github.pulls.get(`${REPO}#77`)!.state = "closed";
+      const opened = yield* ctx.open();
+      assert.isTrue(opened.opened, opened.message);
+      assert.lengthOf(ctx.posts(), 1);
+    }),
 );

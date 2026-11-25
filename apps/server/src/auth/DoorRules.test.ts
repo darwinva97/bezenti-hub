@@ -722,6 +722,8 @@ describe("every door of the Hub declares its rule", () => {
       "makita.activity",
       "makita.configs.create",
       "makita.configs.delete",
+      // Ticket 24: the labels of the chosen Projects' repositories, for the form.
+      "makita.configs.labels",
       "makita.configs.list",
       "makita.configs.pause",
       "makita.configs.resume",
@@ -779,12 +781,18 @@ describe("every door of the Hub declares its rule", () => {
     for (const entry of [
       ["makita_account", "163_MakitaAccount"],
       ["makita_permissions", "164_MakitaPermissions"],
-      ["makita_configs", "165_MakitaConfigs"],
+      ["makita_configs", "165_MakitaConfigs", "173_MakitaTriage"],
       // Ticket 04: what the intake read and decided.
       ["makita_repo_cursors", "166_MakitaIntake"],
       ["makita_events", "166_MakitaIntake"],
       // Ticket 05: the tasks; others ask makitaRows.makitaTaskOfThread. Ticket 10: the worktree.
-      ["makita_tasks", "167_MakitaTasks", "169_MakitaTaskWorkspace", "171_MakitaTaskCi"],
+      [
+        "makita_tasks",
+        "167_MakitaTasks",
+        "169_MakitaTaskWorkspace",
+        "171_MakitaTaskCi",
+        "173_MakitaTriage",
+      ],
     ] as const) {
       const [table, ...migrations] = entry;
       expect(
@@ -804,6 +812,7 @@ describe("every door of the Hub declares its rule", () => {
     // Ticket 05: MCP tools for a Makita task's Thread only; no tool takes a repository. Ticket
     // 10: `makita_push`, only where its configuration may push. 12: its pull request and the CI
     // logs, likewise; no approve tool. 13: a merge is only requested, never made by a tool.
+    // 23: a read-only search of its own repository. 24: labels from its configuration's list.
     expect(Object.keys(MCP_TOOL_RULES).filter((name) => name.startsWith("makita_"))).toEqual([
       "makita_comment",
       "makita_read_issue",
@@ -811,6 +820,8 @@ describe("every door of the Hub declares its rule", () => {
       "makita_open_pull_request",
       "makita_ci_logs",
       "makita_request_merge",
+      "makita_search",
+      "makita_label",
     ]);
     expect(Object.keys(MCP_TOOL_RULES).filter((name) => /merge|approve/u.test(name))).toEqual([
       "makita_request_merge",

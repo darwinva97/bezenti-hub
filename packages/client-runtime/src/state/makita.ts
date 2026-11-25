@@ -66,6 +66,11 @@ export function createMakitaEnvironmentAtoms<R, E>(
       label: "environment-data:makita:configs-resume",
       tag: WS_METHODS.makitaConfigsResume,
     }),
+    // Ticket 24: the labels in the chosen Projects' repositories, offered by the form.
+    repoLabels: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:makita:configs-labels",
+      tag: WS_METHODS.makitaConfigsLabels,
+    }),
     // Ticket 06: stop one task now (its configuration's pausers).
     stopTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:makita:tasks-stop",

@@ -270,6 +270,7 @@ import { withHubAiAccountLimits } from "./usage/hubAiAccountLimits.ts";
 import { withHubGatewayUsage } from "./usage/hubGatewayUsage.ts";
 import * as AccessKeys from "./ai/AccessKeys.ts";
 import * as MakitaAccount from "./makita/MakitaAccount.ts";
+import * as MakitaActivity from "./makita/MakitaActivity.ts";
 import * as MakitaConfigs from "./makita/MakitaConfigs.ts";
 import * as MakitaPermissions from "./makita/MakitaPermissions.ts";
 import * as AiGatewayKeys from "./ai/AiGatewayKeys.ts";
@@ -1455,6 +1456,7 @@ export const layerWsRpc = (
       const makitaAccount = yield* MakitaAccount.MakitaAccount;
       const makitaPermissions = yield* MakitaPermissions.MakitaPermissions;
       const makitaConfigs = yield* MakitaConfigs.MakitaConfigs;
+      const makitaActivity = yield* MakitaActivity.MakitaActivity;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const triage = yield* TriageService.TriageService;
@@ -3024,6 +3026,9 @@ export const layerWsRpc = (
         [WS_METHODS.makitaConfigsPause]: (input) => makitaConfigs.pauseForSession(input),
         [WS_METHODS.makitaConfigsResume]: (input) => makitaConfigs.resumeForSession(input),
         [WS_METHODS.makitaTasksStop]: (input) => makitaConfigs.stopTaskForSession(input),
+        // What Makita does and spends, and the Makita tasks of the Threads one sees (ticket 07).
+        [WS_METHODS.makitaActivity]: (input) => makitaActivity.activityForSession(input),
+        [WS_METHODS.makitaThreads]: () => makitaActivity.threadsForSession,
         [WS_METHODS.projectCloneStart]: (input) =>
           requireCloneDestination(input.destinationPath, { asProject: true }).pipe(
             Effect.andThen(

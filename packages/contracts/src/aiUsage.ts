@@ -54,6 +54,11 @@ export const AiUsageRow = Schema.Struct({
   userId: Schema.NullOr(UserId),
   /** The access key that made the requests (access-keys ticket 04); absent or null: a User. */
   accessKeyId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /**
+   * Makita ticket 07: the Makita configuration whose Thread made the requests (`userId` is its
+   * creator); absent or null otherwise, or where the session may not know the configuration.
+   */
+  makitaConfigId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   spaceId: SpaceId,
   /** Null for a request that reached no account. */
   accountId: Schema.NullOr(AiAccountId),
@@ -94,6 +99,10 @@ export const AiUsageLabels = Schema.Struct({
   /** The access keys the rows name, by label (access-keys ticket 04). */
   accessKeys: Schema.optionalKey(
     Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String })),
+  ),
+  /** The Makita configurations the rows name (Makita ticket 07), shown as «Makita: <name>». */
+  makitaConfigs: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String })),
   ),
   /** Null for a Space the viewer can no longer see: its rows stay, its name does not. */
   spaces: Schema.Array(Schema.Struct({ id: SpaceId, name: Schema.NullOr(Schema.String) })),

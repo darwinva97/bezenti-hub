@@ -718,6 +718,8 @@ describe("every door of the Hub declares its rule", () => {
       "makita.account.pauseAll",
       "makita.account.resumeAll",
       "makita.account.set",
+      // Ticket 07: reads of what Makita does and spends, and of the viewer's Makita Threads.
+      "makita.activity",
       "makita.configs.create",
       "makita.configs.delete",
       "makita.configs.list",
@@ -729,6 +731,7 @@ describe("every door of the Hub declares its rule", () => {
       "makita.permissions.revoke",
       // Ticket 06: stop one task, `makita.pause` on its configuration.
       "makita.tasks.stop",
+      "makita.threads",
     ]);
     // Each decided in makita/ for the session's own person, by AccessPolicy.
     for (const rpc of makitaRpcs) {
@@ -839,6 +842,8 @@ describe("every door of the Hub declares its rule", () => {
       "persistence/Migrations/147_AiUsageUncachedInput.ts",
       "persistence/Migrations/159_AiAccessKeys.ts",
       "persistence/Migrations/160_AiUsageAccessKey.ts",
+      // Each Makita configuration's usage apart (Makita ticket 07).
+      "persistence/Migrations/169_AiUsageMakita.ts",
     ]);
   });
 

@@ -161,6 +161,20 @@ export const stopTasksWithin = Effect.fn("makitaRows.stopTasksWithin")(function*
   return stopped.map((row): StoppedMakitaTask => ({ taskId: row.taskId, threadId: row.threadId }));
 });
 
+/**
+ * Makita ticket 07: configurations' names, for usage rows that already passed their reader's
+ * checks (a deleted configuration keeps its name: its usage stays).
+ */
+export const configNames = Effect.fn("makitaRows.configNames")(function* (
+  sql: SqlClient.SqlClient,
+  configIds: ReadonlyArray<string>,
+) {
+  if (configIds.length === 0) return [] as ReadonlyArray<{ id: string; name: string }>;
+  return yield* sql<{ readonly id: string; readonly name: string }>`
+    SELECT config_id AS id, name FROM makita_configs WHERE ${sql.in("config_id", configIds)}
+  `;
+});
+
 /** Whether a User holds «may use Makita» in a Space (whether it takes effect is the policy's). */
 export const permittedIn = Effect.fn("makitaRows.permittedIn")(function* (
   sql: SqlClient.SqlClient,

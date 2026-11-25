@@ -16,6 +16,8 @@ import {
   type AiUsageSummaryInput,
   type AiUsageTotals,
   addAiUsageTotals,
+  type MakitaUsage,
+  type MakitaUsagePeriods,
   AI_USAGE_NO_TOTALS,
   type AiAccountType,
   type ServerProviderUsageWindow,
@@ -38,6 +40,7 @@ import * as Stream from "effect/Stream";
 
 import * as AccessPolicy from "../auth/AccessPolicy.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
+import { configNames as makitaConfigNames } from "../makita/makitaRows.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as AccessKeys from "./AccessKeys.ts";
 import * as AiAccounts from "./AiAccounts.ts";
@@ -45,6 +48,7 @@ import * as AiGatewayActivity from "./AiGatewayActivity.ts";
 import { AI_PRICES, AI_PRICES_REVIEWED, type AiPrice, costUsd, priceFor } from "./aiPrices.ts";
 import * as AllowedAiAccounts from "./AllowedAiAccounts.ts";
 import { uncachedInputOf } from "./gatewayShapes.ts";
+import { periodOf } from "./GrantCaps.ts";
 
 /** Per-request rows are kept this long; the daily summaries are kept for good. */
 const AI_USAGE_RETENTION_DAYS = 90;
@@ -77,6 +81,14 @@ export class AiUsage extends Context.Service<
       readonly fromAt: string;
       readonly toAt: string;
     }) => Effect.Effect<ReadonlyArray<AiUsageThreadRequest>, AiUsageError>;
+    /**
+     * Makita ticket 07: some configurations' usage, today / this week / this month (summary rows)
+     * and per Thread (per-request rows, the retention's days). No session check: only
+     * MakitaActivity calls it, after deciding which configurations' usage its viewer may see.
+     */
+    readonly makitaUsage: (
+      configIds: ReadonlyArray<string>,
+    ) => Effect.Effect<MakitaUsageRead, AiUsageError>;
     /** Deletes per-request rows older than the retention; the summaries stay. Returns how many. */
     readonly sweep: Effect.Effect<number>;
     /** Subscribes now: one outcome for each request written or lost from then on (for tests). */
@@ -98,6 +110,41 @@ export interface AiUsageThreadRequest {
   readonly cacheReadTokens: number | null;
   readonly cacheWriteTokens: number | null;
 }
+
+/** Makita ticket 07: configurations' usage by period, and their Threads'. */
+export interface MakitaUsageRead {
+  readonly configs: ReadonlyMap<string, MakitaUsagePeriods>;
+  readonly threads: ReadonlyMap<
+    string,
+    {
+      readonly configId: string;
+      readonly periods: MakitaUsagePeriods;
+      /** Everything still kept of it (the per-request rows' retention). */
+      readonly total: MakitaUsage;
+    }
+  >;
+}
+
+/** Usage of some Makita work, with nothing in it yet. */
+export const MAKITA_NO_USAGE: MakitaUsage = { requests: 0, tokens: 0, estimatedUsd: null };
+
+/** Two usages added up (an unpriced part leaves the estimate as it was). */
+export const addMakitaUsage = (a: MakitaUsage, b: MakitaUsage): MakitaUsage => ({
+  requests: a.requests + b.requests,
+  tokens: a.tokens + b.tokens,
+  estimatedUsd:
+    a.estimatedUsd === null
+      ? b.estimatedUsd
+      : b.estimatedUsd === null
+        ? a.estimatedUsd
+        : a.estimatedUsd + b.estimatedUsd,
+});
+
+export const MAKITA_NO_PERIODS: MakitaUsagePeriods = {
+  today: MAKITA_NO_USAGE,
+  week: MAKITA_NO_USAGE,
+  month: MAKITA_NO_USAGE,
+};
 
 /** A request the log took in: stored, or lost to a storage failure (logged). */
 export interface AiUsageWriteOutcome {
@@ -146,6 +193,8 @@ interface SummaryRow {
   readonly grantId: string;
   /** '' unless an access key made the requests (access-keys ticket 04). */
   readonly accessKeyId: string;
+  /** '' unless a Makita configuration's Thread made the requests (Makita ticket 07). */
+  readonly makitaConfigId: string;
   readonly estimatedTokens: number;
   readonly requests: number;
   readonly failedRequests: number;
@@ -215,25 +264,28 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         INSERT INTO ai_usage (usage_id, at, day, user_id, space_id, thread_id, key_id,
           account_id, provider, model, shape, status, duration_ms, failovers,
           input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, grant_id,
-          access_key_id)
+          access_key_id, makita_config_id)
         VALUES (${usageId}, ${request.at}, ${day}, ${userId}, ${request.spaceId},
           ${request.threadId}, ${request.keyId}, ${request.accountId}, ${request.provider},
           ${request.model}, ${request.shape}, ${request.status}, ${request.durationMs},
           ${request.failovers}, ${usage?.inputTokens ?? null}, ${usage?.outputTokens ?? null},
           ${usage?.cacheReadTokens ?? null}, ${usage?.cacheWriteTokens ?? null}, ${grantId},
-          ${request.accessKeyId ?? null})
+          ${request.accessKeyId ?? null}, ${request.makitaConfigId ?? null})
       `;
       // A summary whose uncached input is unknown (from before migration 147) stays unknown.
       yield* sql`
         INSERT INTO ai_usage_daily (day, user_id, space_id, account_id, model, grant_id,
-          access_key_id, requests, failed_requests, unknown_requests, input_tokens, output_tokens,
-          cache_read_tokens, cache_write_tokens, uncached_input_tokens, estimated_tokens)
+          access_key_id, makita_config_id, requests, failed_requests, unknown_requests,
+          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+          uncached_input_tokens, estimated_tokens)
         VALUES (${day}, ${userId}, ${request.spaceId}, ${accountId}, ${model},
-          ${grantId ?? ""}, ${request.accessKeyId ?? ""}, 1, ${failed ? 1 : 0}, ${unknown ? 1 : 0},
+          ${grantId ?? ""}, ${request.accessKeyId ?? ""}, ${request.makitaConfigId ?? ""}, 1,
+          ${failed ? 1 : 0}, ${unknown ? 1 : 0},
           ${usage?.inputTokens ?? 0}, ${usage?.outputTokens ?? 0}, ${usage?.cacheReadTokens ?? 0},
           ${usage?.cacheWriteTokens ?? 0}, ${uncachedInputOf(request.shape, usage)},
           ${failed ? 0 : (request.estimatedTokens ?? 0)})
-        ON CONFLICT (day, user_id, space_id, account_id, model, grant_id, access_key_id)
+        ON CONFLICT (day, user_id, space_id, account_id, model, grant_id, access_key_id,
+          makita_config_id)
         DO UPDATE SET
           requests = requests + 1,
           estimated_tokens = estimated_tokens + excluded.estimated_tokens,
@@ -324,7 +376,8 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
                 access_key_id, requests, failed_requests, uncached_input_tokens)
               VALUES (${entry.day}, ${entry.userId}, ${entry.spaceId}, '', '',
                 ${entry.accessKeyId}, ${entry.count}, ${entry.count}, 0)
-              ON CONFLICT (day, user_id, space_id, account_id, model, grant_id, access_key_id)
+              ON CONFLICT (day, user_id, space_id, account_id, model, grant_id, access_key_id,
+          makita_config_id)
               DO UPDATE SET
                 requests = requests + excluded.requests,
                 failed_requests = failed_requests + excluded.failed_requests
@@ -677,6 +730,11 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
     const summary = Effect.fn("AiUsage.summary")(function* (input: AiUsageSummaryInput) {
       const view = yield* viewer();
       const { userId, can, everything, readSpaces, scope, visible, visibleThreads, given } = view;
+      // Makita ticket 07: a configuration is named only where the session reads that Space's
+      // usage or the usage is its own (its creator); never through a loan to another Space.
+      const namesMakita = (row: SummaryRow) =>
+        row.makitaConfigId !== "" &&
+        (everything || row.userId === userId || view.administered.includes(row.spaceId as SpaceId));
 
       const now = yield* Clock.currentTimeMillis;
       // Days are checked as given: an impossible one (2026-02-31) is refused, never rolled over.
@@ -718,21 +776,24 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         input.threadId === undefined
           ? yield* sql<SummaryRow>`
               SELECT day, user_id AS "userId", space_id AS "spaceId", account_id AS "accountId",
-                model, grant_id AS "grantId", access_key_id AS "accessKeyId", requests,
+                model, grant_id AS "grantId", access_key_id AS "accessKeyId",
+                makita_config_id AS "makitaConfigId", requests,
                 failed_requests AS "failedRequests", unknown_requests AS "unknownRequests",
                 input_tokens AS "inputTokens", output_tokens AS "outputTokens",
                 cache_read_tokens AS "cacheReadTokens", cache_write_tokens AS "cacheWriteTokens",
                 uncached_input_tokens AS "uncachedInputTokens",
                 estimated_tokens AS "estimatedTokens"
               FROM ai_usage_daily WHERE ${sql.and(filters)}
-              ORDER BY day DESC, space_id, user_id, access_key_id, account_id, model, grant_id
+              ORDER BY day DESC, space_id, user_id, access_key_id, makita_config_id, account_id, model,
+                grant_id
               LIMIT ${maxRows + 1}
             `.pipe(Effect.catch(storage("read the AI usage")))
           : yield* sql<SummaryRow>`
               SELECT day, user_id AS "userId", space_id AS "spaceId",
                 COALESCE(account_id, '') AS "accountId", COALESCE(model, '') AS "model",
                 COALESCE(grant_id, '') AS "grantId",
-                COALESCE(access_key_id, '') AS "accessKeyId", 0 AS "estimatedTokens",
+                COALESCE(access_key_id, '') AS "accessKeyId",
+                COALESCE(makita_config_id, '') AS "makitaConfigId", 0 AS "estimatedTokens",
                 COUNT(*) AS "requests",
                 SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS "failedRequests",
                 SUM(CASE WHEN status < 400 AND input_tokens IS NULL AND output_tokens IS NULL
@@ -744,7 +805,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
                 COALESCE(SUM(${sql.literal(UNCACHED_INPUT_SQL)}), 0) AS "uncachedInputTokens"
               FROM ai_usage WHERE ${sql.and(filters)}
               GROUP BY day, user_id, space_id, COALESCE(account_id, ''), COALESCE(model, ''),
-                COALESCE(grant_id, ''), COALESCE(access_key_id, '')
+                COALESCE(grant_id, ''), COALESCE(access_key_id, ''), COALESCE(makita_config_id, '')
               ORDER BY day DESC, space_id, user_id, account_id, model
               LIMIT ${maxRows + 1}
             `.pipe(Effect.catch(storage("read the AI usage")));
@@ -789,6 +850,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
         // An access key's rows have no User: they are its Space's (access-keys ticket 04).
         userId: row.userId === "" ? null : (row.userId as UserId),
         accessKeyId: row.accessKeyId === "" ? null : row.accessKeyId,
+        makitaConfigId: namesMakita(row) ? row.makitaConfigId : null,
         spaceId: row.spaceId as SpaceId,
         accountId: row.accountId === "" ? null : (row.accountId as AiAccountId),
         model: row.model === "" ? null : row.model,
@@ -891,6 +953,19 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       const accessKeys = yield* AccessKeys.accessKeyLabels(sql, accessKeyIds).pipe(
         Effect.catch(storage("read the access keys")),
       );
+      // Makita ticket 07: the configurations the rows still name (already narrowed per row).
+      const makitaIds = [
+        ...new Set(
+          rows.flatMap((row) =>
+            row.makitaConfigId === undefined || row.makitaConfigId === null
+              ? []
+              : [row.makitaConfigId],
+          ),
+        ),
+      ];
+      const makitaConfigs = yield* makitaConfigNames(sql, makitaIds).pipe(
+        Effect.catch(storage("read the Makita configurations")),
+      );
       const spaceIds = [...new Set(rows.map((row) => row.spaceId))];
       const accountIds = [
         ...new Set(rows.flatMap((row) => (row.accountId === null ? [] : [row.accountId]))),
@@ -933,6 +1008,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
       return {
         users: users.map((user) => ({ id: user.id as UserId, name: user.name })),
         accessKeys: accessKeys.map((key) => ({ id: key.id, label: key.label })),
+        makitaConfigs,
         // A Space the viewer can no longer see keeps its rows but no name (nor a new one).
         spaces: spaceIds.flatMap((id) => {
           const space = knownSpaces.get(id);
@@ -954,6 +1030,77 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
           provider: account.provider,
         })),
       } satisfies AiUsageLabels;
+    });
+
+    const makitaUsage = Effect.fn("AiUsage.makitaUsage")(function* (
+      configIds: ReadonlyArray<string>,
+    ) {
+      const configs = new Map<string, MakitaUsagePeriods>();
+      const threads = new Map<
+        string,
+        { configId: string; periods: MakitaUsagePeriods; total: MakitaUsage }
+      >();
+      if (configIds.length === 0) return { configs, threads } satisfies MakitaUsageRead;
+      const now = yield* Clock.currentTimeMillis;
+      const today = periodOf("day", now).fromDay;
+      const week = periodOf("week", now).fromDay;
+      const month = periodOf("month", now).fromDay;
+      const from = week < month ? week : month;
+      type Row = CostRow & { readonly configId: string; readonly requests: number };
+      const daily = yield* sql<Row>`
+        SELECT makita_config_id AS "configId", day, account_id AS "accountId", model,
+          SUM(requests) AS requests, SUM(input_tokens) AS "inputTokens",
+          SUM(output_tokens) AS "outputTokens", SUM(cache_read_tokens) AS "cacheReadTokens",
+          SUM(cache_write_tokens) AS "cacheWriteTokens",
+          SUM(COALESCE(uncached_input_tokens, input_tokens)) AS "uncachedInputTokens"
+        FROM ai_usage_daily
+        WHERE ${sql.in("makita_config_id", [...configIds])} AND day >= ${from}
+        GROUP BY makita_config_id, day, account_id, model
+      `.pipe(Effect.catch(storage("read Makita's usage")));
+      const perThread = yield* sql<Row & { readonly threadId: string }>`
+        SELECT thread_id AS "threadId", makita_config_id AS "configId", day,
+          COALESCE(account_id, '') AS "accountId", COALESCE(model, '') AS "model",
+          COUNT(*) AS requests, COALESCE(SUM(input_tokens), 0) AS "inputTokens",
+          COALESCE(SUM(output_tokens), 0) AS "outputTokens",
+          COALESCE(SUM(cache_read_tokens), 0) AS "cacheReadTokens",
+          COALESCE(SUM(cache_write_tokens), 0) AS "cacheWriteTokens",
+          COALESCE(SUM(${sql.literal(UNCACHED_INPUT_SQL)}), 0) AS "uncachedInputTokens"
+        FROM ai_usage
+        WHERE ${sql.in("makita_config_id", [...configIds])} AND thread_id IS NOT NULL
+        GROUP BY thread_id, makita_config_id, day, COALESCE(account_id, ''), COALESCE(model, '')
+      `.pipe(Effect.catch(storage("read Makita's usage")));
+      const kinds = yield* accountKinds([
+        ...new Set(
+          [...daily, ...perThread].flatMap((row) => (row.accountId === "" ? [] : [row.accountId])),
+        ),
+      ]);
+      const usageOf = (row: Row): MakitaUsage => ({
+        requests: row.requests,
+        // As caps count tokens: input not read from a cache, output and cache writes.
+        tokens:
+          (row.uncachedInputTokens ?? row.inputTokens) + row.outputTokens + row.cacheWriteTokens,
+        estimatedUsd: priceRow(kinds, row).usd,
+      });
+      const inPeriods = (periods: MakitaUsagePeriods, row: Row): MakitaUsagePeriods => {
+        const usage = usageOf(row);
+        return {
+          today: row.day >= today ? addMakitaUsage(periods.today, usage) : periods.today,
+          week: row.day >= week ? addMakitaUsage(periods.week, usage) : periods.week,
+          month: row.day >= month ? addMakitaUsage(periods.month, usage) : periods.month,
+        };
+      };
+      for (const row of daily) {
+        configs.set(row.configId, inPeriods(configs.get(row.configId) ?? MAKITA_NO_PERIODS, row));
+      }
+      for (const row of perThread) {
+        const before = threads.get(row.threadId);
+        threads.set(row.threadId, {
+          configId: row.configId,
+          periods: inPeriods(before?.periods ?? MAKITA_NO_PERIODS, row),
+          total: addMakitaUsage(before?.total ?? MAKITA_NO_USAGE, usageOf(row)),
+        });
+      }
+      return { configs, threads } satisfies MakitaUsageRead;
     });
 
     const threadRequests = Effect.fn("AiUsage.threadRequests")(function* (window: {
@@ -990,6 +1137,7 @@ const make = Effect.fn("AiUsage.make")(function* (options: AiUsageOptions) {
     return AiUsage.of({
       summary,
       threadRequests,
+      makitaUsage,
       sweep,
       outcomes: Effect.map(PubSub.subscribe(outcomes), Stream.fromSubscription),
     });

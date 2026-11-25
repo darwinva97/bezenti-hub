@@ -195,6 +195,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.makitaConfigsPause]: "server",
   [WS_METHODS.makitaConfigsResume]: "server",
   [WS_METHODS.makitaTasksStop]: "server",
+  [WS_METHODS.makitaActivity]: "server",
+  [WS_METHODS.makitaThreads]: "server",
   [WS_METHODS.aiAccountsPicker]: "server",
   [WS_METHODS.threadSetAiAccount]: "server",
   [WS_METHODS.aiAccountsCreate]: "server",

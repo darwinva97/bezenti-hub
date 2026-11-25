@@ -50,6 +50,8 @@ export interface GatewayRequestRecord {
    * ticket 04): counted by its caps and shown as «≈», never 0. Absent for everything else.
    */
   readonly estimatedTokens?: number;
+  /** Makita ticket 07: the configuration whose task's Thread made it; absent or null: none. */
+  readonly makitaConfigId?: string | null;
 }
 
 /** What a cap's subject (a Grant, an access key) used on one UTC day and is not written yet. */
@@ -76,8 +78,15 @@ export const grantSubject = (grantId: string) => `grant:${grantId}`;
 export const accessKeySubject = (keyId: string) => `access-key:${keyId}`;
 
 /**
- * The cap subjects a request counts for: its Grant, its access key (never a shed request, never a
- * count of tokens).
+ * Makita ticket 07: what a configuration's and a Makita Thread's activity («Now») add to the
+ * written usage. Never a cap: Makita has none.
+ */
+export const makitaConfigSubject = (configId: string) => `makita-config:${configId}`;
+export const makitaThreadSubject = (threadId: string) => `makita-thread:${threadId}`;
+
+/**
+ * The subjects a request counts for until it is written: its Grant, its access key (caps), its
+ * Makita configuration and Thread (activity); never a shed request, never a count of tokens.
  */
 const subjectsOf = (request: GatewayRequestRecord): ReadonlyArray<string> =>
   request.shed === true || request.route.endsWith("/count_tokens")
@@ -89,6 +98,12 @@ const subjectsOf = (request: GatewayRequestRecord): ReadonlyArray<string> =>
         ...(request.accessKeyId === undefined || request.accessKeyId === null
           ? []
           : [accessKeySubject(request.accessKeyId)]),
+        ...(request.makitaConfigId === undefined || request.makitaConfigId === null
+          ? []
+          : [
+              makitaConfigSubject(request.makitaConfigId),
+              ...(request.threadId === null ? [] : [makitaThreadSubject(request.threadId)]),
+            ]),
       ];
 
 /** The AI account a Thread's requests go to now. */

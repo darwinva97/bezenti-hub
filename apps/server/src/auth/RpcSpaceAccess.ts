@@ -112,6 +112,16 @@ const MAKITA_PERMISSIONS = {
   unscoped:
     "«May use Makita»: MakitaPermissions answers a person's own session only (never an agent, the Hub's shell or a one-Space session) and only the Owner (AccessPolicy `makita.manageAccount`), who sees every User and Space anyway; given only to an Admin or Member of an open Organization, or to a User in their own Personal space",
 };
+/** Makita ticket 07: what Makita does and spends, decided in MakitaActivity per configuration. */
+const MAKITA_ACTIVITY = {
+  unscoped:
+    "Makita activity: MakitaActivity answers a person's own session only (never an agent, the Hub's shell or a one-Space session); AccessPolicy `makita.view` on the configuration's Space (another Space's configuration answers like a missing one) or on the named Space (else forbidden), every configuration only to the Owner; a configuration's usage only to its creator, to whoever has `aiUsage.viewSpace` there and to the Owner; a task's Thread only if its Space is among those the viewer sees",
+};
+/** Makita ticket 07: the Makita tasks of the Threads the session's person may see. */
+const MAKITA_THREADS = {
+  unscoped:
+    "Makita Threads: MakitaActivity answers a person's own session only (never an agent, the Hub's shell or a one-Space session) with the Makita tasks whose Space is among those the person sees (SpaceDirectory.viewableSpaces; the Owner all): repository, number, GitHub caller login and state, nothing of a configuration",
+};
 /** A Space's Makita configurations: MakitaConfigs decides each on its Space. */
 const MAKITA_CONFIGS = {
   unscoped:
@@ -197,6 +207,8 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.makitaConfigsPause]: MAKITA_CONFIGS,
   [WS_METHODS.makitaConfigsResume]: MAKITA_CONFIGS,
   [WS_METHODS.makitaTasksStop]: MAKITA_CONFIGS,
+  [WS_METHODS.makitaActivity]: MAKITA_ACTIVITY,
+  [WS_METHODS.makitaThreads]: MAKITA_THREADS,
   // Spec 5 ticket 03. Allowances and a Space's defaults: AccessPolicy `vault.manage` and
   // `vault.choose` in Vaults. A Project's choices and a Thread's names: the named Project or
   // Thread must be visible first, then the same rules (EffectiveVaults for the Thread).

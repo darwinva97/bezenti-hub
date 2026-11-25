@@ -206,6 +206,10 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "makita.configs.pause": none("the paused Makita configuration"),
   "makita.configs.resume": none("the resumed Makita configuration"),
   "makita.tasks.stop": none("whether a Makita task was stopped"),
+  "makita.activity": none(
+    "Makita's tasks, events and usage counts: repositories, GitHub logins, outcomes, never issue text",
+  ),
+  "makita.threads": none("the Makita tasks of the viewer's Threads: repository, number, login"),
   "accessKeys.modelOptions": none("a Space's own AI accounts by name and the models they serve"),
   "accessKeys.update": none("the changed access key: its label, limits and dates, never a key"),
   "aiGateway.status": none("the AI gateway's status"),

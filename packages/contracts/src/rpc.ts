@@ -77,6 +77,12 @@ import {
   MakitaTaskStopResult,
 } from "./makita.ts";
 import {
+  MakitaActivityInput,
+  MakitaActivityResult,
+  MakitaThreadsInput,
+  MakitaThreadsResult,
+} from "./makitaActivity.ts";
+import {
   AiGatewayError,
   AiGatewayKeyCreateInput,
   AiGatewayKeyCreateResult,
@@ -798,6 +804,9 @@ export const WS_METHODS = {
   makitaConfigsResume: "makita.configs.resume",
   // Makita ticket 06: stop one task now.
   makitaTasksStop: "makita.tasks.stop",
+  // Makita ticket 07: what Makita does and spends; the Makita tasks of the Threads one sees.
+  makitaActivity: "makita.activity",
+  makitaThreads: "makita.threads",
   projectCloneStart: "projectClone.start",
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
@@ -1575,6 +1584,16 @@ const WsMakitaConfigsResumeRpc = Rpc.make(WS_METHODS.makitaConfigsResume, {
 const WsMakitaTasksStopRpc = Rpc.make(WS_METHODS.makitaTasksStop, {
   payload: MakitaTaskRef,
   success: MakitaTaskStopResult,
+  error: MakitaErrors,
+});
+const WsMakitaActivityRpc = Rpc.make(WS_METHODS.makitaActivity, {
+  payload: MakitaActivityInput,
+  success: MakitaActivityResult,
+  error: MakitaErrors,
+});
+const WsMakitaThreadsRpc = Rpc.make(WS_METHODS.makitaThreads, {
+  payload: MakitaThreadsInput,
+  success: MakitaThreadsResult,
   error: MakitaErrors,
 });
 const WsAiAccountsCreateRpc = Rpc.make(WS_METHODS.aiAccountsCreate, {
@@ -2714,6 +2733,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsMakitaConfigsPauseRpc,
   WsMakitaConfigsResumeRpc,
   WsMakitaTasksStopRpc,
+  WsMakitaActivityRpc,
+  WsMakitaThreadsRpc,
   WsProjectCloneStartRpc,
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,

@@ -433,6 +433,7 @@ const make = Effect.fn("AiGatewayProxy.make")(function* (limits: AiGatewayProxyL
             failovers: input.failovers,
             usage: input.usage,
             grantId: grantOf(input.account),
+            makitaConfigId: caller.makitaConfigId,
             ...(input.shed === true ? { shed: true as const } : {}),
             ...(estimatedTokens === undefined ? {} : { estimatedTokens }),
           };

@@ -1,7 +1,7 @@
 import { WS_METHODS } from "@t3tools/contracts";
 import type { Atom } from "effect/reactivity";
 
-import { createEnvironmentRpcCommand } from "./runtime.ts";
+import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 /**
@@ -70,6 +70,19 @@ export function createMakitaEnvironmentAtoms<R, E>(
     stopTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:makita:tasks-stop",
       tag: WS_METHODS.makitaTasksStop,
+    }),
+    // What Makita does and spends (ticket 07), read again every 30 s while a screen shows it.
+    activity: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:makita:activity",
+      tag: WS_METHODS.makitaActivity,
+      idleTtlMs: 0,
+      refreshIntervalMs: 30_000,
+    }),
+    // The Makita tasks of the Threads one sees: the Thread header and the list's «Makita» filter.
+    threads: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:makita:threads",
+      tag: WS_METHODS.makitaThreads,
+      refreshIntervalMs: 60_000,
     }),
   };
 }

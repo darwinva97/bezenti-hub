@@ -92,6 +92,7 @@ export * from "./installationAccess.ts";
 export * from "./aiGateway.ts";
 export * from "./accessKeys.ts";
 export * from "./makita.ts";
+export * from "./makitaActivity.ts";
 export * from "./aiGatewaySession.ts";
 export * from "./aiAccounts.ts";
 export * from "./aiUsage.ts";

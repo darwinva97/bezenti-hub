@@ -107,6 +107,9 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.makitaAccountGet]: AuthAccessReadScope,
   [WS_METHODS.makitaPermissionsList]: AuthAccessReadScope,
   [WS_METHODS.makitaConfigsList]: AuthOrchestrationReadScope,
+  // Makita's activity and usage counts, and the Makita tasks of the Threads one sees (ticket 07).
+  [WS_METHODS.makitaActivity]: AuthOrchestrationReadScope,
+  [WS_METHODS.makitaThreads]: AuthOrchestrationReadScope,
   // What a Space's keys may reach: account names and model names, never a credential.
   [WS_METHODS.accessKeysModelOptions]: AuthAccessReadScope,
   // Asks GitHub for the newest release, as the Owner opens Settings → AI gateway.

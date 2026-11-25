@@ -35,7 +35,10 @@ export const layer = McpToolAccess.toLayer(MakitaToolkit, {
     Effect.gen(function* () {
       const tasks = yield* MakitaTasks;
       return yield* tasks
-        .commentForThread(yield* callerThread, input.body)
+        .commentForThread(yield* callerThread, input.body, {
+          ...(input.on === undefined ? {} : { on: input.on }),
+          ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+        })
         .pipe(Effect.mapError(asFailure));
     }),
   ),

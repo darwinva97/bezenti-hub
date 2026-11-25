@@ -76,6 +76,19 @@ export interface FakeComment {
   readonly user: FakeGitHubUser;
   readonly created_at: string;
   readonly updated_at: string;
+  /** Ticket 14: a review comment's file and line, and the comment it answers. */
+  readonly path?: string;
+  readonly line?: number;
+  readonly in_reply_to_id?: number;
+}
+
+/** A review of a pull request (ticket 14). */
+interface FakeReview {
+  readonly id: number;
+  readonly user: FakeGitHubUser;
+  body: string;
+  readonly state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "PENDING" | "DISMISSED";
+  readonly submitted_at: string;
 }
 
 /** A reaction Makita put on a comment (ticket 09), and which feed the comment belongs to. */
@@ -160,6 +173,9 @@ export const makeFakeGitHub = () => {
     branchTip: () => null,
   };
   let nextPullNumber = 40;
+  /** Ticket 14: `owner/name#n` → a pull request's reviews, oldest first, and their ETag version. */
+  const reviews = new Map<string, Array<FakeReview>>();
+  const reviewVersions = new Map<string, number>();
 
   const touch = (repo: string) => feedVersions.set(repo, (feedVersions.get(repo) ?? 0) + 1);
 
@@ -250,7 +266,13 @@ export const makeFakeGitHub = () => {
   };
 
   /** A review comment by `user` on pull request `number` (made if missing) of `repo`. */
-  const reviewComment = (repo: string, number: number, user: FakeGitHubUser, body: string) => {
+  const reviewComment = (
+    repo: string,
+    number: number,
+    user: FakeGitHubUser,
+    body: string,
+    options: { readonly path?: string; readonly line?: number; readonly inReplyTo?: number } = {},
+  ) => {
     const key = `${repo}#${number}`;
     if (!issues.has(key)) {
       issues.set(key, {
@@ -270,9 +292,28 @@ export const makeFakeGitHub = () => {
       user,
       created_at: clock.now,
       updated_at: clock.now,
+      path: options.path ?? "src/login.ts",
+      line: options.line ?? 1,
+      ...(options.inReplyTo === undefined ? {} : { in_reply_to_id: options.inReplyTo }),
     };
     reviewComments.set(key, [...(reviewComments.get(key) ?? []), made]);
     commentVersions.set(repo, (commentVersions.get(repo) ?? 0) + 1);
+    return made;
+  };
+
+  /** A review by `user` of pull request `number` of `repo` (ticket 14). */
+  const review = (
+    repo: string,
+    number: number,
+    user: FakeGitHubUser,
+    state: FakeReview["state"],
+    body = "",
+  ) => {
+    nextCommentId += 1;
+    const made: FakeReview = { id: nextCommentId, user, body, state, submitted_at: clock.now };
+    const key = `${repo}#${number}`;
+    reviews.set(key, [...(reviews.get(key) ?? []), made]);
+    reviewVersions.set(key, (reviewVersions.get(key) ?? 0) + 1);
     return made;
   };
 
@@ -620,6 +661,70 @@ export const makeFakeGitHub = () => {
         return json(request, 201, pullOf(repo, pr));
       }
     }
+    // Ticket 14: a pull request's reviews, its review comments, and a reply in a review thread.
+    const reviewsMatch = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/reviews(?:\/(\d+))?$/u.exec(
+      route,
+    );
+    if (request.method === "GET" && reviewsMatch !== null) {
+      const repo = `${reviewsMatch[1]}/${reviewsMatch[2]}`;
+      const key = `${repo}#${reviewsMatch[3]}`;
+      const toJson = (entry: FakeReview) => ({
+        id: entry.id,
+        body: entry.body,
+        state: entry.state,
+        submitted_at: entry.state === "PENDING" ? null : entry.submitted_at,
+        user: { login: entry.user.login, id: entry.user.id, type: entry.user.type ?? "User" },
+        pull_request_url: `${API}repos/${repo}/pulls/${reviewsMatch[3]}`,
+      });
+      const list = reviews.get(key) ?? [];
+      if (reviewsMatch[4] !== undefined) {
+        const found = list.find((entry) => entry.id === Number(reviewsMatch[4]));
+        return found === undefined
+          ? json(request, 404, { message: "Not Found" })
+          : json(request, 200, toJson(found));
+      }
+      const etag = `W/"${key}-reviews-${reviewVersions.get(key) ?? 0}-${query.toString()}"`;
+      if (ifNoneMatch === etag) return json(request, 304, null, { etag });
+      const perPage = Number(query.get("per_page") ?? "30");
+      const page = Number(query.get("page") ?? "1");
+      return json(request, 200, list.slice((page - 1) * perPage, page * perPage).map(toJson), {
+        etag,
+      });
+    }
+    const prCommentsMatch =
+      /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/comments(?:\/(\d+)\/replies)?$/u.exec(route);
+    if (prCommentsMatch !== null) {
+      const repo = `${prCommentsMatch[1]}/${prCommentsMatch[2]}`;
+      const number = Number(prCommentsMatch[3]);
+      if (request.method === "GET" && prCommentsMatch[4] === undefined) {
+        return json(
+          request,
+          200,
+          feedComments(repo, "pulls").filter(
+            (entry) =>
+              "pull_request_url" in entry && entry.pull_request_url.endsWith(`/pulls/${number}`),
+          ),
+        );
+      }
+      if (request.method === "POST" && prCommentsMatch[4] !== undefined) {
+        const parent = (reviewComments.get(`${repo}#${number}`) ?? []).find(
+          (entry) => entry.id === Number(prCommentsMatch[4]),
+        );
+        if (parent === undefined) return json(request, 404, { message: "Not Found" });
+        const made = reviewComment(
+          repo,
+          number,
+          held.user,
+          (bodyOf(request) as { readonly body?: string } | null)?.body ?? "",
+          {
+            ...(parent.path === undefined ? {} : { path: parent.path }),
+            ...(parent.line === undefined ? {} : { line: parent.line }),
+            inReplyTo: parent.id,
+          },
+        );
+        return json(request, 201, made);
+      }
+    }
     const ciMatch = /^repos\/([^/]+)\/([^/]+)\/commits\/([0-9a-f]+)\/(check-runs|status)$/u.exec(
       route,
     );
@@ -717,6 +822,8 @@ export const makeFakeGitHub = () => {
     comment,
     commentOn,
     reviewComment,
+    review,
+    reviews,
     editComment,
     assign,
     /** The comments a login wrote on an issue, as they read on GitHub. */

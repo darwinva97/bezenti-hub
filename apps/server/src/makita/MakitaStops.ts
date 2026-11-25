@@ -32,6 +32,8 @@ const REASONS: Readonly<Record<MakitaTaskStopReason, string>> = {
   "issue-closed": "the issue was closed",
   "issue-locked": "the issue was locked",
   "github-stop": "someone asked on GitHub to stop",
+  "pr-closed": "its pull request was closed",
+  "pr-locked": "its pull request was locked",
 };
 
 /** The `thread.stop` reason for a task's failure. */

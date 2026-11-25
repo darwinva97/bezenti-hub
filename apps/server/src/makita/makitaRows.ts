@@ -91,7 +91,10 @@ export type MakitaTaskStopReason =
   | "issue-closed"
   | "issue-locked"
   // Ticket 09: an allowed person wrote `/makita stop` on the issue.
-  | "github-stop";
+  | "github-stop"
+  // Ticket 14: Makita's pull request closed without a merge, or locked.
+  | "pr-closed"
+  | "pr-locked";
 
 /** A task just stopped: what the turn interrupt and the answers need. */
 interface StoppedMakitaTask {
@@ -131,8 +134,9 @@ export const stopTasksWithin = Effect.fn("makitaRows.stopTasksWithin")(function*
               WHERE created_by = ${scope.creator}
                 AND (${scope.spaceId} IS NULL OR space_id = ${scope.spaceId}))`
           : "issue" in scope
-            ? sql`host = ${scope.issue.host} AND repo = ${scope.issue.repo}
-                AND number = ${scope.issue.number}`
+            ? // Ticket 14: an issue's task, or the task whose pull request it is (one numbering).
+              sql`host = ${scope.issue.host} AND repo = ${scope.issue.repo}
+                AND (number = ${scope.issue.number} OR pr_number = ${scope.issue.number})`
             : sql`1 = 1`;
   const stopped = yield* sql<{
     readonly taskId: string;

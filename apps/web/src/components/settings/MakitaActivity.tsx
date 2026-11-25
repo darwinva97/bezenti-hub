@@ -392,7 +392,9 @@ function ActivityBody({
                 <span>
                   {event.outcome === "started" && event.detail === "continued"
                     ? "Continued a task"
-                    : OUTCOME_LABEL[event.outcome]}
+                    : event.outcome === "started" && event.detail === "conversation"
+                      ? "Continued on its pull request"
+                      : OUTCOME_LABEL[event.outcome]}
                 </span>
                 <span className="text-muted-foreground">
                   {event.actorLogin === null ? "" : `@${event.actorLogin} · `}

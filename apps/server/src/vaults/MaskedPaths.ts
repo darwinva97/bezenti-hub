@@ -543,8 +543,8 @@ export const MCP_DOOR_RULES: Record<string, DoorRule> = {
   link_pull_request: none("the calling agent's own work; what it says next is an event (masked)"),
   link_pull_requests: none("the calling agent's own work; what it says next is an event (masked)"),
   // Makita ticket 05: GitHub's public issue text, framed; no Thread output or Vault value.
-  makita_comment: none("whether Makita posted on its task's issue; never the text it posted"),
-  makita_read_issue: none("a public GitHub issue and its comments, framed as untrusted data"),
+  makita_comment: none("whether Makita posted on its task's issue or PR; never the text it posted"),
+  makita_read_issue: none("a public GitHub issue, its comments and PR, framed as untrusted data"),
   // Makita ticket 10: whether it pushed, the branch and commit; never a diff or the token.
   makita_push: none("whether Makita pushed its task's branch: the branch, the commit, why not"),
   // Makita ticket 12: the PR's number and link; a CI log's tail, masked and framed.

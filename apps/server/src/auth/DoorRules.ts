@@ -285,11 +285,13 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   link_pull_requests: PULL_REQUEST_LINK,
   // Makita ticket 05: listed and callable only for a Makita task's Thread (McpInvocationContext.
   // toolAllowedFor); repository and number are its task's, never the call's.
+  // Ticket 14: also its own pull request (from the task row), and a review thread GitHub says
+  // is on that pull request.
   makita_comment: own(
-    "the calling agent's own Thread, which must be a Makita task's; its repository and number only; the configuration's pause, the task's state, the secret mask and the loop guard, checked on the Hub",
+    "the calling agent's own Thread, which must be a Makita task's; its issue, or its own pull request and that pull request's review threads, only; the configuration's pause, the task's state, the secret mask and the loop guard, checked on the Hub",
   ),
   makita_read_issue: own(
-    "the calling agent's own Thread, which must be a Makita task's; its repository and number only",
+    "the calling agent's own Thread, which must be a Makita task's; its issue and its own pull request only",
   ),
   // Makita ticket 10: listed only when its configuration may push; no input at all.
   makita_push: own(

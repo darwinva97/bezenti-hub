@@ -19,6 +19,7 @@ import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import { linkCodeOf, linkFromCommentWithin } from "./GitHubIdentities.ts";
 import { decideApprovalComment, isApprovalCommand, liveTaskOfItem } from "./makitaApprovers.ts";
 import { allowedCallerIds } from "./makitaCallers.ts";
+import { decideConversation, decodeReviewPage, reviewsPath } from "./makitaConversation.ts";
 import {
   commandOf,
   type CommentCursor,
@@ -252,6 +253,8 @@ const make = Effect.gen(function* () {
   /** Until when every request waits (a rate limit: one token, one quota). */
   const holdUntil = yield* Ref.make(0);
   const lastPrune = yield* Ref.make(0);
+  /** Ticket 14: each followed pull request's reviews ETag (a restart reads them once more). */
+  const reviewEtags = new Map<string, string>();
   /** Each Space's Projects and repositories, read at most once a minute. */
   const repoCache = yield* Ref.make(
     new Map<string, { readonly at: number; readonly projects: ReadonlyArray<SpaceProjectRepo> }>(),
@@ -440,8 +443,20 @@ const make = Effect.gen(function* () {
   }) {
     const queued: Array<QueuedEvent> = [];
     for (const event of input.events) {
-      // An issue closed or locked stops its live task; MakitaStops interrupts its turn.
+      // Ticket 14: Makita's pull request merged ends its task as done (its `closed` finds none).
+      if (event.event === "merged" && event.issue !== undefined) {
+        yield* sql`
+          UPDATE makita_tasks SET state = 'done', pending_push_json = NULL,
+            updated_at = ${iso(input.now)}
+          WHERE host = ${MAKITA_GITHUB_HOST} AND repo = ${input.listened.repo}
+            AND pr_number = ${event.issue.number} AND state NOT IN ('done', 'stopped', 'failed')
+        `;
+        continue;
+      }
+      // An issue (or, ticket 14, Makita's pull request) closed or locked stops its live task;
+      // MakitaStops interrupts its turn.
       if ((event.event === "closed" || event.event === "locked") && event.issue !== undefined) {
+        const pull = event.issue.pull_request !== undefined;
         yield* stopTasksWithin(sql, {
           actor: { source: "system" },
           scope: {
@@ -451,7 +466,14 @@ const make = Effect.gen(function* () {
               number: event.issue.number,
             },
           },
-          reason: event.event === "closed" ? "issue-closed" : "issue-locked",
+          reason:
+            event.event === "closed"
+              ? pull
+                ? "pr-closed"
+                : "issue-closed"
+              : pull
+                ? "pr-locked"
+                : "issue-locked",
         });
         continue;
       }
@@ -500,6 +522,14 @@ const make = Effect.gen(function* () {
         };
       }),
     );
+
+  /** Ticket 14: Makita's own pull requests in a repository (of live tasks) → their configuration. */
+  const livePullsOf = (repo: string) =>
+    sql<{ readonly pr: number; readonly configId: string }>`
+      SELECT pr_number AS pr, config_id AS "configId" FROM makita_tasks
+      WHERE host = ${MAKITA_GITHUB_HOST} AND repo = ${repo} AND pr_number IS NOT NULL
+        AND state NOT IN ('done', 'stopped', 'failed')
+    `.pipe(Effect.map((rows) => new Map(rows.map((row) => [row.pr, row.configId]))));
 
   /**
    * Ticket 08: `@<makita> link <code>` from a new comment by a person links its author's account
@@ -589,9 +619,13 @@ const make = Effect.gen(function* () {
     readonly reactions: Array<LinkReaction>;
   }) {
     const queued: Array<QueuedEvent> = [];
+    // Ticket 14: on Makita's own pull request everything said is said to it, mention or not.
+    const pulls = yield* livePullsOf(input.listened.repo);
     for (const comment of input.comments) {
-      if (!speaksToMakita(comment, input.makita.login)) continue;
-      const code = linkCodeOf(comment.body, input.makita.login);
+      const pull = pulls.get(comment.number);
+      const speaks = speaksToMakita(comment, input.makita.login);
+      if (!speaks && pull === undefined) continue;
+      const code = speaks ? linkCodeOf(comment.body, input.makita.login) : undefined;
       if (code !== undefined) {
         yield* handleLink({
           repo: input.listened.repo,
@@ -614,14 +648,21 @@ const make = Effect.gen(function* () {
                 (yield* liveTaskOfItem(sql, input.listened.repo, comment.number))?.configId ?? null,
             })
           : undefined;
+      // Ticket 14: on Makita's own pull request, what is not an approval is conversation.
       const decision =
         approval ??
-        decideComment({
-          comment,
-          configs: input.listened.configs,
-          makita: input.makita,
-          tasks: yield* tasksOf(input.listened.repo, comment.number),
-        });
+        (pull === undefined
+          ? decideComment({
+              comment,
+              configs: input.listened.configs,
+              makita: input.makita,
+              tasks: yield* tasksOf(input.listened.repo, comment.number),
+            })
+          : decideConversation({
+              comment,
+              config: input.listened.configs.find((config) => config.configId === pull),
+              makita: input.makita,
+            }));
       if (decision === undefined) continue;
       const inserted = yield* insertEvent({
         eventKey: comment.eventKey,
@@ -907,6 +948,91 @@ const make = Effect.gen(function* () {
     return queued;
   });
 
+  /**
+   * Ticket 14: the reviews of Makita's own pull requests in a repository, read with the review
+   * comments' cadence. No cursor: each review is decided once by its key, as every event.
+   */
+  const pollReviews = Effect.fn("MakitaIntake.pollReviews")(function* (input: {
+    readonly listened: ListenedRepo;
+    readonly makita: { readonly id: number; readonly login: string };
+    readonly now: number;
+  }) {
+    const { listened, now } = input;
+    const repo = listened.repo;
+    const queued: Array<QueuedEvent> = [];
+    /** A read GitHub refused: `stop` when nothing more may run this pass, else skip this one. */
+    const refused = Effect.fn("MakitaIntake.reviewsRefused")(function* (error: MakitaGitHubError) {
+      if (error.reason === "rate-limited") {
+        yield* Ref.set(holdUntil, Math.max(error.retryAt ?? 0, now + RATE_LIMIT_MIN_MS));
+        return "stop" as const;
+      }
+      if (error.reason === "unauthorized" || error.reason === "no-token") return "stop" as const;
+      yield* Effect.logWarning("Makita could not read a pull request's reviews", {
+        repo,
+        reason: error.reason,
+      });
+      return "skip" as const;
+    });
+    for (const [pr, configId] of yield* livePullsOf(repo)) {
+      const key = `${repo.toLowerCase()}#${pr}`;
+      const decode = (body: string) => {
+        const page = decodeReviewPage(pr, body);
+        return { items: page.reviews, size: page.size };
+      };
+      const answer = yield* read("pull-reviews", reviewsPath(repo, pr, 1), reviewEtags.get(key));
+      if (answer._tag === "Failure") {
+        if ((yield* refused(answer.failure)) === "stop") return "stop" as const;
+        continue;
+      }
+      // Nothing new since the last read.
+      if (answer.success.status === 304) continue;
+      const first = decode(answer.success.body);
+      const pages = yield* nextPages({
+        operation: "pull-reviews",
+        pathOf: (page) => reviewsPath(repo, pr, page),
+        first: first.items,
+        firstSize: first.size,
+        decode,
+        more: (_items, size) => size >= FEED_PAGE,
+      });
+      if (pages._tag === "failed") {
+        if ((yield* refused(pages.error)) === "stop") return "stop" as const;
+        continue;
+      }
+      const config = listened.configs.find((entry) => entry.configId === configId);
+      const taken = yield* sql.withTransaction(
+        Effect.forEach(pages.items, (review) =>
+          Effect.gen(function* () {
+            const decision = decideConversation({ comment: review, config, makita: input.makita });
+            if (decision === undefined) return [];
+            const inserted = yield* insertEvent({
+              eventKey: review.eventKey,
+              repo,
+              number: pr,
+              kind: "pull",
+              actor: review.author,
+              createdAtGithub: review.createdAt,
+              now,
+              decision,
+            });
+            return inserted && decision.outcome === "queued"
+              ? [{ eventKey: review.eventKey, repo, number: pr, configId: decision.configId }]
+              : [];
+          }),
+        ),
+      );
+      queued.push(...taken.flat());
+      // Only a one-page answer's ETag says nothing changed; later pages would hide behind it.
+      const etag = answer.success.headers["etag"];
+      if (etag !== undefined && first.size < FEED_PAGE) {
+        reviewEtags.set(key, etag);
+      } else {
+        reviewEtags.delete(key);
+      }
+    }
+    return queued as ReadonlyArray<QueuedEvent>;
+  });
+
   const pollDue = Effect.gen(function* () {
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     if (now - (yield* Ref.get(lastPrune)) >= PRUNE_EVERY_MS) {
@@ -957,6 +1083,12 @@ const make = Effect.gen(function* () {
             : yield* pollComments({ listened: entry, feed, row, makita, now });
         if (result === "stop") break poll;
         queued.push(...result);
+        // Ticket 14: the reviews of Makita's pull requests, with the review comments' cadence.
+        if (feed === "review-comments") {
+          const reviews = yield* pollReviews({ listened: entry, makita, now });
+          if (reviews === "stop") break poll;
+          queued.push(...reviews);
+        }
       }
     }
     return queued as ReadonlyArray<QueuedEvent>;

@@ -4,8 +4,8 @@ Ticket: `27-limpieza-de-prs.md`. Spec: `../spec.md` («Abrir el PR, esperar la C
 
 ## What changes
 
-- **Configuration** (`autonomy_json`, migration 174): `closeIdlePrsDays` (null = off; 7–180, the form suggests 90) and `badWorkLabel` (null = off; up to 50 characters, the form suggests `slop`). Audited as `close_idle_prs` / `bad_work_label` in `changed`.
-- **Column `makita_tasks.pr_closed_at`** (migration 174): when the Hub saw or made the task's pull request closed, so the sweep never reads it again.
+- **Configuration** (`autonomy_json`, migration 173): `closeIdlePrsDays` (null = off; 7–180, the form suggests 90) and `badWorkLabel` (null = off; up to 50 characters, the form suggests `slop`). Audited as `close_idle_prs` / `bad_work_label` in `changed`.
+- **Column `makita_tasks.pr_closed_at`** (migration 173): when the Hub saw or made the task's pull request closed, so the sweep never reads it again.
 - **(a) The idle sweep**, Scheduler source `makita-cleanup` (`MakitaCleanup.ts`), at most once every 10 minutes, nothing while «Stop all» is on, the token is refused or the intake's rate-limit hold lasts:
   1. Candidates: tasks of live, unpaused configurations in open Spaces with `closeIdlePrsDays`, with a `pr_number`, no `pr_closed_at`, state not `running`, `awaiting-approval` or `done`, no `pending_push_json`, and the Hub's `updated_at` older than N days; 20 a pass.
   2. `GET pulls/{n}`: not open → `pr_closed_at` and nothing else; opened by another account, or its head not the task's `makita/…` branch → skipped (never touched). Idle: GitHub's `updated_at` (any comment, review, push or label moves it) N days before GitHub's own clock (the answer's `Date`), so the two clocks are never mixed.

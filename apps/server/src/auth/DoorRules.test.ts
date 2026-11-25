@@ -781,7 +781,7 @@ describe("every door of the Hub declares its rule", () => {
     for (const entry of [
       ["makita_account", "163_MakitaAccount"],
       ["makita_permissions", "164_MakitaPermissions"],
-      ["makita_configs", "165_MakitaConfigs", "172_MakitaTriage", "174_MakitaAutonomy"],
+      ["makita_configs", "165_MakitaConfigs", "172_MakitaTriage", "173_MakitaAutonomy"],
       // Ticket 04: what the intake read and decided.
       ["makita_repo_cursors", "166_MakitaIntake"],
       ["makita_events", "166_MakitaIntake"],
@@ -792,10 +792,10 @@ describe("every door of the Hub declares its rule", () => {
         "169_MakitaTaskWorkspace",
         "171_MakitaTaskCi",
         "172_MakitaTriage",
-        "174_MakitaAutonomy",
+        "173_MakitaAutonomy",
       ],
       // Tickets 25–27: what a configuration does on its own, and each issue Makita closed.
-      ["makita_issue_closes", "174_MakitaAutonomy"],
+      ["makita_issue_closes", "173_MakitaAutonomy"],
     ] as const) {
       const [table, ...migrations] = entry;
       expect(

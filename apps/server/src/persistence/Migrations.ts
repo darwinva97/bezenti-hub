@@ -161,7 +161,7 @@ import Migration0169 from "./Migrations/169_MakitaTaskWorkspace.ts";
 import Migration0170 from "./Migrations/170_GitHubIdentities.ts";
 import Migration0171 from "./Migrations/171_MakitaTaskCi.ts";
 import Migration0172 from "./Migrations/172_MakitaTriage.ts";
-import Migration0174 from "./Migrations/174_MakitaAutonomy.ts";
+import Migration0173 from "./Migrations/173_MakitaAutonomy.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -325,7 +325,7 @@ const migrationEntries = [
   [170, "GitHubIdentities", Migration0170],
   [171, "MakitaTaskCi", Migration0171],
   [172, "MakitaTriage", Migration0172],
-  [174, "MakitaAutonomy", Migration0174],
+  [173, "MakitaAutonomy", Migration0173],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

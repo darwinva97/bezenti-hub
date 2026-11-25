@@ -4,7 +4,7 @@ Ticket: `25-todo-issue-nuevo.md`. Spec: `../spec.md` («Cómo llegan los eventos
 
 ## What changes
 
-- **Where the option lives.** Migration **174** adds `makita_configs.autonomy_json TEXT NOT NULL DEFAULT '{}'`: one JSON column for the three robobun-style tickets (25, 26, 27), read and written only through `makita/makitaAutonomy.ts`. Ticket 25 keeps `newIssues: boolean` and `newIssuesSince: <Hub time it was switched on>`; the contract shows `autonomy.newIssues` and the form sends it. Absent in an update: kept as stored. Turning it on or off is audited in `makita.config.update` with `new_issues` in `changed`; create and update audit `autonomy` (the options on, by name).
+- **Where the option lives.** Migration **173** adds `makita_configs.autonomy_json TEXT NOT NULL DEFAULT '{}'`: one JSON column for the three robobun-style tickets (25, 26, 27), read and written only through `makita/makitaAutonomy.ts`. Ticket 25 keeps `newIssues: boolean` and `newIssuesSince: <Hub time it was switched on>`; the contract shows `autonomy.newIssues` and the form sends it. Absent in an update: kept as stored. Turning it on or off is audited in `makita.config.update` with `new_issues` in `changed`; create and update audit `autonomy` (the options on, by name).
 - **A fourth feed, `new-issues`**, per repository, read only while some live configuration listening to it has the option on (paused ones too, so what comes during a pause is `ignored-paused` and never replayed). Otherwise its cursor row is deleted, so switching it on later starts «now».
   - `GET /repos/{o}/{r}/issues?state=all&sort=created&direction=desc&per_page=100` with `If-None-Match`, paged like issue events (down to the cursor, at most 10 pages). The cursor is the highest issue number seen (issues and pull requests share numbers and they only grow).
   - **First read**: the cursor becomes the newest number, nothing is handled. Then only numbers above the cursor, oldest first, in the batch's transaction with the cursor (exactly once by key, as 04).
@@ -24,7 +24,7 @@ Turning it on: the configuration's creator, with `makita.use` (as every edit). S
 
 ## How it is undone
 
-Untick «Every new issue»: the next pass stops reading the feed and deletes its cursor; nothing queued later. Pausing the configuration or «Stop all» works as in 04/06. Migration 174 only adds a column with a default.
+Untick «Every new issue»: the next pass stops reading the feed and deletes its cursor; nothing queued later. Pausing the configuration or «Stop all» works as in 04/06. Migration 173 only adds a column with a default.
 
 ## Tests (red-first)
 

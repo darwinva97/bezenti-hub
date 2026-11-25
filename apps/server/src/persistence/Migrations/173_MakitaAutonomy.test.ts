@@ -26,8 +26,8 @@ it.effect(
         't1', 1, 'octocat', 'running', '2026-11-24T10:00:00Z', '2026-11-24T10:00:00Z')
     `;
 
-      // Later ids may land between 171 and 174 on other branches; this one only adds.
-      yield* runMigrations({ toMigrationInclusive: 174 });
+      // Migration 172 (Makita 24) comes between; this one only adds.
+      yield* runMigrations({ toMigrationInclusive: 173 });
 
       const [config] = yield* sql<{ readonly autonomy: string }>`
       SELECT autonomy_json AS autonomy FROM makita_configs WHERE config_id = 'mk_1'

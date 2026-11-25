@@ -4,8 +4,11 @@
  * `queued` rows of `makita_events`: nothing lives in memory, so a restart keeps it.
  */
 import { MAKITA_HUB_DEFAULT_MAX_TASKS, type SpaceId, type UserId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
+
+import { threadTurnsOf } from "../orchestration-v2/threadTurns.ts";
 
 /** Tasks at work hold a slot: the activity's «Now». One waiting for a person holds none. */
 const AT_WORK_STATES = ["running", "waiting-ci", "awaiting-approval"] as const;
@@ -28,6 +31,43 @@ const noLiveTask = (sql: SqlClient.SqlClient) =>
     WHERE t.host = e.host AND t.repo = e.repo
       AND (t.number = e.number OR t.pr_number = e.number)
       AND t.state NOT IN ('done', 'stopped', 'failed'))`;
+
+/** How long a `running` task is left alone after its last change: its turn may not be recorded yet. */
+const TURN_GRACE_MS = 2 * 60 * 1_000;
+
+/**
+ * A `running` task whose Thread had a turn and has none going now (its agent stopped without
+ * commenting, or its turn failed) waits for a person: `waiting-reply`, so it holds no slot. A
+ * mention or a CI result wakes it as before. Answers the tasks it moved.
+ */
+export const settleEndedTurns = Effect.fn("makitaQueue.settleEndedTurns")(function* (
+  sql: SqlClient.SqlClient,
+) {
+  const now = yield* DateTime.now;
+  const cutoff = DateTime.formatIso(
+    DateTime.makeUnsafe(DateTime.toEpochMillis(now) - TURN_GRACE_MS),
+  );
+  const running = yield* sql<{ readonly taskId: string; readonly threadId: string }>`
+    SELECT task_id AS "taskId", thread_id AS "threadId" FROM makita_tasks
+    WHERE state = 'running' AND updated_at < ${cutoff}
+  `;
+  const turns = yield* threadTurnsOf(
+    sql,
+    running.map((task) => task.threadId),
+  );
+  const ended = running.filter((task) => turns.get(task.threadId)?.going === false);
+  if (ended.length === 0) return [] as ReadonlyArray<string>;
+  // Still `running` and untouched since: a wake in between keeps it.
+  const moved = yield* sql<{ readonly taskId: string }>`
+    UPDATE makita_tasks SET state = 'waiting-reply', updated_at = ${DateTime.formatIso(now)}
+    WHERE ${sql.in(
+      "task_id",
+      ended.map((task) => task.taskId),
+    )} AND state = 'running' AND updated_at < ${cutoff}
+    RETURNING task_id AS "taskId"
+  `;
+  return moved.map((row) => row.taskId);
+});
 
 interface StartingRow {
   readonly eventKey: string;

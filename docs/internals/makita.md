@@ -199,7 +199,7 @@ Design note: `.scratch/makita/issues/22-design.md`.
 - **The line.** `startQueued` asks `makitaQueue.queueGate` about each queued event in arrival order. Only a trigger with no task yet, of an active configuration, on an issue without a live task, ever waits; it stays `queued`. Wakes, commands, approvals, the conversation and merges never wait. At most 20 events are handled per pass; waiting ones do not count.
 - **Out of the line.** `stopTasksWithin` ends the waiting triggers of its scope in the same transaction (`dropWaitingWithin`): `ignored-paused` with the stop's reason, or `ignored-no-config` for an issue closed or locked. A `/makita stop` with no task yet does the same for its configuration's line on that issue (the intake, `github-stop`).
 - **Shown** as `waiting` in `makita.activity`: each item's place in its own configuration's line, never counting another Space's work.
-- **Risk:** a task stuck in `running` (a turn that ended without a comment) holds its slot until someone stops it.
+- **A turn that ended without a word.** Each pass first runs `settleEndedTurns`: a `running` task untouched for 2 minutes whose Thread had a turn and has none going now (`orchestration-v2/threadTurns.ts`: no run `preparing`, `queued`, `starting`, `running` or `waiting`) becomes `waiting-reply`, so it holds no slot; a mention or CI wakes it as before. A task whose Thread has no run yet (its worktree still being made) is left alone.
 
 ## What other tickets read
 

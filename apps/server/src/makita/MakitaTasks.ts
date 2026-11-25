@@ -60,7 +60,7 @@ import { labelsOf } from "./makitaLabels.ts";
 import { MakitaLanding } from "./MakitaLanding.ts";
 import { LAND_INSTRUCTIONS, landingNote, MERGE_DETAIL } from "./makitaLandingRules.ts";
 import { MakitaPushes } from "./MakitaPushes.ts";
-import { queueGate } from "./makitaQueue.ts";
+import { queueGate, settleEndedTurns } from "./makitaQueue.ts";
 import { pauseCreatorConfigsWithin, permittedIn, stopTasksWithin } from "./makitaRows.ts";
 import { liveTasksIn } from "./MakitaTriage.ts";
 import { lookAroundText, reportRefusal } from "./makitaTriageText.ts";
@@ -1044,7 +1044,9 @@ const make = Effect.gen(function* () {
         AND (detail IS NULL OR detail <> ${MERGE_DETAIL})
       ORDER BY seen_at, rowid LIMIT ${QUEUE_READ}
     `;
-    // Ticket 22: a new task waits while its configuration or the Hub is full; nothing else does.
+    // Ticket 22: a task whose turn ended without a word gives its slot back; then a new task
+    // waits while its configuration or the Hub is full; nothing else does.
+    yield* settleEndedTurns(sql);
     const gate = yield* queueGate(sql);
     let handled = 0;
     for (const row of rows) {

@@ -28,9 +28,9 @@ Raise the cap or the ceiling and the next pass starts what waits; lower it and r
 | -------------------------------- | ----------------------------------------------------------------------------------- |
 | WS `makita.account.setTaskLimit` | `MAKITA_ACCOUNT`: the Owner's own session (`makita.manageAccount`), `access:write`. |
 
-## Risks said
+## A turn that ended without a word
 
-- A task stuck in `running` (an agent that ended its turn without commenting, a provider failure) holds its slot until someone stops it («Stop now» in the activity). The Hub has no turn-end signal for Makita tasks yet; follow-up.
+An agent that ends its turn without commenting (or whose turn fails) would keep its task `running` and its slot forever. Each pass first moves such tasks to `waiting-reply`: `running`, untouched for 2 minutes (a launch or a wake is not yet recorded as a run), and its Thread had a run and has none `preparing`, `queued`, `starting`, `running` or `waiting` (the orchestration's run states, read through `orchestration-v2/threadTurns.ts` as Sandboxes and EnvironmentRegistry read them). The update re-checks `running` and the age, so a wake in between keeps it. A task whose Thread has no run yet (a worktree being made) is left alone.
 
 ## Tests (red-first)
 

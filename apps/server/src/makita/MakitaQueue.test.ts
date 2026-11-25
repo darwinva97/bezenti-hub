@@ -5,6 +5,7 @@
  * ceiling wins. Pausing, `/makita stop` and a closed issue take what waits out of the line.
  */
 import { assert, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import { platform, posix } from "../ai/AiGatewayRoute.testkit.ts";
@@ -92,6 +93,51 @@ live(
       yield* ctx.setup.makitaTasks.startQueued;
       assert.deepEqual(ctx.started(), ["12", "13", "14"]);
       assert.deepEqual(yield* ctx.line(), []);
+    }),
+);
+
+live(
+  "a task whose turn ended without a comment gives its slot back once its grace passed; one whose turn goes on keeps it",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* lined(1);
+      const { sql } = ctx.setup.server;
+      yield* ctx.label(12, 13);
+      assert.deepEqual(ctx.started(), ["12"]);
+      const [task] = yield* sql<{ readonly threadId: string }>`
+        SELECT thread_id AS "threadId" FROM makita_tasks WHERE number = 12
+      `;
+      const stateOf12 = sql<{ readonly state: string }>`
+        SELECT state FROM makita_tasks WHERE number = 12
+      `.pipe(Effect.map((rows) => rows[0]?.state));
+      const aged = sql`
+        UPDATE makita_tasks SET updated_at = '2000-01-01T00:00:00.000Z' WHERE number = 12
+      `;
+      // Its Thread's turn is going: the slot stays taken, however old the task.
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_runs
+          (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+        VALUES ('makita-run-12', ${task!.threadId}, 1, 'claudeAgent', 'running',
+          '2026-11-25T00:00:00.000Z', '{}')
+      `;
+      yield* aged;
+      yield* ctx.setup.makitaTasks.startQueued;
+      assert.deepEqual([ctx.started(), yield* stateOf12], [["12"], "running"]);
+
+      // The turn ended, but the task just changed: within the grace it keeps its slot.
+      yield* sql`
+        UPDATE orchestration_v2_projection_runs SET status = 'completed'
+        WHERE run_id = 'makita-run-12'
+      `;
+      const now = DateTime.formatIso(yield* DateTime.now);
+      yield* sql`UPDATE makita_tasks SET updated_at = ${now} WHERE number = 12`;
+      yield* ctx.setup.makitaTasks.startQueued;
+      assert.deepEqual([ctx.started(), yield* stateOf12], [["12"], "running"]);
+
+      // Past the grace with no turn going: it waits for a person and issue 13 starts.
+      yield* aged;
+      yield* ctx.setup.makitaTasks.startQueued;
+      assert.deepEqual([ctx.started(), yield* stateOf12], [["12", "13"], "waiting-reply"]);
     }),
 );
 

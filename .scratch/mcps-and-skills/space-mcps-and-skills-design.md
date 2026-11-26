@@ -3,8 +3,18 @@
 Issue: darwinva97/bezenti-hub#10. ADRs: 0004, 0006, 0008. Vocabulario: `GLOSSARY.md` (Space, Vault,
 Vault group, Secret, Variable, Provider entry, Grant, Environment).
 
-Estado: **propuesta, sin construir.** Las decisiones marcadas «Pregunta» esperan al Owner. El resto
-es la recomendación para el primer corte. Base: `main` `5506cd13027`.
+Estado: **decidido** (2026-11-26, darwinva97 en #10 delega las cinco preguntas: se toman las
+recomendaciones de abajo). Base: `main` `5506cd13027`.
+
+Decisiones:
+
+1. Prestar un MCP con referencias: **A** (el Grant lleva sus Vault groups, con aviso y rotación). B
+   para MCPs http, en otro ticket.
+2. MCPs stdio: **solo Owner y Admin, con audit entry**. Sin lista de comandos permitidos por ahora.
+3. Dónde corre: **en el Environment del Thread**, lanzado por el provider.
+4. Skills de disco: **coexisten**; a igual nombre gana la del Space y el panel lo dice.
+5. Alcance: **los providers que ya aceptan `mcpServers` y `secretEnv`**; el resto, «Not supported»
+   escrito por adapter (§11).
 
 ## 0. Lo que ya existe y en qué se apoya
 
@@ -81,7 +91,7 @@ llega**. El Hub nunca pone un valor en la configuración del MCP ni en otro camp
   permisos 0700) y la pasa al provider por su mecanismo de Skills; se borra al cerrar la sesión.
 - `expects_json`: el panel del Thread cruza los nombres con `vaults.threadEnvironment` y avisa
   «This Skill expects `GITHUB_TOKEN` and this Thread does not receive it». No bloquea.
-- **Pregunta 4 (Skills de disco):** recomendación, coexisten sin más en el primer corte. Si una Skill
+- **Decisión 4 (Skills de disco):** coexisten sin más en el primer corte. Si una Skill
   del Space y una de disco comparten nombre, gana la del Space y el panel lo dice. Importar y ocultar,
   en otro ticket.
 
@@ -94,22 +104,22 @@ Ver tabla en §11. Regla: un provider que no acepta MCPs externos o Skills los m
 
 ## 6. Quién hace qué
 
-| Acción                                                       | Owner | Admin (de la Org) | Member | Guest |
-| ------------------------------------------------------------ | ----- | ----------------- | ------ | ----- |
-| Crear, editar, desactivar, borrar un Space MCP **http**      | sí    | sí                | no     | no    |
-| Crear o editar un Space MCP **stdio** (ejecuta un comando)   | sí    | sí (Pregunta 2)   | no     | no    |
-| Crear, editar, desactivar, borrar una Space Skill            | sí    | sí                | no     | no    |
-| Elegir por Space (defaults) y por Project                    | sí    | sí                | no     | no    |
-| Ver nombres, transporte, estado y Skills                     | sí    | sí                | sí     | sí    |
-| Ver la configuración (con referencias, nunca valores)        | sí    | sí                | no     | no    |
-| Prestar / retirar (Grant)                                    | sí    | sí                | no     | no    |
-| Aceptar / devolver un préstamo                               | sí    | sí                | no     | no    |
+| Acción                                                     | Owner | Admin (de la Org) | Member | Guest |
+| ---------------------------------------------------------- | ----- | ----------------- | ------ | ----- |
+| Crear, editar, desactivar, borrar un Space MCP **http**    | sí    | sí                | no     | no    |
+| Crear o editar un Space MCP **stdio** (ejecuta un comando) | sí    | sí                | no     | no    |
+| Crear, editar, desactivar, borrar una Space Skill          | sí    | sí                | no     | no    |
+| Elegir por Space (defaults) y por Project                  | sí    | sí                | no     | no    |
+| Ver nombres, transporte, estado y Skills                   | sí    | sí                | sí     | sí    |
+| Ver la configuración (con referencias, nunca valores)      | sí    | sí                | no     | no    |
+| Prestar / retirar (Grant)                                  | sí    | sí                | no     | no    |
+| Aceptar / devolver un préstamo                             | sí    | sí                | no     | no    |
 
 En un Personal space, su User hace lo del Admin. `AccessPolicy` gana `spaceMcp.view`,
 `spaceMcp.viewConfig`, `spaceMcp.manage`, `spaceMcp.manageStdio`, `spaceSkill.view`,
 `spaceSkill.manage`. Quien no ve el Space recibe not-found en todas.
 
-**Pregunta 2:** recomendación, en el primer corte basta Owner/Admin + audit entry. Una lista de
+**Decisión 2:** en el primer corte basta Owner/Admin + audit entry. Una lista de
 comandos permitidos por el Owner (como los comandos de Secret providers) queda como ticket aparte si
 el Owner la quiere; añadirla después no cambia los datos.
 
@@ -117,7 +127,7 @@ el Owner la quiere; añadirla después no cambia los datos.
 
 - `space-skill`: misma mecánica que un Vault group. Aparece enlazada y de solo lectura en el Space
   prestatario, se elige como las propias y deja de llegar en el siguiente turno al retirarla.
-- `space-mcp`: **Pregunta 1, recomendación A.** El Grant del MCP **lleva obligatoriamente los Vault
+- `space-mcp`: **Decisión 1: A.** El Grant del MCP **lleva obligatoriamente los Vault
   groups de los que depende**: al dar el préstamo se crean, en la misma transacción, los Grants de
   esos grupos (o se exigen ya activos), con el aviso de siempre («X's agents can read these
   Secrets») y la lista para rotar al retirar. Al retirar el MCP se retiran los grupos que se
@@ -163,28 +173,28 @@ el Owner la quiere; añadirla después no cambia los datos.
 5. Web (Settings del Space), móvil, tool MCP del Hub, docs (`docs/internals/secrets.md` «Who reaches
    what», `docs/user/`).
 
-**Pregunta 5:** recomendación, el primer corte cubre los providers que ya aceptan `mcpServers` y
+**Decisión 5:** el primer corte cubre los providers que ya aceptan `mcpServers` y
 `secretEnv`; el resto queda «Not supported» escrito por adapter hasta su ticket.
 
-**Pregunta 3:** recomendación, el MCP corre donde corre el provider (el Environment del Thread),
+**Decisión 3:** el MCP corre donde corre el provider (el Environment del Thread),
 como hoy los comandos. Un MCP alojado en el Hub o el Sandbox del Space es la opción B de la
-Pregunta 1 y va con ella.
+Decisión 1 y va con ella.
 
 ## 11. Soporte por provider
 
 Los siete adapters ya inyectan el MCP propio del Hub (`t3-code`) al abrir sesión o turno: ahí se
 añaden los Space MCPs, uno por nombre, sin tocar el `t3-code`.
 
-| Provider    | Dónde añadir Space MCPs                                                          | Skills hoy                                    | Recibe `secretEnv` | Primer corte                                                              |
-| ----------- | -------------------------------------------------------------------------------- | --------------------------------------------- | ------------------ | ------------------------------------------------------------------------- |
-| Claude      | `claudeMcpQueryOverrides` (`ClaudeAdapterV2.ts`), `mcpServers` del SDK           | `ClaudeSkills.ts` (disco); SDK `plugins`       | sí                 | MCPs y Skills                                                             |
-| Codex       | `codexThreadRuntimeParams`: `mcp_servers.<nombre>` en el `config` por Thread     | `skills/list` del app-server; sin ruta propia | sí (app-server propio) | MCPs; Skills a investigar (override de `config`), si no «Not supported» |
-| Grok        | ACP compartido (`provider-acp` `acpMcpContext`), array `mcpServers`              | catálogo del CLI                              | sí                 | MCPs; Skills «Not supported»                                              |
-| Kiro        | ACP compartido                                                                   | ninguna                                       | sí                 | MCPs; Skills «Not supported»                                              |
-| OpenCode v1 | `client.mcp.add` (`provider-opencode` `adapter.ts`)                              | `app.skills` del servidor                     | sí (sin `serverUrl` externo) | MCPs; Skills «Not supported»                                   |
-| OpenCode v2 | `client.mcp.add` (`v2/adapter.ts`)                                               | `app.skills`                                  | no                 | MCPs sin referencias; con referencias «Unavailable»                       |
-| Cursor      | `cursorMcpServers()` (`provider-cursor` `adapter.ts`)                            | `skills.ts` (disco)                           | no (SDK en proceso) | MCPs sin referencias; con referencias «Unavailable»; Skills «Not supported» |
-| Antigravity | ACP compartido (`mcpOverHttp`)                                                   | `AntigravitySkills.ts` (disco)                | no                 | MCPs http sin referencias; resto «Unavailable»; Skills «Not supported»    |
+| Provider    | Dónde añadir Space MCPs                                                      | Skills hoy                                    | Recibe `secretEnv`           | Primer corte                                                                |
+| ----------- | ---------------------------------------------------------------------------- | --------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------- |
+| Claude      | `claudeMcpQueryOverrides` (`ClaudeAdapterV2.ts`), `mcpServers` del SDK       | `ClaudeSkills.ts` (disco); SDK `plugins`      | sí                           | MCPs y Skills                                                               |
+| Codex       | `codexThreadRuntimeParams`: `mcp_servers.<nombre>` en el `config` por Thread | `skills/list` del app-server; sin ruta propia | sí (app-server propio)       | MCPs; Skills a investigar (override de `config`), si no «Not supported»     |
+| Grok        | ACP compartido (`provider-acp` `acpMcpContext`), array `mcpServers`          | catálogo del CLI                              | sí                           | MCPs; Skills «Not supported»                                                |
+| Kiro        | ACP compartido                                                               | ninguna                                       | sí                           | MCPs; Skills «Not supported»                                                |
+| OpenCode v1 | `client.mcp.add` (`provider-opencode` `adapter.ts`)                          | `app.skills` del servidor                     | sí (sin `serverUrl` externo) | MCPs; Skills «Not supported»                                                |
+| OpenCode v2 | `client.mcp.add` (`v2/adapter.ts`)                                           | `app.skills`                                  | no                           | MCPs sin referencias; con referencias «Unavailable»                         |
+| Cursor      | `cursorMcpServers()` (`provider-cursor` `adapter.ts`)                        | `skills.ts` (disco)                           | no (SDK en proceso)          | MCPs sin referencias; con referencias «Unavailable»; Skills «Not supported» |
+| Antigravity | ACP compartido (`mcpOverHttp`)                                               | `AntigravitySkills.ts` (disco)                | no                           | MCPs http sin referencias; resto «Unavailable»; Skills «Not supported»      |
 
 Las Skills por carpeta temporal (§4) son baratas para quien ya lee carpetas (Claude con `plugins` o
 `additionalDirectories`, Cursor, Antigravity), pero escribir en `~` o en el worktree mezclaría el

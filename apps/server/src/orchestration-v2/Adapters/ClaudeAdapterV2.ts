@@ -228,6 +228,7 @@ import {
   applySecretEnv,
   claudeGatewaySettingsEnv,
 } from "@t3tools/provider-core/server/instanceEnvironment";
+import { resolveSpaceMcps, type ResolvedSpaceMcp } from "@t3tools/provider-core/server/spaceMcps";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriverCreateInput,
@@ -2141,17 +2142,42 @@ export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 // allowedTools pre-approves calls; tools controls availability. Pre-approve T3 tools for headless modes,
 // limited to annotated read-only tools in read-only sandboxes.
 
+/** A Space's MCP servers, as the Agent SDK takes them; never named over the Hub's own. */
+function claudeSpaceMcpServers(
+  spaceMcps: ReadonlyArray<ResolvedSpaceMcp> | undefined,
+): NonNullable<ClaudeQueryOptions["mcpServers"]> {
+  return Object.fromEntries(
+    (spaceMcps ?? []).map(({ name, config }) => [
+      name,
+      config.transport === "stdio"
+        ? {
+            type: "stdio" as const,
+            command: config.command,
+            args: [...config.args],
+            env: config.env,
+          }
+        : { type: "http" as const, url: config.url, headers: config.headers },
+    ]),
+  );
+}
+
 export function claudeMcpQueryOverrides(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly readOnlySandbox: boolean;
   readonly allowedTools?: ReadonlyArray<string>;
+  readonly spaceMcps?: ReadonlyArray<ResolvedSpaceMcp>;
 }): {
   readonly allowedTools?: ReadonlyArray<string>;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
 } {
   const session = input.mcpSession;
+  const spaceServers = claudeSpaceMcpServers(input.spaceMcps);
+  const hasSpaceServers = Object.keys(spaceServers).length > 0;
   if (session === undefined) {
-    return input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools };
+    return {
+      ...(input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools }),
+      ...(hasSpaceServers ? { mcpServers: spaceServers } : {}),
+    };
   }
   const mcpAllowedTools = input.readOnlySandbox
     ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
@@ -2159,6 +2185,7 @@ export function claudeMcpQueryOverrides(input: {
   return {
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
+      ...spaceServers,
       "t3-code": {
         type: "http",
         url: session.endpoint,
@@ -5163,6 +5190,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     driver: CLAUDE_PROVIDER,
     // Spec 5: each Claude process the session starts gets the Thread's secrets in its environment.
     receivesSecretEnv: true,
+    // A Space's MCP servers, their references filled in from those secrets.
+    receivesSpaceMcps: true,
     // Spec 4 ticket 06: and the Hub's AI gateway, with a CLAUDE_CONFIG_DIR of the Thread's own.
     usesAiGateway: true,
     getCapabilities: Effect.fn("ClaudeAdapterV2.getCapabilities")(function () {
@@ -5175,6 +5204,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         // Spec 5: only into the Claude process's environment (a changed set opens a new session).
         const sessionSecretEnv = input.secretEnv;
+        const sessionSpaceMcps = resolveSpaceMcps(input.spaceMcps, input.secretEnv).ready;
         // Spec 4 ticket 06: on the gateway, no login nor setting of the machine's own ~/.claude.
         const sessionGateway = yield* aiGatewayProcessOf(CLAUDE_PROVIDER, input);
         const sessionGatewayVariables =
@@ -10882,6 +10912,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const mcpSession = yield* mcpSessions.read(turnInput.threadId);
           const mcpOverrides = claudeMcpQueryOverrides({
             mcpSession,
+            ...(turnInput.threadId === input.threadId ? { spaceMcps: sessionSpaceMcps } : {}),
             readOnlySandbox:
               sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
             ...(queryPolicy.allowedTools === undefined

@@ -2516,6 +2516,7 @@ export const layerWsRpc = (
         [WS_METHODS.spaceToolsSkillPut]: (input) => spaceTools.putSkill(input),
         [WS_METHODS.spaceToolsSetEnabled]: (input) => spaceTools.setEnabled(input),
         [WS_METHODS.spaceToolsDelete]: (input) => spaceTools.remove(input),
+        [WS_METHODS.spaceToolsThreadStatus]: (input) => spaceTools.threadStatus(input),
         // Grants: each decided by Grants (AccessPolicy `grant.*`) for the connection's User.
         // Giving and accepting go over HTTP, which carries the strong factor a machine needs.
         [WS_METHODS.grantsListGiven]: (_input) => grants.listGiven,

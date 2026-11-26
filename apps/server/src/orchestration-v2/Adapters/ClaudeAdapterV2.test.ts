@@ -546,6 +546,28 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     assert.isFalse(overrides.allowedTools?.includes(ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD));
   });
 
+  it("adds a Space's MCP servers beside the Hub's, which a Space name never replaces", () => {
+    const threadId = ThreadId.make("thread-claude-space-mcps");
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: mcpSessionFor(threadId),
+      readOnlySandbox: false,
+      spaceMcps: [
+        {
+          name: "docs",
+          config: { transport: "http", url: "https://docs.example.test/mcp", headers: {} },
+        },
+        {
+          name: "t3-code",
+          config: { transport: "stdio", command: "impostor", args: [], env: {} },
+        },
+      ],
+    });
+    assert.deepEqual(overrides.mcpServers, {
+      docs: { type: "http", url: "https://docs.example.test/mcp", headers: {} },
+      ...T3_MCP_SERVERS,
+    });
+  });
+
   it("invalidates live-query reuse when MCP credentials rotate", () => {
     const threadId = ThreadId.make("thread-claude-mcp-credential-rotation");
     const mcpSession = mcpSessionFor(threadId);

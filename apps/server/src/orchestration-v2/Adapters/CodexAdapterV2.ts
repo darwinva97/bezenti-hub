@@ -130,6 +130,7 @@ import {
   codexGatewayConfigArgs,
   mergeProviderInstanceEnvironment,
 } from "@t3tools/provider-core/server/instanceEnvironment";
+import { resolveSpaceMcps, type ResolvedSpaceMcp } from "@t3tools/provider-core/server/spaceMcps";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import {
@@ -1412,6 +1413,7 @@ function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  readonly spaceMcps?: ReadonlyArray<ResolvedSpaceMcp>;
 }): {
   readonly cwd?: string;
   readonly model?: string;
@@ -1431,6 +1433,15 @@ function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      // A Space's MCP servers, before the Hub's own so a name never replaces those.
+      ...Object.fromEntries(
+        (input.spaceMcps ?? []).map(({ name, config }) => [
+          `mcp_servers.${name}`,
+          config.transport === "stdio"
+            ? { command: config.command, args: [...config.args], env: { ...config.env } }
+            : { url: config.url, http_headers: { ...config.headers } },
+        ]),
+      ),
       // One app-server serves many threads, so the id goes in per-thread shell config, not its env.
       ...(input.threadId === null
         ? {}
@@ -1747,6 +1758,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
     // Spec 5: a session's app-server gets the Thread's secrets in its environment; one with
     // secrets serves that Thread alone (ProviderSessionManager).
     receivesSecretEnv: true,
+    // A Space's MCP servers, as the Thread's `mcp_servers` config, filled in from those secrets.
+    receivesSpaceMcps: true,
     // Spec 4 ticket 06: and the Hub's AI gateway as its model provider, in a CODEX_HOME of its own.
     usesAiGateway: true,
     getCapabilities: Effect.fn("CodexAdapterV2.getCapabilities")(function () {
@@ -1772,6 +1785,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
         const aiGateway = yield* aiGatewayProcessOf(CODEX_PROVIDER, input);
+        // A Space's MCP servers go to the Thread that opened the session, and no other.
+        const sessionSpaceMcps = resolveSpaceMcps(input.spaceMcps, input.secretEnv).ready;
+        const spaceMcpsOf = (threadId: string | null) =>
+          threadId === input.threadId && sessionSpaceMcps.length > 0
+            ? { spaceMcps: sessionSpaceMcps }
+            : {};
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
@@ -7214,6 +7233,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   codexThreadRuntimeParams({
                     threadId: threadInput.threadId,
                     mcpSession,
+                    ...spaceMcpsOf(threadInput.threadId),
                     modelSelection: threadInput.modelSelection,
                     runtimePolicy: threadInput.runtimePolicy,
                   }),
@@ -7247,6 +7267,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ...codexThreadRuntimeParams({
                   threadId: appThreadId,
                   mcpSession: yield* readMcpSession(appThreadId),
+                  ...spaceMcpsOf(appThreadId),
                   ...(threadInput.modelSelection === undefined
                     ? {}
                     : { modelSelection: threadInput.modelSelection }),
@@ -8021,6 +8042,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ...codexThreadRuntimeParams({
                     threadId: threadInput.providerThread.appThreadId,
                     mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
+                    ...spaceMcpsOf(threadInput.providerThread.appThreadId),
                     modelSelection: input.modelSelection,
                     runtimePolicy: input.runtimePolicy,
                   }),
@@ -8070,6 +8092,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ...codexThreadRuntimeParams({
                   threadId: threadInput.targetThreadId,
                   mcpSession: yield* mcpSessions.read(threadInput.targetThreadId),
+                  ...spaceMcpsOf(threadInput.targetThreadId),
                   ...(threadInput.modelSelection === undefined
                     ? {}
                     : { modelSelection: threadInput.modelSelection }),

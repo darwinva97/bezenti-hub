@@ -243,6 +243,8 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.spaceToolsSkillPut]: SPACE_TOOLS,
   [WS_METHODS.spaceToolsSetEnabled]: SPACE_TOOLS,
   [WS_METHODS.spaceToolsDelete]: SPACE_TOOLS,
+  // A Thread's view: the Thread must be visible, then its Space's enabled MCPs by name.
+  [WS_METHODS.spaceToolsThreadStatus]: "thread",
   [WS_METHODS.grantsListGiven]: GRANTS,
   [WS_METHODS.grantsListReceived]: GRANTS,
   [WS_METHODS.grantsTargets]: GRANTS,

@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, makeEntityId, SpaceId } from "./baseSchemas.ts";
+import { IsoDateTime, makeEntityId, SpaceId, ThreadId } from "./baseSchemas.ts";
 
 // Space MCPs and Space Skills (.scratch/mcps-and-skills): a Space's own third-party MCP servers
 // and SKILL.md bundles. A value may name a Vault entry as `${NAME}`; a Secret's value is never
@@ -79,6 +79,44 @@ export const SpaceSkill = Schema.Struct({
   files: SpaceSkillFiles,
 });
 export type SpaceSkill = typeof SpaceSkill.Type;
+
+/**
+ * One Space MCP sent to a provider session: its `${NAME}` references unresolved. The machine fills
+ * them in from the session's `secretEnv`, never the Hub.
+ */
+export const SpaceMcpLaunch = Schema.Struct({ name: Schema.String, config: SpaceMcpConfig });
+export type SpaceMcpLaunch = typeof SpaceMcpLaunch.Type;
+
+/** Why a Space MCP does not start in a Thread's session. */
+export const SpaceMcpUnavailableReason = Schema.Literals([
+  /** A referenced name the Thread does not receive (missing, not chosen, withheld, broken). */
+  "not-delivered",
+  /** The provider takes no MCP servers from the Hub. */
+  "not-supported",
+  /** The provider cannot put Vault values in its process. */
+  "no-secrets",
+  /** The Thread's machine runs an executor too old for Space MCPs. */
+  "outdated-machine",
+]);
+export type SpaceMcpUnavailableReason = typeof SpaceMcpUnavailableReason.Type;
+
+export const SpaceToolsThreadStatusInput = Schema.Struct({ threadId: ThreadId });
+export type SpaceToolsThreadStatusInput = typeof SpaceToolsThreadStatusInput.Type;
+
+/** What a Thread's next session gets of its Space's MCP servers, decided as at a session's open. */
+export const SpaceToolsThreadStatus = Schema.Struct({
+  mcps: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      transport: Schema.Literals(["stdio", "http"]),
+      available: Schema.Boolean,
+      reason: Schema.optionalKey(SpaceMcpUnavailableReason),
+      /** For `not-delivered`: the names the Thread does not receive. */
+      missing: Schema.Array(Schema.String),
+    }),
+  ),
+});
+export type SpaceToolsThreadStatus = typeof SpaceToolsThreadStatus.Type;
 
 export const SpaceToolsListInput = Schema.Struct({ spaceId: SpaceId });
 export type SpaceToolsListInput = typeof SpaceToolsListInput.Type;

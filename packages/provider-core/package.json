@@ -51,6 +51,10 @@
       "types": "./src/server/instanceEnvironment.ts",
       "import": "./src/server/instanceEnvironment.ts"
     },
+    "./server/spaceMcps": {
+      "types": "./src/server/spaceMcps.ts",
+      "import": "./src/server/spaceMcps.ts"
+    },
     "./server/instanceIdentity": {
       "types": "./src/server/instanceIdentity.ts",
       "import": "./src/server/instanceIdentity.ts"

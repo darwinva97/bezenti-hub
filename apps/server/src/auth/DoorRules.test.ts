@@ -398,6 +398,12 @@ describe("every door of the Hub declares its rule", () => {
       "orchestration-v2/ProviderSessionManager.ts",
       "project/ProjectSetupScriptRunner.ts",
       "server.ts",
+      // A Thread's Space MCPs: which referenced names it receives, through `turnNames`.
+      "spaceTools/SpaceTools.ts",
+    ]);
+    const spaceTools = files.find(({ file }) => file === "spaceTools/SpaceTools.ts")?.text ?? "";
+    expect([...spaceTools.matchAll(/secretDelivery\s*\.(\w+)/gu)].map((m) => m[1])).toEqual([
+      "turnNames",
     ]);
     const refresher =
       files.find(({ file }) => file === "identity/IdentityRefresher.ts")?.text ?? "";

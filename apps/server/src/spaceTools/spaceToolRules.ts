@@ -1,8 +1,10 @@
 import {
+  SPACE_MCPS_CONTRACT_VERSION,
   SPACE_SKILL_MAX_BYTES,
   SPACE_SKILL_MAX_FILES,
   SPACE_TOOL_NAME_PATTERN,
   type SpaceMcpConfig,
+  type SpaceMcpUnavailableReason,
   type SpaceSkillFiles,
 } from "@t3tools/contracts";
 import { parse as parseYamlDocument } from "yaml";
@@ -151,3 +153,45 @@ export const expectsProblem = (expects: ReadonlyArray<string>): RuleProblem | un
     ? undefined
     : { reason: "invalid", message: `${bad} is not a Vault name.` };
 };
+
+export interface SpaceMcpDecision {
+  readonly name: string;
+  readonly transport: "stdio" | "http";
+  readonly config: SpaceMcpConfig;
+  readonly available: boolean;
+  readonly reason?: SpaceMcpUnavailableReason;
+  readonly missing: ReadonlyArray<string>;
+}
+
+/**
+ * Which of a Thread's Space MCPs its session gets, decided on the Hub before it opens. One whose
+ * referenced name the Thread does not receive is never sent: it would start with an empty value.
+ */
+export const decideSpaceMcps = (input: {
+  readonly mcps: ReadonlyArray<{ readonly name: string; readonly config: SpaceMcpConfig }>;
+  readonly delivered: ReadonlySet<string>;
+  readonly receivesSpaceMcps: boolean;
+  readonly receivesSecretEnv: boolean;
+  readonly contractVersion: number;
+}): ReadonlyArray<SpaceMcpDecision> =>
+  input.mcps.map(({ name, config }) => {
+    const base = { name, transport: config.transport, config };
+    const refs = referencesOf(config);
+    const names = "names" in refs ? refs.names : [];
+    const unavailable = (
+      reason: SpaceMcpUnavailableReason,
+      missing: ReadonlyArray<string> = [],
+    ) => ({
+      ...base,
+      available: false,
+      reason,
+      missing,
+    });
+    if (!input.receivesSpaceMcps) return unavailable("not-supported");
+    if (input.contractVersion < SPACE_MCPS_CONTRACT_VERSION) return unavailable("outdated-machine");
+    if (!("names" in refs)) return unavailable("not-delivered");
+    if (names.length > 0 && !input.receivesSecretEnv) return unavailable("no-secrets");
+    const missing = names.filter((ref) => !input.delivered.has(ref));
+    if (missing.length > 0) return unavailable("not-delivered", missing);
+    return { ...base, available: true, missing: [] };
+  });

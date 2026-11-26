@@ -99,6 +99,7 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "spaceTools.skill.put": none("a Skill's files, as its managers wrote them"),
   "spaceTools.setEnabled": none("nothing"),
   "spaceTools.delete": none("nothing"),
+  "spaceTools.threadStatus": none("MCP and Vault names, never values"),
   "vaults.unlinkedNotice.dismiss": none("names of entries that were Secret links; never a value"),
   "grants.listGiven": none("loans: resource and Space names, states and limits"),
   "grants.listReceived": none("loans: resource and Space names, states and limits"),

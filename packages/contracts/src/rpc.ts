@@ -523,6 +523,8 @@ import {
   SpaceToolSetEnabledInput,
   SpaceToolsList,
   SpaceToolsListInput,
+  SpaceToolsThreadStatus,
+  SpaceToolsThreadStatusInput,
 } from "./spaceTools.ts";
 import {
   Grant,
@@ -732,6 +734,7 @@ export const WS_METHODS = {
   spaceToolsSkillPut: "spaceTools.skill.put",
   spaceToolsSetEnabled: "spaceTools.setEnabled",
   spaceToolsDelete: "spaceTools.delete",
+  spaceToolsThreadStatus: "spaceTools.threadStatus",
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
@@ -2619,6 +2622,11 @@ const WsSpaceToolsDeleteRpc = Rpc.make(WS_METHODS.spaceToolsDelete, {
   payload: SpaceToolDeleteInput,
   error: SpaceToolError,
 });
+const WsSpaceToolsThreadStatusRpc = Rpc.make(WS_METHODS.spaceToolsThreadStatus, {
+  payload: SpaceToolsThreadStatusInput,
+  success: SpaceToolsThreadStatus,
+  error: SpaceToolError,
+});
 const WsSecretProvidersScopesAllowRpc = Rpc.make(WS_METHODS.secretProvidersScopesAllow, {
   payload: ProviderScopeAllowInput,
   success: ProviderScopeChangeResult,
@@ -2765,6 +2773,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSpaceToolsSkillPutRpc,
   WsSpaceToolsSetEnabledRpc,
   WsSpaceToolsDeleteRpc,
+  WsSpaceToolsThreadStatusRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

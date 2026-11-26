@@ -588,6 +588,7 @@ export const make = Effect.fn("EnvironmentAgent.make")(function* (input: Environ
         : { initialProviderItemIdentityVersion: request.initialProviderItemIdentityVersion }),
       ...(secretEnv === undefined ? {} : { secretEnv }),
       ...(aiGateway === undefined ? {} : { aiGateway }),
+      ...(request.spaceMcps === undefined ? {} : { spaceMcps: request.spaceMcps }),
     }).pipe(
       Effect.provideService(Scope.Scope, scope),
       Effect.onError(() => Scope.close(scope, Exit.void)),

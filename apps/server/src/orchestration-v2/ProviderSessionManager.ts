@@ -69,6 +69,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as EnvironmentExecutor from "../environment/EnvironmentExecutor.ts";
 import { ProviderSessionReleasedDuringStartError } from "./ProviderSessionReleasedDuringStart.ts";
 import * as SecretDelivery from "../vaults/SecretDelivery.ts";
+import * as SpaceTools from "../spaceTools/SpaceTools.ts";
 import * as AiGatewayActivity from "../ai/AiGatewayActivity.ts";
 import * as AiGatewaySessions from "../ai/AiGatewaySessions.ts";
 
@@ -421,6 +422,24 @@ export const layerWithOptions = (
       // Spec 5 ticket 04: a session's process gets its Thread owner's secrets. The plan (names and
       // value ids) decides; values are read only when a new process starts.
       const secretDelivery = yield* Effect.serviceOption(SecretDelivery.SecretDelivery);
+      // A Space's MCP servers, decided at each open against what the session receives.
+      const spaceTools = yield* Effect.serviceOption(SpaceTools.SpaceTools);
+      const spaceMcpsFor = Effect.fn("ProviderSessionManagerV2.spaceMcpsFor")(function* (
+        input: OpenInput,
+        plan: SecretDelivery.SecretPlan | undefined,
+      ) {
+        if (Option.isNone(spaceTools)) return undefined;
+        const adapter = yield* registry.get(input.modelSelection.instanceId).pipe(Effect.option);
+        if (Option.isNone(adapter)) return undefined;
+        const target = yield* targetFor(input.threadId);
+        return yield* spaceTools.value.forSession({
+          threadId: input.threadId,
+          delivered: new Set((plan?.variables ?? []).map((variable) => variable.name)),
+          receivesSpaceMcps: adapter.value.receivesSpaceMcps === true,
+          receivesSecretEnv: adapter.value.receivesSecretEnv === true,
+          contractVersion: target.contractVersion,
+        });
+      });
       // Spec 4 ticket 06: a session on the Hub's AI gateway gets the Thread's key in its process.
       const aiGatewaySessions = yield* Effect.serviceOption(AiGatewaySessions.AiGatewaySessions);
       // Spec 4 ticket 08: the account a Thread's requests go to now (a failover, a switch).
@@ -2386,7 +2405,12 @@ export const layerWithOptions = (
             Effect.gen(function* () {
               // Never a session, new or running, for a Thread the gateway refuses.
               if (gatewayPlan._tag === "refused") return yield* openFailed(gatewayPlan.error);
-              const secretFingerprint = plan?.fingerprint ?? NO_SECRETS_FINGERPRINT;
+              const spaceMcps = yield* spaceMcpsFor(input, plan).pipe(Effect.mapError(openFailed));
+              // A changed set of Space MCPs needs a new process too, as a changed secret set does.
+              const secretFingerprint =
+                spaceMcps === undefined || spaceMcps.fingerprint === ""
+                  ? (plan?.fingerprint ?? NO_SECRETS_FINGERPRINT)
+                  : `${plan?.fingerprint ?? NO_SECRETS_FINGERPRINT}+mcp:${spaceMcps.fingerprint}`;
               const shared = (driver: string) =>
                 openFailed(new SecretDeliveryError({ reason: "shared-process", provider: driver }));
               const sharedId =
@@ -2575,6 +2599,9 @@ export const layerWithOptions = (
                       }),
                   ...(secretEnv === undefined ? {} : { secretEnv }),
                   ...(Option.isSome(gateway) ? { aiGateway: gateway.value.access } : {}),
+                  ...(spaceMcps === undefined || spaceMcps.launches.length === 0
+                    ? {}
+                    : { spaceMcps: spaceMcps.launches }),
                 })
                 .pipe(
                   Effect.provideService(Scope.Scope, sessionScope),

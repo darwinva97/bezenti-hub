@@ -199,3 +199,21 @@ añaden los Space MCPs, uno por nombre, sin tocar el `t3-code`.
 Las Skills por carpeta temporal (§4) son baratas para quien ya lee carpetas (Claude con `plugins` o
 `additionalDirectories`, Cursor, Antigravity), pero escribir en `~` o en el worktree mezclaría el
 Space con la máquina: solo se hace donde el provider acepta una ruta por sesión.
+
+## 12. Paso 2, tal como quedó
+
+- Un Space MCP **activado** llega a todos los Threads de su Space. La elección por Project (como
+  los Vault groups) queda para un paso posterior: hoy se desactiva el MCP entero.
+- Al abrir la sesión, `SpaceTools.forSession` decide cada MCP con `decideSpaceMcps`: «not-supported»
+  (el provider no los recibe), «outdated-machine» (executor < 17), «no-secrets» (el provider no
+  recibe `secretEnv` y el MCP tiene referencias), «not-delivered» (con los nombres que faltan). Solo
+  los disponibles viajan en `provider.openSession` (`spaceMcps`, contrato 17), sin resolver.
+- La máquina los resuelve con `resolveSpaceMcps` desde el `secretEnv` de la sesión; si falta un
+  nombre, descarta ese MCP entero.
+- El fingerprint de la sesión incluye los MCPs enviados (id + `updated_at`): editar o desactivar uno
+  abre un proceso nuevo en el siguiente turno. Un Thread cuyo Space tiene MCPs recibe su propia
+  sesión (`Orchestrator.receivesSecrets`), como uno con Secrets.
+- Claude (`mcpServers` del SDK) y Codex (`mcp_servers.<nombre>` por Thread) los reciben. El resto de
+  adapters no declara `receivesSpaceMcps`: «not-supported» hasta el paso 3.
+- `spaceTools.threadStatus` (puerta `thread`) muestra disponible / no disponible y el motivo según
+  lo que el Vault entrega al Thread.

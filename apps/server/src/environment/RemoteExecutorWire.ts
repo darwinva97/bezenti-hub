@@ -6,6 +6,7 @@
  */
 import {
   AiGatewayAccess,
+  SpaceMcpLaunch,
   CheckpointId,
   CheckpointRef,
   EnvironmentExecutorUnavailableError,
@@ -168,6 +169,8 @@ const OpenSessionInput = Schema.Struct({
    * adds its own relay and provider home; never logged, kept or answered back.
    */
   aiGateway: Schema.optionalKey(AiGatewayAccess),
+  /** Contract 17: the Thread's Space MCPs, references unresolved (filled in from `secretEnv`). */
+  spaceMcps: Schema.optionalKey(Schema.Array(SpaceMcpLaunch)),
 });
 
 /** Which optional session methods the Environment's runtime has. */

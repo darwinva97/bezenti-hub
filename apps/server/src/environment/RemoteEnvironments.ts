@@ -910,6 +910,7 @@ const make = Effect.gen(function* () {
     planSelectionTransition: () => Effect.succeed({ type: "restart_session" }),
     // Carried to the machine, whose own adapter takes them or refuses the session.
     receivesSecretEnv: true,
+    receivesSpaceMcps: true,
     usesAiGateway: true,
     acceptsAiCredential: AI_DIRECT_VARIABLES,
     openSession: Effect.fn("RemoteEnvironments.openSession")(function* (input) {

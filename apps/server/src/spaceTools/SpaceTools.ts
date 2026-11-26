@@ -24,6 +24,11 @@ import {
   type SpaceToolSetEnabledInput,
   type SpaceToolsList,
   type SpaceToolsListInput,
+  type SpaceMcpLaunch,
+  type SpaceToolsThreadStatus,
+  type SpaceToolsThreadStatusInput,
+  SPACE_MCPS_CONTRACT_VERSION,
+  type ThreadId,
   type UserId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -37,15 +42,18 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
+import * as SecretDelivery from "../vaults/SecretDelivery.ts";
 import * as Vaults from "../vaults/Vaults.ts";
 import {
   configProblem,
+  decideSpaceMcps,
   expectsProblem,
   nameProblem,
   readSkill,
   referencesOf,
   type RuleProblem,
   secretLiteralIn,
+  type SpaceMcpDecision,
 } from "./spaceToolRules.ts";
 
 export class SpaceTools extends Context.Service<
@@ -58,6 +66,30 @@ export class SpaceTools extends Context.Service<
     readonly putSkill: (input: SpaceSkillPutInput) => Effect.Effect<SpaceSkill, SpaceToolError>;
     readonly setEnabled: (input: SpaceToolSetEnabledInput) => Effect.Effect<void, SpaceToolError>;
     readonly remove: (input: SpaceToolDeleteInput) => Effect.Effect<void, SpaceToolError>;
+    /** `spaceTools.threadStatus`: the RPC guard has checked the Thread is visible. */
+    readonly threadStatus: (
+      input: SpaceToolsThreadStatusInput,
+    ) => Effect.Effect<SpaceToolsThreadStatus, SpaceToolError>;
+    /** Whether the Thread's Space has an enabled MCP: such a Thread gets a process of its own. */
+    readonly threadHasMcps: (threadId: ThreadId) => Effect.Effect<boolean, SpaceToolError>;
+    /**
+     * For a provider session about to open (the Hub's own call, no User's): the Thread's Space's
+     * enabled MCPs, decided against what the session receives. `fingerprint` names the sent set.
+     */
+    readonly forSession: (input: {
+      readonly threadId: ThreadId;
+      readonly delivered: ReadonlySet<string>;
+      readonly receivesSpaceMcps: boolean;
+      readonly receivesSecretEnv: boolean;
+      readonly contractVersion: number;
+    }) => Effect.Effect<
+      {
+        readonly decisions: ReadonlyArray<SpaceMcpDecision>;
+        readonly launches: ReadonlyArray<SpaceMcpLaunch>;
+        readonly fingerprint: string;
+      },
+      SpaceToolError
+    >;
   }
 >()("t3/spaceTools/SpaceTools") {}
 
@@ -129,6 +161,7 @@ const make = Effect.gen(function* () {
   const spaces = yield* SpaceDirectory.SpaceDirectory;
   const audit = yield* AuditLog.AuditLog;
   const vaults = yield* Vaults.Vaults;
+  const secretDelivery = yield* SecretDelivery.SecretDelivery;
   const random = yield* SecureRandom.SecureRandom;
   const newId = (prefix: string) =>
     random
@@ -424,7 +457,78 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catchTags({ SqlError: storage("delete it") }));
   });
 
-  return SpaceTools.of({ list, getMcp, putMcp, getSkill, putSkill, setEnabled, remove });
+  /** The enabled MCPs of the Thread's Space; none for a Thread without one. */
+  const enabledMcpsOf = Effect.fn("SpaceTools.enabledMcpsOf")(function* (threadId: ThreadId) {
+    const placement = yield* spaces
+      .placementOf(threadId)
+      .pipe(Effect.catch(storage("read the Thread's Space")));
+    if (Option.isNone(placement)) return [];
+    const rows = yield* sql<McpRow>`
+      SELECT mcp_id AS id, space_id AS "spaceId", name, transport, config_json AS "configJson",
+        enabled, updated_at AS "updatedAt"
+      FROM space_mcps WHERE space_id = ${placement.value.space.id} AND enabled = 1 ORDER BY name
+    `.pipe(Effect.catch(storage("read the Space's MCP servers")));
+    return rows.map((row) => ({ row, name: row.name, config: decodeConfig(row.configJson) }));
+  });
+
+  const forSession = Effect.fn("SpaceTools.forSession")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly delivered: ReadonlySet<string>;
+    readonly receivesSpaceMcps: boolean;
+    readonly receivesSecretEnv: boolean;
+    readonly contractVersion: number;
+  }) {
+    const mcps = yield* enabledMcpsOf(input.threadId);
+    const decisions = decideSpaceMcps({ ...input, mcps });
+    const sent = mcps.filter((_, index) => decisions[index]?.available === true);
+    return {
+      decisions,
+      launches: sent.map(({ name, config }) => ({ name, config })),
+      fingerprint: sent.map(({ row }) => `${row.id}@${row.updatedAt}`).join(","),
+    };
+  });
+
+  const threadStatus = Effect.fn("SpaceTools.threadStatus")(function* (
+    input: SpaceToolsThreadStatusInput,
+  ) {
+    const names = yield* secretDelivery
+      .turnNames(input.threadId)
+      .pipe(Effect.catch(storage("read what the Thread receives")));
+    // What the Vaults allow; the provider and machine are decided when a session opens.
+    const { decisions } = yield* forSession({
+      threadId: input.threadId,
+      delivered: new Set(names.map((entry) => entry.name)),
+      receivesSpaceMcps: true,
+      receivesSecretEnv: true,
+      contractVersion: SPACE_MCPS_CONTRACT_VERSION,
+    });
+    return {
+      mcps: decisions.map(({ name, transport, available, reason, missing }) => ({
+        name,
+        transport,
+        available,
+        ...(reason === undefined ? {} : { reason }),
+        missing,
+      })),
+    } satisfies SpaceToolsThreadStatus;
+  });
+
+  const threadHasMcps = Effect.fn("SpaceTools.threadHasMcps")(function* (threadId: ThreadId) {
+    return (yield* enabledMcpsOf(threadId)).length > 0;
+  });
+
+  return SpaceTools.of({
+    list,
+    getMcp,
+    putMcp,
+    getSkill,
+    putSkill,
+    setEnabled,
+    remove,
+    threadStatus,
+    forSession,
+    threadHasMcps,
+  });
 });
 
 export const layer = Layer.effect(SpaceTools, make);

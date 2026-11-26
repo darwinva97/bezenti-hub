@@ -2,6 +2,7 @@ import type {
   AiGatewayAccess,
   OrchestrationV2HistoricalMessage,
   SecretEnv,
+  SpaceMcpLaunch,
 } from "@t3tools/contracts";
 import {
   ChatAttachment,
@@ -480,6 +481,11 @@ export interface ProviderAdapterV2OpenSessionInput {
    * they never start without it: no fallback to a login of the machine.
    */
   readonly aiGateway?: AiGatewaySessionInput;
+  /**
+   * The Thread's Space MCP servers, references unresolved: the adapter fills them in from
+   * `secretEnv` (`resolveSpaceMcps`). Only adapters with `receivesSpaceMcps` get any.
+   */
+  readonly spaceMcps?: ReadonlyArray<SpaceMcpLaunch>;
 }
 
 /** `aiGateway` of a session: what the Hub sent, and what the machine adds before the driver runs. */
@@ -736,6 +742,8 @@ export class ProviderAdapterV2 extends Context.Service<
     ) => Effect.Effect<ProviderAdapterV2SessionRuntime, ProviderAdapterV2Error, Scope.Scope>;
     /** Puts `secretEnv` into the environment of each process its sessions start. */
     readonly receivesSecretEnv?: true;
+    /** Passes `spaceMcps` to the provider as MCP servers of the session's Thread. */
+    readonly receivesSpaceMcps?: true;
     /** Points each process its sessions start at the Hub's AI gateway (`aiGateway`). */
     readonly usesAiGateway?: true;
     /**

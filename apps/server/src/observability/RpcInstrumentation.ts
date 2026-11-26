@@ -97,6 +97,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.spaceToolsSkillPut]: "spaceTools",
   [WS_METHODS.spaceToolsSetEnabled]: "spaceTools",
   [WS_METHODS.spaceToolsDelete]: "spaceTools",
+  [WS_METHODS.spaceToolsThreadStatus]: "spaceTools",
   [WS_METHODS.vaultsGroupsList]: "vaults",
   [WS_METHODS.vaultsGroupsCreate]: "vaults",
   [WS_METHODS.vaultsGroupsUpdate]: "vaults",

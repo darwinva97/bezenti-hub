@@ -58,11 +58,13 @@ describe("which Settings entries a viewer sees", () => {
       [{ id: "theirs", kind: "personal", isOwn: false, canInvite: false }],
       "theirs",
     );
-    expect(targets("space", context(OWNER, othersPersonal))).toEqual([]);
+    // Its MCP servers and Skills are read like its Vault, by the Owner too.
+    expect(targets("space", context(OWNER, othersPersonal))).toEqual(["SettingsSpaceTools"]);
   });
 
   it("falls back to the viewer's own Personal space without a directory", () => {
     expect(targets("space", context(MEMBER))).toEqual([
+      "SettingsSpaceTools",
       "SettingsScheduledTasks",
       "SettingsArchive",
     ]);
@@ -75,12 +77,14 @@ describe("which Settings entries a viewer sees", () => {
     ] as const;
     expect(targets("space", context(MEMBER, spaceSubject(spaces, "plain")))).toEqual([
       "SettingsMembers",
+      "SettingsSpaceTools",
       "SettingsScheduledTasks",
       "SettingsArchive",
     ]);
     expect(targets("space", context(MEMBER, spaceSubject(spaces, "run")))).toEqual([
       "SettingsMembers",
       "SettingsInvitations",
+      "SettingsSpaceTools",
       "SettingsScheduledTasks",
       "SettingsArchive",
     ]);

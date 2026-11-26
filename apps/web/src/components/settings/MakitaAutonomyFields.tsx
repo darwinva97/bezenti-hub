@@ -117,7 +117,7 @@ export function MakitaAutonomyFields(props: {
             />
           </div>
           <p className="font-normal text-muted-foreground">
-            {`Makita posts its verdict (wanted, not wanted, duplicate, cannot reproduce, already fixed), its confidence (${MAKITA_CLOSE_MIN_CONFIDENCE.min} to ${MAKITA_CLOSE_MIN_CONFIDENCE.max}) and a reason, then closes. Only issues opened by someone it answers, or that someone it answers handed to it; never a stranger's on a stranger's word. Up to ${MAKITA_CLOSE_PER_DAY.max} a day. Reopening the issue or commenting /makita reopen undoes it, and Makita never closes that issue again.`}
+            {`Makita posts its verdict (wanted, not wanted, duplicate, cannot reproduce, already fixed), its confidence (${MAKITA_CLOSE_MIN_CONFIDENCE.min} to ${MAKITA_CLOSE_MIN_CONFIDENCE.max}) and a reason, then closes. Only issues opened by someone it answers, or that someone it answers handed to it; never a stranger's on a stranger's word. Up to ${MAKITA_CLOSE_PER_DAY.max} a day. Reopening the issue, or telling Makita to reopen it («@Makita reopen», or /makita reopen), undoes it, and Makita never closes that issue again.`}
           </p>
         </div>
       ) : null}

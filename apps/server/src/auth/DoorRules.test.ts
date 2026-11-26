@@ -842,13 +842,17 @@ describe("every door of the Hub declares its rule", () => {
       "makita_open_pull_request",
       "makita_ci_logs",
       "makita_request_merge",
+      // Ticket 29: only where its configuration may push; it only asks, the Hub approves.
+      "makita_request_approval",
       "makita_search",
       "makita_label",
       // Ticket 26: only where its configuration may close issues; the Hub decides the close.
       "makita_close_issue",
     ]);
-    expect(Object.keys(MCP_TOOL_RULES).filter((name) => /merge|approve/u.test(name))).toEqual([
+    // A merge or an approval is only requested, never made by a tool.
+    expect(Object.keys(MCP_TOOL_RULES).filter((name) => /merge|approv/u.test(name))).toEqual([
       "makita_request_merge",
+      "makita_request_approval",
     ]);
     // No RPC merges or lands anything.
     expect([...WsRpcGroup.requests.keys()].filter((tag) => /merge|land/iu.test(tag))).toEqual([]);

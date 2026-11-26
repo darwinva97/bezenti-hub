@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 import type { FeedComment } from "./makitaFeeds.ts";
+import { plainIntentOf } from "./makitaPlainWords.ts";
 
 /** Event details of what `MakitaCleanup` acts on once the batch is written. */
 export const BAD_WORK = "bad-work";
@@ -69,6 +70,11 @@ const notAPerson = (
 /** `/makita reopen` as a comment's first line (any case, trimmed). */
 export const isReopenCommand = (body: string) =>
   (body.split(/\r?\n/u)[0] ?? "").trim().toLowerCase() === "/makita reopen";
+
+/** Ticket 29: `/makita reopen`, or «@makita reábrelo» in plain words (an issue: with the mention). */
+export const isReopenOrder = (body: string, makitaLogin: string) =>
+  isReopenCommand(body) ||
+  plainIntentOf(body, { login: makitaLogin, addressed: "mention" }) === "reopen";
 
 /**
  * Ticket 27: a label on a pull request that is the bad-work label of the configuration whose task
@@ -149,8 +155,9 @@ export const recordReopenWithin = Effect.fn("makitaAutonomyRows.recordReopenWith
 });
 
 /**
- * Ticket 26: `/makita reopen` in a new comment on an issue Makita closed. Undefined (decided like
- * any comment) when Makita did not close it; strangers, bots and edits are ignored silently.
+ * Ticket 26: `/makita reopen` (ticket 29: or its plain words) in a new comment on an issue Makita
+ * closed. Undefined (decided like any comment) when Makita did not close it; strangers, bots and
+ * edits are ignored silently.
  */
 export const decideReopenComment = Effect.fn("makitaAutonomyRows.decideReopenComment")(function* (
   sql: SqlClient.SqlClient,
@@ -159,10 +166,14 @@ export const decideReopenComment = Effect.fn("makitaAutonomyRows.decideReopenCom
     readonly comment: FeedComment;
     readonly configs: ReadonlyArray<DecidingConfig>;
     readonly makitaId: number;
+    readonly makitaLogin: string;
   },
 ) {
   const { comment } = input;
-  if (!isReopenCommand(comment.body) || !comment.eventKey.startsWith("gh:issue-comment:")) {
+  if (
+    !isReopenOrder(comment.body, input.makitaLogin) ||
+    !comment.eventKey.startsWith("gh:issue-comment:")
+  ) {
     return undefined;
   }
   const closed = yield* closedByMakita(sql, input.repo, comment.number);

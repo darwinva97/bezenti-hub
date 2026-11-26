@@ -22,7 +22,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as AuditLog from "../audit/AuditLog.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
 import { storedAutonomyOf } from "./makitaAutonomy.ts";
-import { isReopenCommand, REOPEN } from "./makitaAutonomyRows.ts";
+import { isReopenOrder, REOPEN } from "./makitaAutonomyRows.ts";
 import { allowedCallerIds } from "./makitaCallers.ts";
 import {
   checkCloseInput,
@@ -88,6 +88,8 @@ interface CloseTask {
   readonly configDeletedAt: string | null;
   readonly autonomyJson: string;
   readonly makitaPaused: number;
+  /** Ticket 29: the close comment says how to ask Makita to reopen it in words. */
+  readonly makitaLogin: string;
 }
 
 const fail = (reason: MakitaError["reason"], message: string) =>
@@ -121,7 +123,9 @@ const make = Effect.gen(function* () {
         c.paused_at AS "configPausedAt", c.deleted_at AS "configDeletedAt",
         c.autonomy_json AS "autonomyJson",
         COALESCE((SELECT global_paused_at IS NOT NULL FROM makita_account
-          WHERE account_id = 'makita'), 1) AS "makitaPaused"
+          WHERE account_id = 'makita'), 1) AS "makitaPaused",
+        COALESCE((SELECT login FROM makita_account WHERE account_id = 'makita'), '')
+          AS "makitaLogin"
       FROM makita_tasks t JOIN makita_configs c ON c.config_id = t.config_id
       WHERE t.thread_id = ${threadId}
     `.pipe(Effect.map((rows) => rows[0]));
@@ -243,7 +247,7 @@ const make = Effect.gen(function* () {
       yield* unclaim;
       return refused(haltNow);
     }
-    const body = closeCommentText({ ...checked, reason });
+    const body = closeCommentText({ ...checked, reason, makitaLogin: task.makitaLogin });
     const posted = yield* github
       .rest({
         operation: "issue-comment",
@@ -363,11 +367,14 @@ const make = Effect.gen(function* () {
       return;
     }
     const comment = decodeOneComment(ref.feed, read.success.body);
+    const [bot] = yield* sql<{ readonly login: string }>`
+      SELECT login FROM makita_account WHERE account_id = 'makita'
+    `;
     if (
       comment === undefined ||
       comment.author?.id !== row.actorId ||
       comment.updatedAt !== comment.createdAt ||
-      !isReopenCommand(comment.body)
+      !isReopenOrder(comment.body, bot?.login ?? "")
     ) {
       return yield* finish(row.eventKey, "ignored-edited", REOPEN);
     }

@@ -529,8 +529,9 @@ live(
           assert.deepEqual(ctx.merges(), [], text);
         });
 
+      // Longer words than the Hub's own short list (ticket 29), so they reach the agent.
       // Before the last push: a real wake, but an order that predates the head.
-      const early = yield* ctx.say(GRACE_GH, "@makita-bot merge it", 12, true);
+      const early = yield* ctx.say(GRACE_GH, "@makita-bot good work, merge it", 12, true);
       yield* tick(ctx);
       yield* ctx.push();
       yield* refusedWith(early.id, "before your last push");
@@ -563,7 +564,7 @@ live(
       yield* refusedWith(1, "A review cannot order a merge", "review");
 
       // The approver's order wakes the turn; CI turned red meanwhile: refused, and said once.
-      const order = yield* ctx.say(GRACE_GH, "@makita-bot mergealo", 12);
+      const order = yield* ctx.say(GRACE_GH, "@makita-bot todo bien, mergealo", 12);
       yield* tick(ctx);
       assert.include(
         String(setup.sends.at(-1)?.input.text),
@@ -582,16 +583,16 @@ live(
 
       // An approver's words on the pull request's conversation wake the turn without a mention
       // (ticket 14), and the wake names the comment to point at.
-      const valid = yield* ctx.say(GRACE_GH, "Merge it, thanks.", pr);
+      const valid = yield* ctx.say(GRACE_GH, "Great work, merge it.", pr);
       yield* tick(ctx);
       assert.include(
         String(setup.sends.at(-1)?.input.text),
         `Its author is an approver. Only if it clearly orders a merge now, call makita_request_merge with commentId ${valid.id} and kind issue-comment.`,
       );
       // Edited after it woke the turn: refused; and `valid` is no longer the newest wake.
-      const editedOrder = yield* ctx.say(GRACE_GH, "@makita-bot merge it", 12);
+      const editedOrder = yield* ctx.say(GRACE_GH, "@makita-bot fine by me, merge it", 12);
       yield* tick(ctx);
-      setup.github.editComment(REPO, editedOrder.id, "@makita-bot merge it now");
+      setup.github.editComment(REPO, editedOrder.id, "@makita-bot fine by me, merge it now");
       yield* refusedWith(editedOrder.id, "edited");
       yield* refusedWith(valid.id, "did not wake your current turn");
       setup.github.clock.now = gitHubTime(
@@ -603,7 +604,7 @@ live(
       assert.include(String(setup.sends.at(-1)?.input.text), "a review cannot order a merge");
       yield* refusedWith(review.id, "A review cannot order a merge", "review");
       // The approver's next words on the pull request: that comment lands.
-      const last = setup.github.commentOn(REPO, pr, GRACE_GH, "Merge it.");
+      const last = setup.github.commentOn(REPO, pr, GRACE_GH, "All good now, merge it.");
       yield* tick(ctx);
       const answer = yield* ctx.request(last.id, "issue-comment");
       assert.isTrue(answer.merged, answer.message);
@@ -617,6 +618,56 @@ live(
         via: "request",
         orderedBy: "Grace-GH",
         orderComment: last.id,
+      });
+      assert.equal((yield* ctx.row).state, "done");
+    }),
+);
+
+live(
+  "Makita ticket 29: an approver's «mergéalo» on the pull request or «@makita-bot merge it» on the issue is /makita merge under every check; from someone who is not an approver it reaches the agent",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* ready();
+      const { setup, pr, head } = ctx;
+      // octocat is allowed but not an approver: conversation, never an order.
+      const octocat = yield* ctx.say(OCTOCAT, "Mergéalo");
+      yield* tick(ctx);
+      assert.deepEqual(ctx.merges(), []);
+      assert.include(String(setup.sends.at(-1)?.input.text), "Its author is not an approver");
+      const outcome = (id: number) =>
+        Effect.map(ctx.events, (events) =>
+          events
+            .filter((event) => event.key === `gh:issue-comment:${id}`)
+            .map((event) => [event.outcome, event.detail]),
+        );
+      assert.deepEqual(yield* outcome(octocat.id), [["started", "conversation"]]);
+
+      // The approver's words with CI red on the head: refused as the command is, and said.
+      setup.github.ci.set(head, {
+        checkRuns: [{ id: 9, name: "lint", status: "completed", conclusion: "failure" }],
+        statuses: [],
+      });
+      const red = yield* ctx.say(GRACE_GH, "Mergéalo, gracias 🙏");
+      yield* tick(ctx);
+      assert.deepEqual(ctx.merges(), []);
+      assert.equal(
+        ctx.onPr().at(-1),
+        `CI failed on \`${head.slice(0, 12)}\`; I only land commits CI passed.`,
+      );
+      assert.deepEqual(yield* outcome(red.id), [["land", "ci-red"]]);
+
+      // Green again: said on the issue with the mention, it lands the checked head.
+      setup.github.ci.set(head, GREEN);
+      const order = yield* ctx.say(GRACE_GH, "@makita-bot merge it", 12);
+      yield* tick(ctx);
+      assert.deepEqual(
+        ctx.merges().map((merge) => [merge.number, merge.sha]),
+        [[pr, head]],
+      );
+      assert.deepInclude((yield* auditOf(ctx, "makita.github.merge"))[0]!.detail, {
+        via: "command",
+        orderedBy: "Grace-GH",
+        orderComment: order.id,
       });
       assert.equal((yield* ctx.row).state, "done");
     }),

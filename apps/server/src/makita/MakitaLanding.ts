@@ -33,7 +33,7 @@ import { ciVerdictOf } from "./makitaCi.ts";
 import { commentOfKey, commentPath, decodeOneComment, mentions } from "./makitaFeeds.ts";
 import { MakitaGitHub, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import {
-  isMergeCommand,
+  isMergeOrder,
   type MakitaLandRefusal,
   MERGE_DETAIL,
   type MergeRequestKind,
@@ -559,7 +559,7 @@ const make = Effect.gen(function* () {
         commandId: CommandId.make(`makita-land:${order.eventKey}`),
         threadId: ThreadId.make(task.threadId),
         messageId: MessageId.make(`makita-land-message:${order.eventKey}`),
-        text: `Approver ${order.author.login} ordered a merge of your pull request with /makita merge; the Hub did not merge it: ${refusalText(refusal)} Makita said so on GitHub. Do not try to merge another way; carry on only with what a person asks.`,
+        text: `Approver ${order.author.login} ordered a merge of your pull request on GitHub; the Hub did not merge it: ${refusalText(refusal)} Makita said so on GitHub. Do not try to merge another way; carry on only with what a person asks.`,
         attachments: [],
         mode: "queue",
         createdBy: "system",
@@ -615,13 +615,8 @@ const make = Effect.gen(function* () {
     const comment = decodeOneComment(ref.feed, read.success.body);
     if (comment === undefined) return yield* finish("ignored-no-config", "comment-unreadable");
     const author = comment.author;
-    // Only creation counts, only from the person the intake saw, only the command itself.
-    if (
-      author === null ||
-      author.id !== row.actorId ||
-      comment.updatedAt !== comment.createdAt ||
-      !isMergeCommand(comment.body)
-    ) {
+    // Only creation counts, only from the person the intake saw.
+    if (author === null || author.id !== row.actorId || comment.updatedAt !== comment.createdAt) {
       return yield* finish("ignored-edited", null);
     }
     const bot = yield* account;
@@ -635,6 +630,15 @@ const make = Effect.gen(function* () {
     }
     const task = yield* readTask({ taskId: live.taskId });
     if (task === undefined) return yield* finish("command", "nothing-to-merge");
+    // Still the order itself: `/makita merge`, or its plain words (ticket 29).
+    if (
+      !isMergeOrder(comment.body, {
+        login: bot.value.login,
+        onOwnPull: comment.number === task.prNumber,
+      })
+    ) {
+      return yield* finish("ignored-edited", null);
+    }
     if (task.configPausedAt !== null || task.configDeletedAt !== null) {
       return yield* finish("ignored-paused", "config-paused", task.taskId);
     }
@@ -732,7 +736,7 @@ const make = Effect.gen(function* () {
     }
     if (input.kind === "review") {
       return notMerged(
-        "A review cannot order a merge: GitHub keeps no record of whether its text was edited. The approver can write /makita merge, or say it in a comment.",
+        "A review cannot order a merge: GitHub keeps no record of whether its text was edited. The approver can say it in a comment (or write /makita merge).",
       );
     }
     if (!Number.isSafeInteger(input.commentId) || input.commentId <= 0) {

@@ -536,7 +536,7 @@ const approvalText = (config: MakitaConfig) => {
     config.createdByName ?? "its creator",
     ...config.approvers.map((approver) => `@${approver.login}`),
   ].join(", ");
-  return `${config.approval === "always" ? "Every push waits" : "Pushes for others wait"} for /makita ok from ${who}`;
+  return `${config.approval === "always" ? "Every push waits" : "Pushes for others wait"} for an approval («ok», or /makita ok) from ${who}`;
 };
 
 type CallersChoice = "creator" | "list" | "members";
@@ -544,9 +544,9 @@ type CallersChoice = "creator" | "list" | "members";
 /** When a push waits for an approver (Makita ticket 11). */
 const APPROVAL_NOTES: Readonly<Record<MakitaConfig["approval"], string>> = {
   others:
-    "A push after a request from someone who is not an approver waits for /makita ok. A push that fixes CI follows the last approval.",
+    "A push after a request from someone who is not an approver waits for an approver's «ok» (or /makita ok). A push that fixes CI follows the last approval.",
   always:
-    "Every push after a new request waits for /makita ok, even yours. A push that fixes CI follows the last approval.",
+    "Every push after a new request waits for an approver's «ok» (or /makita ok), even yours. A push that fixes CI follows the last approval.",
   never: "It pushes for anyone it answers without asking.",
 };
 
@@ -834,7 +834,9 @@ function ConfigDialog(props: {
                 </label>
                 <p className="font-normal text-muted-foreground">
                   Leave the label empty to use only these. On an issue Makita already works on, a
-                  mention by someone it answers continues that work, and «/makita stop» stops it.
+                  mention by someone it answers continues that work, and «@Makita stop» (or /makita
+                  stop) stops it. Short orders work in plain words, in English or Spanish; the
+                  /makita commands are the exact form.
                 </p>
               </div>
               <div className="flex flex-col gap-2 text-xs font-medium">
@@ -1004,8 +1006,9 @@ function ConfigDialog(props: {
                         <p className="font-normal text-muted-foreground">
                           You approve with your linked GitHub account. Someone listed here counts
                           only while the account is linked by an active Admin or Member of this
-                          Space, checked at each /makita ok. Makita asks on the issue, and an
-                          approver replies with a new comment whose first line is /makita ok.
+                          Space, checked at each approval. Makita asks on the issue, and an approver
+                          replies in a new comment, in their own words («@Makita ok», «dale») or
+                          with /makita ok.
                         </p>
                       </>
                     )}
@@ -1024,12 +1027,12 @@ function ConfigDialog(props: {
                     {mayLand ? (
                       <div className="flex flex-col gap-1 rounded-md border border-warning/40 bg-warning/8 p-2 font-normal">
                         <p className="text-warning-foreground">
-                          {`Makita will merge its pull request into ${landsOn} when an approver comments /makita merge on a pull request whose CI passed on its latest commit. If ${landsOn} deploys, that comment is a production deploy.`}
+                          {`Makita will merge its pull request into ${landsOn} when an approver orders it («merge it», or /makita merge) on a pull request whose CI passed on its latest commit. If ${landsOn} deploys, that comment is a production deploy.`}
                         </p>
                         <p className="text-muted-foreground">
-                          An approver may also say it in their own words; the Hub then reads that
-                          comment again and applies the same checks. A protected base (pull requests
-                          and checks required, no direct pushes) is recommended.
+                          Longer words work too; the Hub then reads that comment again and applies
+                          the same checks. A protected base (pull requests and checks required, no
+                          direct pushes) is recommended.
                         </p>
                         <label className="flex items-center gap-2">
                           <Checkbox

@@ -7,6 +7,10 @@ import {
   CLOSE_VERDICTS,
   MAX_CLOSE_REASON,
 } from "../../../makita/makitaCloseRules.ts";
+import {
+  APPROVAL_REQUEST_KINDS,
+  REQUEST_APPROVAL_DESCRIPTION,
+} from "../../../makita/makitaApprovers.ts";
 import { MakitaIssueCloses } from "../../../makita/MakitaIssueCloses.ts";
 import { MakitaLanding } from "../../../makita/MakitaLanding.ts";
 import {
@@ -180,6 +184,29 @@ const MakitaRequestMergeTool = Tool.make("makita_request_merge", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, true);
 
+// Makita ticket 29: listed only where the configuration may push. It only asks: the Hub reads the
+// comment again on GitHub and approves the waiting push only for a valid approver's comment.
+const MakitaRequestApprovalTool = Tool.make("makita_request_approval", {
+  description: REQUEST_APPROVAL_DESCRIPTION,
+  parameters: Schema.Struct({
+    commentId: Schema.Number,
+    kind: Schema.Literals(APPROVAL_REQUEST_KINDS),
+  }),
+  success: Schema.Struct({ approved: Schema.Boolean, message: Schema.String }),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    MakitaTasks,
+    ThreadManagementService.ThreadManagementService,
+  ],
+})
+  .annotate(Tool.Title, "Ask the Hub to send your push an approver approved")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, true);
+
 // Makita ticket 23: read-only. The repository is the task's; the query keeps words only.
 const MakitaSearchTool = Tool.make("makita_search", {
   description:
@@ -260,6 +287,7 @@ export const MakitaToolkit = Toolkit.make(
   MakitaOpenPullRequestTool,
   MakitaCiLogsTool,
   MakitaRequestMergeTool,
+  MakitaRequestApprovalTool,
   MakitaSearchTool,
   MakitaLabelTool,
   MakitaCloseIssueTool,

@@ -86,6 +86,8 @@ export const closeCommentText = (input: {
   readonly ref: number | null;
   readonly confidence: number;
   readonly reason: string;
+  /** Ticket 29: how to ask in words; the command stays the exact form. */
+  readonly makitaLogin: string;
 }) => {
   const target =
     input.ref === null
@@ -100,7 +102,7 @@ export const closeCommentText = (input: {
   return [
     `Triage verdict: ${VERDICT_WORDS[input.verdict]}${target} (confidence ${input.confidence.toFixed(2)}). ${input.reason}`,
     "",
-    `${closing} If that is wrong, reopen this issue or comment \`/makita reopen\`: Makita will not close it again.`,
+    `${closing} If that is wrong, reopen this issue or reply \`@${input.makitaLogin} reopen\` (or \`/makita reopen\`): Makita will not close it again.`,
   ].join("\n");
 };
 

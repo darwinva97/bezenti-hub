@@ -308,6 +308,10 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   makita_request_merge: own(
     "the calling agent's own Thread, which must be a Makita task's whose configuration may push and land; only requests: the Hub re-reads the cited comment from GitHub and merges its own pull request only if it is a valid approver's order that woke the turn, unused, with the same checks as /makita merge",
   ),
+  // Makita ticket 29: listed only when its configuration may push. It only asks; the Hub approves.
+  makita_request_approval: own(
+    "the calling agent's own Thread, which must be a Makita task's whose configuration may push; only requests: the Hub re-reads the cited comment from GitHub and approves its own waiting push only if it is an approver's, unedited, newer than Makita's request, the comment that woke the turn and unused, with the same checks as /makita ok",
+  ),
   // Makita ticket 23: read-only; the repository is the task's, never the call's.
   makita_search: own(
     "the calling agent's own Thread, which must be a Makita task's; a read-only search of its task's repository only (the query's qualifiers removed, every result's repository checked), with the other live Makita tasks of that repository; framed as untrusted data, bounded, and held by the intake's rate-limit hold",

@@ -44,8 +44,20 @@ import { frameUntrusted } from "../scheduledTasks/webhookTemplate.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as SecretMasker from "../vaults/SecretMasker.ts";
-import { approveFromGitHub, tellReleased } from "./makitaApprovalFlow.ts";
-import { APPROVAL_DETAIL, isApproverNow } from "./makitaApprovers.ts";
+import {
+  approveFromGitHub,
+  type MakitaApprovalRequestResult,
+  requestApprovalForThread,
+  tellReleased,
+} from "./makitaApprovalFlow.ts";
+import {
+  APPROVAL_DETAIL,
+  APPROVAL_INSTRUCTIONS,
+  type ApprovalRequestKind,
+  approvalNote,
+  decodePending,
+  isApproverNow,
+} from "./makitaApprovers.ts";
 import { allowedCallerIds } from "./makitaCallers.ts";
 import { MakitaConfigs } from "./MakitaConfigs.ts";
 import {
@@ -189,6 +201,14 @@ export class MakitaTasks extends Context.Service<
       body: string,
       where?: MakitaCommentWhere,
     ) => Effect.Effect<MakitaCommentResult, MakitaError>;
+    /**
+     * Ticket 29, `makita_request_approval`: the calling Thread's waiting push, approved only by
+     * the approver's comment it points at, read again from GitHub.
+     */
+    readonly requestApprovalForThread: (
+      threadId: ThreadId,
+      input: { readonly commentId: number; readonly kind: ApprovalRequestKind },
+    ) => Effect.Effect<MakitaApprovalRequestResult, MakitaError>;
   }
 >()("t3/makita/MakitaTasks") {}
 
@@ -383,6 +403,7 @@ const make = Effect.gen(function* () {
             `- You work in your own git worktree, ${input.pushing.cwd}, on the branch ${input.pushing.branch}, made from ${input.pushing.base ?? "the repository's default branch"}. Commit there with plain git; your commits are authored as Makita already.`,
             `- makita_push is the only way your commits reach GitHub: it pushes them to ${input.pushing.branch} and nowhere else. Never run git push, never force anything, never change .github/workflows, never commit secrets. Nothing of yours reaches the base or the default branch.`,
             `- Once your branch is pushed, open one pull request into ${input.pushing.base ?? "the default branch"} with makita_open_pull_request; its body has the sections Problem, Fix, Verified and Downsides. The Hub then watches its CI: it wakes you with the failing checks if CI fails (read their logs with makita_ci_logs, fix, commit, makita_push) and says on the issue when it passes.${input.land ? "" : " You may never merge or approve a pull request."}`,
+            ...APPROVAL_INSTRUCTIONS,
             ...(input.land ? LAND_INSTRUCTIONS : []),
           ]),
       input.pushing === null
@@ -566,6 +587,40 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * Ticket 29: while the task's push waits for an approver (Makita asked, nobody approved yet),
+   * what a wake tells the agent; else undefined.
+   */
+  const approvalWaitOf = Effect.fn("MakitaTasks.approvalWaitOf")(function* (
+    live: LiveTaskRow,
+    authorId: number,
+    commentId: number,
+    eventKey: string,
+  ) {
+    const [task] = yield* sql<{ readonly pendingJson: string | null; readonly capability: string }>`
+      SELECT t.pending_push_json AS "pendingJson", c.capability
+      FROM makita_tasks t JOIN makita_configs c ON c.config_id = t.config_id
+      WHERE t.task_id = ${live.taskId}
+    `;
+    const pending = Option.getOrUndefined(decodePending(task?.pendingJson ?? null));
+    if (
+      task?.capability !== "push" ||
+      pending?.request === undefined ||
+      pending.approval !== undefined
+    ) {
+      return undefined;
+    }
+    return approvalNote({
+      approver: yield* isApproverNow(sql, live.configId, authorId),
+      commentId,
+      kind: eventKey.startsWith("gh:review-comment:")
+        ? "review-comment"
+        : eventKey.startsWith("gh:review:")
+          ? "review"
+          : "issue-comment",
+    });
+  });
+
+  /**
    * Ticket 09: an allowed person's mention on an issue with a live task wakes its Thread, queued
    * after any turn at work, framed as the first message. The loop guard counts from zero again.
    */
@@ -603,7 +658,8 @@ const make = Effect.gen(function* () {
     // Ticket 13: where it may land, the agent learns whether the author approves and which
     // comment this is (the only thing makita_request_merge may point at).
     const landing = yield* landingOf(live.configId, author.id, comment.id, row.eventKey);
-    const text =
+    const waiting = yield* approvalWaitOf(live, author.id, comment.id, row.eventKey);
+    const said =
       item !== undefined
         ? [
             conversationText({
@@ -629,6 +685,7 @@ const make = Effect.gen(function* () {
               ? {}
               : { landing: { ...landing, kind: landing.kind } }),
           });
+    const text = waiting === undefined ? said : `${said}\n${waiting}`;
     const sent = yield* threads
       .sendToThread({
         projectId: ProjectId.make(live.projectId),
@@ -1114,6 +1171,14 @@ const make = Effect.gen(function* () {
     Effect.withSpan("MakitaTasks.startQueued"),
   );
 
+  /** Ticket 29: `makita_request_approval`, decided in `makitaApprovalFlow`. */
+  const requestApproval = Effect.fn("MakitaTasks.requestApprovalForThread")(function* (
+    threadId: ThreadId,
+    input: { readonly commentId: number; readonly kind: ApprovalRequestKind },
+  ) {
+    return yield* requestApprovalForThread(sql, github, threadId, input);
+  });
+
   /** The calling Thread's task with its configuration; another Thread is refused. */
   const taskOfThread = Effect.fn("MakitaTasks.taskOfThread")(function* (threadId: ThreadId) {
     const [task] = yield* sql<TaskRow>`
@@ -1333,7 +1398,13 @@ const make = Effect.gen(function* () {
     } satisfies MakitaCommentResult;
   });
 
-  return MakitaTasks.of({ startQueued, awaitStarting, readIssueForThread, commentForThread });
+  return MakitaTasks.of({
+    startQueued,
+    awaitStarting,
+    readIssueForThread,
+    commentForThread,
+    requestApprovalForThread: requestApproval,
+  });
 });
 
 /** Over Makita's GitHub client and configurations, the intake, the launch, the masker, pushes. */

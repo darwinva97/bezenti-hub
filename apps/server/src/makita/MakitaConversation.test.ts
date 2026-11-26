@@ -198,6 +198,44 @@ live(
 );
 
 live(
+  "Makita ticket 29: «para» on Makita's pull request stops its task without a mention; «stop using tabs» wakes it instead; a stranger's «Stop!» is silence",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* ready;
+      const { setup } = ctx;
+      yield* withPull(ctx, 12, 41);
+      setup.github.commentOn(REPO, 41, STRANGER, "Stop!");
+      setup.github.commentOn(REPO, 41, OCTOCAT, "Stop using tabs in this file.");
+      yield* tick(ctx);
+      assert.lengthOf(setup.sends, 1);
+      assert.include(setup.sends[0]!.input.text, "Stop using tabs in this file.");
+      assert.equal((yield* taskOf(ctx, 12)).state, "running");
+
+      later(ctx, 5);
+      const stop = setup.github.commentOn(REPO, 41, OCTOCAT, "Para, por favor.");
+      yield* tick(ctx);
+      assert.deepInclude(yield* taskOf(ctx, 12), { state: "stopped", failure: "github-stop" });
+      assert.deepEqual(setup.github.reactions.at(-1), {
+        repo: REPO,
+        feed: "issues",
+        commentId: stop.id,
+        content: "+1",
+      });
+      assert.deepEqual(
+        (yield* ctx.events)
+          .filter((row) => row.number === 41)
+          .map((row) => [row.login, row.outcome, row.detail]),
+        [
+          ["mallory", "ignored-not-allowed", null],
+          ["octocat", "started", "conversation"],
+          ["octocat", "command", "stop"],
+        ],
+      );
+      assert.lengthOf(setup.sends, 1);
+    }),
+);
+
+live(
   "an allowed person's review, line comment and review-thread reply each wake the Thread once, saying where and how to answer; an edited comment does not",
   () =>
     Effect.gen(function* () {

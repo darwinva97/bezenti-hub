@@ -30,7 +30,14 @@ import {
   NEW_ISSUES_FEED,
   newIssuesPath,
 } from "./makitaNewIssues.ts";
-import { decideApprovalComment, isApprovalCommand, liveTaskOfItem } from "./makitaApprovers.ts";
+import {
+  approvesWaiting,
+  decideApprovalComment,
+  isApprovalCommand,
+  isApproverNow,
+  liveTaskOfItem,
+} from "./makitaApprovers.ts";
+import { plainIntentOf } from "./makitaPlainWords.ts";
 import { decideMergeComment, isMergeCommand } from "./makitaLandingRules.ts";
 import { allowedCallerIds } from "./makitaCallers.ts";
 import { decideConversation, decodeReviewPage, reviewsPath } from "./makitaConversation.ts";
@@ -730,6 +737,7 @@ const make = Effect.gen(function* () {
         comment,
         configs: input.listened.configs,
         makitaId: input.makita.id,
+        makitaLogin: input.makita.login,
       });
       if (reopen !== undefined) {
         yield* insertEvent({
@@ -744,9 +752,35 @@ const make = Effect.gen(function* () {
         });
         continue;
       }
+      // Ticket 29: «ok» or «mergéalo» said to Makita counts as the command only from an approver
+      // now, and «ok» only while a push Makita asked for waits; otherwise it is conversation.
+      const issueComment = comment.eventKey.startsWith("gh:issue-comment:");
+      const plain = issueComment
+        ? plainIntentOf(comment.body, {
+            login: input.makita.login,
+            addressed: pull === undefined ? "mention" : "pull",
+          })
+        : undefined;
+      const plainTask =
+        plain === "approve" || plain === "merge"
+          ? yield* liveTaskOfItem(sql, input.listened.repo, comment.number)
+          : undefined;
+      const byApprover =
+        plainTask !== undefined &&
+        comment.author !== null &&
+        (yield* isApproverNow(sql, plainTask.configId, comment.author.id));
+      const plainApproval =
+        byApprover &&
+        plain === "approve" &&
+        approvesWaiting(plainTask?.pendingJson ?? null, {
+          feed: "issue-comments",
+          id: comment.id,
+          createdAt: comment.createdAt,
+        });
+      const plainMerge = byApprover && plain === "merge";
       // Ticket 11: `/makita ok` in an issue or pull request conversation, for its live task.
       const approval =
-        isApprovalCommand(comment.body) && comment.eventKey.startsWith("gh:issue-comment:")
+        (isApprovalCommand(comment.body) || plainApproval) && issueComment
           ? decideApprovalComment({
               comment,
               configs: input.listened.configs,
@@ -757,9 +791,7 @@ const make = Effect.gen(function* () {
           : undefined;
       // Ticket 13: `/makita merge`, likewise; whether its author approves is read when handled.
       const merge =
-        approval === undefined &&
-        isMergeCommand(comment.body) &&
-        comment.eventKey.startsWith("gh:issue-comment:")
+        approval === undefined && (isMergeCommand(comment.body) || plainMerge) && issueComment
           ? decideMergeComment({
               comment,
               configs: input.listened.configs,

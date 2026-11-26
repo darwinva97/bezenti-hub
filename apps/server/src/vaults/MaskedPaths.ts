@@ -693,6 +693,7 @@ export const EXECUTOR_OPERATIONS: Record<RemoteOperation | RemoteStreamOperation
   "move.fetch": none("refs"),
   "move.prepare": none("a folder, refs and the setup script's status"),
   "move.recover": none("refs"),
+  "move.remove": none("a status and a refusal's reason"),
   "files.read": masked("vaults/maskWorkspace.ts"),
   "files.write": masked("vaults/maskWorkspace.ts"),
   "files.inspectAsset": none("a file's path, size and identity"),

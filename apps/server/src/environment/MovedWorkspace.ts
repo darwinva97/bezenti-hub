@@ -124,6 +124,24 @@ export const MoveRecoverResult = Schema.Struct({
 });
 export type MoveRecoverResult = typeof MoveRecoverResult.Type;
 
+/** Makita ticket 28: a worktree `move.prepare` made for a Thread, removed with what it holds. */
+export const MoveRemoveInput = Schema.Struct({
+  /** The Project's checkout on the machine, which lists its worktrees. It is never changed. */
+  checkout: Schema.String,
+  projectId: ProjectId,
+  threadId: ThreadId,
+  /** Removed only when it is where `move.prepare` puts this Project's and Thread's worktree. */
+  cwd: Schema.String,
+});
+export type MoveRemoveInput = typeof MoveRemoveInput.Type;
+
+export const MoveRemoveResult = Schema.Struct({
+  /** `absent`: already gone. `refused`: not that worktree, so nothing was touched. */
+  status: Schema.Literals(["removed", "absent", "refused"]),
+  detail: Schema.optionalKey(Schema.String),
+});
+export type MoveRemoveResult = typeof MoveRemoveResult.Type;
+
 /**
  * Captures the workspace into `recoveredRef` and keeps it only if it differs from `baseRef` (or
  * HEAD without one). Pushing it is the caller's: each machine reaches the Hub its own way.
@@ -182,18 +200,22 @@ const shortHash = (value: string) => {
   return hash.toString(16).padStart(8, "0");
 };
 
+/** The two folder names a moved worktree's path ends with, whatever the machine's separator. */
+export const movedWorktreeNames = (projectId: string, threadId: string) => ({
+  project: `${safeName(projectId).slice(0, 48)}-${shortHash(projectId)}`,
+  thread: `${safeName(threadId).slice(-24)}-${shortHash(threadId)}`,
+});
+
 /** `<worktrees>/<project>/<thread>`, from ids, so two Projects in folders alike never collide. */
 export const movedWorktreePath = (
   path: Path.Path,
   worktreesDir: string,
   projectId: string,
   threadId: string,
-) =>
-  path.join(
-    worktreesDir,
-    `${safeName(projectId).slice(0, 48)}-${shortHash(projectId)}`,
-    `${safeName(threadId).slice(-24)}-${shortHash(threadId)}`,
-  );
+) => {
+  const names = movedWorktreeNames(projectId, threadId);
+  return path.join(worktreesDir, names.project, names.thread);
+};
 
 interface ListedWorktree {
   readonly path: string;
@@ -402,4 +424,76 @@ export const prepareMovedWorkspace = Effect.fn("MovedWorkspace.prepare")(functio
     ),
   );
   return { cwd, setAsideRefs, detached, setupScript };
+});
+
+/**
+ * `move.remove`: the Thread's worktree goes, uncommitted changes and all, only when it is exactly
+ * where `move.prepare` puts it and the Project's checkout lists it; anything else is refused and
+ * left as it is. A worktree already gone answers `absent`.
+ */
+export const removeMovedWorktree = Effect.fn("MovedWorkspace.remove")(function* (
+  deps: {
+    readonly vcs: VcsProcess.VcsProcess["Service"];
+    readonly fileSystem: FileSystem.FileSystem;
+    readonly path: Path.Path;
+    /** Where this machine keeps the worktrees it makes. */
+    readonly worktreesDir: string;
+  },
+  input: MoveRemoveInput,
+): Effect.fn.Return<MoveRemoveResult, CheckpointStoreError> {
+  const operation = "MovedWorkspace.remove";
+  const git = (cwd: string, args: ReadonlyArray<string>) =>
+    deps.vcs.run({ operation, command: "git", cwd, args, allowNonZeroExit: true });
+  const exists = (target: string) =>
+    deps.fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false));
+  const real = (target: string) =>
+    deps.fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => deps.path.resolve(target)));
+  const refused = (detail: string): MoveRemoveResult => ({ status: "refused", detail });
+
+  const cwd = deps.path.resolve(input.cwd);
+  const planned = deps.path.resolve(
+    movedWorktreePath(deps.path, deps.worktreesDir, input.projectId, input.threadId),
+  );
+  if (cwd !== planned)
+    return refused("This is not the worktree this machine made for that Thread.");
+  const checkout = deps.path.resolve(input.checkout);
+  const fromCwd = deps.path.relative(cwd, checkout);
+  if (fromCwd === "" || (!fromCwd.startsWith("..") && !deps.path.isAbsolute(fromCwd))) {
+    return refused("That folder holds the Project's checkout.");
+  }
+  const present = yield* exists(cwd);
+  if (!(yield* exists(checkout))) {
+    return present
+      ? refused("The Project's checkout is not on this machine.")
+      : { status: "absent" };
+  }
+  const list = yield* git(checkout, ["worktree", "list", "--porcelain"]);
+  if (list.exitCode !== 0) {
+    return yield* failed(operation, checkout, "git worktree list failed.", list.exitCode);
+  }
+  const cwdReal = present ? yield* real(cwd) : cwd;
+  let listed = false;
+  for (const worktree of parseWorktrees(list.stdout)) {
+    if (deps.path.resolve(worktree.path) === cwd || (yield* real(worktree.path)) === cwdReal) {
+      listed = true;
+    }
+  }
+  if (!listed) {
+    return present
+      ? refused("That folder is not a worktree of this Project's checkout.")
+      : { status: "absent" };
+  }
+  if (present) {
+    const removed = yield* git(checkout, ["worktree", "remove", "--force", "--force", "--", cwd]);
+    if (removed.exitCode !== 0) {
+      return yield* failed(
+        operation,
+        cwd,
+        `git worktree remove failed: ${removed.stderr.trim().slice(0, 1_000) || "no output"}`,
+        removed.exitCode,
+      );
+    }
+  }
+  yield* git(checkout, ["worktree", "prune"]).pipe(Effect.ignore);
+  return { status: present ? "removed" : "absent" };
 });

@@ -195,3 +195,89 @@ describe("MovedWorkspace.prepare", () => {
       }).pipe(Effect.provide(layer)),
   );
 });
+
+const exists = (target: string) =>
+  Effect.promise(() =>
+    NodeFSP.access(target).then(
+      () => true,
+      () => false,
+    ),
+  );
+
+const remove = (
+  setup: Effect.Success<ReturnType<typeof machine>>,
+  input: Partial<MovedWorkspace.MoveRemoveInput> & { readonly cwd: string },
+) =>
+  Effect.gen(function* () {
+    return yield* MovedWorkspace.removeMovedWorktree(
+      {
+        vcs: yield* VcsProcess.VcsProcess,
+        fileSystem: yield* FileSystem.FileSystem,
+        path: yield* Path.Path,
+        worktreesDir: setup.worktreesDir,
+      },
+      {
+        checkout: setup.checkout,
+        projectId: ProjectId.make("project:one"),
+        threadId: ThreadId.make("thread:one"),
+        ...input,
+      },
+    );
+  });
+
+describe("MovedWorkspace.remove (Makita ticket 28)", () => {
+  it.live(
+    "removes the Thread's worktree with its uncommitted changes, then answers that it is gone",
+    () =>
+      Effect.gen(function* () {
+        const setup = yield* machine();
+        const made = yield* prepare(setup, {});
+        yield* write(`${made.cwd}/wip.md`, "never committed\n");
+
+        assert.deepEqual(yield* remove(setup, { cwd: made.cwd }), { status: "removed" });
+        assert.isFalse(yield* exists(made.cwd));
+        assert.notInclude(yield* git(setup.checkout, "worktree", "list", "--porcelain"), made.cwd);
+        assert.deepEqual(yield* remove(setup, { cwd: made.cwd }), { status: "absent" });
+        // The checkout itself is untouched.
+        assert.equal(yield* read(`${setup.checkout}/README.md`), "# repo\n");
+      }).pipe(Effect.provide(layer)),
+  );
+
+  it.live(
+    "refuses another Thread's worktree, the checkout and a folder the checkout does not list",
+    () =>
+      Effect.gen(function* () {
+        const setup = yield* machine();
+        const made = yield* prepare(setup, {});
+        // Another Thread's id: its worktree would be elsewhere, so this one is not its to remove.
+        const asOther = yield* remove(setup, {
+          cwd: made.cwd,
+          threadId: ThreadId.make("thread:two"),
+        });
+        assert.equal(asOther.status, "refused");
+        assert.isTrue(yield* exists(made.cwd));
+        // The checkout, never.
+        const checkout = yield* remove(setup, { cwd: setup.checkout });
+        assert.equal(checkout.status, "refused");
+        assert.isTrue(yield* exists(`${setup.checkout}/README.md`));
+        // A folder at the planned path that the checkout does not list (another repository's).
+        const planned = MovedWorkspace.movedWorktreePath(
+          yield* Path.Path,
+          setup.worktreesDir,
+          "project:one",
+          "thread:three",
+        );
+        yield* Effect.promise(() => NodeFSP.mkdir(planned, { recursive: true }));
+        yield* write(`${planned}/keep.md`, "someone's\n");
+        const unlisted = yield* remove(setup, {
+          cwd: planned,
+          threadId: ThreadId.make("thread:three"),
+        });
+        assert.deepEqual(unlisted, {
+          status: "refused",
+          detail: "That folder is not a worktree of this Project's checkout.",
+        });
+        assert.equal(yield* read(`${planned}/keep.md`), "someone's\n");
+      }).pipe(Effect.provide(layer)),
+  );
+});

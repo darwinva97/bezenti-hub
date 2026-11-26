@@ -23,9 +23,12 @@ import {
  * 8: Hub previews. 9: checkouts from the Hub. 10: `secretEnv`. 11: `aiGateway` in
  * `provider.openSession`. 12: shells keep and report their `facts`, and `terminal.reconcile`; the
  * Hub refuses terminals of a machine before 12. 13: `secretEnv.aiCredential` (a direct AI
- * account's credential, every ambient one dropped). 15 to 17: see below.
+ * account's credential, every ambient one dropped). 15 to 18: see below.
  */
-export const ENVIRONMENT_EXECUTOR_CONTRACT_VERSION = 17;
+export const ENVIRONMENT_EXECUTOR_CONTRACT_VERSION = 18;
+
+/** 18: `move.remove`, a worktree `move.prepare` made, removed (Makita ticket 28). */
+export const MOVE_REMOVE_CONTRACT_VERSION = 18;
 
 /** 15: `files.inspectAsset` and `files.streamAsset`, a Thread's files served by URL (ticket 15). */
 export const REMOTE_ASSETS_CONTRACT_VERSION = 15;

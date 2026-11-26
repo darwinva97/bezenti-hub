@@ -970,6 +970,9 @@ export const make = Effect.fn("EnvironmentAgent.make")(function* (input: Environ
       }
       case "move.prepare":
         return local.workspace.move.prepare(request as RemoteInput<"move.prepare">);
+      // Makita ticket 28: only the worktree `move.prepare` made for that Thread is removed.
+      case "move.remove":
+        return local.workspace.move.remove(request as RemoteInput<"move.remove">);
       // Back with a Thread that moved away: what it never uploaded goes to the Hub, through this
       // machine's own credential; the workspace stays as it is.
       case "move.recover": {

@@ -86,6 +86,8 @@ import {
   MovePrepareResult,
   MoveRecoverInput,
   MoveRecoverResult,
+  MoveRemoveInput,
+  MoveRemoveResult,
   MovePublishScratchInput,
   MovePublishScratchResult,
 } from "./MovedWorkspace.ts";
@@ -496,6 +498,8 @@ export const REMOTE_OPERATIONS = {
   "move.prepare": checkpoint(MovePrepareInput, MovePrepareResult),
   // Back with a Thread that moved away: its changes never uploaded go to a recovered ref.
   "move.recover": checkpoint(MoveRecoverInput, MoveRecoverResult),
+  // Contract 18 (Makita ticket 28): a worktree `move.prepare` made, removed; anything else refused.
+  "move.remove": checkpoint(MoveRemoveInput, MoveRemoveResult),
   // Workspace calls name the Thread's workspace root on the machine and paths relative to it; the
   // machine refuses whatever resolves (symlinks included) outside the root. They carry the
   // contract's own errors, so the Hub hands a machine's answer to the client as it came.

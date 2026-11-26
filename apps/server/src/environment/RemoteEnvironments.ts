@@ -1238,6 +1238,11 @@ const make = Effect.gen(function* () {
       recover: Effect.fn("RemoteEnvironments.move.recover")((input) =>
         callCheckpoint<MovedWorkspace.MoveRecoverResult>(link, "move.recover", input),
       ),
+      // A machine before contract 18 answers that it does not know the call (MakitaMachines
+      // does not ask one).
+      remove: Effect.fn("RemoteEnvironments.move.remove")((input) =>
+        callCheckpoint<MovedWorkspace.MoveRemoveResult>(link, "move.remove", input),
+      ),
     };
     // The machine's own text generation; a failure it could not name is reported as one.
     const textGeneration: EnvironmentExecutor.EnvironmentTextGeneration = {

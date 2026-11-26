@@ -144,6 +144,10 @@ export interface EnvironmentMoveWorkspace {
   readonly recover: (
     input: MovedWorkspace.MoveRecoverInput,
   ) => Effect.Effect<MovedWorkspace.MoveRecoverResult, CheckpointStoreError>;
+  /** Removes a worktree `prepare` made for the Thread (contract 18, Makita ticket 28). */
+  readonly remove: (
+    input: MovedWorkspace.MoveRemoveInput,
+  ) => Effect.Effect<MovedWorkspace.MoveRemoveResult, CheckpointStoreError>;
 }
 
 /**
@@ -602,6 +606,27 @@ const makeMoveWorkspace = (input: {
                   })
                 : Effect.void,
             ),
+          ),
+    remove: (request) =>
+      Option.isNone(vcs) ||
+      Option.isNone(fileSystem) ||
+      Option.isNone(path) ||
+      Option.isNone(config)
+        ? Effect.fail(
+            new VcsUnsupportedOperationError({
+              operation: "EnvironmentExecutor.move.remove",
+              kind: "git",
+              detail: "This server cannot remove a Thread's worktree.",
+            }),
+          )
+        : MovedWorkspace.removeMovedWorktree(
+            {
+              vcs: vcs.value,
+              fileSystem: fileSystem.value,
+              path: path.value,
+              worktreesDir: config.value.worktreesDir,
+            },
+            request,
           ),
   };
 };

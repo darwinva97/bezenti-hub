@@ -17,6 +17,7 @@ import {
   makeAuthenticator,
   serveAuthHttp,
 } from "../auth/UserAuth.testkit.ts";
+import * as Grants from "../grants/Grants.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as Vaults from "../vaults/Vaults.ts";
 import { orgOwner } from "../vaults/VaultGroups.testkit.ts";
@@ -38,9 +39,13 @@ const hub = Effect.gen(function* () {
   });
   const acmeId = yield* organization("Acme");
   const betaId = yield* organization("Beta");
-  const person = Effect.fn(function* (id: string, role?: "admin" | "member" | "guest") {
+  const person = Effect.fn(function* (
+    id: string,
+    role?: "admin" | "member" | "guest",
+    spaceId: SpaceId = acmeId,
+  ) {
     yield* addMember(server, { id, displayName: id });
-    if (role !== undefined) yield* joinOrganization(server, acmeId, id, role);
+    if (role !== undefined) yield* joinOrganization(server, spaceId, id, role);
     // An Admin's role holds with a strong factor enrolled.
     if (role === "admin") {
       yield* server.sql`INSERT INTO user_passkeys (credential_id, user_id, public_key, sign_count,
@@ -53,11 +58,15 @@ const hub = Effect.gen(function* () {
   const member = yield* person("grace", "member");
   const guest = yield* person("hedy", "guest");
   const outsider = yield* person("linus");
+  // Beta's Admin; Ada also works in Beta, so she may name it when lending.
+  const betaAdmin = yield* person("bea", "admin", betaId);
+  yield* joinOrganization(server, betaId, "ada", "member");
   yield* Context.get(server.services, SpaceDirectory.SpaceDirectory).membershipsChanged([
     admin,
     member,
     guest,
     outsider,
+    betaAdmin,
   ]);
   const as = (userId: UserId) => CommandActor.actAs(userId);
   const vaults = Context.get(server.services, Vaults.Vaults);
@@ -77,7 +86,23 @@ const hub = Effect.gen(function* () {
   const auditActions = server.sql<{ readonly action: string }>`
     SELECT action FROM audit_log WHERE action LIKE 'space_%' ORDER BY rowid
   `.pipe(Effect.map((rows) => rows.map((row) => row.action)));
-  return { server, ownerId, acmeId, admin, member, guest, outsider, as, tools, auditActions };
+  const grants = Context.get(server.services, Grants.Grants);
+  return {
+    server,
+    ownerId,
+    acmeId,
+    betaId,
+    admin,
+    member,
+    guest,
+    outsider,
+    betaAdmin,
+    acmeGroup: acmeGroup.id,
+    as,
+    tools,
+    grants,
+    auditActions,
+  };
 });
 
 const reasonOf = <A, E extends { readonly reason: string }, R>(effect: Effect.Effect<A, E, R>) =>
@@ -297,5 +322,109 @@ it.effect("a Skill is read from SKILL.md; it is turned off, on and deleted, each
       "space_skill.enable",
       "space_skill.delete",
     ]);
+  }),
+);
+
+it.effect(
+  "a lent MCP needs its Vault groups lent first; the borrower uses it, never reads it",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const mcp = yield* h.tools
+        .putMcp({ spaceId: h.acmeId, name: "github", config: github("${GITHUB_TOKEN}") })
+        .pipe(h.as(h.admin));
+      const lendMcp = h.grants
+        .give(
+          {
+            resource: { kind: "space-mcp", spaceMcpId: mcp.id },
+            spaceId: h.betaId,
+            limits: { kind: "space-mcp" },
+          },
+          { strongFactor: false },
+        )
+        .pipe(h.as(h.admin));
+      // Decision 1 (A): its token reaches Beta only through Acme's own group, lent there first.
+      const early = yield* Effect.flip(lendMcp);
+      assert.equal(early.reason, "not-lendable");
+      assert.include(early.message, "GITHUB_TOKEN");
+      const groupLoan = yield* h.grants
+        .give(
+          {
+            resource: { kind: "vault-group", vaultGroupId: h.acmeGroup },
+            spaceId: h.betaId,
+            limits: { kind: "vault-group" },
+          },
+          { strongFactor: true },
+        )
+        .pipe(h.as(h.admin));
+      yield* h.grants
+        .accept({ grantId: groupLoan.id }, { strongFactor: false })
+        .pipe(h.as(h.betaAdmin));
+      const loan = yield* lendMcp;
+      yield* h.grants.accept({ grantId: loan.id }, { strongFactor: false }).pipe(h.as(h.betaAdmin));
+
+      const seen = yield* h.tools.list({ spaceId: h.betaId }).pipe(h.as(h.betaAdmin));
+      assert.deepEqual(
+        seen.mcps.map((row) => [row.name, row.lent?.grantId]),
+        [["github", loan.id]],
+      );
+      // Read-only there: no configuration, no change, no lending it on.
+      for (const attempt of [
+        h.tools.getMcp({ id: mcp.id }),
+        h.tools.setEnabled({ tool: { kind: "mcp", id: mcp.id }, enabled: false }),
+        h.tools.remove({ tool: { kind: "mcp", id: mcp.id } }),
+      ]) {
+        assert.equal(yield* reasonOf(attempt.pipe(h.as(h.betaAdmin))), "not-found");
+      }
+      const lendOn = yield* h.grants
+        .give(
+          {
+            resource: { kind: "space-mcp", spaceMcpId: mcp.id },
+            spaceId: `personal:${h.betaAdmin}` as SpaceId,
+            limits: { kind: "space-mcp" },
+          },
+          { strongFactor: false },
+        )
+        .pipe(h.as(h.betaAdmin), Effect.flip);
+      assert.equal(lendOn.reason, "not-found");
+
+      // Taken back: gone from Beta's list at once.
+      yield* h.grants.end({ grantId: loan.id }).pipe(h.as(h.admin));
+      assert.deepEqual(
+        (yield* h.tools.list({ spaceId: h.betaId }).pipe(h.as(h.betaAdmin))).mcps,
+        [],
+      );
+    }),
+);
+
+it.effect("deleting a lent Skill ends its loan, which keeps the Skill's name", () =>
+  Effect.gen(function* () {
+    const h = yield* hub;
+    const skill = yield* h.tools
+      .putSkill({ spaceId: h.acmeId, files: { "SKILL.md": SKILL }, expects: [] })
+      .pipe(h.as(h.admin));
+    const loan = yield* h.grants
+      .give(
+        {
+          resource: { kind: "space-skill", spaceSkillId: skill.id },
+          spaceId: h.betaId,
+          limits: { kind: "space-skill" },
+        },
+        { strongFactor: false },
+      )
+      .pipe(h.as(h.admin));
+    yield* h.grants.accept({ grantId: loan.id }, { strongFactor: false }).pipe(h.as(h.betaAdmin));
+    assert.deepEqual(
+      (yield* h.tools.list({ spaceId: h.betaId }).pipe(h.as(h.betaAdmin))).skills.map(
+        (row) => row.name,
+      ),
+      ["release-notes"],
+    );
+    yield* h.tools.remove({ tool: { kind: "skill", id: skill.id } }).pipe(h.as(h.admin));
+    const [ended] = yield* h.server.sql<{ readonly state: string; readonly name: string }>`
+      SELECT state || '/' || end_reason AS state, resource_name AS name FROM grants
+      WHERE grant_id = ${loan.id}
+    `;
+    assert.deepEqual(ended, { state: "ended/resource-gone", name: "release-notes" });
   }),
 );

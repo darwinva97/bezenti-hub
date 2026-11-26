@@ -42,6 +42,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
+import * as GrantEnding from "../grants/GrantEnding.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as SecretDelivery from "../vaults/SecretDelivery.ts";
 import * as Vaults from "../vaults/Vaults.ts";
@@ -113,6 +114,8 @@ interface McpRow {
   readonly configJson: string;
   readonly enabled: number;
   readonly updatedAt: string;
+  readonly grantId?: string | null;
+  readonly lenderName?: string | null;
 }
 
 interface SkillRow {
@@ -124,6 +127,8 @@ interface SkillRow {
   readonly expectsJson: string;
   readonly enabled: number;
   readonly updatedAt: string;
+  readonly grantId?: string | null;
+  readonly lenderName?: string | null;
 }
 
 const encodeConfig = Schema.encodeSync(Schema.fromJsonString(SpaceMcpConfig));
@@ -133,6 +138,11 @@ const decodeConfig = Schema.decodeUnknownSync(Schema.fromJsonString(SpaceMcpConf
 const decodeFiles = Schema.decodeUnknownSync(Schema.fromJsonString(SpaceSkillFiles));
 const decodeNames = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 
+const loanOf = (row: { readonly grantId?: string | null; readonly lenderName?: string | null }) =>
+  row.grantId === undefined || row.grantId === null
+    ? {}
+    : { lent: { grantId: row.grantId, lenderName: row.lenderName ?? "" } };
+
 const mcpSummary = (row: McpRow): SpaceMcpSummary => ({
   id: SpaceMcpId.make(row.id),
   spaceId: row.spaceId as SpaceId,
@@ -140,6 +150,7 @@ const mcpSummary = (row: McpRow): SpaceMcpSummary => ({
   transport: row.transport,
   enabled: row.enabled === 1,
   updatedAt: row.updatedAt,
+  ...loanOf(row),
 });
 
 const mcpDetail = (row: McpRow): SpaceMcp => {
@@ -156,6 +167,7 @@ const skillSummary = (row: SkillRow): SpaceSkillSummary => ({
   enabled: row.enabled === 1,
   expects: decodeNames(row.expectsJson),
   updatedAt: row.updatedAt,
+  ...loanOf(row),
 });
 
 const commandOf = (config: SpaceMcpConfig) =>
@@ -211,6 +223,48 @@ const make = Effect.gen(function* () {
     }
     return { userId, space, canManage: can("spaceTool.manage", space) };
   });
+
+  const LENDER_NAME = `COALESCE(CASE g.lender_kind
+      WHEN 'user' THEN (SELECT display_name FROM users WHERE user_id = g.lender_id)
+      ELSE (SELECT name FROM spaces WHERE space_id = g.lender_id) END, g.lender_name)`;
+
+  /** The Space's own MCPs and those lent to it by an active Grant: its own first, then by name. */
+  const mcpsOfSpace = (spaceId: string, onlyEnabled: boolean) =>
+    sql<McpRow>`
+      SELECT m.mcp_id AS id, m.space_id AS "spaceId", m.name, m.transport,
+        m.config_json AS "configJson", m.enabled, m.updated_at AS "updatedAt",
+        g.grant_id AS "grantId", ${sql.literal(LENDER_NAME)} AS "lenderName"
+      FROM space_mcps m
+      LEFT JOIN grants g ON g.resource_kind = 'space-mcp' AND g.resource_id = m.mcp_id
+        AND g.target_kind = 'space' AND g.target_id = ${spaceId} AND g.state = 'active'
+      WHERE (m.space_id = ${spaceId} OR g.grant_id IS NOT NULL)
+        AND (${onlyEnabled ? 0 : 1} = 1 OR m.enabled = 1)
+      ORDER BY (g.grant_id IS NOT NULL), m.name
+    `;
+
+  const skillsOfSpace = (spaceId: string, onlyEnabled: boolean) =>
+    sql<SkillRow>`
+      SELECT k.skill_id AS id, k.space_id AS "spaceId", k.name, k.description,
+        k.files_json AS "filesJson", k.expects_json AS "expectsJson", k.enabled,
+        k.updated_at AS "updatedAt", g.grant_id AS "grantId",
+        ${sql.literal(LENDER_NAME)} AS "lenderName"
+      FROM space_skills k
+      LEFT JOIN grants g ON g.resource_kind = 'space-skill' AND g.resource_id = k.skill_id
+        AND g.target_kind = 'space' AND g.target_id = ${spaceId} AND g.state = 'active'
+      WHERE (k.space_id = ${spaceId} OR g.grant_id IS NOT NULL)
+        AND (${onlyEnabled ? 0 : 1} = 1 OR k.enabled = 1)
+      ORDER BY (g.grant_id IS NOT NULL), k.name
+    `;
+
+  /** A Space's own wins a name it shares with a lent one. */
+  const firstByName = <A extends { readonly name: string }>(rows: ReadonlyArray<A>) => {
+    const seen = new Set<string>();
+    return rows.filter((row) => {
+      if (seen.has(row.name)) return false;
+      seen.add(row.name);
+      return true;
+    });
+  };
 
   const mcpRow = (id: string) =>
     sql<McpRow>`
@@ -269,16 +323,12 @@ const make = Effect.gen(function* () {
 
   const list = Effect.fn("SpaceTools.list")(function* (input: SpaceToolsListInput) {
     const { space, canManage } = yield* spaceFor(input.spaceId, "spaceTool.view");
-    const mcps = yield* sql<McpRow>`
-      SELECT mcp_id AS id, space_id AS "spaceId", name, transport, config_json AS "configJson",
-        enabled, updated_at AS "updatedAt"
-      FROM space_mcps WHERE space_id = ${space.id} ORDER BY name
-    `.pipe(Effect.catch(storage("read the MCP servers")));
-    const skills = yield* sql<SkillRow>`
-      SELECT skill_id AS id, space_id AS "spaceId", name, description, files_json AS "filesJson",
-        expects_json AS "expectsJson", enabled, updated_at AS "updatedAt"
-      FROM space_skills WHERE space_id = ${space.id} ORDER BY name
-    `.pipe(Effect.catch(storage("read the Skills")));
+    const mcps = yield* mcpsOfSpace(space.id, false).pipe(
+      Effect.catch(storage("read the MCP servers")),
+    );
+    const skills = yield* skillsOfSpace(space.id, false).pipe(
+      Effect.catch(storage("read the Skills")),
+    );
     return {
       spaceId: space.id,
       canManage,
@@ -451,6 +501,17 @@ const make = Effect.gen(function* () {
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
+          // Its loans end first, keeping its name for the borrowers' history.
+          yield* GrantEnding.endGone(
+            sql,
+            AuditLog.userActor(userId),
+            { resource: { kind: isMcp ? "space-mcp" : "space-skill", id: row.id } },
+            isMcp ? "space_mcp.delete" : "space_skill.delete",
+          ).pipe(
+            Effect.mapError(
+              () => new SpaceToolError({ reason: "storage", message: "Could not end its loans." }),
+            ),
+          );
           if (isMcp) yield* sql`DELETE FROM space_mcps WHERE mcp_id = ${row.id}`;
           else yield* sql`DELETE FROM space_skills WHERE skill_id = ${row.id}`;
           yield* record(userId, space.id, {
@@ -468,12 +529,14 @@ const make = Effect.gen(function* () {
       .placementOf(threadId)
       .pipe(Effect.catch(storage("read the Thread's Space")));
     if (Option.isNone(placement)) return [];
-    const rows = yield* sql<McpRow>`
-      SELECT mcp_id AS id, space_id AS "spaceId", name, transport, config_json AS "configJson",
-        enabled, updated_at AS "updatedAt"
-      FROM space_mcps WHERE space_id = ${placement.value.space.id} AND enabled = 1 ORDER BY name
-    `.pipe(Effect.catch(storage("read the Space's MCP servers")));
-    return rows.map((row) => ({ row, name: row.name, config: decodeConfig(row.configJson) }));
+    const rows = yield* mcpsOfSpace(placement.value.space.id, true).pipe(
+      Effect.catch(storage("read the Space's MCP servers")),
+    );
+    return firstByName(rows).map((row) => ({
+      row,
+      name: row.name,
+      config: decodeConfig(row.configJson),
+    }));
   });
 
   /** The enabled Skills of the Thread's Space. */
@@ -482,12 +545,10 @@ const make = Effect.gen(function* () {
       .placementOf(threadId)
       .pipe(Effect.catch(storage("read the Thread's Space")));
     if (Option.isNone(placement)) return [];
-    const rows = yield* sql<SkillRow>`
-      SELECT skill_id AS id, space_id AS "spaceId", name, description, files_json AS "filesJson",
-        expects_json AS "expectsJson", enabled, updated_at AS "updatedAt"
-      FROM space_skills WHERE space_id = ${placement.value.space.id} AND enabled = 1 ORDER BY name
-    `.pipe(Effect.catch(storage("read the Space's Skills")));
-    return rows;
+    const rows = yield* skillsOfSpace(placement.value.space.id, true).pipe(
+      Effect.catch(storage("read the Space's Skills")),
+    );
+    return firstByName(rows);
   });
 
   const forSession = Effect.fn("SpaceTools.forSession")(function* (input: {

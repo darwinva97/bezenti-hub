@@ -18,6 +18,8 @@ export type GrantEndingVia =
   | "organization.delete"
   | "ai_account.delete"
   | "vault_group.delete"
+  | "space_mcp.delete"
+  | "space_skill.delete"
   | "environment.remove"
   | "environment.mode.change";
 
@@ -48,6 +50,8 @@ export const KEEP_NAMES_SQL = `
     WHEN 'environment' THEN (SELECT name FROM environments WHERE environment_id = grants.resource_id)
     WHEN 'ai-account' THEN (SELECT name FROM ai_accounts WHERE account_id = grants.resource_id)
     WHEN 'vault-group' THEN (SELECT name FROM vault_groups WHERE group_id = grants.resource_id)
+    WHEN 'space-mcp' THEN (SELECT name FROM space_mcps WHERE mcp_id = grants.resource_id)
+    WHEN 'space-skill' THEN (SELECT name FROM space_skills WHERE skill_id = grants.resource_id)
     END, grants.resource_name),
   lender_name = COALESCE(CASE grants.lender_kind
     WHEN 'user' THEN (SELECT display_name FROM users WHERE user_id = grants.lender_id)
@@ -99,6 +103,8 @@ export const endGone = Effect.fn("GrantEnding.endGone")(function* (
         WHEN 'environment' THEN (SELECT name FROM environments WHERE environment_id = g.resource_id)
         WHEN 'ai-account' THEN (SELECT name FROM ai_accounts WHERE account_id = g.resource_id)
         WHEN 'vault-group' THEN (SELECT name FROM vault_groups WHERE group_id = g.resource_id)
+        WHEN 'space-mcp' THEN (SELECT name FROM space_mcps WHERE mcp_id = g.resource_id)
+        WHEN 'space-skill' THEN (SELECT name FROM space_skills WHERE skill_id = g.resource_id)
         ELSE NULL END, g.resource_name) AS "resourceName",
       (SELECT e.environment_id FROM environments e
         WHERE e.grant_id = g.grant_id AND e.revoked_at IS NULL) AS "lentEnvironmentId"

@@ -36,6 +36,10 @@ export const SpaceMcpConfig = Schema.Union([
 export type SpaceMcpConfig = typeof SpaceMcpConfig.Type;
 
 /** What everyone who sees the Space reads: never the configuration. */
+/** One lent to the Space by another (read-only there): the loan and who lent it. */
+export const SpaceToolLoan = Schema.Struct({ grantId: Schema.String, lenderName: Schema.String });
+export type SpaceToolLoan = typeof SpaceToolLoan.Type;
+
 export const SpaceMcpSummary = Schema.Struct({
   id: SpaceMcpId,
   spaceId: SpaceId,
@@ -43,6 +47,7 @@ export const SpaceMcpSummary = Schema.Struct({
   transport: Schema.Literals(["stdio", "http"]),
   enabled: Schema.Boolean,
   updatedAt: IsoDateTime,
+  lent: Schema.optionalKey(SpaceToolLoan),
 });
 export type SpaceMcpSummary = typeof SpaceMcpSummary.Type;
 
@@ -64,6 +69,7 @@ export const SpaceSkillSummary = Schema.Struct({
   /** Vault names it says it needs: names only. */
   expects: Schema.Array(Schema.String),
   updatedAt: IsoDateTime,
+  lent: Schema.optionalKey(SpaceToolLoan),
 });
 export type SpaceSkillSummary = typeof SpaceSkillSummary.Type;
 

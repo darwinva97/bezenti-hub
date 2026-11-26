@@ -1,6 +1,7 @@
 /**
  * Grants: an owner lends one resource to a Space, with limits, and can take it back. Machines
- * (`environment`), AI accounts and Vault groups are lent. See docs/internals/grants.md.
+ * (`environment`), AI accounts, Vault groups, Space MCPs and Space Skills are lent. See
+ * docs/internals/grants.md.
  */
 import * as Schema from "effect/Schema";
 
@@ -8,12 +9,19 @@ import { AiAccountId, AiAccountProvider, AiAccountType } from "./aiAccounts.ts";
 import { EnvironmentId, GrantId, SpaceId, TrimmedNonEmptyString, UserId } from "./baseSchemas.ts";
 import { GrantCap, GrantCapState } from "./grantCaps.ts";
 import { SandboxHostReport } from "./hubEnvironments.ts";
+import { SpaceMcpId, SpaceSkillId } from "./spaceTools.ts";
 import { AuthReauth } from "./userAccounts.ts";
 import { VaultEntryId, VaultGroupId } from "./vaults.ts";
 
 export { GrantId };
 
-export const GrantResourceKind = Schema.Literals(["environment", "ai-account", "vault-group"]);
+export const GrantResourceKind = Schema.Literals([
+  "environment",
+  "ai-account",
+  "vault-group",
+  "space-mcp",
+  "space-skill",
+]);
 export type GrantResourceKind = typeof GrantResourceKind.Type;
 
 /**
@@ -71,11 +79,20 @@ export type AiAccountGrantLimits = typeof AiAccountGrantLimits.Type;
 export const VaultGroupGrantLimits = Schema.Struct({ kind: Schema.Literal("vault-group") });
 export type VaultGroupGrantLimits = typeof VaultGroupGrantLimits.Type;
 
+/**
+ * A lent Space MCP or Skill has no limits. An MCP's Vault references reach the borrower only
+ * through the lender's Vault groups lent there too.
+ */
+export const SpaceMcpGrantLimits = Schema.Struct({ kind: Schema.Literal("space-mcp") });
+export const SpaceSkillGrantLimits = Schema.Struct({ kind: Schema.Literal("space-skill") });
+
 /** By resource kind. */
 export const GrantLimits = Schema.Union([
   EnvironmentGrantLimits,
   AiAccountGrantLimits,
   VaultGroupGrantLimits,
+  SpaceMcpGrantLimits,
+  SpaceSkillGrantLimits,
 ]);
 export type GrantLimits = typeof GrantLimits.Type;
 
@@ -83,6 +100,8 @@ export const GrantResourceRef = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("environment"), environmentId: EnvironmentId }),
   Schema.Struct({ kind: Schema.Literal("ai-account"), aiAccountId: AiAccountId }),
   Schema.Struct({ kind: Schema.Literal("vault-group"), vaultGroupId: VaultGroupId }),
+  Schema.Struct({ kind: Schema.Literal("space-mcp"), spaceMcpId: SpaceMcpId }),
+  Schema.Struct({ kind: Schema.Literal("space-skill"), spaceSkillId: SpaceSkillId }),
 ]);
 export type GrantResourceRef = typeof GrantResourceRef.Type;
 

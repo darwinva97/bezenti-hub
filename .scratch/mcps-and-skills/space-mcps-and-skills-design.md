@@ -237,3 +237,20 @@ Space con la máquina: solo se hace donde el provider acepta una ruta por sesió
   con el prefijo del plugin (`space:<nombre>`).
 - `spaceTools.threadStatus` lista además las Skills activadas y los nombres de Vault que esperan y
   el Thread no recibe.
+
+## 14. Paso 4, tal como quedó: préstamos
+
+- `grants.resource_kind` gana `space-mcp` y `space-skill` (migración 176, que reconstruye la tabla
+  porque SQLite no cambia un CHECK). Sin límites, como un Vault group.
+- Presta el dueño del Space del MCP o la Skill: una Organization (sus Admins) o el User de un
+  Personal space. Uno prestado no es del Space que lo recibe, así que no se vuelve a prestar.
+- **Decisión 1 (A), aplicada:** un MCP con referencias solo se presta a un Space al que el
+  prestador ya prestó, activo, un Vault group suyo con cada nombre referenciado
+  (`not-lendable` con los nombres que faltan). Ese préstamo del grupo lleva el aviso y la petición de
+  rotar de siempre. Un MCP con referencias no se presta por enlace.
+- El prestatario lo ve en su lista con `lent` (préstamo y quién presta), lo recibe en sus Threads
+  y nunca lee su configuración, ni lo cambia, ni lo borra (not-found). Si comparte nombre con uno
+  propio, gana el propio. Al retirarlo o devolverlo deja de llegar en el siguiente turno.
+- Borrar un MCP o una Skill termina sus préstamos (`resource-gone`) y les deja el nombre.
+- Clientes: las listas de préstamos de web, desktop y móvil los nombran («MCP server», «Skill») y
+  dicen qué ve el prestatario. Prestarlos desde Settings del Space llega con el paso 5.

@@ -15,6 +15,8 @@ export interface ConnectionDiagnosis {
   readonly headline: string;
   readonly hops: ReadonlyArray<ConnectionDiagnosisHop>;
   readonly steps: ReadonlyArray<string>;
+  /** The host refused this device's credential: retrying the same one cannot help. */
+  readonly signInAgain: boolean;
   readonly facts: ReadonlyArray<readonly [label: string, value: string]>;
 }
 
@@ -66,13 +68,18 @@ function headline(host: string, located: Located, failure: ConnectionAttemptErro
     case "device":
       return "This device could not prepare the connection";
     case "server":
-      return failure?.reason === "authentication" || failure?.reason === "permission"
-        ? `T3 Code on ${host} did not accept this device`
-        : `T3 Code on ${host} did not answer`;
+      switch (failure?.reason) {
+        case "authentication":
+          return `T3 Code on ${host} did not accept this device`;
+        case "permission":
+          return `Your account has no access to T3 Code on ${host}`;
+        default:
+          return `T3 Code on ${host} did not answer`;
+      }
   }
 }
 
-function steps(host: string, located: Located): string[] {
+function steps(host: string, located: Located, failure: ConnectionAttemptError | null): string[] {
   switch (located.cause) {
     case "offline":
       return ["Connect this device to the internet. T3 Code reconnects on its own."];
@@ -88,6 +95,15 @@ function steps(host: string, located: Located): string[] {
         `If it keeps failing, remove ${host} from this device and add it again.`,
       ];
     case "server":
+      if (failure?.reason === "authentication") {
+        return [
+          `Sign in to ${host} again. Its sign-in for this device has ended.`,
+          `If it keeps failing, remove ${host} from this device and add it again.`,
+        ];
+      }
+      if (failure?.reason === "permission") {
+        return [`Ask an admin of ${host} for access, then sign in again.`];
+      }
       return [
         `Make sure T3 Code is running on ${host}.`,
         "Retry. If it keeps failing, copy the diagnostics.",
@@ -149,7 +165,11 @@ export function presentConnectionDiagnosis(
   return {
     headline: headline(host, located, failure),
     hops,
-    steps: steps(host, located),
+    steps: steps(host, located, failure),
+    signInAgain:
+      located.hop === "server" &&
+      located.cause === null &&
+      (failure?.reason === "authentication" || failure?.reason === "permission"),
     facts,
   };
 }

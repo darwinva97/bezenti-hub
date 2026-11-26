@@ -64,6 +64,27 @@ describe("presentConnectionDiagnosis", () => {
     expect(results(state)).toEqual(["device:ok", "server:failed"]);
   });
 
+  it.each([
+    {
+      reason: "authentication" as const,
+      headline: "T3 Code on Mac mini did not accept this device",
+      firstStep: "Sign in to Mac mini again. Its sign-in for this device has ended.",
+    },
+    {
+      reason: "permission" as const,
+      headline: "Your account has no access to T3 Code on Mac mini",
+      firstStep: "Ask an admin of Mac mini for access, then sign in again.",
+    },
+  ])("offers to sign in again when the host rejects the $reason", (row) => {
+    const diagnosis = diagnose(
+      backoff(new ConnectionBlockedError({ reason: row.reason, detail: "", hop: "server" })),
+    );
+    expect(diagnosis?.headline).toBe(row.headline);
+    expect(diagnosis?.steps[0]).toBe(row.firstStep);
+    expect(diagnosis?.signInAgain).toBe(true);
+    expect(diagnose(backoff(unreachable()))?.signInAgain).toBe(false);
+  });
+
   it("reports this device as offline before any other hop", () => {
     const state = { ...backoff(unreachable()), network: "offline" as const };
     expect(diagnose(state)?.headline).toBe("This device is offline");

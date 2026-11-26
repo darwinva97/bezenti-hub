@@ -129,7 +129,7 @@ export function ConnectionEnvironmentRow(props: {
           {diagnosis ? (
             <>
               <Text className="text-xs text-danger-foreground">{diagnosis.headline}</Text>
-              {connectionState.attempt > 0 ? (
+              {connectionState.attempt > 0 && connectionState.phase !== "blocked" ? (
                 <Text className="text-xs text-foreground-muted">
                   {`Retrying · attempt ${connectionState.attempt}`}
                 </Text>
@@ -206,6 +206,7 @@ export function ConnectionEnvironmentRow(props: {
             <ConnectionDiagnosisDetails
               hostLabel={props.environment.environmentLabel}
               diagnosis={diagnosis}
+              presentation={presentation}
             />
           ) : null}
           <ConnectionFormField

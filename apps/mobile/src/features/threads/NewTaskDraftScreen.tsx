@@ -13,7 +13,7 @@ import { scopedProjectKey } from "../../lib/scopedEntities";
 import { connectionTone } from "../connection/connectionTone";
 import { AppBar } from "../../components/ui/AppBar";
 import { withAiAccount } from "@t3tools/client-runtime/ai-accounts-view";
-import { ThreadId } from "@t3tools/contracts";
+import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
@@ -97,6 +97,34 @@ import { newTaskFlowKey } from "./new-task-flow-state";
 import { appAtomRegistry } from "../../state/atom-registry";
 
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
+import { useEnvironmentPresentation } from "../../state/presentation";
+import { useConnectionDiagnosis } from "../connection/ConnectionDiagnosisDetails";
+import { Button } from "../../components/ui/Button";
+
+const DRAFT_SAVED_NOTICE =
+  "Your draft is saved on this device. Connect to an environment to choose its first model.";
+
+function DraftConnectionNotice(props: {
+  readonly environmentId: EnvironmentId;
+  readonly onShowEnvironment: () => void;
+}) {
+  const { presentation } = useEnvironmentPresentation(props.environmentId);
+  const { diagnosis } = useConnectionDiagnosis(props.environmentId, presentation);
+  if (diagnosis === null) {
+    return <Text className="text-foreground-muted">{DRAFT_SAVED_NOTICE}</Text>;
+  }
+  return (
+    <View className="gap-2">
+      <Text className="text-foreground-muted">
+        {`${diagnosis.headline}. Your draft is saved on this device.`}
+      </Text>
+      <Button
+        label={diagnosis.signInAgain ? "Sign in again" : "See what to try"}
+        onPress={props.onShowEnvironment}
+      />
+    </View>
+  );
+}
 
 function NewTaskWorkspaceIcon(props: {
   readonly workspaceMode: "local" | "worktree";
@@ -867,9 +895,14 @@ export function NewTaskDraftScreen(props: {
       >
         <View className="flex-1 justify-end gap-3 p-4">
           {environmentControl}
-          <Text className="text-foreground-muted">
-            Your draft is saved on this device. Connect to an environment to choose its first model.
-          </Text>
+          {flow.selectedEnvironmentId === null ? (
+            <Text className="text-foreground-muted">{DRAFT_SAVED_NOTICE}</Text>
+          ) : (
+            <DraftConnectionNotice
+              environmentId={flow.selectedEnvironmentId}
+              onShowEnvironment={() => openContextPicker("NewTaskEnvironment")}
+            />
+          )}
           <ComposerEditor
             draftKey={flow.draftKey}
             value={flow.prompt}

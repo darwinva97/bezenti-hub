@@ -75,6 +75,7 @@ const SETTINGS_SEARCH_TERMS = {
     "quota",
   ],
   SettingsVaults: ["vaults", "secrets", "api keys", "tokens", "environment variables"],
+  SettingsSpaceTools: ["mcp", "mcp servers", "skills", "tools", "integrations"],
   SettingsLoans: ["loans", "grants", "lend", "borrow", "lending link", "accept", "give back"],
   SettingsEnvironmentSourceControl: [
     "git",

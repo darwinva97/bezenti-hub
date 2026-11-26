@@ -127,6 +127,10 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.secretProvidersScopesAllow]: AuthSettingsWriteScope,
   [WS_METHODS.vaultsSpaceDefaultsSet]: AuthAccessWriteScope,
   [WS_METHODS.vaultsProjectChoicesSet]: AuthAccessWriteScope,
+  [WS_METHODS.spaceToolsMcpPut]: AuthAccessWriteScope,
+  [WS_METHODS.spaceToolsSkillPut]: AuthAccessWriteScope,
+  [WS_METHODS.spaceToolsSetEnabled]: AuthAccessWriteScope,
+  [WS_METHODS.spaceToolsDelete]: AuthAccessWriteScope,
   // Grants: who may is the Hub's (AccessPolicy `grant.*`); lending changes who reaches a resource.
   [WS_METHODS.grantsReject]: AuthAccessWriteScope,
   [WS_METHODS.grantsCancel]: AuthAccessWriteScope,

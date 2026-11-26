@@ -21,6 +21,7 @@ export const SETTINGS_PAGE_TARGETS = [
   "SettingsAiAccounts",
   "SettingsVaults",
   "SettingsLoans",
+  "SettingsSpaceTools",
   "SettingsKeyboard",
   "SettingsMicrophone",
   "SettingsFollowUp",

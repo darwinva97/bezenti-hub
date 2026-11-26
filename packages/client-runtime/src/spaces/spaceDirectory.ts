@@ -218,6 +218,16 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "grant.cancel": "Cancelled a loan offer",
   "grant.end": "Ended a loan",
   "grant.limits.change": "Changed a loan's limits",
+  "space_mcp.create": "Added an MCP server to a Space",
+  "space_mcp.update": "Changed a Space's MCP server",
+  "space_mcp.enable": "Turned on a Space's MCP server",
+  "space_mcp.disable": "Turned off a Space's MCP server",
+  "space_mcp.delete": "Deleted a Space's MCP server",
+  "space_skill.create": "Added a Skill to a Space",
+  "space_skill.update": "Changed a Space's Skill",
+  "space_skill.enable": "Turned on a Space's Skill",
+  "space_skill.disable": "Turned off a Space's Skill",
+  "space_skill.delete": "Deleted a Space's Skill",
 };
 
 /** Where a client keeps its current Space, one per User so a shared browser does not mix them. */

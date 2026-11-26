@@ -512,6 +512,21 @@ import {
   VaultProviderScopesInput,
 } from "./secretProviderScopes.ts";
 import {
+  SpaceMcp,
+  SpaceMcpGetInput,
+  SpaceMcpPutInput,
+  SpaceSkill,
+  SpaceSkillGetInput,
+  SpaceSkillPutInput,
+  SpaceToolDeleteInput,
+  SpaceToolError,
+  SpaceToolSetEnabledInput,
+  SpaceToolsList,
+  SpaceToolsListInput,
+  SpaceToolsThreadStatus,
+  SpaceToolsThreadStatusInput,
+} from "./spaceTools.ts";
+import {
   Grant,
   GrantError,
   GrantClaimOfferInput,
@@ -712,6 +727,14 @@ export const WS_METHODS = {
   secretProvidersScopesPut: "secretProviders.scopes.put",
   secretProvidersScopesDelete: "secretProviders.scopes.delete",
   secretProvidersScopesAllow: "secretProviders.scopes.allow",
+  spaceToolsList: "spaceTools.list",
+  spaceToolsMcpGet: "spaceTools.mcp.get",
+  spaceToolsMcpPut: "spaceTools.mcp.put",
+  spaceToolsSkillGet: "spaceTools.skill.get",
+  spaceToolsSkillPut: "spaceTools.skill.put",
+  spaceToolsSetEnabled: "spaceTools.setEnabled",
+  spaceToolsDelete: "spaceTools.delete",
+  spaceToolsThreadStatus: "spaceTools.threadStatus",
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
@@ -2566,6 +2589,44 @@ const WsSecretProvidersScopesDeleteRpc = Rpc.make(WS_METHODS.secretProvidersScop
   success: ProviderScopeDeleteResult,
   error: SecretProviderRpcError,
 });
+const WsSpaceToolsListRpc = Rpc.make(WS_METHODS.spaceToolsList, {
+  payload: SpaceToolsListInput,
+  success: SpaceToolsList,
+  error: SpaceToolError,
+});
+const WsSpaceToolsMcpGetRpc = Rpc.make(WS_METHODS.spaceToolsMcpGet, {
+  payload: SpaceMcpGetInput,
+  success: SpaceMcp,
+  error: SpaceToolError,
+});
+const WsSpaceToolsMcpPutRpc = Rpc.make(WS_METHODS.spaceToolsMcpPut, {
+  payload: SpaceMcpPutInput,
+  success: SpaceMcp,
+  error: SpaceToolError,
+});
+const WsSpaceToolsSkillGetRpc = Rpc.make(WS_METHODS.spaceToolsSkillGet, {
+  payload: SpaceSkillGetInput,
+  success: SpaceSkill,
+  error: SpaceToolError,
+});
+const WsSpaceToolsSkillPutRpc = Rpc.make(WS_METHODS.spaceToolsSkillPut, {
+  payload: SpaceSkillPutInput,
+  success: SpaceSkill,
+  error: SpaceToolError,
+});
+const WsSpaceToolsSetEnabledRpc = Rpc.make(WS_METHODS.spaceToolsSetEnabled, {
+  payload: SpaceToolSetEnabledInput,
+  error: SpaceToolError,
+});
+const WsSpaceToolsDeleteRpc = Rpc.make(WS_METHODS.spaceToolsDelete, {
+  payload: SpaceToolDeleteInput,
+  error: SpaceToolError,
+});
+const WsSpaceToolsThreadStatusRpc = Rpc.make(WS_METHODS.spaceToolsThreadStatus, {
+  payload: SpaceToolsThreadStatusInput,
+  success: SpaceToolsThreadStatus,
+  error: SpaceToolError,
+});
 const WsSecretProvidersScopesAllowRpc = Rpc.make(WS_METHODS.secretProvidersScopesAllow, {
   payload: ProviderScopeAllowInput,
   success: ProviderScopeChangeResult,
@@ -2705,6 +2766,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsSecretProvidersScopesPutRpc,
   WsSecretProvidersScopesDeleteRpc,
   WsSecretProvidersScopesAllowRpc,
+  WsSpaceToolsListRpc,
+  WsSpaceToolsMcpGetRpc,
+  WsSpaceToolsMcpPutRpc,
+  WsSpaceToolsSkillGetRpc,
+  WsSpaceToolsSkillPutRpc,
+  WsSpaceToolsSetEnabledRpc,
+  WsSpaceToolsDeleteRpc,
+  WsSpaceToolsThreadStatusRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

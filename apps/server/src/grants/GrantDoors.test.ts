@@ -58,6 +58,8 @@ const SWEPT_ELSEWHERE: Record<string, string> = {
     "GrantOffers.test.ts: anyone may apply a link to a Space they decide for (that is a link)",
   // Not a loan: the one-use join an SSH install run is granted (SshInstall tests).
   "http:environments.grantJoin": "SshInstall.test.ts",
+  // Not a loan: the Owner's «may use Makita» for a User in a Space (MakitaPermissions tests).
+  "ws:makita.permissions.grant": "MakitaPermissions.test.ts",
 };
 const RE_GRANTS = /grant/iu;
 

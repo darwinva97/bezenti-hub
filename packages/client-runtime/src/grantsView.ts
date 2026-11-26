@@ -49,7 +49,13 @@ export const vaultLendWarning = (space: string) =>
 
 /** A loan's limits in words: a machine's sizes, an AI account's caps («No cap»), or none. */
 export const limitsText = (limits: GrantLimits) => {
-  if (limits.kind === "vault-group") return "Read-only for the Space";
+  if (
+    limits.kind === "vault-group" ||
+    limits.kind === "space-mcp" ||
+    limits.kind === "space-skill"
+  ) {
+    return "Read-only for the Space";
+  }
   if (limits.kind === "environment") {
     return `${limits.cpus} CPUs · ${gib(limits.memoryBytes)} memory · ${limits.pids} processes · ${gib(limits.diskBytes)} disk`;
   }
@@ -176,7 +182,15 @@ export const nounOf = (grant: Pick<Grant, "resource">) =>
     ? "AI account"
     : grant.resource.kind === "vault-group"
       ? "Vault group"
-      : "machine";
+      : grant.resource.kind === "space-mcp"
+        ? "MCP server"
+        : grant.resource.kind === "space-skill"
+          ? "Skill"
+          : "machine";
+
+/** What the borrower is told of a lent MCP server or Skill: its lender's, read-only here. */
+export const spaceToolLenderSays = (lender: string) =>
+  `${lender} can change or remove it at any time, and its configuration stays with them. An MCP server's Vault entries reach your Threads only through the Vault groups ${lender} lent you.`;
 
 /**
  * Grants ticket 07: what the borrower is told of a lent Vault group: it is its lender's, read-only
@@ -191,7 +205,9 @@ export const lenderSees = (grant: Grant) =>
     ? `${grant.lender.name ?? "Its lender"} sees how much each person here uses it, never prompts or Threads.${grant.aiAccount?.type === "subscription" ? ` ${subscriptionTermsWarning(grant.aiAccount.provider)}` : ""}`
     : grant.resource.kind === "vault-group"
       ? groupLenderSays(grant.lender.name ?? "Its lender")
-      : lenderSeesEverything(grant.lender.name ?? "Its lender");
+      : grant.resource.kind === "space-mcp" || grant.resource.kind === "space-skill"
+        ? spaceToolLenderSays(grant.lender.name ?? "Its lender")
+        : lenderSeesEverything(grant.lender.name ?? "Its lender");
 
 const STATE_LABELS: Record<Grant["state"], string> = {
   offered: "Offered",
@@ -305,6 +321,9 @@ export const endingWarning = (grant: Grant) => {
   const space = targetLabel(grant, "the Space");
   if (grant.resource.kind === "ai-account") {
     return `The Threads of ${space} that use it are refused from their next request and need another AI account; requests already running finish.`;
+  }
+  if (grant.resource.kind === "space-mcp" || grant.resource.kind === "space-skill") {
+    return `The Threads of ${space} stop receiving it from their next turn.`;
   }
   if (grant.resource.kind === "vault-group") {
     return grant.can.revoke

@@ -152,7 +152,11 @@ export function ApplyLoanLink(props: { readonly environmentId: EnvironmentId }) 
                 ? "A machine: your Space gets a Sandbox of its own on it"
                 : offer.resource.kind === "vault-group"
                   ? "A Vault group for your Threads"
-                  : "An AI account for your Threads, through the AI gateway"}{" "}
+                  : offer.resource.kind === "space-mcp"
+                    ? "An MCP server for your Threads"
+                    : offer.resource.kind === "space-skill"
+                      ? "A Skill for your Threads"
+                      : "An AI account for your Threads, through the AI gateway"}{" "}
               · {limitsText(offer.limits)}. The link works once, until{" "}
               {new Date(offer.expiresAt).toLocaleString()}.
             </Text>

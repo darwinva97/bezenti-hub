@@ -116,6 +116,13 @@ const PAGES: Readonly<Record<SettingsModalId, readonly SettingsModalPage[]>> = {
       needsServer: true,
     },
     {
+      target: "SettingsSpaceTools",
+      label: "MCP servers & Skills",
+      icon: { ios: "wrench.and.screwdriver", android: "build" },
+      sectionId: "mcp-and-skills",
+      needsServer: true,
+    },
+    {
       target: "SettingsScheduledTasks",
       label: "Scheduled tasks",
       icon: "clock",

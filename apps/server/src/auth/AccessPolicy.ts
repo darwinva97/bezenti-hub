@@ -321,6 +321,13 @@ export type Action =
    * Personal space's User; an Organization's Admins and the Owner (owned-resources 04).
    */
   | "vault.choose"
+  /** A Space's MCP servers and Skills: names and state, for whoever sees the Space. */
+  | "spaceTool.view"
+  /**
+   * Create, change, turn off and delete them, and read an MCP server's configuration: as
+   * `vault.choose` (a stdio server runs a command on the Thread's machine).
+   */
+  | "spaceTool.manage"
   /**
    * On an `AiAccountResource`: create, rename, disable, replace, order and delete it: a User's
    * own, nobody else (the Owner included); an Organization's, its Admins and the Owner. On the
@@ -1172,8 +1179,11 @@ export function decide(principal: Principal, action: Action, resource: Resource)
       ? decideVault(principal, action, resource)
       : deny("wrong-resource");
   }
-  if (action === "vault.choose") {
+  if (action === "vault.choose" || action === "spaceTool.manage") {
     return isSpace(resource) ? decideVaultChoice(principal, resource) : deny("wrong-resource");
+  }
+  if (action === "spaceTool.view") {
+    return isSpace(resource) ? decide(principal, "space.view", resource) : deny("wrong-resource");
   }
   if (USER_ACTIONS.has(action) || isUser(resource)) {
     if (!USER_ACTIONS.has(action) || !isUser(resource)) return deny("wrong-resource");

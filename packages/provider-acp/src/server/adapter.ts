@@ -2,6 +2,8 @@
 
 import {
   type ChatAttachment,
+  type SecretEnv,
+  type SpaceMcpLaunch,
   type ModelSelection,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
@@ -72,6 +74,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import { formatReadToolLabel, formatSearchToolLabel } from "@t3tools/shared/toolActivity";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { applySecretEnv } from "@t3tools/provider-core/server/instanceEnvironment";
+import { resolveSpaceMcps } from "@t3tools/provider-core/server/spaceMcps";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { makeAcpMcpOverAcpBridge, type AcpMcpOverAcpBridge } from "./mcpOverAcpBridge.ts";
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
@@ -157,6 +160,8 @@ export interface AcpAdapterV2RuntimeInput {
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly httpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  /** A Space's MCP servers, their references filled in (only with `receivesSpaceMcps`). */
+  readonly spaceMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly processEnvironment?: NodeJS.ProcessEnv;
   /** The Thread the process serves (a per-Thread home, spec 4 ticket 07). */
   readonly threadId?: string;
@@ -358,6 +363,8 @@ export interface AcpAdapterV2Flavor {
    * (merged into it) reach the agent's process. Without it, a session with secrets is refused.
    */
   readonly receivesSecretEnv?: true;
+  /** Puts a Space's MCP servers in each session it opens (`spaceMcps`). */
+  readonly receivesSpaceMcps?: true;
   /**
    * Spec 4 ticket 07: the variables of a direct AI account credential the agent runs on (its
    * process drops every ambient AI credential, `applySecretEnv`), from `processEnvironment`.
@@ -871,6 +878,20 @@ function acpMcpContext(
       ...(self.entrypoint === undefined ? {} : { T3_ACP_MCP_ENTRYPOINT: self.entrypoint }),
     },
   };
+}
+
+/** A Space's MCP servers in ACP's shape, filled in from the session's own secrets. */
+function acpSpaceMcpServers(
+  launches: ReadonlyArray<SpaceMcpLaunch>,
+  secretEnv: SecretEnv | undefined,
+): ReadonlyArray<EffectAcpSchema.McpServer> {
+  const pairs = (map: Readonly<Record<string, string>>) =>
+    Object.entries(map).map(([name, value]) => ({ name, value }));
+  return resolveSpaceMcps(launches, secretEnv).ready.map(({ name, config }) =>
+    config.transport === "stdio"
+      ? { name, command: config.command, args: [...config.args], env: pairs(config.env) }
+      : { type: "http" as const, name, url: config.url, headers: pairs(config.headers) },
+  );
 }
 
 function acpMcpActivation(context: AcpMcpContext) {
@@ -1700,6 +1721,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
     instanceId: options.instanceId,
     driver,
     ...(flavor.receivesSecretEnv === true ? { receivesSecretEnv: true as const } : {}),
+    ...(flavor.receivesSpaceMcps === true ? { receivesSpaceMcps: true as const } : {}),
     ...(flavor.acceptsAiCredential !== undefined
       ? { acceptsAiCredential: flavor.acceptsAiCredential }
       : {}),
@@ -2330,6 +2352,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             mcpServers: mcpContext.servers,
             acpMcpServers: mcpContext.acpServers,
             httpMcpServers: mcpContext.httpServers,
+            ...(flavor.receivesSpaceMcps === true && input.spaceMcps !== undefined
+              ? { spaceMcpServers: acpSpaceMcpServers(input.spaceMcps, input.secretEnv) }
+              : {}),
             // Spec 5: the Thread's secrets go into the agent process's environment with the rest.
             ...(mcpContext.processEnvironment === undefined && input.secretEnv === undefined
               ? {}

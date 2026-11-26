@@ -298,7 +298,9 @@ export function makeGrokAcpAdapterFlavor(
           runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
         })),
     // Spec 5: its own runtime starts Grok with `processEnvironment` (a Thread's secrets in it).
-    ...(options.makeRuntime === undefined ? { receivesSecretEnv: true as const } : {}),
+    ...(options.makeRuntime === undefined
+      ? { receivesSecretEnv: true as const, receivesSpaceMcps: true as const }
+      : {}),
     // Spec 4 ticket 07: on a Hub turn it runs on a direct AI account's key, never a login.
     ...(options.makeRuntime === undefined ? { acceptsAiCredential: ["XAI_API_KEY"] } : {}),
     // Auto prompts represent classifier refusals and must reach the user.

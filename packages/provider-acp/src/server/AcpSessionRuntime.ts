@@ -124,6 +124,8 @@ export interface AcpSessionRuntimeOptions {
   /** Authenticate before opening: Antigravity selects its credential source from the method. */
   readonly authenticateEagerly?: boolean;
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  /** A Space's MCP servers, added to whichever set the agent takes (http ones only if it can). */
+  readonly spaceMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   /** Sent on every session/new, load, resume and fork; omitting them clears an agent's stored roots. */
   readonly additionalDirectories?: ReadonlyArray<string>;
   /** Session `_meta`, chosen from the negotiated agent before each session setup or activation. */
@@ -1087,6 +1089,27 @@ export interface AcpSessionRuntimeStartResult {
     | EffectAcpSchema.ResumeSessionResponse;
   readonly modelConfigId: string | undefined;
 }
+
+/**
+ * The Hub's own server in the form the agent takes best (acp, then http, then stdio), with a
+ * Space's servers beside it: an http one only to an agent that takes http.
+ */
+export const selectSessionMcpServers = (
+  capabilities: { readonly acp?: boolean; readonly http?: boolean } | undefined | null,
+  lists: {
+    readonly acp: ReadonlyArray<EffectAcpSchema.McpServer>;
+    readonly http: ReadonlyArray<EffectAcpSchema.McpServer>;
+    readonly stdio: ReadonlyArray<EffectAcpSchema.McpServer>;
+    readonly space: ReadonlyArray<EffectAcpSchema.McpServer>;
+  },
+): ReadonlyArray<EffectAcpSchema.McpServer> => {
+  const space = lists.space.filter(
+    (server) => !("type" in server) || server.type !== "http" || capabilities?.http === true,
+  );
+  if (capabilities?.acp === true && lists.acp.length > 0) return [...space, ...lists.acp];
+  if (capabilities?.http === true && lists.http.length > 0) return [...space, ...lists.http];
+  return [...space, ...lists.stdio];
+};
 
 export interface AcpSessionActivationOptions {
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
@@ -2136,16 +2159,12 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     initializeResult: EffectAcpSchema.InitializeResponse,
     activationOptions?: AcpSessionActivationOptions,
   ): ReadonlyArray<EffectAcpSchema.McpServer> => {
-    const mcpCapabilities = initializeResult.agentCapabilities?.mcpCapabilities;
-    const acpServers = activationOptions?.acpMcpServers ?? options.acpMcpServers ?? [];
-    if (mcpCapabilities?.acp === true && acpServers.length > 0) {
-      return acpServers;
-    }
-    const httpServers = activationOptions?.httpMcpServers ?? options.httpMcpServers ?? [];
-    if (mcpCapabilities?.http === true && httpServers.length > 0) {
-      return httpServers;
-    }
-    return activationOptions?.mcpServers ?? options.mcpServers ?? [];
+    return selectSessionMcpServers(initializeResult.agentCapabilities?.mcpCapabilities, {
+      acp: activationOptions?.acpMcpServers ?? options.acpMcpServers ?? [],
+      http: activationOptions?.httpMcpServers ?? options.httpMcpServers ?? [],
+      stdio: activationOptions?.mcpServers ?? options.mcpServers ?? [],
+      space: options.spaceMcpServers ?? [],
+    });
   };
 
   const sessionSetupFields = (initializeResult: EffectAcpSchema.InitializeResponse) => {

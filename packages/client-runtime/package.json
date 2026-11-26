@@ -67,6 +67,10 @@
       "types": "./src/grantsView.ts",
       "default": "./src/grantsView.ts"
     },
+    "./space-tools-view": {
+      "types": "./src/spaceToolsView.ts",
+      "default": "./src/spaceToolsView.ts"
+    },
     "./ai-usage-view": {
       "types": "./src/aiUsageView.ts",
       "default": "./src/aiUsageView.ts"
@@ -306,6 +310,10 @@
     "./state/ai-gateway": {
       "types": "./src/state/aiGateway.ts",
       "default": "./src/state/aiGateway.ts"
+    },
+    "./state/spaceTools": {
+      "types": "./src/state/spaceTools.ts",
+      "default": "./src/state/spaceTools.ts"
     },
     "./state/grants": {
       "types": "./src/state/grants.ts",

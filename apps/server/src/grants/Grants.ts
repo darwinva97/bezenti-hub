@@ -67,6 +67,7 @@ import { LentSandboxDisk } from "../sandboxes/sandboxSpace.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as VaultGrantUsage from "../vaults/VaultGrantUsage.ts";
 import * as VaultReachLoss from "../vaults/VaultReachLoss.ts";
+import * as SpaceToolRows from "../spaceTools/spaceToolRows.ts";
 import { KEEP_NAMES_SQL } from "./GrantEnding.ts";
 
 /** What a change does to a Grant. */
@@ -213,6 +214,8 @@ interface Lendable {
   readonly lenderKind: "user" | "organization";
   readonly lenderId: string;
   readonly lender: AccessPolicy.GrantLender;
+  /** A Space MCP's Vault names, which the lender's lent groups must hold. */
+  readonly references?: ReadonlyArray<string>;
 }
 
 const fail = (reason: GrantErrorReason, message: string) =>
@@ -269,7 +272,7 @@ const machineOf = (row: GrantRow) => {
 };
 
 const limitsDetail = (limits: GrantLimits) =>
-  limits.kind === "vault-group"
+  limits.kind === "vault-group" || limits.kind === "space-mcp" || limits.kind === "space-skill"
     ? {}
     : limits.kind === "environment"
       ? {
@@ -418,6 +421,8 @@ const make = Effect.gen(function* () {
         WHEN 'environment' THEN (SELECT name FROM environments WHERE environment_id = g.resource_id)
         WHEN 'ai-account' THEN (SELECT name FROM ai_accounts WHERE account_id = g.resource_id)
         WHEN 'vault-group' THEN (SELECT name FROM vault_groups WHERE group_id = g.resource_id)
+        WHEN 'space-mcp' THEN (SELECT name FROM space_mcps WHERE mcp_id = g.resource_id)
+        WHEN 'space-skill' THEN (SELECT name FROM space_skills WHERE skill_id = g.resource_id)
         ELSE NULL END, g.resource_name) AS "resourceName",
       CASE g.resource_kind
         WHEN 'ai-account' THEN (SELECT provider FROM ai_accounts WHERE account_id = g.resource_id)
@@ -803,13 +808,84 @@ const make = Effect.gen(function* () {
     } satisfies Lendable;
   });
 
+  /**
+   * A Space's own MCP server or Skill, lent by its Space's owner: an Organization (its Admins) or
+   * a Personal space's User. One lent to a Space is never lent on from there: it is not its own.
+   */
+  const lendableSpaceTool = Effect.fn("Grants.lendableSpaceTool")(function* (
+    kind: "space-mcp" | "space-skill",
+    toolId: string,
+    who?: Caller,
+  ) {
+    const missing =
+      kind === "space-mcp" ? "That MCP server does not exist." : "That Skill does not exist.";
+    const row = yield* SpaceToolRows.toolForGrant(sql, kind, toolId).pipe(
+      Effect.catch(storage("read what is lent")),
+    );
+    if (row === undefined) return yield* fail("not-found", missing);
+    const space = (yield* targetsOf([{ targetId: row.spaceId }])).get(
+      row.spaceId as SpaceId,
+    )?.resource;
+    if (space === undefined) return yield* fail("not-found", missing);
+    const ownerUserId = space.kind === "personal" ? space.personalOwnerUserId : null;
+    if (space.kind === "personal" && (ownerUserId === null || ownerUserId === undefined)) {
+      return yield* fail("not-found", missing);
+    }
+    const lender =
+      ownerUserId === null || ownerUserId === undefined
+        ? ({ kind: "organization", space } as const)
+        : ({ kind: "user", userId: ownerUserId } as const);
+    yield* lenderSideOr(who, lender, missing);
+    return {
+      kind,
+      resourceId: toolId,
+      name: row.name,
+      lenderKind: lender.kind,
+      lenderId: lender.kind === "user" ? lender.userId : row.spaceId,
+      lender,
+      references: row.references,
+    } satisfies Lendable;
+  });
+
   /** The resource as `who` (its lender's side) may lend it; anyone else is told it is missing. */
   const lendable = (resource: GrantGiveInput["resource"], who: Caller) =>
     resource.kind === "environment"
       ? lendableEnvironment(resource.environmentId, who)
       : resource.kind === "ai-account"
         ? lendableAiAccount(resource.aiAccountId, who)
-        : lendableVaultGroup(resource.vaultGroupId, who);
+        : resource.kind === "vault-group"
+          ? lendableVaultGroup(resource.vaultGroupId, who)
+          : resource.kind === "space-mcp"
+            ? lendableSpaceTool("space-mcp", resource.spaceMcpId, who)
+            : lendableSpaceTool("space-skill", resource.spaceSkillId, who);
+
+  /**
+   * Decision 1 (option A): an MCP server's Vault references reach a borrower only through the
+   * lender's own Vault groups, lent to that Space and active, never through the borrower's.
+   */
+  const mcpReferencesLent = Effect.fn("Grants.mcpReferencesLent")(function* (
+    item: { readonly lenderKind: string; readonly lenderId: string },
+    references: ReadonlyArray<string>,
+    spaceId: string,
+  ) {
+    if (references.length === 0) return;
+    const lent = yield* sql<{ readonly name: string }>`
+      SELECT DISTINCT e.name FROM grants g
+      JOIN vault_groups v ON v.group_id = g.resource_id
+      JOIN vault_entries e ON e.group_id = v.group_id
+      WHERE g.resource_kind = 'vault-group' AND g.state = 'active' AND g.target_kind = 'space'
+        AND g.target_id = ${spaceId} AND v.owner_kind = ${item.lenderKind}
+        AND v.owner_id = ${item.lenderId} AND v.archived_at IS NULL
+    `.pipe(Effect.catch(storage("read the Vault groups lent there")));
+    const names = new Set(lent.map((row) => row.name));
+    const missing = references.filter((name) => !names.has(name));
+    if (missing.length > 0) {
+      return yield* fail(
+        "not-lendable",
+        `This MCP server needs ${missing.join(", ")}: first lend the Vault groups that hold them to this Space.`,
+      );
+    }
+  });
 
   /** Whether giving it needs a strong factor: an active machine's, any Vault group's. */
   const giveNeedsFactor = (kind: GrantResourceKind, startsActive: boolean) =>
@@ -880,6 +956,8 @@ const make = Effect.gen(function* () {
     const known = yield* targetsOf([{ targetId: input.spaceId }]);
     const target = known.get(input.spaceId);
     if (target === undefined) return yield* fail("not-found", "That Space does not exist.");
+    if (item.kind === "space-mcp")
+      yield* mcpReferencesLent(item, item.references ?? [], input.spaceId);
     const named = yield* knownTargets(who, input.spaceId).pipe(
       Effect.catch(storage("check the Space")),
     );
@@ -1475,6 +1553,13 @@ const make = Effect.gen(function* () {
         const problem = limitsProblem(item.kind, input.limits);
         if (problem !== undefined) return yield* fail("invalid-limits", problem);
         if (item.kind === "environment") yield* hostReady(item.resourceId);
+        // Its Vault groups go to a Space first, with their own warning: no link skips that.
+        if (item.kind === "space-mcp" && (item.references ?? []).length > 0) {
+          return yield* fail(
+            "not-lendable",
+            "An MCP server that uses Vault entries is not lent by link: lend it to a Space you work in, after its Vault groups.",
+          );
+        }
         const current = yield* DateTime.now;
         const at = DateTime.formatIso(current);
         const open = yield* sql<{ readonly n: number }>`

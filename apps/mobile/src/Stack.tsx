@@ -94,6 +94,7 @@ import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsCl
 import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsDiagnosticsRouteScreen";
 import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
 import { SettingsVaultsRouteScreen } from "./features/settings/SettingsVaultsRouteScreen";
+import { SettingsSpaceToolsRouteScreen } from "./features/settings/SettingsSpaceToolsRouteScreen";
 import { SettingsAiAccountsRouteScreen } from "./features/settings/SettingsAiAccountsRouteScreen";
 import { SettingsLoansRouteScreen } from "./features/grants/SettingsLoansRouteScreen";
 import { SettingsLoanLinkRouteScreen } from "./features/grants/SettingsLoanLinkRouteScreen";
@@ -306,6 +307,11 @@ const SETTINGS_SCREENS = {
     screen: SettingsVaultsRouteScreen,
     linking: "settings/user/vaults",
     options: { ...SETTINGS_PAGE_OPTIONS, title: "Vaults" },
+  }),
+  SettingsSpaceTools: createNativeStackScreen({
+    screen: SettingsSpaceToolsRouteScreen,
+    linking: "settings/space/mcp-and-skills",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "MCP servers & Skills" },
   }),
   SettingsLoans: createNativeStackScreen({
     screen: SettingsLoansRouteScreen,

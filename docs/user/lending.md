@@ -16,6 +16,10 @@ way. You keep it: you see how it is used and take it back whenever you want.
   take it back, you are told which Secrets to replace.
 - **A personal machine**. Each Space you lend it to runs in its own Sandbox there, with the CPU,
   memory, process and disk limits you set. You keep working on it as before.
+- **An MCP server or a Skill** of a Space you manage. The borrowing Space's Threads use it; its
+  people never see an MCP server's settings and cannot change or lend it. An MCP server that uses
+  Vault entries is lent only after the Vault groups holding them, so they carry their own warning.
+  See [MCP servers and Skills](space-mcps-and-skills.md).
 
 ## Lend
 

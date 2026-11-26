@@ -9,6 +9,7 @@ import {
   OrchestratorMcpDeleteScheduledTaskInput,
   OrchestratorMcpDeleteScheduledTaskResult,
   OrchestratorMcpListSecretNamesResult,
+  SpaceToolsThreadStatus,
   OrchestratorMcpRequestSecretInput,
   OrchestratorMcpRequestSecretResult,
   OrchestratorMcpFailure,
@@ -204,6 +205,19 @@ const ListSecretNamesTool = Tool.make("list_secret_names", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
+const ListSpaceToolsTool = Tool.make("list_space_tools", {
+  description:
+    "MCP servers and Skills this thread's Space gives it, by name: whether each MCP server is available and, if not, why (such as a Vault entry this thread does not receive). Never a configuration or a value.",
+  // No `parameters`: Tool.EmptyParams (an empty Struct is not a valid MCP input schema).
+  success: SpaceToolsThreadStatus,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "List Space MCP servers and Skills")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
 const CreateThreadsTool = Tool.make("create_threads", {
   description:
     "Create new top-level threads in this checkout. Not delegation. One thread or its own worktree: `t3_thread_launch`. Project, branch, and worktree inherit.",
@@ -311,6 +325,7 @@ export const OrchestratorToolkit = Toolkit.make(
   DeleteScheduledTaskTool,
   RequestSecretTool,
   ListSecretNamesTool,
+  ListSpaceToolsTool,
   CreateThreadsTool,
   ThreadListTool,
   ThreadReadTool,

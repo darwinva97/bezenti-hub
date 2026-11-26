@@ -202,6 +202,7 @@ import { threadAccessOf } from "./commandAccess.ts";
 import * as DirectoryRoots from "../spaces/directoryRoots.ts";
 import * as ServerConfig from "../config.ts";
 import * as SecretDelivery from "../vaults/SecretDelivery.ts";
+import * as SpaceTools from "../spaceTools/SpaceTools.ts";
 import * as AiGatewaySessions from "../ai/AiGatewaySessions.ts";
 import { scratchRootOf } from "../environment/ScratchWorkspace.ts";
 import { effectiveOwner } from "../spaces/SpaceVisibility.ts";
@@ -1081,11 +1082,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const spaces = yield* Effect.serviceOption(SpaceDirectory.SpaceDirectory);
   // Spec 5: a Thread with secrets gets its own provider process, never one shared by Threads.
   const secretDelivery = yield* Effect.serviceOption(SecretDelivery.SecretDelivery);
+  // So does a Thread whose Space has MCP servers: they are its session's alone.
+  const spaceTools = yield* Effect.serviceOption(SpaceTools.SpaceTools);
   const receivesSecrets = (threadId: ThreadId) =>
-    Option.isNone(secretDelivery)
-      ? Effect.succeed(false)
-      : // Unreadable: a process of its own, the side that never shares secrets.
-        secretDelivery.value.mayReceiveSecrets(threadId).pipe(Effect.orElseSucceed(() => true));
+    Effect.all([
+      Option.isNone(secretDelivery)
+        ? Effect.succeed(false)
+        : // Unreadable: a process of its own, the side that never shares secrets.
+          secretDelivery.value.mayReceiveSecrets(threadId).pipe(Effect.orElseSucceed(() => true)),
+      Option.isNone(spaceTools)
+        ? Effect.succeed(false)
+        : spaceTools.value.threadHasMcps(threadId).pipe(Effect.orElseSucceed(() => true)),
+    ]).pipe(Effect.map(([secrets, mcps]) => secrets || mcps));
   // Spec 4 ticket 06: so does a Thread on the AI gateway (its process holds the Thread's key).
   const aiGatewaySessions = yield* Effect.serviceOption(AiGatewaySessions.AiGatewaySessions);
   const usesAiGateway = (input: {

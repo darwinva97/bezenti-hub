@@ -77,6 +77,30 @@ describe("upstream telemetry", () => {
   });
 });
 
+describe("issue forms", () => {
+  const templates = NodePath.join(REPO_ROOT, ".github/ISSUE_TEMPLATE");
+
+  it("never send reporters to the upstream repository", () => {
+    const matches: Array<string> = [];
+    for (const file of sourceFiles(templates)) {
+      const lines = NodeFS.readFileSync(file, "utf8").split("\n");
+      lines.forEach((line, index) => {
+        if (/pingdotgg\/t3code/i.test(line)) {
+          matches.push(`${NodePath.relative(REPO_ROOT, file)}:${index + 1}: ${line.trim()}`);
+        }
+      });
+    }
+    expect(matches).toEqual([]);
+  });
+
+  it("offer a feature request form in this repository", () => {
+    const forms = NodeFS.readdirSync(templates).map((name) =>
+      NodeFS.readFileSync(NodePath.join(templates, name), "utf8"),
+    );
+    expect(forms.some((form) => /^name: Feature request$/m.test(form))).toBe(true);
+  });
+});
+
 describe("upstream hosts", () => {
   it("are never linked from a shipped app, package, script, workflow, or user doc", () => {
     const matches: Array<string> = [];

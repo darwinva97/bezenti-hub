@@ -337,6 +337,7 @@ export const MCP_TOOL_RULES: Readonly<Record<string, DoorRule>> = {
   preview_wait_for: PREVIEW,
   read_pull_request_guide: rpc(WS_METHODS.pullRequestsReviewGuide),
   list_secret_names: OWN_THREAD,
+  list_space_tools: OWN_THREAD,
   request_secret: OWN_THREAD,
   run_scheduled_task_now: rpc(WS_METHODS.scheduledTasksRunNow),
   schedule_task: TASK,

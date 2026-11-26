@@ -25,6 +25,7 @@ import {
   type OrchestratorMcpDelegateTaskResult,
   type OrchestratorMcpDeleteScheduledTaskInput,
   type OrchestratorMcpListSecretNamesResult,
+  type SpaceToolsThreadStatus,
   type OrchestratorMcpRequestSecretInput,
   type OrchestratorMcpRequestSecretResult,
   type OrchestratorMcpDeleteScheduledTaskResult,
@@ -135,6 +136,7 @@ import {
 import { visibleScheduledTasks } from "../scheduledTasks/visibleScheduledTasks.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SecretDelivery from "../vaults/SecretDelivery.ts";
+import * as SpaceTools from "../spaceTools/SpaceTools.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -207,6 +209,10 @@ export interface OrchestratorMcpServiceShape {
   readonly listSecretNames: (
     scope: McpInvocationScope,
   ) => Effect.Effect<OrchestratorMcpListSecretNamesResult, OrchestratorMcpFailure>;
+  /** The caller's own Thread's Space MCP servers and Skills: names and state, never values. */
+  readonly listSpaceTools: (
+    scope: McpInvocationScope,
+  ) => Effect.Effect<SpaceToolsThreadStatus, OrchestratorMcpFailure>;
   readonly listThreads: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadListInput,
@@ -1075,6 +1081,7 @@ const make = Effect.gen(function* () {
   const secretRequests = yield* SecretRequests.SecretRequests;
   // On the Hub; a narrow test or a joined machine has none, and its agents then list nothing.
   const secretDelivery = yield* Effect.serviceOption(SecretDelivery.SecretDelivery);
+  const spaceTools = yield* Effect.serviceOption(SpaceTools.SpaceTools);
 
   const requireCapability = (scope: McpInvocationScope) =>
     scope.capabilities.has("orchestration")
@@ -2081,6 +2088,20 @@ const make = Effect.gen(function* () {
         );
       yield* Effect.annotateCurrentSpan({ "secret_names.count": secrets.length });
       return { secrets };
+    }),
+    listSpaceTools: Effect.fn("OrchestratorMcpService.listSpaceTools")(function* (scope) {
+      // As list_secret_names: the credential's own Thread, and only while its User sees it.
+      const threadScope = yield* requireThreadScope(scope, "list_space_tools");
+      const threadId = threadScope.thread.threadId;
+      yield* loadReadableThread(scope, threadId);
+      if (Option.isNone(spaceTools)) return { mcps: [], skills: [] };
+      return yield* spaceTools.value
+        .threadStatus({ threadId })
+        .pipe(
+          Effect.mapError((error) =>
+            failure("orchestration_error", `Could not list the MCP servers: ${error.message}`),
+          ),
+        );
     }),
     requestSecret: Effect.fn("OrchestratorMcpService.requestSecret")(function* (scope, input) {
       const { scope: threadScope, parent } = yield* loadThreadCaller(scope, "request_secret");

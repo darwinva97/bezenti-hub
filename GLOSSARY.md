@@ -132,6 +132,18 @@ _Avoid_: Mounted secret, volume
 A short-lived token the Hub signs for one Thread, naming its User, Space, Project and Thread, which outside systems (Kubernetes, OpenBao, cloud accounts) trust instead of a stored secret. It reaches the Thread as a Vault entry.
 _Avoid_: OIDC token, ID token, JWT (as a name), service account token
 
+**Space MCP**:
+A third-party MCP server that belongs to a Space: a command (stdio) or a URL (http), with arguments, environment variables and headers. The Hub hands it to the provider of every Thread of its Space, and of Spaces it is lent to. Not the Hub's own MCP tools (`t3-code`).
+_Avoid_: MCP (alone), configured MCP, plugin
+
+**Space Skill**:
+A `SKILL.md` with its frontmatter and supporting files, kept in a Space and handed to its Threads. It holds no Secrets; it may name the Vault entries it expects.
+_Avoid_: Skill (alone, for one found in a machine's folders), prompt, plugin
+
+**Vault reference**:
+`${NAME}` in a Space MCP's value: the Vault entry of that environment-variable name, filled in on the Thread's machine when its process starts. The value is never stored with the MCP.
+_Avoid_: Placeholder, secret ref
+
 **Sandbox**:
 An Environment the Hub runs on its own machine for exactly one Space, isolated from every other Space. It is where a Space's work runs when no other Environment is chosen.
 _Avoid_: Container, VM, workspace, default environment

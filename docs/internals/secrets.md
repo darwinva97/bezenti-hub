@@ -728,6 +728,16 @@ Space's owner) is never a Project's add or remove, in the service, in `forThread
 (Threads without a Project) takes no choices: it spans every Space. `vaults.choices` reads them for
 whoever sees the Space.
 
+**Space MCPs** (`spaceTools/`, .scratch/mcps-and-skills) reach a Vault entry only by name, as
+`${NAME}`, and never hold a value. Saving one checks each name against the groups reaching its
+Space, answering alike whether or not another Space holds it. At a session's open
+(`SpaceTools.forSession`) a server whose names are not all in the Thread's plan is not sent: it is
+«not-delivered», never started with an empty value. The rest travel unresolved in
+`provider.openSession` (`spaceMcps`, contract 17) and the machine fills them in from that session's
+own `secretEnv` (`resolveSpaceMcps`), so a reference reaches nothing the set itself does not.
+A lent MCP adds no reach: decision A lends it only to a Space that already borrows the lender's
+groups holding its names, and those groups' rules (`lent-dangerous`, `lent-machine`) still apply.
+
 ## The effective set (`vaults/EffectiveVaults.ts`)
 
 `EffectiveVaults.forThread({ threadId, actingUserId })` is the only place that computes which

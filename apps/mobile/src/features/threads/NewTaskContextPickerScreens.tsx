@@ -122,7 +122,11 @@ function EnvironmentPickerRow(props: {
       {expanded ? (
         <View className="gap-3 px-4 pb-4">
           {diagnosis ? (
-            <ConnectionDiagnosisDetails hostLabel={props.title} diagnosis={diagnosis} />
+            <ConnectionDiagnosisDetails
+              hostLabel={props.title}
+              diagnosis={diagnosis}
+              presentation={presentation}
+            />
           ) : (
             <Text className="text-sm text-foreground-muted">{status}</Text>
           )}

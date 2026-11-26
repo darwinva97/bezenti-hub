@@ -3,12 +3,15 @@ import {
   AVAILABLE_CONNECTION_STATE,
   type ConnectionDiagnosis,
   connectionDiagnosisText,
+  connectionRoutes,
   presentConnectionDiagnosis,
+  routeHttpBaseUrl,
   type EnvironmentPresentation,
 } from "@t3tools/client-runtime/connection";
 import type { EnvironmentId } from "@t3tools/contracts";
 import Constants from "expo-constants";
 import { AsyncResult } from "effect/reactivity";
+import { useState } from "react";
 import { View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -16,6 +19,8 @@ import { Button } from "../../components/ui/Button";
 import { environmentCatalog } from "../../connection/catalog";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import * as Dialog from "../../components/ui/Dialog";
+import { signInToHub } from "../../state/use-remote-environment-registry";
 
 const HOP_MARK = { ok: "✓", failed: "✕", unchecked: "–" } as const;
 const HOP_NOTE = { ok: "", failed: " · Failed", unchecked: " · Not checked" } as const;
@@ -41,13 +46,39 @@ export function useConnectionDiagnosis(
   return { diagnosis, state };
 }
 
+function SignInAgainButton(props: { readonly presentation: EnvironmentPresentation }) {
+  const [signingIn, setSigningIn] = useState(false);
+  const route = connectionRoutes(props.presentation.entry)[0];
+  const hubUrl = route === undefined ? null : routeHttpBaseUrl(route);
+  if (hubUrl === null) return null;
+  return (
+    <Button
+      label={signingIn ? "Signing in…" : "Sign in again"}
+      icon="person.crop.circle"
+      tone="primary"
+      disabled={signingIn}
+      onPress={() => {
+        setSigningIn(true);
+        void signInToHub(hubUrl, props.presentation.entry.target.environmentId).then((outcome) => {
+          setSigningIn(false);
+          if (outcome.error !== null) Dialog.alert("Could not sign in", outcome.error);
+        });
+      }}
+    />
+  );
+}
+
 export function ConnectionDiagnosisDetails(props: {
   readonly hostLabel: string;
   readonly diagnosis: ConnectionDiagnosis;
+  readonly presentation: EnvironmentPresentation | null;
 }) {
   const { diagnosis } = props;
   return (
     <View className="gap-3">
+      {diagnosis.signInAgain && props.presentation !== null ? (
+        <SignInAgainButton presentation={props.presentation} />
+      ) : null}
       <View className="gap-0.5">
         {diagnosis.hops.map((hop) => (
           <Text

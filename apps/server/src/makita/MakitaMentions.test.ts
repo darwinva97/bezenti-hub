@@ -286,6 +286,74 @@ live(
     }),
 );
 
+live(
+  "Makita ticket 29: «@makita-bot para» stops like /makita stop and «reinténtalo» retries a failed task; a longer sentence, a stranger or an edit does not",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* makitaReady;
+      const { setup } = ctx;
+      yield* ctx.configure({ triggers: ALL_TRIGGERS });
+      yield* setup.makitaIntake.pollDue;
+      setup.github.label(REPO, 12, "makita", OCTOCAT);
+      yield* tick(ctx);
+
+      // Red-first: a stranger's stop, a stop added by an edit, and a sentence that only contains
+      // the word stop nothing; the sentence reaches the Thread as ordinary conversation.
+      setup.github.commentOn(REPO, 12, STRANGER, "@makita-bot para");
+      const thanks = setup.github.commentOn(REPO, 12, OCTOCAT, "Thanks!");
+      yield* tick(ctx);
+      setup.github.editComment(REPO, thanks.id, "@makita-bot stop");
+      later(ctx, 5);
+      setup.github.commentOn(REPO, 12, OCTOCAT, "@makita-bot no pares hasta que pase CI");
+      yield* tick(ctx);
+      assert.equal((yield* tasksOf(ctx))[0]!.state, "running");
+      assert.lengthOf(setup.sends, 1);
+      assert.include(setup.sends[0]!.input.text, "no pares hasta que pase CI");
+      assert.deepEqual(
+        (yield* ctx.events).slice(1).map((row) => [row.login, row.outcome, row.detail]),
+        [
+          ["mallory", "ignored-not-allowed", null],
+          ["octocat", "ignored-edited", null],
+          ["octocat", "started", "continued"],
+        ],
+      );
+
+      // Said plainly, with the mention at the end: the task stops, with a 👍 and no text.
+      later(ctx, 6);
+      const stop = setup.github.commentOn(REPO, 12, OCTOCAT, "¡Para, por favor! @makita-bot");
+      yield* tick(ctx);
+      assert.deepInclude((yield* tasksOf(ctx))[0], { state: "stopped", failure: "github-stop" });
+      assert.deepEqual(setup.github.reactions, [
+        { repo: REPO, feed: "issues", commentId: stop.id, content: "+1" },
+      ]);
+      assert.deepEqual(
+        [(yield* ctx.events).at(-1)!.outcome, (yield* ctx.events).at(-1)!.detail],
+        ["command", "stop"],
+      );
+      assert.deepEqual(setup.github.commentsBy(REPO, 12, "makita-bot"), [
+        "On it. I'll report back here.",
+      ]);
+
+      // A failed task is retried in words; a stranger's words do nothing.
+      setup.launchState.fail = true;
+      setup.github.label(REPO, 13, "makita", OCTOCAT);
+      yield* tick(ctx);
+      setup.launchState.fail = false;
+      setup.github.commentOn(REPO, 13, STRANGER, "@makita-bot try again");
+      setup.github.commentOn(REPO, 13, OCTOCAT, "@makita-bot inténtalo de nuevo");
+      yield* tick(ctx);
+      assert.lengthOf(setup.launches, 3);
+      assert.include(
+        setup.launches[2]!.input.initialMessage!.text,
+        "asked you to try the issue below again",
+      );
+      assert.deepEqual(
+        (yield* tasksOf(ctx)).filter((row) => row.number === 13).map((row) => row.state),
+        ["failed", "running"],
+      );
+    }),
+);
+
 live("a mention in a pull request's review comment starts a task on the pull request", () =>
   Effect.gen(function* () {
     const ctx = yield* makitaReady;

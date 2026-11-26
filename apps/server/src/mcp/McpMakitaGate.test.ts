@@ -68,6 +68,7 @@ const NAMES = [
   "makita_open_pull_request",
   "makita_ci_logs",
   "makita_request_merge",
+  "makita_request_approval",
   "makita_search",
   "makita_label",
   "makita_close_issue",
@@ -143,6 +144,7 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       makita_open_pull_request: false,
       makita_ci_logs: false,
       makita_request_merge: false,
+      makita_request_approval: false,
       // Ticket 23: every Makita Thread may search its own repository; 24: labels only when listed.
       makita_search: true,
       makita_label: false,
@@ -163,6 +165,8 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       makita_push: true,
       makita_open_pull_request: true,
       makita_ci_logs: true,
+      // Ticket 29: only a pushing configuration has pushes that wait for an approver.
+      makita_request_approval: true,
     });
     // Ticket 13: only a configuration that may land sees the merge request; still no merge tool.
     expect(asLander).toEqual({ ...asPusher, makita_request_merge: true });
@@ -176,6 +180,7 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       makita_open_pull_request: false,
       makita_ci_logs: false,
       makita_request_merge: false,
+      makita_request_approval: false,
       makita_search: false,
       makita_label: false,
       makita_close_issue: false,
@@ -198,6 +203,7 @@ it.effect("a Makita Thread reaches only its allow-list; nobody else reaches maki
       "makita_open_pull_request",
       "makita_push",
       "makita_read_issue",
+      "makita_request_approval",
       "makita_request_merge",
       "makita_search",
       "t3_background_wait",

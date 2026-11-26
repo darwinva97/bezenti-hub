@@ -6,6 +6,8 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { plainIntentOf } from "./makitaPlainWords.ts";
+
 export type MakitaFeed = "issue-events" | "issue-comments" | "review-comments";
 export const MAKITA_FEEDS: ReadonlyArray<MakitaFeed> = [
   "issue-events",
@@ -139,14 +141,19 @@ export const formatCommentCursor = (cursor: CommentCursor) => `${cursor.at}|${cu
 export const isAfter = (comment: FeedComment, cursor: CommentCursor) =>
   comment.updatedAt > cursor.at || (comment.updatedAt === cursor.at && comment.id > cursor.id);
 
-/** Whether `body` mentions `@login` as a whole word, outside quoted (`>`) lines. */
+/**
+ * Whether `body` mentions `@login` as a whole word, outside quoted (`>`) lines and, as on GitHub,
+ * outside inline code (ticket 29: Makita's own «reply `@makita ok`» is not a mention).
+ */
 export const mentions = (body: string, login: string) => {
   if (login.length === 0) return false;
   const escaped = login.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   const pattern = new RegExp(`(?:^|[^\\w/@.-])@${escaped}(?![\\w-])`, "iu");
   return body
     .split(/\r?\n/u)
-    .some((line) => !line.trimStart().startsWith(">") && pattern.test(line));
+    .some(
+      (line) => !line.trimStart().startsWith(">") && pattern.test(line.replace(/`[^`]*`/gu, " ")),
+    );
 };
 
 export type MakitaCommand = "stop" | "retry";
@@ -198,15 +205,28 @@ export const decideComment = (input: {
   readonly makita: { readonly id: number; readonly login: string };
   /** The issue's tasks: the live one's configuration, or the newest one's if it failed. */
   readonly tasks: { readonly live: string | null; readonly failed: string | null };
+  /** Ticket 14: said on Makita's own pull request, where words need no mention. */
+  readonly onOwnPull?: boolean;
 }): CommentDecision | undefined => {
   const { comment, configs, tasks } = input;
-  const command = commandOf(comment.body);
+  const byId = (configId: string | null) =>
+    configId === null ? undefined : configs.find((config) => config.configId === configId);
+  // Ticket 29: «para» or «reintenta» said to Makita is the command; a retry only where one applies.
+  const plain = plainIntentOf(comment.body, {
+    login: input.makita.login,
+    addressed: input.onOwnPull === true ? "pull" : "mention",
+  });
+  const command =
+    commandOf(comment.body) ??
+    (plain === "stop"
+      ? "stop"
+      : plain === "retry" && tasks.live === null && byId(tasks.failed) !== undefined
+        ? "retry"
+        : undefined);
   const mentioned = mentions(comment.body, input.makita.login);
   if (command === undefined && !mentioned) return;
   const oldest = configs[0];
   if (oldest === undefined) return;
-  const byId = (configId: string | null) =>
-    configId === null ? undefined : configs.find((config) => config.configId === configId);
   let candidates: ReadonlyArray<CommentDecidingConfig>;
   let missing: string | null = null;
   const trigger = command ?? "mention";

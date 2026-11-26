@@ -252,6 +252,49 @@ live(
     }),
 );
 
+live(
+  "Makita ticket 29: «@makita-bot reábrelo» reopens an issue Makita closed as /makita reopen does; a stranger's words or no mention do nothing",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* makitaReady;
+      const { setup } = ctx;
+      yield* ctx.configure(CLOSING);
+      yield* setup.makitaIntake.pollDue;
+      const thread = yield* taskFor(ctx, 12);
+      assert.isTrue((yield* setup.makitaIssueCloses.closeForThread(thread, NOT_WANTED)).closed);
+      // The close says how in words first; inline code is not a mention, so it is not an order.
+      assert.include(
+        setup.github.commentsBy(REPO, 12, "makita-bot").at(-1)!,
+        "reopen this issue or reply `@makita-bot reopen` (or `/makita reopen`)",
+      );
+      const stranger = setup.github.commentOn(REPO, 12, STRANGER, "@makita-bot reopen it");
+      setup.github.commentOn(REPO, 12, OCTOCAT, "reábrelo");
+      setup.github.commentOn(REPO, 12, OCTOCAT, "@makita-bot reopen it once the fix is out");
+      yield* tick(ctx);
+      assert.equal(setup.github.issues.get(`${REPO}#12`)!.state, "closed");
+
+      const says = setup.github.commentOn(REPO, 12, OCTOCAT, "@makita-bot ¡Reábrelo, por favor!");
+      yield* tick(ctx);
+      assert.equal(setup.github.issues.get(`${REPO}#12`)!.state, "open");
+      const events = (yield* ctx.events).filter((row) => row.detail?.startsWith("reopen"));
+      assert.deepEqual(
+        events.map((row) => [row.key, row.outcome, row.detail]),
+        [
+          [`gh:issue-comment:${stranger.id}`, "ignored-not-allowed", "reopen"],
+          [`gh:issue-comment:${says.id}`, "command", "reopen:done"],
+        ],
+      );
+      assert.deepEqual(
+        setup.github.reactions.map((reaction) => [reaction.commentId, reaction.content]),
+        [[says.id, "+1"]],
+      );
+      const [row] = yield* setup.server.sql<{ readonly via: string; readonly login: string }>`
+        SELECT reopened_via AS via, reopened_by_login AS login FROM makita_issue_closes
+      `;
+      assert.deepEqual(row, { via: "command", login: "octocat" });
+    }),
+);
+
 live("an allowed person reopening on GitHub is recorded; a stranger's reopening is not", () =>
   Effect.gen(function* () {
     const ctx = yield* makitaReady;

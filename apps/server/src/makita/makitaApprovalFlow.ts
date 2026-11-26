@@ -23,18 +23,22 @@ import * as AuditLog from "../audit/AuditLog.ts";
 import * as CommandActor from "../auth/CommandActor.ts";
 import type * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import {
+  type ApprovalRequestKind,
+  approvalRequestKeysOf,
   approverIdsOf,
+  approvesWaiting,
   decodePending,
   encodeApproval,
   encodePending,
-  isApprovalCommand,
+  isApprovalOrder,
   isApproverNow,
   liveTaskOfItem,
   type MakitaApproval,
   type MakitaPendingPush,
   pushNeedsApproval,
+  requestText,
 } from "./makitaApprovers.ts";
-import { commentOfKey, commentPath, decodeOneComment } from "./makitaFeeds.ts";
+import { commentOfKey, commentPath, decodeOneComment, mentions } from "./makitaFeeds.ts";
 import type { MakitaGitHub } from "./MakitaGitHub.ts";
 import type { MakitaMachines } from "./MakitaMachines.ts";
 import type { MakitaPushResult } from "./MakitaPushes.ts";
@@ -195,7 +199,7 @@ const hold = Effect.fn("makitaApprovalFlow.holdForApproval")(function* (
   }
   const waiting = (pending: MakitaPendingPush, then: string): MakitaPushResult => ({
     pushed: false,
-    message: `This push needs an approver's \`/makita ok\` before it reaches GitHub. Nothing was pushed; ${pending.branch} (${sizeOf(pending)}) waits. ${then}`,
+    message: `This push needs an approver's approval on GitHub (in their own words, or \`/makita ok\`) before it reaches GitHub. Nothing was pushed; ${pending.branch} (${sizeOf(pending)}) waits. ${then}`,
     branch: pending.branch,
     sha: pending.sha,
     commits: pending.commits,
@@ -230,9 +234,15 @@ const hold = Effect.fn("makitaApprovalFlow.holdForApproval")(function* (
     );
   }
   const who = yield* approversOnIssue(sql, github, task);
-  const body = `Ready to push \`${pending.branch}\` (${sizeOf(pending)}). ${
-    who.length === 0 ? "An approver" : who.map((login) => `@${login}`).join(" or ")
-  } can reply \`/makita ok\` to send it.`;
+  const [bot] = yield* sql<{ readonly login: string }>`
+    SELECT login FROM makita_account WHERE account_id = 'makita'
+  `;
+  const body = requestText({
+    branch: pending.branch,
+    size: sizeOf(pending),
+    approvers: who,
+    makitaLogin: bot?.login ?? "",
+  });
   const posted = yield* postAsHub(sql, github, task, body).pipe(Effect.result);
   if (posted._tag === "Failure" || Option.isNone(posted.success)) {
     if (posted._tag === "Failure") {
@@ -260,6 +270,90 @@ const hold = Effect.fn("makitaApprovalFlow.holdForApproval")(function* (
  */
 export const holdForApproval = (sql: SqlClient.SqlClient, github: GitHub, input: MakitaHoldInput) =>
   hold(sql, github, input).pipe(Effect.catch(asMakitaError("keep the push for approval")));
+
+interface ApprovedTask {
+  readonly taskId: string;
+  readonly configId: string;
+  readonly spaceId: string;
+  readonly repo: string;
+  readonly number: number;
+  /** The waiting push as it was read: only that one is approved. */
+  readonly pendingJson: string | null;
+}
+
+/**
+ * An approver's GitHub approval of the waiting push, inside the caller's transaction: only the push
+ * that was pending when it was read (a newer one needs its own), audited `makita.task.approve`.
+ */
+const recordApprovalWithin = Effect.fn("makitaApprovalFlow.recordApprovalWithin")(function* (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly task: ApprovedTask;
+    readonly pending: MakitaPendingPush;
+    readonly approval: MakitaApproval;
+  },
+) {
+  const { task, approval } = input;
+  const at = yield* nowIso;
+  const updated = yield* sql<{ readonly id: string }>`
+    UPDATE makita_tasks SET pending_push_json = ${encodePending({ ...input.pending, approval })},
+      approved_through = ${encodeApproval(approval)}, replies_without_person = 0,
+      updated_at = ${at}
+    WHERE task_id = ${task.taskId} AND pending_push_json = ${task.pendingJson}
+      AND state NOT IN ('done', 'stopped', 'failed')
+    RETURNING task_id AS id
+  `;
+  if (updated.length === 0) return false;
+  yield* AuditLog.write(sql)({
+    actor: { source: "system" },
+    action: "makita.task.approve",
+    spaceId: SpaceId.make(task.spaceId),
+    target: { kind: "makita_task", id: task.taskId, name: `${task.repo}#${task.number}` },
+    detail: {
+      space: task.spaceId,
+      repo: task.repo,
+      number: task.number,
+      makita: task.configId,
+      via: "github",
+      login: approval.login,
+      sha: input.pending.sha,
+    },
+  });
+  return true;
+});
+
+/** A 👍 on the approving comment, audited; best effort. */
+const thumbsUp = (sql: SqlClient.SqlClient, github: GitHub, task: ApprovedTask, path: string) =>
+  github
+    .rest({
+      operation: "comment-reaction",
+      method: "POST",
+      path: `${path}/reactions`,
+      body: { content: "+1" },
+    })
+    .pipe(
+      Effect.andThen(
+        AuditLog.write(sql)({
+          actor: { source: "system" },
+          action: "makita.github.reaction",
+          spaceId: SpaceId.make(task.spaceId),
+          target: { kind: "makita_task", id: task.taskId, name: `${task.repo}#${task.number}` },
+          detail: {
+            space: task.spaceId,
+            repo: task.repo,
+            number: task.number,
+            makita: task.configId,
+            content: "+1",
+          },
+        }),
+      ),
+      Effect.catch((error) =>
+        Effect.logWarning("Makita could not react to an approval", {
+          taskId: task.taskId,
+          reason: "reason" in error ? error.reason : "storage",
+        }),
+      ),
+    );
 
 /** A queued `/makita ok`, as the tasks pass reads it from `makita_events`. */
 interface MakitaApprovalEvent {
@@ -322,17 +416,16 @@ export const approveFromGitHub = Effect.fn("makitaApprovalFlow.approveFromGitHub
   const comment = decodeOneComment(ref.feed, read.success.body);
   if (comment === undefined) return yield* finish("ignored-no-config", "comment-unreadable");
   const author = comment.author;
-  // Only creation counts, only from the person the intake saw, only the command itself.
-  if (
-    author === null ||
-    author.id !== row.actorId ||
-    comment.updatedAt !== comment.createdAt ||
-    !isApprovalCommand(comment.body)
-  ) {
+  // Only creation counts, only from the person the intake saw.
+  if (author === null || author.id !== row.actorId || comment.updatedAt !== comment.createdAt) {
     return yield* finish("ignored-edited", null);
   }
-  const [account] = yield* sql<{ readonly id: number; readonly paused: string | null }>`
-    SELECT github_user_id AS id, global_paused_at AS paused FROM makita_account
+  const [account] = yield* sql<{
+    readonly id: number;
+    readonly login: string;
+    readonly paused: string | null;
+  }>`
+    SELECT github_user_id AS id, login, global_paused_at AS paused FROM makita_account
     WHERE account_id = 'makita'
   `;
   if (account === undefined || account.paused !== null) {
@@ -342,6 +435,15 @@ export const approveFromGitHub = Effect.fn("makitaApprovalFlow.approveFromGitHub
   const task = yield* liveTaskOfItem(sql, row.repo, comment.number);
   if (task === undefined || task.configId !== row.configId) {
     return yield* finish("command", "nothing-to-approve");
+  }
+  // Still the order itself: `/makita ok`, or its plain words (ticket 29).
+  if (
+    !isApprovalOrder(comment.body, {
+      login: account.login,
+      onOwnPull: comment.number !== task.number,
+    })
+  ) {
+    return yield* finish("ignored-edited", null);
   }
   const [config] = yield* sql<{ readonly paused: string | null; readonly deleted: string | null }>`
     SELECT paused_at AS paused, deleted_at AS deleted FROM makita_configs
@@ -369,73 +471,222 @@ export const approveFromGitHub = Effect.fn("makitaApprovalFlow.approveFromGitHub
     login: author.login,
     commentId: ref.id,
   };
-  const at = yield* nowIso;
+  const target = { ...task, repo: row.repo };
   const approved = yield* sql.withTransaction(
     Effect.gen(function* () {
-      // Only the push that was pending when it was read: a newer one needs its own approval.
-      const updated = yield* sql<{ readonly id: string }>`
-        UPDATE makita_tasks SET pending_push_json = ${encodePending({ ...pending.value, approval })},
-          approved_through = ${encodeApproval(approval)}, replies_without_person = 0,
-          updated_at = ${at}
-        WHERE task_id = ${task.taskId} AND pending_push_json = ${task.pendingJson}
-          AND state NOT IN ('done', 'stopped', 'failed')
-        RETURNING task_id AS id
-      `;
-      if (updated.length === 0) {
+      if (!(yield* recordApprovalWithin(sql, { task: target, pending: pending.value, approval }))) {
         yield* finish("command", "nothing-to-approve", task.taskId);
         return false;
       }
       yield* finish("approval", "approved", task.taskId);
-      yield* AuditLog.write(sql)({
-        actor: { source: "system" },
-        action: "makita.task.approve",
-        spaceId: SpaceId.make(task.spaceId),
-        target: { kind: "makita_task", id: task.taskId, name: `${row.repo}#${task.number}` },
-        detail: {
-          space: task.spaceId,
-          repo: row.repo,
-          number: task.number,
-          makita: task.configId,
-          via: "github",
-          login: author.login,
-          sha: pending.value.sha,
-        },
-      });
       return true;
     }),
   );
   if (!approved) return;
-  yield* github
-    .rest({
-      operation: "comment-reaction",
-      method: "POST",
-      path: `${commentPath(row.repo, ref.feed, ref.id)}/reactions`,
-      body: { content: "+1" },
-    })
-    .pipe(
-      Effect.andThen(
-        AuditLog.write(sql)({
-          actor: { source: "system" },
-          action: "makita.github.reaction",
-          spaceId: SpaceId.make(task.spaceId),
-          target: { kind: "makita_task", id: task.taskId, name: `${row.repo}#${task.number}` },
-          detail: {
-            space: task.spaceId,
-            repo: row.repo,
-            number: task.number,
-            makita: task.configId,
-            content: "+1",
-          },
-        }),
-      ),
-      Effect.catch((error) =>
-        Effect.logWarning("Makita could not react to an approval", {
-          taskId: task.taskId,
-          reason: "reason" in error ? error.reason : "storage",
-        }),
-      ),
-    );
+  yield* thumbsUp(sql, github, target, commentPath(row.repo, ref.feed, ref.id));
 });
+
+/** What `makita_request_approval` answers the agent. */
+export interface MakitaApprovalRequestResult {
+  readonly approved: boolean;
+  readonly message: string;
+}
+
+const notApproved = (message: string): MakitaApprovalRequestResult => ({
+  approved: false,
+  message: `${message} Nothing was approved.`,
+});
+
+const refuseRequest = (reason: MakitaError["reason"], message: string) =>
+  Effect.fail(new MakitaError({ reason, message }));
+
+/**
+ * Ticket 29, `makita_request_approval`: nothing of the call is trusted but the comment's id. The
+ * comment is read again on GitHub and must be an approver's, unedited, newer than Makita's request,
+ * on the task's pull request (or a mention on its issue), the one that woke the current turn, and
+ * unused. Then the waiting push is approved exactly as by `/makita ok`.
+ */
+const requestApproval = Effect.fn("makitaApprovalFlow.requestApproval")(function* (
+  sql: SqlClient.SqlClient,
+  github: GitHub,
+  threadId: string,
+  input: { readonly commentId: number; readonly kind: ApprovalRequestKind },
+) {
+  const [task] = yield* sql<{
+    readonly taskId: string;
+    readonly configId: string;
+    readonly spaceId: string;
+    readonly repo: string;
+    readonly number: number;
+    readonly prNumber: number | null;
+    readonly state: string;
+    readonly pendingJson: string | null;
+    readonly capability: string;
+    readonly configPausedAt: string | null;
+    readonly configDeletedAt: string | null;
+  }>`
+    SELECT t.task_id AS "taskId", t.config_id AS "configId", t.space_id AS "spaceId", t.repo,
+      t.number, t.pr_number AS "prNumber", t.state, t.pending_push_json AS "pendingJson",
+      c.capability, c.paused_at AS "configPausedAt", c.deleted_at AS "configDeletedAt"
+    FROM makita_tasks t JOIN makita_configs c ON c.config_id = t.config_id
+    WHERE t.thread_id = ${threadId}
+  `;
+  if (task === undefined) {
+    return yield* refuseRequest("forbidden", "This Thread is not a Makita task's.");
+  }
+  const [bot] = yield* sql<{
+    readonly id: number;
+    readonly login: string;
+    readonly paused: string | null;
+  }>`
+    SELECT github_user_id AS id, login, global_paused_at AS paused FROM makita_account
+    WHERE account_id = 'makita'
+  `;
+  // Anything stopped wins, a `/makita stop` already heard for its issue or pull request too.
+  const numbers = task.prNumber === null ? [task.number] : [task.number, task.prNumber];
+  const stops = yield* sql<{ readonly key: string }>`
+    SELECT event_key AS key FROM makita_events
+    WHERE outcome = 'queued' AND detail = 'stop' AND host = ${MAKITA_GITHUB_HOST}
+      AND repo = ${task.repo} AND ${sql.in("number", numbers)}
+  `;
+  if (!LIVE.includes(task.state)) {
+    return yield* refuseRequest("forbidden", "This Makita task has ended.");
+  }
+  if (
+    bot === undefined ||
+    bot.paused !== null ||
+    task.configPausedAt !== null ||
+    task.configDeletedAt !== null ||
+    stops.length > 0
+  ) {
+    return yield* refuseRequest("forbidden", "Makita is stopped for this work.");
+  }
+  if (task.capability !== "push") {
+    return yield* refuseRequest("forbidden", "This Makita configuration may not push.");
+  }
+  const pending = decodePending(task.pendingJson);
+  if (Option.isNone(pending)) return notApproved("No push of yours waits for an approver.");
+  if (pending.value.approval !== undefined) {
+    return notApproved("Your waiting push is already approved: the Hub sends it on its next pass.");
+  }
+  const request = pending.value.request;
+  if (request === undefined) {
+    return notApproved(
+      "Makita has not asked on GitHub for this push yet: call makita_push again so it asks.",
+    );
+  }
+  if (input.kind === "review") {
+    return notApproved(
+      "A review cannot approve a push: GitHub keeps no record of whether its text was edited. The approver can say it in a comment.",
+    );
+  }
+  if (!Number.isSafeInteger(input.commentId) || input.commentId <= 0) {
+    return notApproved("That is not a comment id.");
+  }
+  const feed = input.kind === "issue-comment" ? "issue-comments" : "review-comments";
+  const read = yield* github
+    .rest({ operation: "comment-read", path: commentPath(task.repo, feed, input.commentId) })
+    .pipe(Effect.result);
+  if (read._tag === "Failure") {
+    return read.failure.reason === "not-found"
+      ? notApproved("There is no such comment in your task's repository.")
+      : yield* refuseRequest(
+          "github",
+          `Could not read the comment on GitHub: ${read.failure.message}`,
+        );
+  }
+  const comment = decodeOneComment(feed, read.success.body);
+  if (comment === undefined) return notApproved("That is not a comment Makita can read.");
+  const onPull = task.prNumber !== null && comment.number === task.prNumber;
+  const mentionOnIssue =
+    comment.number === task.number &&
+    input.kind === "issue-comment" &&
+    mentions(comment.body, bot.login);
+  if (!onPull && !mentionOnIssue) {
+    return notApproved(
+      "That comment is neither on your pull request nor a mention of Makita on your issue.",
+    );
+  }
+  const author = comment.author;
+  if (author === null || author.id === bot.id) {
+    return notApproved("That comment is not a person's: it cannot approve anything.");
+  }
+  if (comment.updatedAt !== comment.createdAt) {
+    return notApproved("That comment was edited: an edited comment never approves.");
+  }
+  if (!approvesWaiting(task.pendingJson, { feed, id: comment.id, createdAt: comment.createdAt })) {
+    return notApproved(
+      "That comment was written before Makita asked for this push: only an approval given after it counts.",
+    );
+  }
+  if (!(yield* isApproverNow(sql, task.configId, author.id))) {
+    return notApproved(
+      "Only an approver's comment can approve your push, and its author is not one.",
+    );
+  }
+  const keys = approvalRequestKeysOf(input.kind, comment.id);
+  const wakes = yield* sql<{
+    readonly key: string;
+    readonly actorId: number | null;
+    readonly seenAt: string;
+  }>`
+    SELECT event_key AS key, actor_github_id AS "actorId", seen_at AS "seenAt"
+    FROM makita_events WHERE task_id = ${task.taskId} AND outcome = 'started'
+    ORDER BY seen_at DESC, rowid DESC
+  `;
+  const cited = wakes.find((wake) => wake.key === keys.event);
+  if (cited === undefined || cited.actorId !== author.id || cited.seenAt !== wakes[0]?.seenAt) {
+    return notApproved(
+      "That comment did not wake your current turn: only the comment that woke you can approve.",
+    );
+  }
+  const approval: MakitaApproval = {
+    via: "github",
+    at: comment.createdAt,
+    login: author.login,
+    commentId: comment.id,
+  };
+  const at = yield* nowIso;
+  const outcome = yield* sql.withTransaction(
+    Effect.gen(function* () {
+      // One comment, one attempt: marked with the approval itself.
+      const marked = yield* sql<{ readonly key: string }>`
+        INSERT INTO makita_events (event_key, host, repo, number, kind, actor_github_id,
+          actor_login, created_at_github, seen_at, config_id, outcome, detail, task_id)
+        VALUES (${keys.used}, ${MAKITA_GITHUB_HOST}, ${task.repo}, ${comment.number},
+          ${onPull ? "pull" : "issue"}, ${author.id}, ${author.login}, ${comment.createdAt},
+          ${at}, ${task.configId}, 'approval', 'requested', ${task.taskId})
+        ON CONFLICT (event_key) DO NOTHING
+        RETURNING event_key AS key
+      `;
+      if (marked.length === 0) return "used" as const;
+      const recorded = yield* recordApprovalWithin(sql, {
+        task,
+        pending: pending.value,
+        approval,
+      });
+      return recorded ? ("approved" as const) : ("gone" as const);
+    }),
+  );
+  if (outcome === "used") return notApproved("That comment was already used for an approval.");
+  if (outcome === "gone") return notApproved("No push of yours waits for an approver any more.");
+  yield* thumbsUp(sql, github, task, commentPath(task.repo, feed, comment.id));
+  return {
+    approved: true,
+    message: `Approved by @${author.login}. The Hub pushes exactly ${pending.value.sha.slice(0, 12)} to ${pending.value.branch} on its next pass and tells you; stop here until then.`,
+  } satisfies MakitaApprovalRequestResult;
+});
+
+/** `makita_request_approval` for the calling agent's own Thread; storage failures are said. */
+export const requestApprovalForThread = (
+  sql: SqlClient.SqlClient,
+  github: GitHub,
+  threadId: string,
+  input: { readonly commentId: number; readonly kind: ApprovalRequestKind },
+) =>
+  requestApproval(sql, github, threadId, input).pipe(
+    Effect.catch(asMakitaError("handle the approval request")),
+  );
 
 /**
  * The Owner's «Approve» on the Hub, inside the caller's transaction: the waiting push gets the

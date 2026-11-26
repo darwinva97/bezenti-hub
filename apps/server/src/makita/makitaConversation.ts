@@ -14,6 +14,7 @@ import {
   decideComment,
   type FeedComment,
 } from "./makitaFeeds.ts";
+import { plainIntentOf } from "./makitaPlainWords.ts";
 
 /** The `detail` of an event queued from Makita's pull request, and of the wake it made. */
 export const CONVERSATION = "conversation";
@@ -110,12 +111,17 @@ export const decideConversation = (input: {
 }): CommentDecision | undefined => {
   const { comment, config, makita } = input;
   if (config === undefined || comment.author?.id === makita.id) return;
-  if (commandOf(comment.body) !== undefined) {
+  // Ticket 29: «para» here, no mention needed, is `/makita stop`.
+  if (
+    commandOf(comment.body) !== undefined ||
+    plainIntentOf(comment.body, { login: makita.login, addressed: "pull" }) === "stop"
+  ) {
     return decideComment({
       comment,
       configs: [config],
       makita,
       tasks: { live: config.configId, failed: null },
+      onOwnPull: true,
     });
   }
   const first = (comment.body.split(/\r?\n/u)[0] ?? "").trim().toLowerCase();

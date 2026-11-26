@@ -157,6 +157,7 @@ export const MAKITA_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "makita_open_pull_request",
   "makita_ci_logs",
   "makita_request_merge",
+  "makita_request_approval",
   "makita_search",
   "makita_label",
   "makita_close_issue",
@@ -166,12 +167,13 @@ export const MAKITA_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
 
 /**
  * Ticket 10: listed only when the Makita Thread's configuration may push branches; ticket 12 adds
- * its pull request and the CI logs.
+ * its pull request and the CI logs, ticket 29 the request to approve its waiting push.
  */
 const MAKITA_PUSH_TOOLS: ReadonlySet<string> = new Set([
   "makita_push",
   "makita_open_pull_request",
   "makita_ci_logs",
+  "makita_request_approval",
 ]);
 
 /** Ticket 13: listed only when the configuration may push and land. */

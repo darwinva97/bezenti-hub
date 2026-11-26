@@ -96,6 +96,17 @@ export const layer = McpToolAccess.toLayer(MakitaToolkit, {
         .pipe(Effect.mapError(asFailure));
     }),
   ),
+  makita_request_approval: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const tasks = yield* MakitaTasks;
+      return yield* tasks
+        .requestApprovalForThread(yield* callerThread, {
+          commentId: input.commentId,
+          kind: input.kind,
+        })
+        .pipe(Effect.mapError(asFailure));
+    }),
+  ),
   makita_close_issue: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const closes = yield* MakitaIssueCloses;

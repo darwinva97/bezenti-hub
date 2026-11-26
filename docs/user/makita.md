@@ -10,7 +10,7 @@ working as the exact form.
   read your comment.
 - **On Makita's own pull request**, no mention is needed: `stop` is enough.
 
-Only people the configuration answers can steer it. Makita ignores everyone else.
+Only people the configuration answers can steer it. Makita takes no order from anyone else.
 
 ## Short orders
 

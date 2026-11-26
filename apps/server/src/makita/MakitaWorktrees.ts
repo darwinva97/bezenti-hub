@@ -16,6 +16,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as AuditLog from "../audit/AuditLog.ts";
 import { movedWorktreeNames } from "../environment/MovedWorkspace.ts";
+import { threadTurnsOf } from "../orchestration-v2/threadTurns.ts";
 import { MakitaGitHub, type MakitaGitHubError } from "./MakitaGitHub.ts";
 import { MakitaIntake } from "./MakitaIntake.ts";
 import { MakitaMachines, type MakitaRemoval } from "./MakitaMachines.ts";
@@ -337,9 +338,17 @@ const make = Effect.gen(function* () {
         AND (worktree_next_try_at IS NULL OR worktree_next_try_at <= ${iso(now)})
         AND (pr_number IS NOT NULL OR landed_sha IS NOT NULL OR pr_closed_at IS NOT NULL
           OR updated_at <= ${iso(now - WORKTREE_GRACE_MS)})
-      ORDER BY updated_at, task_id LIMIT ${BATCH}
+      ORDER BY CASE WHEN pr_number IS NULL OR landed_sha IS NOT NULL OR pr_closed_at IS NOT NULL
+          THEN 0 ELSE 1 END, updated_at, task_id
+      LIMIT ${BATCH}
     `;
+    // A turn still going in its Thread (a person's, or the agent finishing): kept for now.
+    const turns = yield* threadTurnsOf(
+      sql,
+      tasks.map((task) => task.threadId),
+    );
     for (const task of tasks) {
+      if (turns.get(task.threadId)?.going === true) continue;
       yield* removeOne(task, canAskGitHub).pipe(
         Effect.catch((cause) =>
           Effect.logError("Makita could not remove a finished task's worktree", {

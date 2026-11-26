@@ -253,7 +253,7 @@ live(
 );
 
 live(
-  "a failed task without a pull request keeps its worktree for 7 days, then it is removed; a live one keeps it",
+  "a failed task without a pull request keeps its worktree for 7 days, then it is removed; a live one, or one whose Thread still has a turn going, keeps it",
   () =>
     Effect.gen(function* () {
       const ctx = yield* makitaReady;
@@ -263,11 +263,24 @@ live(
       const recent = yield* seed(ctx, { ...base, number: 14, state: "failed", days: 6 });
       const old = yield* seed(ctx, { ...base, number: 15, state: "failed", days: 8 });
       const running = yield* seed(ctx, { ...base, number: 16, state: "running", days: 40 });
+      const busy = yield* seed(ctx, { ...base, number: 21, state: "stopped", days: 40 });
+      yield* setup.server.sql`
+        INSERT INTO orchestration_v2_projection_runs
+          (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+        VALUES ('wt-run-21', ${busy.threadId}, 1, 'claudeAgent', 'running',
+          '2026-11-25T00:00:00.000Z', '{}')
+      `;
 
       yield* setup.makitaWorktrees.sweep;
       assert.isTrue(NodeFS.existsSync(recent.cwd));
       assert.isFalse(NodeFS.existsSync(old.cwd));
       assert.isTrue(NodeFS.existsSync(running.cwd));
+      assert.isTrue(NodeFS.existsSync(busy.cwd));
+      yield* setup.server.sql`
+        UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE run_id = 'wt-run-21'
+      `;
+      yield* setup.makitaWorktrees.sweep;
+      assert.isFalse(NodeFS.existsSync(busy.cwd));
       assert.deepInclude((yield* auditOf(ctx, "makita.task.remove_worktree"))[0]!, {
         number: 15,
         why: "ended",

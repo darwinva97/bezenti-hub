@@ -3,8 +3,6 @@
  * reads names and state; its managers (`spaceTool.manage`) read and change the rest. A hidden
  * Space or tool answers like a missing one. No door returns a Vault value.
  */
-import * as NodeCrypto from "node:crypto";
-
 import {
   type SpaceId,
   SpaceMcpConfig,
@@ -30,6 +28,7 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -90,6 +89,9 @@ interface SkillRow {
   readonly updatedAt: string;
 }
 
+const encodeConfig = Schema.encodeSync(Schema.fromJsonString(SpaceMcpConfig));
+const encodeFiles = Schema.encodeSync(Schema.fromJsonString(SpaceSkillFiles));
+const encodeNames = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const decodeConfig = Schema.decodeUnknownSync(Schema.fromJsonString(SpaceMcpConfig));
 const decodeFiles = Schema.decodeUnknownSync(Schema.fromJsonString(SpaceSkillFiles));
 const decodeNames = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.String)));
@@ -127,6 +129,11 @@ const make = Effect.gen(function* () {
   const spaces = yield* SpaceDirectory.SpaceDirectory;
   const audit = yield* AuditLog.AuditLog;
   const vaults = yield* Vaults.Vaults;
+  const random = yield* SecureRandom.SecureRandom;
+  const newId = (prefix: string) =>
+    random
+      .randomBytes(12)
+      .pipe(Effect.map((bytes) => `${prefix}_${Buffer.from(bytes).toString("hex")}`));
 
   const now = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -265,9 +272,9 @@ const make = Effect.gen(function* () {
     if (input.id !== undefined && (existing === undefined || existing.spaceId !== space.id)) {
       return yield* fail("not-found", NOT_FOUND);
     }
-    const id = existing?.id ?? `mcp_${NodeCrypto.randomBytes(12).toString("hex")}`;
+    const id = existing?.id ?? (yield* newId("mcp"));
     const at = yield* now;
-    const configJson = JSON.stringify(input.config);
+    const configJson = encodeConfig(input.config);
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
@@ -325,7 +332,7 @@ const make = Effect.gen(function* () {
     if (input.id !== undefined && (existing === undefined || existing.spaceId !== space.id)) {
       return yield* fail("not-found", NOT_FOUND);
     }
-    const id = existing?.id ?? `skill_${NodeCrypto.randomBytes(12).toString("hex")}`;
+    const id = existing?.id ?? (yield* newId("skill"));
     const at = yield* now;
     const expects = [...new Set(input.expects)].toSorted();
     yield* sql
@@ -338,8 +345,8 @@ const make = Effect.gen(function* () {
           if (clash.length > 0) {
             return yield* fail("name-taken", `This Space already has a Skill named ${read.name}.`);
           }
-          const filesJson = JSON.stringify(input.files);
-          const expectsJson = JSON.stringify(expects);
+          const filesJson = encodeFiles(input.files);
+          const expectsJson = encodeNames(expects);
           if (existing === undefined) {
             yield* sql`
               INSERT INTO space_skills (skill_id, space_id, name, description, files_json,

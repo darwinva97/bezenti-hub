@@ -1,6 +1,19 @@
 # CI de bezenti (solo en este fork, darwinva97/bezenti-hub). Ver bezenti/README.md.
 #
-# En cada push a main (y a mano):
+# Cuándo corre: NO en cada push a main. Un push a main ya no despliega por sí solo; se despliega en
+# ventanas (schedule) y a mano:
+#   - schedule           lun-vie a las 12, 15, 18 y 21 UTC (07, 10, 13 y 16 en Perú, UTC-5). La ventana solo
+#                        despliega si main trae algo nuevo desde la última ejecución correcta de este workflow
+#                        y no es solo docs/pruebas (job `comprobar`); si no, termina en verde sin compilar,
+#                        sin Release y sin tocar infra-contabo. Se despliega el HEAD de main con todo lo
+#                        acumulado, en una sola ejecución.
+#   - workflow_dispatch  «desplegar ahora» (fixes urgentes): despliega siempre, aunque el commit ya esté
+#                        desplegado. Se lanza sobre main (Actions → bezenti → Run workflow, o
+#                        `gh workflow run bezenti.yml --ref main`).
+# bezenti-desktop y bezenti-android cuelgan de este workflow (workflow_run) y solo actúan si hubo despliegue.
+#
+# Cuando corre:
+# 0. comprobar  decide si hay algo que desplegar (ver arriba); si no, verificar/imagen/desplegar se saltan.
 # 1. verificar  comprobación de tipos del servidor (falla solo con errores) y pruebas de lo que toca
 #               el despliegue: proxies de confianza, clave maestra, instalación por SSH.
 # 2. imagen     compila con bezenti/Dockerfile (Debian 12, Node 26.12.1) una sola vez y saca dos cosas
@@ -20,8 +33,10 @@
 name: bezenti
 
 on:
-  push:
-    branches: [main]
+  # Los cron de GitHub van en UTC, pueden retrasarse varios minutos en hora punta y se desactivan solos
+  # si el repo pasa 60 días sin actividad.
+  schedule:
+    - cron: "0 12,15,18,21 * * 1-5"
   workflow_dispatch:
 
 permissions:
@@ -35,7 +50,46 @@ env:
   IMAGE: ghcr.io/darwinva97/bezenti-hub
 
 jobs:
+  comprobar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      desplegar: ${{ steps.c.outputs.desplegar }}
+    steps:
+      # «Lo ya desplegado» = el commit de la última ejecución correcta de este workflow en main. Se mira
+      # eso y no la última Release: la Release se crea en `imagen`, antes de `desplegar`, y si `desplegar`
+      # falla la Release existiría sin que el Hub la tenga. Una ventana saltada (sin cambios relevantes)
+      # también acaba en correcto y adelanta esa marca, lo cual es lo que se quiere: ya se revisó hasta ahí.
+      - id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          decidir() { echo "desplegar=$1" >> "$GITHUB_OUTPUT"; echo "$2"; exit 0; }
+          [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || decidir true "Despliegue manual: se despliega siempre."
+          prev=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/bezenti.yml/runs?branch=main&status=success&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // empty')
+          [ -n "$prev" ] || decidir true "Sin ejecución correcta previa en main: se despliega."
+          [ "$prev" != "$GITHUB_SHA" ] || decidir false "main ($GITHUB_SHA) ya está al día: nada que desplegar."
+          # Lista de archivos con git y no con la API de compare: esa corta en 300 archivos y pagina de 30 en 30.
+          git init -q .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch -q --no-tags --depth=1 origin "$prev" "$GITHUB_SHA" \
+            || decidir true "No se pudo traer $prev para comparar: se despliega."
+          files=$(git diff --name-only --no-renames "$prev" "$GITHUB_SHA") \
+            || decidir true "No se pudo comparar con $prev: se despliega."
+          # Lo que no cambia lo que corre en producción: docs, .scratch, Markdown y archivos de prueba.
+          rel=$(printf '%s\n' "$files" | grep -Ev '^$|^(docs/|\.scratch/)|\.md$|\.test\.tsx?$' || true)
+          [ -n "$rel" ] || decidir false "Desde ${prev::7} solo cambian docs/pruebas: nada que desplegar."
+          decidir true "Cambios desde ${prev::7}: $(printf '%s\n' "$rel" | head -20 | tr '\n' ' ')"
+
   verificar:
+    needs: comprobar
+    if: needs.comprobar.outputs.desplegar == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:

@@ -1,6 +1,7 @@
 # App de escritorio para Windows de bezenti (solo en este fork, darwinva97/bezenti-hub). Ver bezenti/README.md.
 #
-# Después de cada ejecución correcta de `bezenti` en main (y a mano, para una Release ya publicada):
+# Después de cada ejecución de `bezenti` en main que SÍ desplegó (las ventanas sin cambios no publican Release
+# y aquí no hacen nada) y a mano, para una Release ya publicada:
 # compila el instalador de Windows x64 (NSIS) del MISMO commit que la Release `v<versión>` (el Hub y sus
 # clientes tienen que ir en la misma versión) y le añade `T3-Code-<versión>-x64.exe` y su `.sha256`.
 #
@@ -33,10 +34,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # La ejecución de `bezenti` acaba en verde también cuando una ventana no tenía nada que desplegar
+  # (todos sus trabajos saltados): solo hay Release nueva si su trabajo `imagen` salió bien.
+  comprobar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      hay: ${{ steps.c.outputs.hay }}
+    steps:
+      - id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            echo "hay=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          imagen=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.name == "imagen") | .conclusion] | first // "ninguno"')
+          echo "imagen de la ejecución $RUN_ID: $imagen"
+          if [ "$imagen" = success ]; then
+            echo "hay=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hay=false" >> "$GITHUB_OUTPUT"
+            echo "Esa ejecución de bezenti no publicó Release: nada que hacer."
+          fi
+
   preparar:
+    needs: comprobar
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+      needs.comprobar.outputs.hay == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'))
     runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:

@@ -31,8 +31,20 @@ README de `darwinva97/infra-contabo`.
 
 ## Versiones: Hub y VPS, siempre la misma
 
-Cada push a `main` produce la versión `<versión de apps/server/package.json>-bezenti.<número de ejecución>`
-(por ejemplo `0.1.7-bezenti.3`) y, **de la misma compilación**:
+Un push a `main` **ya no despliega por sí solo**. `bezenti.yml` corre en ventanas (lun-vie a las 12, 15, 18 y 21
+UTC, es decir 07, 10, 13 y 16 en Perú) y a mano:
+
+- En cada ventana despliega el HEAD de `main` con todo lo acumulado, en una sola ejecución, solo si hay algo
+  nuevo desde la última ejecución correcta y no es solo `docs/`, `.scratch/`, Markdown o archivos de prueba
+  (`*.test.ts(x)`). Si no, termina en verde sin compilar, sin Release y sin tocar infra-contabo.
+- **Desplegar ahora** (fix urgente): Actions → bezenti → «Run workflow» sobre `main`, o
+  `gh workflow run bezenti.yml --ref main`. Despliega siempre, aunque ese commit ya esté desplegado.
+- Si GitHub retrasa o no dispara un cron (pasa; además lo desactiva tras 60 días sin actividad del repo),
+  se lanza a mano.
+
+Cada despliegue produce la versión `<versión de apps/server/package.json>-bezenti.<número de ejecución>`
+(por ejemplo `0.1.7-bezenti.3`; las ventanas saltadas también gastan número, así que habrá saltos) y,
+**de la misma compilación**:
 
 - la imagen `ghcr.io/darwinva97/bezenti-hub:v<versión>` (también `:sha-<7>` y `:latest`; se despliega
   `v<versión>` porque `sha-<7>` se repite al relanzar el mismo commit);
@@ -86,7 +98,8 @@ git checkout -b actualizar-eijun origin/main
 git merge eijun/main            # si hay conflicto en los archivos de arriba: quedarse con lo de Eijun
                                 # si él ya lo arregló, o reaplicar nuestro cambio si no
 git push -u origin actualizar-eijun
-# revisar, y fusionar en main: el CI compila, publica imagen + Release y despliega el Hub
+# revisar, y fusionar en main: en la siguiente ventana el CI compila, publica imagen + Release y despliega
+# el Hub (o lanzar bezenti a mano para desplegar ya)
 ```
 
 O desde la web: botón «Sync fork» de GitHub (hace el mismo merge en `main`).
@@ -96,7 +109,7 @@ Si Eijun publica algún día sus propias Releases, no se usan: la VPS y el Hub s
 
 ## App de Android
 
-`.github/workflows/bezenti-android.yml` corre después de cada `bezenti` correcto en `main` (o a mano con el
+`.github/workflows/bezenti-android.yml` corre después de cada `bezenti` de `main` que desplegó (o a mano con el
 tag de una Release) y añade a esa misma Release `bezenti-hub-<versión>.apk` y su línea en `SHA256SUMS`,
 compilado del mismo commit que el Hub (la app y el Hub tienen que ir en la misma versión). En el móvil:
 abrir `https://github.com/darwinva97/bezenti-hub/releases/latest`, descargar el `.apk`, permitir
@@ -108,7 +121,7 @@ pierde, los móviles tienen que desinstalar la app para instalar una firmada con
 
 ## App de escritorio para Windows
 
-`.github/workflows/bezenti-desktop.yml` corre después de cada `bezenti` correcto en `main` (o a mano con el
+`.github/workflows/bezenti-desktop.yml` corre después de cada `bezenti` de `main` que desplegó (o a mano con el
 tag de una Release) y añade a esa misma Release el instalador `T3-Code-<versión>-x64.exe` y su `.sha256`,
 compilado del mismo commit que el Hub. Usa `release-desktop.yml` del original (que sigue desactivado como
 workflow: solo se llama) con runners normales de GitHub, y lleva dentro, para el backend de WSL, la CLI de

@@ -2,6 +2,7 @@ import {
   ArchiveIcon,
   BotIcon,
   BotMessageSquareIcon,
+  PlugIcon,
   BoxIcon,
   FlaskConicalIcon,
   NetworkIcon,
@@ -208,6 +209,9 @@ const SpaceVaultSection = lazySection(() =>
 const SpaceAiAccountsSection = lazySection(() =>
   import("./OwnedResourceSections").then((module) => ({ default: module.SpaceAiAccountsSection })),
 );
+const SpaceToolsSection = lazySection(() =>
+  import("./SpaceToolsSettings").then((module) => ({ default: module.SpaceToolsSection })),
+);
 const SpaceMachinesSection = lazySection(() =>
   import("./OwnedResourceSections").then((module) => ({ default: module.SpaceMachinesSection })),
 );
@@ -310,6 +314,13 @@ export const SETTINGS_MODAL_SECTIONS: Readonly<
       label: "Machines",
       icon: ServerIcon,
       component: SpaceMachinesSection,
+      group: 1,
+    },
+    {
+      id: "mcp-and-skills",
+      label: "MCP servers & Skills",
+      icon: PlugIcon,
+      component: SpaceToolsSection,
       group: 1,
     },
     reserved("grants-to-accept", "Grants to accept", KeyRoundIcon, 1),

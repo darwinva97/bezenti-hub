@@ -5,7 +5,8 @@ machine it runs, so nobody installs them by hand.
 
 ## Add an MCP server
 
-Owners and Admins of an organization add MCP servers (in a Personal space, its owner does). Give it
+In Space settings → **MCP servers & Skills**, Owners and Admins of an organization add MCP servers
+(in a Personal space, its owner does). Give it
 a name and either a command to run (stdio) or a URL (http), with its arguments, environment
 variables or headers.
 
@@ -35,5 +36,5 @@ Skills found on their machine.
 
 ## Lend one
 
-An MCP server or a Skill can be lent to another Space with a Grant, like a Vault group. See
+Choose **Lend…** on its row to lend it to another Space with a Grant, like a Vault group. See
 [Lending resources](lending.md).

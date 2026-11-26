@@ -350,7 +350,15 @@ describe("Space settings sections", () => {
 
   it("gives an Organization its Members, and its Invitations to who may invite", () => {
     // The Owner and an Admin may invite; a Member and a Guest read the list and leave.
-    const shared = ["vault", "ai-accounts", "machines", "scheduled-tasks", "makita", "archive"];
+    const shared = [
+      "vault",
+      "ai-accounts",
+      "machines",
+      "mcp-and-skills",
+      "scheduled-tasks",
+      "makita",
+      "archive",
+    ];
     expect(ids(ORGANIZATION_ADMIN, OWNER_IN_BROWSER)).toEqual([
       "general",
       "members",
@@ -362,7 +370,7 @@ describe("Space settings sections", () => {
   });
 
   it("gives a Personal space no Members or Invitations, to its User and to the Owner reading it", () => {
-    const resources = ["vault", "ai-accounts", "machines"];
+    const resources = ["vault", "ai-accounts", "machines", "mcp-and-skills"];
     expect(ids(OWN_PERSONAL)).toEqual([
       "general",
       ...resources,

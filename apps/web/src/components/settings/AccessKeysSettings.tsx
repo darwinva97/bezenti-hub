@@ -985,7 +985,7 @@ function EditAccessKeyDialog(props: {
     unlimited || (limits !== null && CAP_LABELS.some(([kind]) => limits[kind] !== null));
   const ready =
     props.mode === "renew"
-      ? renewReady && limits !== null
+      ? renewReady && (noCaps || limits !== null)
       : label.trim().length > 0 &&
         models.length > 0 &&
         capsReady &&

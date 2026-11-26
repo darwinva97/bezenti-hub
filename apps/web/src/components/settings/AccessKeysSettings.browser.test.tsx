@@ -12,6 +12,7 @@ const hub = vi.hoisted(() => ({
   subscription: false,
   created: [] as unknown[],
   revoked: [] as unknown[],
+  updated: [] as unknown[],
 }));
 
 vi.mock("../../state/environments", async (importOriginal) => ({
@@ -62,6 +63,9 @@ vi.mock("../../state/use-atom-command", () => ({
       case "revoke an access key":
         hub.revoked.push(target?.input);
         return success({});
+      case "change an access key":
+        hub.updated.push(target?.input);
+        return success({});
       default:
         return success({});
     }
@@ -107,6 +111,7 @@ function reset() {
   hub.subscription = false;
   hub.created = [];
   hub.revoked = [];
+  hub.updated = [];
   hub.accounts = [
     account("acct-claude", "Claude team", [
       "claude-sonnet-4-5",
@@ -226,7 +231,7 @@ it("chooses accounts with the same picker, and says in one line that a subscript
   expect(page.getByRole("option", { name: "claude-sonnet-4-5" }).elements()).toHaveLength(0);
 });
 
-it("keeps Renew, Edit and Revoke in a key's menu, and revokes after a confirmation", async () => {
+it("keeps Renew, Edit and Revoke in a key's menu, renews a key without limits, and revokes after a confirmation", async () => {
   reset();
   hub.keys = [accessKey("key-1", "Partner Bob")];
   await using _screen = await render(<AccessKeysSection spaceId={SPACE} />);
@@ -237,6 +242,15 @@ it("keeps Renew, Edit and Revoke in a key's menu, and revokes after a confirmati
   await page.getByRole("button", { name: "Actions for Partner Bob" }).click();
   await expect.element(page.getByRole("menuitem", { name: "Renew Partner Bob" })).toBeVisible();
   await expect.element(page.getByRole("menuitem", { name: "Edit Partner Bob" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Renew Partner Bob" }).click();
+  press(
+    page
+      .getByRole("dialog", { name: "Renew «Partner Bob»" })
+      .getByRole("button", { name: "Renew key" }),
+  );
+  await expect.poll(() => hub.updated).toEqual([{ keyId: "key-1", validity: { days: 30 } }]);
+
+  await page.getByRole("button", { name: "Actions for Partner Bob" }).click();
   await page.getByRole("menuitem", { name: "Revoke Partner Bob" }).click();
   press(page.getByRole("button", { name: "Revoke key" }));
   await expect.poll(() => hub.revoked).toEqual([{ keyId: "key-1" }]);

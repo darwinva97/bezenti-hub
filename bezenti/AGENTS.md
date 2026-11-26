@@ -36,7 +36,8 @@ Where this file and the root `AGENTS.md` disagree, this file wins.
 5. **Report** to the lead: commits, tip SHA, the GREEN run URL, what changed for users, and open
    questions. The lead reviews and merges into `public-hub-1`.
 6. **Never** push to `main`, deploy, tag, or publish a release. Only `main` deploys (through
-   `bezenti.yml`), and only when the Owner says so. No pull requests unless asked.
+   `bezenti.yml`: on a schedule window, or by manual dispatch for an urgent fix), and only when the Owner
+   says so. A push to `main` does not deploy by itself. No pull requests unless asked.
 
 ## Hub rules
 

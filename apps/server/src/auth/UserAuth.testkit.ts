@@ -51,6 +51,7 @@ import * as IdentityTokens from "../identity/IdentityTokens.ts";
 import * as EffectiveVaults from "../vaults/EffectiveVaults.ts";
 import * as ProviderReads from "../vaults/ProviderReads.ts";
 import * as SecretProviderScopes from "../vaults/SecretProviderScopes.ts";
+import * as SpaceTools from "../spaceTools/SpaceTools.ts";
 import { scopeAllows } from "../vaults/providerScopeRules.ts";
 import * as SecretDelivery from "../vaults/SecretDelivery.ts";
 import * as MachineSecretFiles from "../environment/MachineSecretFiles.ts";
@@ -271,6 +272,7 @@ const makeLayerServices = (
     Layer.provideMerge(
       Layer.mergeAll(
         layerPullRequests,
+        SpaceTools.layer.pipe(Layer.provide(SpaceDirectory.layer)),
         // Outside MCP clients: OAuth approval and the bearer check /mcp runs.
         Layer.mergeAll(
           // Sign-in and linking through Keycloak (ticket 02), over the realm the test gives.

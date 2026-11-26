@@ -72,6 +72,11 @@ const VAULTS = {
   unscoped:
     "Vaults: AccessPolicy `vault.*` for the session's User through SpaceDirectory.authorizeResource (spaceLimit too); a hidden Vault answers like a missing one; no value is returned",
 };
+/** Space MCPs and Skills name a Space, never a Thread or Project. */
+const SPACE_TOOLS = {
+  unscoped:
+    "SpaceTools: AccessPolicy `spaceTool.view` / `spaceTool.manage` on the tool's Space through SpaceDirectory.authorizer; a hidden one answers like a missing one; no value is returned",
+};
 /** AI accounts name no Thread or Project: the list is AllowedAiAccounts' for the session. */
 const AI_ACCOUNTS_LIST = {
   unscoped:
@@ -231,6 +236,13 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.vaultsThreadEnvironment]: "thread",
   // Vaults ticket 03: the scopes a Vault's editors may use, decided by Vaults (`vault.edit`).
   [WS_METHODS.vaultsProviderScopes]: VAULTS,
+  [WS_METHODS.spaceToolsList]: SPACE_TOOLS,
+  [WS_METHODS.spaceToolsMcpGet]: SPACE_TOOLS,
+  [WS_METHODS.spaceToolsMcpPut]: SPACE_TOOLS,
+  [WS_METHODS.spaceToolsSkillGet]: SPACE_TOOLS,
+  [WS_METHODS.spaceToolsSkillPut]: SPACE_TOOLS,
+  [WS_METHODS.spaceToolsSetEnabled]: SPACE_TOOLS,
+  [WS_METHODS.spaceToolsDelete]: SPACE_TOOLS,
   [WS_METHODS.grantsListGiven]: GRANTS,
   [WS_METHODS.grantsListReceived]: GRANTS,
   [WS_METHODS.grantsTargets]: GRANTS,

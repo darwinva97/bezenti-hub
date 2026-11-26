@@ -686,6 +686,17 @@ it.effect(
         "grant.cancel",
         "grant.end",
         "grant.limits.change",
+        // spaceTools/SpaceTools.test.ts (a Space's MCP servers and Skills)
+        "space_mcp.create",
+        "space_mcp.update",
+        "space_mcp.enable",
+        "space_mcp.disable",
+        "space_mcp.delete",
+        "space_skill.create",
+        "space_skill.update",
+        "space_skill.enable",
+        "space_skill.disable",
+        "space_skill.delete",
         // auth/SignInSettings.test.ts (Keycloak sign-in, ticket 01)
         "signIn.settings.update",
         // auth/KeycloakSignIn.test.ts (Keycloak sign-in, ticket 02)

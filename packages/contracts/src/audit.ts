@@ -147,6 +147,17 @@ export const AuditAction = Schema.Literals([
   "grant.cancel",
   "grant.end",
   "grant.limits.change",
+  // Space MCPs and Skills (.scratch/mcps-and-skills).
+  "space_mcp.create",
+  "space_mcp.update",
+  "space_mcp.enable",
+  "space_mcp.disable",
+  "space_mcp.delete",
+  "space_skill.create",
+  "space_skill.update",
+  "space_skill.enable",
+  "space_skill.disable",
+  "space_skill.delete",
 ]);
 export type AuditAction = typeof AuditAction.Type;
 
@@ -170,6 +181,8 @@ export const AuditTargetKind = Schema.Literals([
   "provider_scope",
   "grant",
   "sign_in_settings",
+  "space_mcp",
+  "space_skill",
 ]);
 export type AuditTargetKind = typeof AuditTargetKind.Type;
 
@@ -538,6 +551,18 @@ export const AUDIT_DETAIL_KEYS = {
   "provider_scope.update": ["provider", "paths", "writable", "broke"],
   "provider_scope.delete": ["provider", "broke"],
   "provider_scope.allow": ["vault", "vaultId", "allowed", "broke"],
+  /** Its transport, a stdio server's command (no arguments) and the Vault names it references. */
+  "space_mcp.create": ["transport", "command", "references"],
+  "space_mcp.update": ["transport", "command", "references"],
+  "space_mcp.enable": [],
+  "space_mcp.disable": [],
+  "space_mcp.delete": [],
+  /** How many files it has and the Vault names it expects. */
+  "space_skill.create": ["files", "expects"],
+  "space_skill.update": ["files", "expects"],
+  "space_skill.enable": [],
+  "space_skill.disable": [],
+  "space_skill.delete": [],
   /** Its audience, subject, id and expiry, and the Thread it was signed for; never the token. */
   "identity.issue": ["aud", "sub", "jti", "exp", "thread"],
   /**

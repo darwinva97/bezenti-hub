@@ -126,6 +126,7 @@ import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as Vaults from "./vaults/Vaults.ts";
 import * as SecretProviderScopes from "./vaults/SecretProviderScopes.ts";
+import * as SpaceTools from "./spaceTools/SpaceTools.ts";
 import * as Grants from "./grants/Grants.ts";
 import * as EffectiveVaults from "./vaults/EffectiveVaults.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
@@ -1295,6 +1296,7 @@ export const layerWsRpc = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const vaults = yield* Vaults.Vaults;
+      const spaceTools = yield* SpaceTools.SpaceTools;
       const secretProviderScopes = yield* SecretProviderScopes.SecretProviderScopes;
       const grants = yield* Grants.Grants;
       const effectiveVaults = yield* EffectiveVaults.EffectiveVaults;
@@ -2506,6 +2508,14 @@ export const layerWsRpc = (
         // Vaults ticket 03: a Vault's usable Provider scopes (its editors); Secret providers'
         // scopes, «Test connection» and what a deletion breaks (the Owner, SecretProviderScopes).
         [WS_METHODS.vaultsProviderScopes]: (input) => vaults.providerScopes(input),
+        // A Space's MCP servers and Skills, decided by SpaceTools (`spaceTool.*`).
+        [WS_METHODS.spaceToolsList]: (input) => spaceTools.list(input),
+        [WS_METHODS.spaceToolsMcpGet]: (input) => spaceTools.getMcp(input),
+        [WS_METHODS.spaceToolsMcpPut]: (input) => spaceTools.putMcp(input),
+        [WS_METHODS.spaceToolsSkillGet]: (input) => spaceTools.getSkill(input),
+        [WS_METHODS.spaceToolsSkillPut]: (input) => spaceTools.putSkill(input),
+        [WS_METHODS.spaceToolsSetEnabled]: (input) => spaceTools.setEnabled(input),
+        [WS_METHODS.spaceToolsDelete]: (input) => spaceTools.remove(input),
         // Grants: each decided by Grants (AccessPolicy `grant.*`) for the connection's User.
         // Giving and accepting go over HTTP, which carries the strong factor a machine needs.
         [WS_METHODS.grantsListGiven]: (_input) => grants.listGiven,

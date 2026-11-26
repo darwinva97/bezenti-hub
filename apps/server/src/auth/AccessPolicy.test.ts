@@ -2355,6 +2355,42 @@ const rows: ReadonlyArray<Row> = [
     deny("space-frozen"),
   ],
   ["choosing is decided on a Space", owner, "vault.choose", orgVault, deny("wrong-resource")],
+  // Space MCPs and Skills (.scratch/mcps-and-skills): managed as Vault choices are; seen by all.
+  ["an Admin manages Acme's MCPs and Skills", admin, "spaceTool.manage", organization, allow],
+  ["the Owner manages Acme's", owner, "spaceTool.manage", organization, allow],
+  [
+    "a Member does not manage them",
+    member,
+    "spaceTool.manage",
+    organization,
+    deny("role-not-allowed"),
+  ],
+  [
+    "a Guest does not manage them",
+    guest,
+    "spaceTool.manage",
+    organization,
+    deny("role-not-allowed"),
+  ],
+  [
+    "another Organization's Admin does not",
+    outsider,
+    "spaceTool.manage",
+    organization,
+    deny("not-a-member"),
+  ],
+  [
+    "the Owner does not in another's Personal space",
+    owner,
+    "spaceTool.manage",
+    personalOf("grace"),
+    deny("personal-space-read-only"),
+  ],
+  ["a Personal space's User does", personalCreator, "spaceTool.manage", personalOf("grace"), allow],
+  ["a Member sees their names", member, "spaceTool.view", organization, allow],
+  ["a Guest sees their names", guest, "spaceTool.view", organization, allow],
+  ["an outsider does not", outsider, "spaceTool.view", organization, deny("not-a-member")],
+  ["they are decided on a Space", admin, "spaceTool.manage", orgVault, deny("wrong-resource")],
   // Dedicated machines (owned-resources 07): the Owner or an Organization's Admins give one to it,
   // and it becomes the Organization's; whoever works there uses it for its Threads, as its
   // Sandbox; other Spaces neither see nor use it.

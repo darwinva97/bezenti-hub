@@ -146,6 +146,9 @@ export const RPC_REQUIRED_SCOPES = {
   // Vaults: names to read (writes are CLIENT_GUARDED_RPC_SCOPES'); who may is AccessPolicy's.
   [WS_METHODS.vaultsGroupsList]: AuthAccessReadScope,
   [WS_METHODS.vaultsEntriesList]: AuthAccessReadScope,
+  [WS_METHODS.spaceToolsList]: AuthAccessReadScope,
+  [WS_METHODS.spaceToolsMcpGet]: AuthAccessReadScope,
+  [WS_METHODS.spaceToolsSkillGet]: AuthAccessReadScope,
   [WS_METHODS.vaultsChoices]: AuthAccessReadScope,
   // A Thread's secret names, as its other reads.
   [WS_METHODS.vaultsThreadEnvironment]: AuthOrchestrationReadScope,

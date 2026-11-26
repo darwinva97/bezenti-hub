@@ -33,7 +33,7 @@ export const REMOTE_ASSETS_CONTRACT_VERSION = 15;
 /** 16: secret files (`secretEnv.files`, `secrets.refreshFiles`, `secretFilesRoot` in the hello). */
 export const SECRET_FILES_CONTRACT_VERSION = 16;
 
-/** 17: `spaceMcps` in `provider.openSession`, a Space's MCP servers with unresolved references. */
+/** 17: `spaceMcps` and `spaceSkills` in `provider.openSession` (a Space's MCP servers, Skills). */
 export const SPACE_MCPS_CONTRACT_VERSION = 17;
 
 /** The first contract whose shells report their facts (spec 5 ticket 07). */

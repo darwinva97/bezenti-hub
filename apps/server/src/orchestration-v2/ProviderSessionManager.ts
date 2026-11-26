@@ -437,6 +437,7 @@ export const layerWithOptions = (
           delivered: new Set((plan?.variables ?? []).map((variable) => variable.name)),
           receivesSpaceMcps: adapter.value.receivesSpaceMcps === true,
           receivesSecretEnv: adapter.value.receivesSecretEnv === true,
+          receivesSpaceSkills: adapter.value.receivesSpaceSkills === true,
           contractVersion: target.contractVersion,
         });
       });
@@ -2602,6 +2603,11 @@ export const layerWithOptions = (
                   ...(spaceMcps === undefined || spaceMcps.launches.length === 0
                     ? {}
                     : { spaceMcps: spaceMcps.launches }),
+                  ...(spaceMcps === undefined || spaceMcps.skills.length === 0
+                    ? {}
+                    : {
+                        spaceSkills: spaceMcps.skills.map(({ name, files }) => ({ name, files })),
+                      }),
                 })
                 .pipe(
                   Effect.provideService(Scope.Scope, sessionScope),

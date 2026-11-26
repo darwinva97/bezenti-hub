@@ -25,6 +25,7 @@ import {
   type SpaceToolsList,
   type SpaceToolsListInput,
   type SpaceMcpLaunch,
+  type SpaceSkillLaunch,
   type SpaceToolsThreadStatus,
   type SpaceToolsThreadStatusInput,
   SPACE_MCPS_CONTRACT_VERSION,
@@ -70,7 +71,7 @@ export class SpaceTools extends Context.Service<
     readonly threadStatus: (
       input: SpaceToolsThreadStatusInput,
     ) => Effect.Effect<SpaceToolsThreadStatus, SpaceToolError>;
-    /** Whether the Thread's Space has an enabled MCP: such a Thread gets a process of its own. */
+    /** Whether the Thread's Space has an enabled MCP or Skill: its Thread gets its own process. */
     readonly threadHasMcps: (threadId: ThreadId) => Effect.Effect<boolean, SpaceToolError>;
     /**
      * For a provider session about to open (the Hub's own call, no User's): the Thread's Space's
@@ -81,11 +82,15 @@ export class SpaceTools extends Context.Service<
       readonly delivered: ReadonlySet<string>;
       readonly receivesSpaceMcps: boolean;
       readonly receivesSecretEnv: boolean;
+      readonly receivesSpaceSkills: boolean;
       readonly contractVersion: number;
     }) => Effect.Effect<
       {
         readonly decisions: ReadonlyArray<SpaceMcpDecision>;
         readonly launches: ReadonlyArray<SpaceMcpLaunch>;
+        readonly skills: ReadonlyArray<
+          SpaceSkillLaunch & { readonly expects: ReadonlyArray<string> }
+        >;
         readonly fingerprint: string;
       },
       SpaceToolError
@@ -471,20 +476,47 @@ const make = Effect.gen(function* () {
     return rows.map((row) => ({ row, name: row.name, config: decodeConfig(row.configJson) }));
   });
 
+  /** The enabled Skills of the Thread's Space. */
+  const enabledSkillsOf = Effect.fn("SpaceTools.enabledSkillsOf")(function* (threadId: ThreadId) {
+    const placement = yield* spaces
+      .placementOf(threadId)
+      .pipe(Effect.catch(storage("read the Thread's Space")));
+    if (Option.isNone(placement)) return [];
+    const rows = yield* sql<SkillRow>`
+      SELECT skill_id AS id, space_id AS "spaceId", name, description, files_json AS "filesJson",
+        expects_json AS "expectsJson", enabled, updated_at AS "updatedAt"
+      FROM space_skills WHERE space_id = ${placement.value.space.id} AND enabled = 1 ORDER BY name
+    `.pipe(Effect.catch(storage("read the Space's Skills")));
+    return rows;
+  });
+
   const forSession = Effect.fn("SpaceTools.forSession")(function* (input: {
     readonly threadId: ThreadId;
     readonly delivered: ReadonlySet<string>;
     readonly receivesSpaceMcps: boolean;
     readonly receivesSecretEnv: boolean;
+    readonly receivesSpaceSkills: boolean;
     readonly contractVersion: number;
   }) {
     const mcps = yield* enabledMcpsOf(input.threadId);
     const decisions = decideSpaceMcps({ ...input, mcps });
     const sent = mcps.filter((_, index) => decisions[index]?.available === true);
+    const skillRows =
+      input.receivesSpaceSkills && input.contractVersion >= SPACE_MCPS_CONTRACT_VERSION
+        ? yield* enabledSkillsOf(input.threadId)
+        : [];
     return {
       decisions,
       launches: sent.map(({ name, config }) => ({ name, config })),
-      fingerprint: sent.map(({ row }) => `${row.id}@${row.updatedAt}`).join(","),
+      skills: skillRows.map((row) => ({
+        name: row.name,
+        files: decodeFiles(row.filesJson),
+        expects: decodeNames(row.expectsJson),
+      })),
+      fingerprint: [
+        ...sent.map(({ row }) => `mcp:${row.id}@${row.updatedAt}`),
+        ...skillRows.map((row) => `skill:${row.id}@${row.updatedAt}`),
+      ].join(","),
     };
   });
 
@@ -495,11 +527,13 @@ const make = Effect.gen(function* () {
       .turnNames(input.threadId)
       .pipe(Effect.catch(storage("read what the Thread receives")));
     // What the Vaults allow; the provider and machine are decided when a session opens.
-    const { decisions } = yield* forSession({
+    const delivered = new Set(names.map((entry) => entry.name));
+    const { decisions, skills } = yield* forSession({
       threadId: input.threadId,
-      delivered: new Set(names.map((entry) => entry.name)),
+      delivered,
       receivesSpaceMcps: true,
       receivesSecretEnv: true,
+      receivesSpaceSkills: true,
       contractVersion: SPACE_MCPS_CONTRACT_VERSION,
     });
     return {
@@ -510,11 +544,17 @@ const make = Effect.gen(function* () {
         ...(reason === undefined ? {} : { reason }),
         missing,
       })),
+      skills: skills.map(({ name, expects }) => ({
+        name,
+        missing: expects.filter((expected) => !delivered.has(expected)),
+      })),
     } satisfies SpaceToolsThreadStatus;
   });
 
   const threadHasMcps = Effect.fn("SpaceTools.threadHasMcps")(function* (threadId: ThreadId) {
-    return (yield* enabledMcpsOf(threadId)).length > 0;
+    return (
+      (yield* enabledMcpsOf(threadId)).length > 0 || (yield* enabledSkillsOf(threadId)).length > 0
+    );
   });
 
   return SpaceTools.of({

@@ -69,6 +69,7 @@ import {
   applySecretEnv,
   mergeProviderInstanceEnvironment,
 } from "@t3tools/provider-core/server/instanceEnvironment";
+import { resolveSpaceMcps } from "@t3tools/provider-core/server/spaceMcps";
 import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
@@ -941,7 +942,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
     instanceId: options.instanceId,
     driver: OPENCODE_PROVIDER,
     // Spec 5: a session's own server gets the Thread's secrets; an external server cannot.
-    ...(options.settings.serverUrl?.trim() ? {} : { receivesSecretEnv: true as const }),
+    ...(options.settings.serverUrl?.trim()
+      ? {}
+      : { receivesSecretEnv: true as const, receivesSpaceMcps: true as const }),
     // Spec 4 ticket 06: the same, for the Hub's AI gateway (its own server, its own XDG homes).
     ...(options.settings.serverUrl?.trim() ? {} : { usesAiGateway: true as const }),
     getCapabilities: Effect.fn("OpencodeAdapter.getCapabilities")(function () {
@@ -1002,6 +1005,25 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               },
             }),
           );
+        }
+
+        // A Space's MCP servers, filled in from the Thread's secrets, on this session's own server.
+        if (!connection.external) {
+          for (const { name, config } of resolveSpaceMcps(input.spaceMcps, input.secretEnv).ready) {
+            yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
+              client.mcp.add({
+                name,
+                config:
+                  config.transport === "stdio"
+                    ? {
+                        type: "local",
+                        command: [config.command, ...config.args],
+                        environment: { ...config.env },
+                      }
+                    : { type: "remote", url: config.url, headers: { ...config.headers } },
+              }),
+            );
+          }
         }
 
         const now = yield* DateTime.now;

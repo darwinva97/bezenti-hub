@@ -128,6 +128,7 @@ import {
   type RunId,
   type ThreadId,
   resolveIdleCompaction,
+  type SpaceSkillLaunch,
 } from "@t3tools/contracts";
 
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
@@ -1895,6 +1896,8 @@ export function makeClaudeQueryOptions(input: {
    * so on the gateway it is not used.
    */
   readonly gatewaySettingsEnv?: Record<string, string>;
+  /** Local plugin folders, such as a session's Space Skills. */
+  readonly plugins?: ReadonlyArray<string>;
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
   const {
@@ -2036,10 +2039,45 @@ export function makeClaudeQueryOptions(input: {
     ...(input.attachmentsDir === undefined ? [] : [input.attachmentsDir]),
     ...claudeLaunchArgDirectories(input.settings?.launchArgs),
   ];
+  const withPlugins =
+    input.plugins === undefined || input.plugins.length === 0
+      ? options
+      : { ...options, plugins: input.plugins.map((path) => ({ type: "local" as const, path })) };
   const withDirectories =
-    additionalDirectories.length === 0 ? options : { ...options, additionalDirectories };
+    additionalDirectories.length === 0 ? withPlugins : { ...withPlugins, additionalDirectories };
   return input.cwd === null ? withDirectories : { ...withDirectories, cwd: input.cwd };
 }
+
+const encodePluginManifest = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ name: Schema.String, description: Schema.String })),
+);
+
+/**
+ * A Space's Skills as a local plugin folder of one session, removed with its scope. A path that
+ * would leave its Skill's folder is refused here too, whatever the Hub checked.
+ */
+export const writeClaudeSpaceSkillsPlugin = Effect.fn("writeClaudeSpaceSkillsPlugin")(function* (
+  skills: ReadonlyArray<SpaceSkillLaunch>,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-space-skills-" });
+  yield* fileSystem.makeDirectory(path.join(root, ".claude-plugin"), { recursive: true });
+  yield* fileSystem.writeFileString(
+    path.join(root, ".claude-plugin", "plugin.json"),
+    encodePluginManifest({ name: "space", description: "This Space's Skills" }),
+  );
+  for (const skill of skills) {
+    const folder = path.join(root, "skills", skill.name);
+    for (const [relative, text] of Object.entries(skill.files)) {
+      const target = path.resolve(folder, relative);
+      if (!target.startsWith(folder + path.sep)) continue;
+      yield* fileSystem.makeDirectory(path.dirname(target), { recursive: true });
+      yield* fileSystem.writeFileString(target, text);
+    }
+  }
+  return root;
+});
 
 /**
  * Checks the append launch arguments the way the Claude CLI would and reads
@@ -5192,6 +5230,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     receivesSecretEnv: true,
     // A Space's MCP servers, their references filled in from those secrets.
     receivesSpaceMcps: true,
+    // A Space's Skills, as a plugin folder of the session's own.
+    receivesSpaceSkills: true,
     // Spec 4 ticket 06: and the Hub's AI gateway, with a CLAUDE_CONFIG_DIR of the Thread's own.
     usesAiGateway: true,
     getCapabilities: Effect.fn("ClaudeAdapterV2.getCapabilities")(function () {
@@ -5205,6 +5245,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         // Spec 5: only into the Claude process's environment (a changed set opens a new session).
         const sessionSecretEnv = input.secretEnv;
         const sessionSpaceMcps = resolveSpaceMcps(input.spaceMcps, input.secretEnv).ready;
+        const sessionSkillsPlugin =
+          input.spaceSkills === undefined || input.spaceSkills.length === 0
+            ? undefined
+            : yield* writeClaudeSpaceSkillsPlugin(input.spaceSkills).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterOpenSessionError({
+                      driver: CLAUDE_PROVIDER,
+                      providerSessionId: input.providerSessionId,
+                      cause,
+                    }),
+                ),
+              );
         // Spec 4 ticket 06: on the gateway, no login nor setting of the machine's own ~/.claude.
         const sessionGateway = yield* aiGatewayProcessOf(CLAUDE_PROVIDER, input);
         const sessionGatewayVariables =
@@ -11077,6 +11132,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { mcpServers: mcpOverrides.mcpServers }),
             deviceToolsAvailable: mcpSession?.capabilities?.has("device") === true,
+            ...(sessionSkillsPlugin === undefined || turnInput.threadId !== input.threadId
+              ? {}
+              : { plugins: [sessionSkillsPlugin] }),
             permissionMode: queryPolicy.permissionMode,
             ...(queryPolicy.allowDangerouslySkipPermissions === undefined
               ? {}

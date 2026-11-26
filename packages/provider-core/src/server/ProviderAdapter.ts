@@ -3,6 +3,7 @@ import type {
   OrchestrationV2HistoricalMessage,
   SecretEnv,
   SpaceMcpLaunch,
+  SpaceSkillLaunch,
 } from "@t3tools/contracts";
 import {
   ChatAttachment,
@@ -486,6 +487,8 @@ export interface ProviderAdapterV2OpenSessionInput {
    * `secretEnv` (`resolveSpaceMcps`). Only adapters with `receivesSpaceMcps` get any.
    */
   readonly spaceMcps?: ReadonlyArray<SpaceMcpLaunch>;
+  /** The Thread's Space Skills. Only adapters with `receivesSpaceSkills` get any. */
+  readonly spaceSkills?: ReadonlyArray<SpaceSkillLaunch>;
 }
 
 /** `aiGateway` of a session: what the Hub sent, and what the machine adds before the driver runs. */
@@ -744,6 +747,8 @@ export class ProviderAdapterV2 extends Context.Service<
     readonly receivesSecretEnv?: true;
     /** Passes `spaceMcps` to the provider as MCP servers of the session's Thread. */
     readonly receivesSpaceMcps?: true;
+    /** Gives `spaceSkills` to the provider as Skills of the session's Thread. */
+    readonly receivesSpaceSkills?: true;
     /** Points each process its sessions start at the Hub's AI gateway (`aiGateway`). */
     readonly usesAiGateway?: true;
     /**

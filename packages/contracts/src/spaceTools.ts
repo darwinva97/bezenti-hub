@@ -87,6 +87,10 @@ export type SpaceSkill = typeof SpaceSkill.Type;
 export const SpaceMcpLaunch = Schema.Struct({ name: Schema.String, config: SpaceMcpConfig });
 export type SpaceMcpLaunch = typeof SpaceMcpLaunch.Type;
 
+/** One Space Skill sent to a provider session: its files, written on the machine for it alone. */
+export const SpaceSkillLaunch = Schema.Struct({ name: Schema.String, files: SpaceSkillFiles });
+export type SpaceSkillLaunch = typeof SpaceSkillLaunch.Type;
+
 /** Why a Space MCP does not start in a Thread's session. */
 export const SpaceMcpUnavailableReason = Schema.Literals([
   /** A referenced name the Thread does not receive (missing, not chosen, withheld, broken). */
@@ -114,6 +118,10 @@ export const SpaceToolsThreadStatus = Schema.Struct({
       /** For `not-delivered`: the names the Thread does not receive. */
       missing: Schema.Array(Schema.String),
     }),
+  ),
+  /** Its enabled Skills, and the Vault names each expects that the Thread does not receive. */
+  skills: Schema.Array(
+    Schema.Struct({ name: Schema.String, missing: Schema.Array(Schema.String) }),
   ),
 });
 export type SpaceToolsThreadStatus = typeof SpaceToolsThreadStatus.Type;

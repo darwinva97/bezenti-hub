@@ -568,6 +568,48 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     });
   });
 
+  it.effect("writes a Space's Skills as a plugin folder that goes with its session", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const root = yield* ClaudeAdapterV2.writeClaudeSpaceSkillsPlugin([
+            {
+              name: "release-notes",
+              files: {
+                "SKILL.md": "---\nname: release-notes\ndescription: Notes.\n---\nWrite them.\n",
+                "templates/notes.md": "# Notes",
+                "../outside.md": "never written",
+              },
+            },
+          ]);
+          const skill = path.join(root, "skills", "release-notes");
+          assert.include(
+            yield* fileSystem.readFileString(path.join(root, ".claude-plugin", "plugin.json")),
+            '"name":"space"',
+          );
+          assert.equal(
+            yield* fileSystem.readFileString(path.join(skill, "templates", "notes.md")),
+            "# Notes",
+          );
+          assert.isFalse(yield* fileSystem.exists(path.join(root, "skills", "outside.md")));
+          const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            nativeThreadId: "native-1",
+            resume: false,
+            cwd: null,
+            plugins: [root],
+          });
+          assert.deepEqual(options.plugins, [{ type: "local", path: root }]);
+          return root;
+        }),
+      );
+      // Gone once the session's scope closes.
+      assert.isFalse(yield* fileSystem.exists(root));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it("invalidates live-query reuse when MCP credentials rotate", () => {
     const threadId = ThreadId.make("thread-claude-mcp-credential-rotation");
     const mcpSession = mcpSessionFor(threadId);

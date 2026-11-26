@@ -217,3 +217,23 @@ Space con la máquina: solo se hace donde el provider acepta una ruta por sesió
   adapters no declara `receivesSpaceMcps`: «not-supported» hasta el paso 3.
 - `spaceTools.threadStatus` (puerta `thread`) muestra disponible / no disponible y el motivo según
   lo que el Vault entrega al Thread.
+
+## 13. Paso 3, tal como quedó: decisión por adapter
+
+| Provider    | Space MCPs                                                        | Space Skills                                            |
+| ----------- | ----------------------------------------------------------------- | ------------------------------------------------------- |
+| Claude      | sí (`mcpServers` del SDK)                                         | sí: carpeta de plugin local de la sesión (`plugins`)    |
+| Codex       | sí (`mcp_servers.<nombre>` del Thread)                            | no soportado: el app-server no toma una ruta por sesión |
+| Grok        | sí (ACP `mcpServers`; http solo si el agente lo anuncia)          | no soportado: su catálogo viene del CLI                 |
+| Kiro        | sí (ACP, igual que Grok)                                          | no soportado: no tiene Skills                           |
+| OpenCode v1 | sí (`client.mcp.add`, solo con servidor propio de la sesión)      | no soportado: `app.skills` lee del disco                |
+| OpenCode v2 | no soportado: no recibe `secretEnv`                               | no soportado                                            |
+| Cursor      | no soportado: el SDK corre en el proceso del Hub, sin `secretEnv` | no soportado                                            |
+| Antigravity | no soportado: no recibe `secretEnv`                               | no soportado                                            |
+
+- Las Skills van en `provider.openSession` (`spaceSkills`, contrato 17). Claude las escribe en una
+  carpeta temporal de la sesión (`.claude-plugin/plugin.json` + `skills/<nombre>/…`) que se borra
+  al cerrarla; un path que salga de su carpeta se ignora también en la máquina. Claude las muestra
+  con el prefijo del plugin (`space:<nombre>`).
+- `spaceTools.threadStatus` lista además las Skills activadas y los nombres de Vault que esperan y
+  el Thread no recibe.

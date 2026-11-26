@@ -124,6 +124,10 @@ export const AuditAction = Schema.Literals([
   "makita.github.reopen_issue",
   // Makita ticket 27: one of Makita's pull requests closed (idle, or an approver's bad-work label).
   "makita.github.close_pull_request",
+  // Makita ticket 28: a finished task's worktree removed from its machine (or given up), and the
+  // `makita/…` branch of a pull request a person merged or closed on GitHub, deleted.
+  "makita.task.remove_worktree",
+  "makita.github.delete_branch",
   // Makita ticket 21: a repository added to a Space by name (its Project made or reused).
   "makita.repo.add",
   // Makita ticket 22: the Owner's ceiling on Makita tasks at once across the Hub.
@@ -536,6 +540,22 @@ export const AUDIT_DETAIL_KEYS = {
     "by",
     "byId",
   ],
+  /**
+   * Where (`environment`), why (`pr-closed` or `ended`) and what came of it: `removed`, `gone`,
+   * `refused` or `gave-up` (with `failure`, one line). Never the path.
+   */
+  "makita.task.remove_worktree": [
+    "space",
+    "repo",
+    "number",
+    "makita",
+    "environment",
+    "why",
+    "outcome",
+    "failure",
+  ],
+  /** The `makita/…` branch of a pull request a person merged or closed on GitHub. */
+  "makita.github.delete_branch": ["space", "repo", "number", "makita", "pr", "branch"],
   /** A repository (`owner/name`, public to whoever added it) and its Project, made or reused. */
   "makita.repo.add": ["space", "repo", "project", "created"],
   /** The Hub-wide ceiling of Makita tasks at once, before and after. */

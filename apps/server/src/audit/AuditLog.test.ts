@@ -662,6 +662,9 @@ it.effect(
         "makita.github.reopen_issue",
         // makita/MakitaCleanup.test.ts (Makita ticket 27: idle or bad-work pull requests closed)
         "makita.github.close_pull_request",
+        // makita/MakitaWorktrees.test.ts (Makita ticket 28: finished tasks' worktrees and branches)
+        "makita.task.remove_worktree",
+        "makita.github.delete_branch",
         // makita/MakitaRepoAdd.test.ts (Makita ticket 21: a repository added by name)
         "makita.repo.add",
         // makita/MakitaQueue.test.ts (Makita ticket 22: the Hub-wide ceiling)

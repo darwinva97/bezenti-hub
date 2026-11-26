@@ -810,6 +810,8 @@ describe("every door of the Hub declares its rule", () => {
         "171_MakitaTaskCi",
         "172_MakitaTriage",
         "173_MakitaAutonomy",
+        // Ticket 28: finished tasks' worktrees removed, a person's closed PR's branch deleted.
+        "177_MakitaWorktreeCleanup",
       ],
       // Tickets 25–27: what a configuration does on its own, and each issue Makita closed.
       ["makita_issue_closes", "173_MakitaAutonomy"],

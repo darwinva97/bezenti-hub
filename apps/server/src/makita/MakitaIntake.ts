@@ -55,6 +55,7 @@ import { MakitaGitHub, type MakitaGitHubAnswer, type MakitaGitHubError } from ".
 import { listenedProjects, type SpaceProjectRepo, spaceProjectRepos } from "./MakitaRepos.ts";
 import { dropWaitingWithin } from "./makitaQueue.ts";
 import { stopTasksWithin } from "./makitaRows.ts";
+import { notePullClosedWithin } from "./makitaWorktreeRows.ts";
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
@@ -489,6 +490,15 @@ const make = Effect.gen(function* () {
     readonly now: number;
   }) {
     const queued: Array<QueuedEvent> = [];
+    // Ticket 28: a person merged or closed it: its branch is deleted, its worktree removed.
+    const pullClosed = (number: number, actor: IssueEvent["actor"]) =>
+      notePullClosedWithin(sql, {
+        repo: input.listened.repo,
+        number,
+        actorId: actor?.id ?? null,
+        makitaId: input.makitaUserId,
+        at: iso(input.now),
+      });
     for (const event of input.events) {
       // Ticket 14: Makita's pull request merged ends its task as done (its `closed` finds none).
       if (event.event === "merged" && event.issue !== undefined) {
@@ -498,6 +508,7 @@ const make = Effect.gen(function* () {
           WHERE host = ${MAKITA_GITHUB_HOST} AND repo = ${input.listened.repo}
             AND pr_number = ${event.issue.number} AND state NOT IN ('done', 'stopped', 'failed')
         `;
+        yield* pullClosed(event.issue.number, event.actor);
         continue;
       }
       // An issue (or, ticket 14, Makita's pull request) closed or locked stops its live task;
@@ -522,6 +533,7 @@ const make = Effect.gen(function* () {
                 ? "pr-locked"
                 : "issue-locked",
         });
+        if (pull && event.event === "closed") yield* pullClosed(event.issue.number, event.actor);
         continue;
       }
       // Tickets 26–27: an approver's bad-work label on Makita's pull request, an issue Makita

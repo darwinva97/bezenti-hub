@@ -32,6 +32,7 @@ import * as MakitaRepoAdd from "./MakitaRepoAdd.ts";
 import * as MakitaStops from "./MakitaStops.ts";
 import * as MakitaTasks from "./MakitaTasks.ts";
 import * as MakitaTriage from "./MakitaTriage.ts";
+import * as MakitaWorktrees from "./MakitaWorktrees.ts";
 
 /** One `ThreadLaunchService.launch` Makita asked for, and the actor it ran as. */
 export interface RecordedLaunch {
@@ -101,6 +102,8 @@ export const makitaHub = Effect.gen(function* () {
       MakitaTriage.layer,
       // Tickets 26–27: closing issues with a verdict, cleaning up Makita's pull requests.
       MakitaCleanup.layer.pipe(Layer.provideMerge(MakitaIssueCloses.layer)),
+      // Ticket 28: finished tasks' worktrees, removed through the fake machine.
+      MakitaWorktrees.layer,
     ).pipe(
       Layer.provideMerge(MakitaPushes.layer),
       Layer.provideMerge(
@@ -141,6 +144,7 @@ export const makitaHub = Effect.gen(function* () {
     makitaTriage: Context.get(context, MakitaTriage.MakitaTriage),
     makitaIssueCloses: Context.get(context, MakitaIssueCloses.MakitaIssueCloses),
     makitaCleanup: Context.get(context, MakitaCleanup.MakitaCleanup),
+    makitaWorktrees: Context.get(context, MakitaWorktrees.MakitaWorktrees),
     gitWorld,
     githubIdentities: Context.get(context, GitHubIdentities.GitHubIdentities),
     makitaRepoAdd: Context.get(context, MakitaRepoAdd.MakitaRepoAdd),

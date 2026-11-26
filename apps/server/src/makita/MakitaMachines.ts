@@ -1,13 +1,13 @@
 /**
- * Makita ticket 10: the machine side of a pushing task, through executor calls every machine
- * already serves (a Thread move uses them), so no machine needs anything new: the task's own
- * worktree on the Space's work place, and its upload to the Project's Hub repository. Nothing here
- * holds or passes Makita's token.
+ * Makita ticket 10: the machine side of a pushing task, through executor calls a Thread move uses:
+ * the task's own worktree on the Space's work place, its upload to the Project's Hub repository,
+ * and (ticket 28, contract 18) its removal. Nothing here holds or passes Makita's token.
  */
 import {
   CheckpointRef,
   type EnvironmentId,
   MakitaError,
+  MOVE_REMOVE_CONTRACT_VERSION,
   type ProjectId,
   type ProviderInstanceId,
   type SpaceId,
@@ -52,6 +52,22 @@ export interface MakitaUploadInput {
   readonly ref: string;
 }
 
+/** Ticket 28: a task's worktree to remove, as the Hub recorded it when it made it. */
+export interface MakitaRemoveInput {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
+  readonly cwd: string;
+}
+
+/**
+ * What came of it: `removed`, `absent` (already gone), or why not: the machine is not connected,
+ * runs a version without `move.remove`, refused it (not that worktree) or failed.
+ */
+export type MakitaRemoval =
+  | { readonly _tag: "removed" | "absent" | "offline" | "outdated" }
+  | { readonly _tag: "refused" | "failed"; readonly detail: string };
+
 export class MakitaMachines extends Context.Service<
   MakitaMachines,
   {
@@ -66,6 +82,8 @@ export class MakitaMachines extends Context.Service<
      * and uploads it to the Project's Hub repository, with the machine's own credential.
      */
     readonly uploadWorktree: (input: MakitaUploadInput) => Effect.Effect<void, MakitaError>;
+    /** Ticket 28: the machine removes the task's worktree (`move.remove`, contract 18). */
+    readonly removeWorktree: (input: MakitaRemoveInput) => Effect.Effect<MakitaRemoval>;
   }
 >()("t3/makita/MakitaMachines") {}
 
@@ -192,7 +210,43 @@ const make = Effect.gen(function* () {
       );
   });
 
-  return MakitaMachines.of({ hubRepository, makeWorktree, uploadWorktree });
+  const removeWorktree = Effect.fn("MakitaMachines.removeWorktree")(function* (
+    input: MakitaRemoveInput,
+  ): Effect.fn.Return<MakitaRemoval> {
+    if (Option.isNone(executors)) return { _tag: "failed", detail: NOT_HERE };
+    const found = yield* executors.value.get(input.environmentId).pipe(Effect.option);
+    if (Option.isNone(found)) return { _tag: "offline" };
+    const executor = found.value;
+    // A machine from before contract 18 does not know the call: it is not asked.
+    const { forward } = executor.workspace;
+    if (Option.isSome(forward) && forward.value.contractVersion() < MOVE_REMOVE_CONTRACT_VERSION) {
+      return { _tag: "outdated" };
+    }
+    const checkout = yield* executor.workspace.paths.checkout(input.projectId).pipe(Effect.result);
+    if (checkout._tag === "Failure") return { _tag: "failed", detail: why(checkout.failure) };
+    if (Option.isNone(checkout.success)) {
+      return { _tag: "refused", detail: "The Project has no checkout on that machine." };
+    }
+    const answer = yield* executor.workspace.move
+      .remove({
+        checkout: checkout.success.value,
+        projectId: input.projectId,
+        threadId: input.threadId,
+        cwd: input.cwd,
+      })
+      .pipe(Effect.result);
+    if (answer._tag === "Failure") {
+      return answer.failure._tag === "EnvironmentExecutorUnavailableError"
+        ? { _tag: "offline" }
+        : { _tag: "failed", detail: why(answer.failure) };
+    }
+    const { status, detail } = answer.success;
+    return status === "refused"
+      ? { _tag: "refused", detail: detail ?? "The machine refused." }
+      : { _tag: status };
+  });
+
+  return MakitaMachines.of({ hubRepository, makeWorktree, uploadWorktree, removeWorktree });
 });
 
 /** Over the Hub's repositories, its Environments and their executors, where the Hub has them. */

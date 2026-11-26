@@ -190,9 +190,17 @@ const make = Effect.gen(function* () {
   const prepareWorkspace = Effect.fn("MakitaPushes.prepareWorkspace")(function* (
     input: MakitaWorkspaceInput,
   ) {
-    const [row] = yield* sql<{ readonly workspaceJson: string | null }>`
-      SELECT workspace_json AS "workspaceJson" FROM makita_tasks WHERE task_id = ${input.taskId}
+    const [row] = yield* sql<{
+      readonly workspaceJson: string | null;
+      readonly removedAt: string | null;
+    }>`
+      SELECT workspace_json AS "workspaceJson", worktree_removed_at AS "removedAt"
+      FROM makita_tasks WHERE task_id = ${input.taskId}
     `.pipe(Effect.catch(storage("read the task")));
+    // Ticket 28: an ended task's worktree, once removed, is never made again.
+    if (row !== undefined && row.removedAt !== null) {
+      return yield* fail("forbidden", "This task's worktree was removed.");
+    }
     const known = Option.flatMap(Option.fromNullishOr(row?.workspaceJson), decodeWorkspace);
     if (Option.isSome(known)) return known.value;
     const bot = yield* account;

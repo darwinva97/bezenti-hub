@@ -14,9 +14,15 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import { movedWorktreeNames } from "../environment/MovedWorkspace.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { MakitaGitRemote } from "./MakitaGitHub.ts";
-import { MakitaMachines, type MakitaWorktreeInput } from "./MakitaMachines.ts";
+import {
+  MakitaMachines,
+  type MakitaRemoval,
+  type MakitaRemoveInput,
+  type MakitaWorktreeInput,
+} from "./MakitaMachines.ts";
 
 const SANDBOX = EnvironmentId.make("env-sandbox");
 
@@ -120,16 +126,25 @@ export const makeGitWorld = () => {
   };
   const made: Array<MakitaWorktreeInput & { readonly cwd: string }> = [];
   const uploads: Array<{ readonly ref: string; readonly cwd: string }> = [];
+  /** Ticket 28: every removal the Hub asked the machine for. */
+  const removals: Array<MakitaRemoveInput> = [];
+  /** Where `move.prepare` puts a Thread's worktree on this machine. */
+  const worktreeOf = (projectId: string, threadId: string) => {
+    const names = movedWorktreeNames(projectId, threadId);
+    return NodePath.join(machine, "worktrees", names.project, names.thread);
+  };
   /**
    * `gate`: while set, making a worktree waits for it (a slow first clone); `attempts` counts
-   * every start of one, each also told to `started` (its number) when set.
+   * every start of one, each also told to `started` (its number) when set. `removal`: how the
+   * machine answers a removal (`removed`: the folder goes, or `absent` when already gone).
    */
   const state: {
     failWorktree: boolean;
     gate: Deferred.Deferred<void> | null;
     attempts: number;
     started: ((attempt: number) => Effect.Effect<void>) | null;
-  } = { failWorktree: false, gate: null, attempts: 0, started: null };
+    removal: "removed" | "offline" | "outdated" | "failed";
+  } = { failWorktree: false, gate: null, attempts: 0, started: null, removal: "removed" };
 
   const fail = (message: string) => Effect.fail(new MakitaError({ reason: "github", message }));
   const slow = Effect.suspend(() => {
@@ -152,7 +167,7 @@ export const makeGitWorld = () => {
                   const checkout = checkoutOf(input.projectId);
                   const bare = hubRepositoryOf(input.projectId);
                   git(checkout, ["fetch", "--quiet", bare, `+${input.baseRef}:${input.baseRef}`]);
-                  const cwd = NodePath.join(machine, "worktrees", input.threadId);
+                  const cwd = worktreeOf(input.projectId, input.threadId);
                   git(checkout, ["worktree", "add", "--quiet", "--detach", cwd, input.baseRef]);
                   NodeChildProcess.execFileSync("sh", ["-c", input.setupCommand], {
                     cwd,
@@ -188,6 +203,15 @@ export const makeGitWorld = () => {
             uploads.push({ ref: input.ref, cwd: input.cwd });
           },
           catch: (cause) => new MakitaError({ reason: "github", message: String(cause) }),
+        }),
+      removeWorktree: (input) =>
+        Effect.sync((): MakitaRemoval => {
+          removals.push(input);
+          if (state.removal === "failed") return { _tag: "failed", detail: "git said no" };
+          if (state.removal !== "removed") return { _tag: state.removal };
+          if (!NodeFS.existsSync(input.cwd)) return { _tag: "absent" };
+          NodeFS.rmSync(input.cwd, { recursive: true, force: true });
+          return { _tag: "removed" };
         }),
     }),
   );
@@ -257,6 +281,8 @@ export const makeGitWorld = () => {
     gitRuns,
     made,
     uploads,
+    removals,
+    worktreeOf,
     state,
     seed,
     tipOf,

@@ -13,6 +13,7 @@ import * as MakitaPushes from "../makita/MakitaPushes.ts";
 import * as MakitaStops from "../makita/MakitaStops.ts";
 import * as MakitaTasks from "../makita/MakitaTasks.ts";
 import * as MakitaTriage from "../makita/MakitaTriage.ts";
+import * as MakitaWorktrees from "../makita/MakitaWorktrees.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Layer from "effect/Layer";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -535,6 +536,11 @@ export const layer = Layer.mergeAll(
   layerLegacyV1ThreadImporterProvided,
 );
 
+/** Makita's machine side (tickets 10, 28): one instance for pushes and worktree removal. */
+const layerMakitaMachines = MakitaMachines.layer.pipe(
+  Layer.provide(layerEnvironmentExecutorsProvided),
+);
+
 export const layerProduction = Layer.mergeAll(
   layer.pipe(Layer.provide(layerProjectService)),
   layerProjectService,
@@ -577,9 +583,11 @@ export const layerProduction = Layer.mergeAll(
   MakitaTasks.layerScheduled.pipe(
     // Makita ticket 12: a task's pull request, and the watch of its CI.
     Layer.merge(MakitaPullRequests.layerScheduled),
-    // Makita tickets 26–27: closing issues with a verdict, and cleaning up its pull requests.
+    // Makita tickets 26–27: closing issues with a verdict, and cleaning up its pull requests;
+    // ticket 28: finished tasks' worktrees removed from their machines (the same scheduled layer).
     Layer.merge(MakitaCleanup.layerScheduled),
     Layer.provideMerge(MakitaCleanup.layer.pipe(Layer.provideMerge(MakitaIssueCloses.layer))),
+    Layer.provideMerge(MakitaWorktrees.layer.pipe(Layer.provide(layerMakitaMachines))),
     Layer.provideMerge(
       MakitaPullRequests.layer.pipe(
         Layer.provide(Layer.mergeAll(layerThreadManagementProvided, AuditLog.layer)),
@@ -598,14 +606,7 @@ export const layerProduction = Layer.mergeAll(
     Layer.provideMerge(MakitaTriage.layer.pipe(Layer.provide(AuditLog.layer))),
     // Makita ticket 10: a pushing task's worktree on its machine, and `makita_push`.
     Layer.provideMerge(
-      MakitaPushes.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            MakitaMachines.layer.pipe(Layer.provide(layerEnvironmentExecutorsProvided)),
-            AuditLog.layer,
-          ),
-        ),
-      ),
+      MakitaPushes.layer.pipe(Layer.provide(Layer.mergeAll(layerMakitaMachines, AuditLog.layer))),
     ),
     Layer.provideMerge(MakitaIntake.layer.pipe(Layer.provide(ProcessRunner.layer))),
     Layer.provide(SpaceDirectory.layer),

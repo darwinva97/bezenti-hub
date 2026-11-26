@@ -24,6 +24,7 @@ import { MakitaGitHub } from "./MakitaGitHub.ts";
 import { MakitaIntake } from "./MakitaIntake.ts";
 import { MakitaIssueCloses } from "./MakitaIssueCloses.ts";
 import { stopTasksWithin } from "./makitaRows.ts";
+import { MakitaWorktrees } from "./MakitaWorktrees.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 /** The idle sweep runs at most this often; a bad-work label is acted on every tick. */
@@ -438,13 +439,15 @@ export const layer = Layer.effect(MakitaCleanup, make);
 
 /**
  * On the Hub's Scheduler (`makita-cleanup`, every tick): `/makita reopen` orders and bad-work
- * labels the intake accepted, then the idle sweep when due.
+ * labels the intake accepted, then the idle sweep when due. Ticket 28's worktree pass runs as its
+ * own source (`makita-worktrees`), so a slow machine never holds the rest back.
  */
 export const layerScheduled = Layer.effectDiscard(
   Effect.gen(function* () {
     const scheduler = yield* Scheduler.Scheduler;
     const cleanup = yield* MakitaCleanup;
     const closes = yield* MakitaIssueCloses;
+    const worktrees = yield* MakitaWorktrees;
     yield* scheduler.register(
       "makita-cleanup",
       closes.reopenQueued.pipe(
@@ -452,5 +455,6 @@ export const layerScheduled = Layer.effectDiscard(
         Effect.andThen(cleanup.sweepIdle),
       ),
     );
+    yield* scheduler.register("makita-worktrees", worktrees.sweepDue);
   }),
 );

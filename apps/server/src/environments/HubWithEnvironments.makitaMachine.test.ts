@@ -126,3 +126,5 @@ describe("Hub con Environments: a Makita configuration's dedicated machine", () 
       }).pipe(Effect.scoped),
   );
 });
+
+// Runs with the server wiring of the registry (server.ts).

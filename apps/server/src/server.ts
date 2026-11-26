@@ -619,6 +619,9 @@ const layerAuth = Layer.mergeAll(
             Layer.provide(VcsProcess.layer),
             // A configuration's repositories come from each Project's checkout (git remote).
             Layer.provide(ProcessRunner.layer),
+            // Ticket 15: «Where it works» reads the machines dedicated to a Space. The same
+            // registry as below (memoized); without it a configuration sees no machine at all.
+            Layer.provide(EnvironmentRegistry.layerFromConfig),
           ),
         ),
         // The usage log: counts what the gateway layer ends, off its path (spec 4 ticket 05).

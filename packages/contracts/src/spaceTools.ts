@@ -40,6 +40,14 @@ export type SpaceMcpConfig = typeof SpaceMcpConfig.Type;
 export const SpaceToolLoan = Schema.Struct({ grantId: Schema.String, lenderName: Schema.String });
 export type SpaceToolLoan = typeof SpaceToolLoan.Type;
 
+/** Where a Space MCP was found, when it was added from a registry search. */
+export const SpaceMcpSource = Schema.Struct({
+  registry: Schema.Literal("mcp-registry"),
+  id: Schema.String.check(Schema.isMaxLength(256)),
+  version: Schema.String.check(Schema.isMaxLength(64)),
+});
+export type SpaceMcpSource = typeof SpaceMcpSource.Type;
+
 export const SpaceMcpSummary = Schema.Struct({
   id: SpaceMcpId,
   spaceId: SpaceId,
@@ -48,6 +56,7 @@ export const SpaceMcpSummary = Schema.Struct({
   enabled: Schema.Boolean,
   updatedAt: IsoDateTime,
   lent: Schema.optionalKey(SpaceToolLoan),
+  source: Schema.optionalKey(SpaceMcpSource),
 });
 export type SpaceMcpSummary = typeof SpaceMcpSummary.Type;
 
@@ -153,6 +162,8 @@ export const SpaceMcpPutInput = Schema.Struct({
   id: Schema.optionalKey(SpaceMcpId),
   name: ToolName,
   config: SpaceMcpConfig,
+  /** Only on a new one; an edit keeps where it came from. */
+  source: Schema.optionalKey(SpaceMcpSource),
 });
 export type SpaceMcpPutInput = typeof SpaceMcpPutInput.Type;
 
@@ -167,6 +178,32 @@ export const SpaceSkillPutInput = Schema.Struct({
   expects: Schema.Array(Schema.String.check(Schema.isMaxLength(128))).check(Schema.isMaxLength(50)),
 });
 export type SpaceSkillPutInput = typeof SpaceSkillPutInput.Type;
+
+export const SpaceMcpSearchInput = Schema.Struct({
+  spaceId: SpaceId,
+  query: Schema.String.check(Schema.isMinLength(2), Schema.isMaxLength(100)),
+});
+export type SpaceMcpSearchInput = typeof SpaceMcpSearchInput.Type;
+
+/**
+ * One registry entry, checked and turned into a draft for the "Add MCP server" form. Nothing is
+ * saved or run until a manager saves the draft; secret values are `${NAME}` references.
+ */
+export const SpaceMcpSearchResult = Schema.Struct({
+  source: SpaceMcpSource,
+  title: Schema.String,
+  description: Schema.String,
+  websiteUrl: Schema.optionalKey(Schema.String),
+  /** A suggested name for the Space MCP. */
+  name: Schema.String,
+  config: SpaceMcpConfig,
+  /** The Vault names the draft references, which the registry marks secret. */
+  secrets: Schema.Array(Schema.String),
+});
+export type SpaceMcpSearchResult = typeof SpaceMcpSearchResult.Type;
+
+export const SpaceMcpSearch = Schema.Struct({ results: Schema.Array(SpaceMcpSearchResult) });
+export type SpaceMcpSearch = typeof SpaceMcpSearch.Type;
 
 export const SpaceToolRef = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("mcp"), id: SpaceMcpId }),
@@ -193,6 +230,8 @@ export const SpaceToolErrorReason = Schema.Literals([
   /** A credential-looking header or variable given as a literal instead of a reference. */
   "secret-literal",
   "storage",
+  /** The MCP registry did not answer, answered nothing usable, or this Hub does not search it. */
+  "registry-unavailable",
 ]);
 export type SpaceToolErrorReason = typeof SpaceToolErrorReason.Type;
 

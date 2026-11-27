@@ -4,6 +4,7 @@
  */
 import type {
   SpaceMcpConfig,
+  SpaceMcpSource,
   SpaceMcpUnavailableReason,
   SpaceToolsThreadStatus,
 } from "@t3tools/contracts";
@@ -103,3 +104,15 @@ export const unavailableText = (mcp: SpaceToolsThreadStatus["mcps"][number]) =>
     : mcp.reason === "not-delivered"
       ? `Unavailable: ${REASONS[mcp.reason]} ${mcp.missing.join(", ")}`
       : `Unavailable: ${REASONS[mcp.reason]}`;
+
+/** Where a Space MCP server added from a registry search came from. */
+export const sourceText = (source: SpaceMcpSource) =>
+  `From the MCP Registry: ${source.id}@${source.version}`;
+
+/** The full command line a stdio draft runs, so it is read before it is saved. */
+export const commandLineOf = (config: SpaceMcpConfig) =>
+  config.transport === "stdio"
+    ? [config.command, ...config.args]
+        .map((part) => (/^[\w@%+=:,./${}<>-]+$/u.test(part) ? part : JSON.stringify(part)))
+        .join(" ")
+    : config.url;

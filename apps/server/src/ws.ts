@@ -126,6 +126,7 @@ import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as Vaults from "./vaults/Vaults.ts";
 import * as SecretProviderScopes from "./vaults/SecretProviderScopes.ts";
+import * as McpRegistry from "./spaceTools/McpRegistry.ts";
 import * as SpaceTools from "./spaceTools/SpaceTools.ts";
 import * as Grants from "./grants/Grants.ts";
 import * as EffectiveVaults from "./vaults/EffectiveVaults.ts";
@@ -1297,6 +1298,7 @@ export const layerWsRpc = (
       const secretRequests = yield* SecretRequests.SecretRequests;
       const vaults = yield* Vaults.Vaults;
       const spaceTools = yield* SpaceTools.SpaceTools;
+      const mcpRegistry = yield* McpRegistry.McpRegistry;
       const secretProviderScopes = yield* SecretProviderScopes.SecretProviderScopes;
       const grants = yield* Grants.Grants;
       const effectiveVaults = yield* EffectiveVaults.EffectiveVaults;
@@ -2512,6 +2514,7 @@ export const layerWsRpc = (
         [WS_METHODS.spaceToolsList]: (input) => spaceTools.list(input),
         [WS_METHODS.spaceToolsMcpGet]: (input) => spaceTools.getMcp(input),
         [WS_METHODS.spaceToolsMcpPut]: (input) => spaceTools.putMcp(input),
+        [WS_METHODS.spaceToolsMcpSearch]: (input) => mcpRegistry.search(input),
         [WS_METHODS.spaceToolsSkillGet]: (input) => spaceTools.getSkill(input),
         [WS_METHODS.spaceToolsSkillPut]: (input) => spaceTools.putSkill(input),
         [WS_METHODS.spaceToolsSetEnabled]: (input) => spaceTools.setEnabled(input),

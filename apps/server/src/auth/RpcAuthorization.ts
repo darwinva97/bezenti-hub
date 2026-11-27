@@ -148,6 +148,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.vaultsEntriesList]: AuthAccessReadScope,
   [WS_METHODS.spaceToolsList]: AuthAccessReadScope,
   [WS_METHODS.spaceToolsMcpGet]: AuthAccessReadScope,
+  [WS_METHODS.spaceToolsMcpSearch]: AuthAccessReadScope,
   [WS_METHODS.spaceToolsSkillGet]: AuthAccessReadScope,
   [WS_METHODS.spaceToolsThreadStatus]: AuthAccessReadScope,
   [WS_METHODS.vaultsChoices]: AuthAccessReadScope,

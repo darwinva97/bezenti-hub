@@ -7,6 +7,7 @@ import { type SpaceMcpConfig, SpaceId, UserId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Redacted from "effect/Redacted";
 
 import * as CommandActor from "../auth/CommandActor.ts";
@@ -21,6 +22,7 @@ import * as Grants from "../grants/Grants.ts";
 import * as SpaceDirectory from "../spaces/SpaceDirectory.ts";
 import * as Vaults from "../vaults/Vaults.ts";
 import { orgOwner } from "../vaults/VaultGroups.testkit.ts";
+import * as McpRegistry from "./McpRegistry.ts";
 import * as SpaceTools from "./SpaceTools.ts";
 
 const TOKEN_VALUE = "vault-value-never-shown";
@@ -179,6 +181,89 @@ it.effect("an Admin saves an MCP whose token is a Vault reference; no answer hol
       "space_mcp.delete",
     ]);
   }),
+);
+
+it.effect(
+  "a manager searches the MCP Registry for drafts; a saved draft shows where it came from",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const asked: string[] = [];
+      let answer: () => Response = () =>
+        Response.json({
+          servers: [
+            {
+              server: {
+                name: "io.github.github/github-mcp-server",
+                version: "2.3.0",
+                remotes: [
+                  {
+                    type: "streamable-http",
+                    url: "https://mcp.example.test/mcp",
+                    headers: [{ name: "Authorization", isSecret: true }],
+                  },
+                ],
+              },
+            },
+          ],
+        });
+      const client = HttpClient.make((request) => {
+        asked.push(request.url);
+        return Effect.succeed(HttpClientResponse.fromWeb(request, answer()));
+      });
+      const registry = yield* McpRegistry.make("https://registry.test").pipe(
+        Effect.provideService(SpaceTools.SpaceTools, h.tools),
+        Effect.provideService(HttpClient.HttpClient, client),
+      );
+      const search = (query: string) => registry.search({ spaceId: h.acmeId, query });
+      const found = yield* search("GitHub").pipe(h.as(h.admin));
+      assert.deepEqual(found.results[0]?.config, github("${GITHUB_MCP_SERVER_TOKEN}"));
+      // Members and Guests do not search; a stranger does not learn the Space exists.
+      assert.equal(yield* reasonOf(search("github").pipe(h.as(h.member))), "forbidden");
+      assert.equal(yield* reasonOf(search("github").pipe(h.as(h.outsider))), "not-found");
+      // The same question is answered from the cache; a broken registry is a plain refusal.
+      answer = () => new Response("<html>", { status: 502 });
+      assert.deepEqual(yield* search(" github ").pipe(h.as(h.admin)), found);
+      assert.equal(asked.length, 1);
+      assert.equal(yield* reasonOf(search("gitlab").pipe(h.as(h.admin))), "registry-unavailable");
+      answer = () => Response.json({ unexpected: true });
+      assert.equal(yield* reasonOf(search("gitea").pipe(h.as(h.admin))), "registry-unavailable");
+      const off = yield* McpRegistry.make(undefined).pipe(
+        Effect.provideService(SpaceTools.SpaceTools, h.tools),
+        Effect.provideService(HttpClient.HttpClient, client),
+      );
+      assert.equal(
+        yield* reasonOf(off.search({ spaceId: h.acmeId, query: "github" }).pipe(h.as(h.admin))),
+        "registry-unavailable",
+      );
+
+      const draft = found.results[0]!;
+      const saved = yield* h.tools
+        .putMcp({
+          spaceId: h.acmeId,
+          name: draft.name,
+          config: github("${GITHUB_TOKEN}"),
+          source: draft.source,
+        })
+        .pipe(h.as(h.admin));
+      assert.deepEqual(saved.source, draft.source);
+      // An edit keeps where it came from.
+      yield* h.tools
+        .putMcp({
+          spaceId: h.acmeId,
+          id: saved.id,
+          name: draft.name,
+          config: github("${GITHUB_TOKEN}"),
+          source: { ...draft.source, id: "io.example/other" },
+        })
+        .pipe(h.as(h.admin));
+      const listed = yield* h.tools.list({ spaceId: h.acmeId }).pipe(h.as(h.member));
+      assert.deepEqual(listed.mcps[0]?.source, draft.source);
+      const [created] = yield* h.server.sql<{ readonly detail: string }>`
+        SELECT detail_json AS detail FROM audit_log WHERE action = 'space_mcp.create'
+      `;
+      assert.include(created?.detail ?? "", "io.github.github/github-mcp-server@2.3.0");
+    }),
 );
 
 it.effect(

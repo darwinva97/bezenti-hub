@@ -1,9 +1,11 @@
 import { spaceLabel } from "@t3tools/client-runtime/grants-view";
 import {
+  commandLineOf,
   emptyMcpForm,
   mcpConfigOf,
   mcpFormOf,
   type SpaceMcpForm,
+  sourceText,
 } from "@t3tools/client-runtime/space-tools-view";
 import {
   type AtomCommandResult,
@@ -13,6 +15,8 @@ import type {
   EnvironmentId,
   GrantTarget,
   SpaceId,
+  SpaceMcpSearchResult,
+  SpaceMcpSource,
   SpaceMcpSummary,
   SpaceSkillFiles,
   SpaceSkillSummary,
@@ -339,6 +343,9 @@ function ToolRow(props: {
           )}
         </div>
         <span className="text-xs text-muted-foreground">{detail}</span>
+        {tool.kind === "mcp" && tool.row.source !== undefined ? (
+          <span className="text-xs text-muted-foreground">{sourceText(tool.row.source)}</span>
+        ) : null}
         {expects === null ? null : <span className="text-xs text-muted-foreground">{expects}</span>}
       </div>
       <div className="flex shrink-0 items-center gap-1">
@@ -396,8 +403,18 @@ function McpDialog(props: {
   const [form, setForm] = useState<SpaceMcpForm | null>(
     props.editing === null ? emptyMcpForm : null,
   );
+  const [source, setSource] = useState<SpaceMcpSource | null>(null);
+  const [needs, setNeeds] = useState<ReadonlyArray<string>>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const choose = (result: SpaceMcpSearchResult) => {
+    setName(result.name);
+    setForm(mcpFormOf(result.config));
+    setSource(result.source);
+    setNeeds(result.secrets);
+    setError(null);
+  };
+  const draft = form === null ? null : mcpConfigOf(form);
 
   const editingId = props.editing?.id ?? null;
   const readFirst = useEffectEvent((id: SpaceMcpSummary["id"]) =>
@@ -434,6 +451,7 @@ function McpDialog(props: {
         ...(props.editing === null ? {} : { id: props.editing.id }),
         name: name.trim(),
         config: config.config,
+        ...(props.editing === null && source !== null ? { source } : {}),
       },
     });
     setPending(false);
@@ -468,6 +486,21 @@ function McpDialog(props: {
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : (
               <div className="flex flex-col gap-3">
+                {props.editing === null ? (
+                  <McpRegistrySearch
+                    environmentId={props.environmentId}
+                    spaceId={props.spaceId}
+                    onChoose={choose}
+                  />
+                ) : null}
+                {source === null ? null : (
+                  <p className="text-xs text-muted-foreground">
+                    {`${sourceText(source)}. Check every field: nothing is saved or run until you save.`}
+                    {needs.length === 0
+                      ? null
+                      : ` It needs ${needs.join(", ")} in a Vault group this Space receives.`}
+                  </p>
+                )}
                 <label className="flex flex-col gap-1 text-xs font-medium">
                   Name
                   <Input
@@ -512,6 +545,14 @@ function McpDialog(props: {
                         onChange={(event) => field("env", event.target.value)}
                       />
                     </label>
+                    {draft !== null &&
+                    "config" in draft &&
+                    draft.config.transport === "stdio" &&
+                    draft.config.command !== "" ? (
+                      <code className="rounded-md bg-muted px-2 py-1.5 font-mono text-xs break-all">
+                        {commandLineOf(draft.config)}
+                      </code>
+                    ) : null}
                     <p className="text-xs text-warning-foreground">
                       This command runs on the machine of every Thread of this Space.
                     </p>
@@ -554,6 +595,92 @@ function McpDialog(props: {
         </form>
       </DialogPopup>
     </Dialog>
+  );
+}
+
+/** The MCP Registry, searched by the Hub; choosing a result only fills in the form. */
+function McpRegistrySearch(props: {
+  readonly environmentId: EnvironmentId;
+  readonly spaceId: SpaceId;
+  readonly onChoose: (result: SpaceMcpSearchResult) => void;
+}) {
+  const searchMcp = useAtomCommand(spaceToolsEnvironment.searchMcp, "search the MCP Registry");
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<ReadonlyArray<SpaceMcpSearchResult> | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+
+  const search = async () => {
+    const text = query.trim();
+    if (text.length < 2) return;
+    setSearching(true);
+    const result = await searchMcp({
+      environmentId: props.environmentId,
+      input: { spaceId: props.spaceId, query: text },
+    });
+    setSearching(false);
+    if (result._tag === "Success") {
+      setResults(result.value.results);
+      setProblem(null);
+    } else {
+      setResults(null);
+      setProblem(failureText(result, "Could not search the MCP Registry."));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <div className="flex-1">
+          <Input
+            aria-label="Search the MCP Registry"
+            value={query}
+            placeholder="Search the MCP Registry"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              void search();
+            }}
+          />
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={searching || query.trim().length < 2}
+          onClick={() => void search()}
+        >
+          Search
+        </Button>
+      </div>
+      {problem === null ? null : <p className="text-xs text-destructive">{problem}</p>}
+      {results === null ? null : results.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nothing found.</p>
+      ) : (
+        <ul className="flex max-h-56 flex-col divide-y overflow-y-auto rounded-md border">
+          {results.map((result) => (
+            <li key={result.source.id}>
+              <button
+                type="button"
+                className="flex w-full flex-col gap-0.5 px-3 py-2 text-left hover:bg-accent"
+                onClick={() => {
+                  props.onChoose(result);
+                  setResults(null);
+                }}
+              >
+                <span className="text-sm font-medium">{result.title}</span>
+                {result.description === "" ? null : (
+                  <span className="text-xs text-muted-foreground">{result.description}</span>
+                )}
+                <span className="text-xs text-muted-foreground">
+                  {`${result.config.transport === "stdio" ? "Runs a command" : "Over HTTP"} · ${result.source.id}`}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

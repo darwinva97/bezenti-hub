@@ -66,6 +66,7 @@ import * as SecretResolver from "./secrets/SecretResolver.ts";
 import * as DeliveredValues from "./vaults/DeliveredValues.ts";
 import * as ProviderReads from "./vaults/ProviderReads.ts";
 import * as SecretProviderScopes from "./vaults/SecretProviderScopes.ts";
+import * as McpRegistry from "./spaceTools/McpRegistry.ts";
 import * as SpaceTools from "./spaceTools/SpaceTools.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
@@ -846,6 +847,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(CodexManagedTokenBroker.layer),
   Layer.provideMerge(layerServerEnvironment),
   // A Space's MCP servers and Skills, over the one Vaults instance of layerAuth.
+  Layer.provideMerge(McpRegistry.layer),
   Layer.provideMerge(SpaceTools.layer),
   Layer.provideMerge(layerAuth),
   Layer.provideMerge(AssetSigner.layer),

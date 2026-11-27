@@ -93,6 +93,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.spaceToolsList]: "spaceTools",
   [WS_METHODS.spaceToolsMcpGet]: "spaceTools",
   [WS_METHODS.spaceToolsMcpPut]: "spaceTools",
+  [WS_METHODS.spaceToolsMcpSearch]: "spaceTools",
   [WS_METHODS.spaceToolsSkillGet]: "spaceTools",
   [WS_METHODS.spaceToolsSkillPut]: "spaceTools",
   [WS_METHODS.spaceToolsSetEnabled]: "spaceTools",

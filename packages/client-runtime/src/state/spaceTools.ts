@@ -24,6 +24,10 @@ export function createSpaceToolsEnvironmentAtoms<R, E>(
       label: "environment-data:space-tools:mcp-put",
       tag: WS_METHODS.spaceToolsMcpPut,
     }),
+    searchMcp: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:space-tools:mcp-search",
+      tag: WS_METHODS.spaceToolsMcpSearch,
+    }),
     getSkill: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:space-tools:skill-get",
       tag: WS_METHODS.spaceToolsSkillGet,

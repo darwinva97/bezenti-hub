@@ -39,6 +39,7 @@ import {
 import { buildFileTreePathUpdates, shouldRebuildFileTree } from "./fileTreePathReconciliation";
 import { loadFileAncestors } from "./loadFileAncestors";
 import { useDirectoryEntries } from "./useDirectoryEntries";
+import { useWorkspaceDownload } from "./workspaceDownload";
 import { useProjectPathSearch } from "~/state/queries";
 
 interface FileBrowserPanelProps {
@@ -155,6 +156,7 @@ export default function FileBrowserPanel({
   const { resolvedTheme } = useTheme();
   const composerRef = useComposerHandleContext();
   const fileContextMenu = useFileContextMenu(environmentId);
+  const downloadWorkspaceEntry = useWorkspaceDownload(environmentId);
   const {
     entries: directoryEntries,
     load,
@@ -189,6 +191,8 @@ export default function FileBrowserPanel({
         return;
       }
       const relativePath = item.path.replace(/\/$/, "");
+      const isDirectory =
+        item.path.endsWith("/") || entryKindsRef.current.get(relativePath) === "directory";
       const mention = serializeComposerFileLink(panelPath(relativePath));
       const pointer = contextMenuPointerRef.current;
       const pointerIsFresh = pointer !== null && performance.now() - pointer.at < 1000;
@@ -206,6 +210,11 @@ export default function FileBrowserPanel({
             ...fileMenuItems,
             { id: "copy-mention", label: "Copy mention" },
             { id: "add-to-chat", label: "Add to chat" },
+            {
+              id: "download",
+              label: isDirectory ? "Download as .zip" : "Download",
+              icon: "download",
+            },
           ],
           position,
         );
@@ -215,6 +224,18 @@ export default function FileBrowserPanel({
           fileMenuItems.some((entry) => entry.id === clicked) || clicked.startsWith("editor:");
         if (isFileMenuAction) {
           await fileContextMenu.activate(clicked as FileContextMenuAction, fileTarget);
+          return;
+        }
+        if (clicked === "download") {
+          try {
+            await downloadWorkspaceEntry({ cwd, path: relativePath });
+          } catch (error) {
+            toastManager.add({
+              type: "error",
+              title: isDirectory ? "Could not download folder" : "Could not download file",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            });
+          }
           return;
         }
         if (clicked === "copy-mention") {

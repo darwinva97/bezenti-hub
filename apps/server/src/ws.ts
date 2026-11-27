@@ -3246,7 +3246,10 @@ export const layerWsRpc = (
             ) {
               return yield* issueAssetUrl({ resource: input.resource, viewer: principal.userId });
             }
-            if (input.resource._tag === "draft-workspace-file") {
+            if (
+              input.resource._tag === "draft-workspace-file" ||
+              input.resource._tag === "workspace-download"
+            ) {
               return yield* issueAssetUrl({
                 resource: input.resource,
                 workspaceRoot: input.resource.cwd,

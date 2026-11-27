@@ -479,7 +479,7 @@ const assetReadTargets = (payload: unknown): ReadonlyArray<string> | "refused" =
     if (climbsOrHome(path)) return "refused";
     return localWorkspaceTargets(WS_METHODS.assetsCreateUrl, { path }, ["path"]);
   }
-  if (tag === "draft-workspace-file") {
+  if (tag === "draft-workspace-file" || tag === "workspace-download") {
     return localWorkspaceTargets(WS_METHODS.assetsCreateUrl, { cwd, relativePath: path });
   }
   if (tag === "project-favicon" || tag === SOURCE_CONTROL_MEDIA_ASSET) {

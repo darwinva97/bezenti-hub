@@ -67,6 +67,31 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
 
+const folderZipFileName = (folderName: string) => `${folderName || "folder"}.zip`;
+
+/** The folder a ZIP URL was signed for, if it is still a folder inside the same root. */
+const resolveFolderZip = Effect.fnUntraced(function* (
+  claims: Extract<AssetClaims, { kind: "workspace-folder-zip" }>,
+  requestedName: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const folder = path.join(claims.workspaceRoot, claims.relativePath);
+  const name = path.basename(folder);
+  if (requestedName !== folderZipFileName(name)) return null;
+  const canonical = yield* fileSystem.realPath(folder).pipe(Effect.orElseSucceed(() => null));
+  if (canonical !== folder || !isWithinRoot(path, canonical, claims.workspaceRoot)) return null;
+  const info = yield* fileSystem.stat(canonical).pipe(Effect.orElseSucceed(() => null));
+  if (info?.type !== "Directory") return null;
+  return {
+    kind: "folder-zip",
+    path: canonical,
+    name: name || "folder",
+    fileName: requestedName,
+    ...(claims.viewer === undefined ? {} : { viewer: claims.viewer }),
+  } satisfies ResolvedAsset;
+});
+
 const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
 const PROJECT_FAVICON_TOKEN_BUCKET_MS = 30 * 60 * 1000;
 const HTML_ATTACHMENT_TOKEN_BUCKET_MS = 30 * 60 * 1000;
@@ -188,6 +213,15 @@ const AssetClaimsSchema = Schema.Union([
   }),
   Schema.Struct({
     version: Schema.Literal(1),
+    kind: Schema.Literal("workspace-folder-zip"),
+    /** Symlink-resolved at mint time; the folder is `relativePath` under it. */
+    workspaceRoot: Schema.String,
+    relativePath: Schema.String,
+    expiresAt: Schema.Number,
+    viewer: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
     kind: Schema.Literal(SOURCE_CONTROL_MEDIA_ASSET),
     /** A host's `fetchUrl`, narrowed at mint time; the signature is what keeps it there. */
     url: Schema.String,
@@ -225,6 +259,14 @@ export type ResolvedAsset =
       readonly url: string;
       readonly cwd: string;
       readonly expiresAt: number;
+    }
+  | {
+      readonly kind: "folder-zip";
+      /** The folder, symlink-resolved. */
+      readonly path: string;
+      readonly name: string;
+      readonly fileName: string;
+      readonly viewer?: string;
     }
   | MachineFileAsset;
 
@@ -452,7 +494,8 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
       });
     }
     const download =
-      input.resource._tag === "media-file" && input.resource.disposition === "attachment";
+      (input.resource._tag === "media-file" && input.resource.disposition === "attachment") ||
+      input.resource._tag === "workspace-download";
     if (!download && hostPreviewMimeTypeFromExtension(path.extname(canonicalFile)) === null) {
       return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
     }
@@ -706,6 +749,59 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       fileRevision = finalized.fileRevision;
       break;
     }
+    case "workspace-download": {
+      const workspaceRoot = yield* workspacePaths
+        .normalizeWorkspaceRoot(input.resource.cwd)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new AssetWorkspaceRootNormalizationError({ resource: input.resource, cause }),
+          ),
+        );
+      const resolved = yield* workspacePaths
+        .resolveRelativePathWithinRoot({ workspaceRoot, relativePath: input.resource.path })
+        .pipe(
+          Effect.mapError(
+            (cause) => new AssetWorkspacePathValidationError({ resource: input.resource, cause }),
+          ),
+        );
+      const inspectionError = (cause: unknown) =>
+        new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause });
+      const canonicalRoot = yield* fileSystem
+        .realPath(workspaceRoot)
+        .pipe(Effect.mapError(inspectionError));
+      const canonicalTarget = yield* fileSystem
+        .realPath(resolved.absolutePath)
+        .pipe(Effect.orElseSucceed(() => null));
+      const info =
+        canonicalTarget !== null && isWithinRoot(path, canonicalTarget, canonicalRoot)
+          ? yield* fileSystem.stat(canonicalTarget).pipe(Effect.mapError(inspectionError))
+          : null;
+      if (canonicalTarget !== null && info?.type === "File") {
+        const finalized = yield* finalizeAbsoluteMediaFileAsset({
+          requestedPath: canonicalTarget,
+          expectedCanonicalPath: canonicalTarget,
+          workspaceRoot,
+          resource: input.resource,
+          expiresAt,
+        });
+        claims = finalized.claims;
+        fileName = finalized.fileName;
+        break;
+      }
+      if (canonicalTarget === null || info?.type !== "Directory") {
+        return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+      }
+      claims = {
+        version: 1,
+        kind: "workspace-folder-zip",
+        workspaceRoot: canonicalRoot,
+        relativePath: path.relative(canonicalRoot, canonicalTarget),
+        expiresAt,
+      };
+      fileName = folderZipFileName(path.basename(canonicalTarget));
+      break;
+    }
     case "attachment": {
       const config = yield* ServerConfig.ServerConfig;
       const attachmentPath = resolveAttachmentPathById({
@@ -927,7 +1023,8 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
     input.viewer !== undefined &&
     (claims.kind === "workspace-file" ||
       claims.kind === "workspace-file-exact" ||
-      claims.kind === "media-file-exact")
+      claims.kind === "media-file-exact" ||
+      claims.kind === "workspace-folder-zip")
   ) {
     claims = { ...claims, viewer: input.viewer };
   }
@@ -1125,6 +1222,9 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
 
   const decodedPath = decodeRelativePath(relativePath);
   if (decodedPath === null) return null;
+  if (claims.kind === "workspace-folder-zip") {
+    return yield* resolveFolderZip(claims, decodedPath);
+  }
   if (claims.kind === "thread-machine-file") {
     let served: string;
     if (claims.mode === "exact") {

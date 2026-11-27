@@ -331,6 +331,68 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect.skipIf(!symlinksSupported)(
+    "downloads a workspace file as it is and a folder as a ZIP, never from outside the root",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-root-" });
+        const outside = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-outside-" });
+        yield* fs.makeDirectory(path.join(root, "out", "docs"), { recursive: true });
+        yield* fs.writeFileString(path.join(root, "out", "report.docx"), "report bytes");
+        yield* fs.writeFileString(path.join(outside, "secret.txt"), "outside");
+        yield* fs.symlink(path.join(outside, "secret.txt"), path.join(root, "secret-link.txt"));
+        yield* fs.symlink(outside, path.join(root, "outside-link"));
+        const download = (relativePath: string) =>
+          issueAssetUrl({
+            resource: { _tag: "workspace-download", cwd: root, path: relativePath },
+            workspaceRoot: root,
+          });
+        const resolveUrl = (relativeUrl: string) => {
+          const suffix = relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+          const separator = suffix.indexOf("/");
+          return resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+        };
+
+        const file = yield* download("out/report.docx");
+        expect(yield* resolveUrl(file.relativeUrl)).toMatchObject({
+          kind: "file",
+          download: true,
+          fileName: "report.docx",
+        });
+
+        const folder = yield* download("out");
+        expect(folder.relativeUrl.endsWith("/out.zip")).toBe(true);
+        const canonicalOut = yield* fs.realPath(path.join(root, "out"));
+        expect(yield* resolveUrl(folder.relativeUrl)).toMatchObject({
+          kind: "folder-zip",
+          path: canonicalOut,
+          name: "out",
+          fileName: "out.zip",
+        });
+        const token = folder.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length).split("/")[0]!;
+        expect(yield* resolveAsset(token, "other.zip")).toBeNull();
+        yield* fs.remove(path.join(root, "out"), { recursive: true });
+        yield* fs.symlink(outside, path.join(root, "out"));
+        expect(yield* resolveAsset(token, "out.zip")).toBeNull();
+
+        for (const relativePath of [
+          "../outside",
+          path.join(outside, "secret.txt"),
+          "secret-link.txt",
+          "outside-link",
+          "missing",
+        ]) {
+          const error = yield* download(relativePath).pipe(Effect.flip);
+          expect([
+            "AssetWorkspacePathValidationError",
+            "AssetWorkspaceAssetNotFoundError",
+          ]).toContain(error._tag);
+        }
+      }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("resolves relative media paths from the thread workspace, including outside it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

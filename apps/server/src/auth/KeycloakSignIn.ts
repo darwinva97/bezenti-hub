@@ -591,8 +591,8 @@ const makeWith = Effect.fn("KeycloakSignIn.makeWith")(function* (options: FlowBo
 
   /**
    * Ticket 05: what the token's groups change for a User (`planGroupSync`), read inside the
-   * caller's transaction. `undefined` is a new identity, with no Memberships yet. The Owner
-   * belongs to no Organization, so no group puts them in one.
+   * caller's transaction. `undefined` is a new identity, with no Memberships yet. Groups never
+   * change the Owner's Memberships.
    */
   const groupPlan = (
     user: { readonly id: UserId; readonly isOwner: boolean } | undefined,

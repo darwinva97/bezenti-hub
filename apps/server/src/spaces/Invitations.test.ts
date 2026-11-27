@@ -330,6 +330,41 @@ it.effect("adds the Organization to a signed-in User who accepts", () =>
   }),
 );
 
+it.effect("the Owner joins an Organization someone else made, as its invitation says", () =>
+  Effect.gen(function* () {
+    const { server, owner } = yield* ownerWithOrganization();
+    const grace = yield* addMember(server);
+    const graces = yield* server.request("/api/spaces/organizations", {
+      body: { name: "Big Team" },
+      cookie: grace,
+    });
+    const spaceId = graces.body.id as string;
+    expect(yield* spacesOf(server, owner)).toContainEqual(
+      expect.objectContaining({ id: spaceId, role: null }),
+    );
+    const token = (yield* invite(server, owner, spaceId, "admin")).body.token as string;
+
+    const joined = yield* server.request("/api/invitations/join", {
+      body: { token },
+      cookie: owner,
+    });
+    expect(joined.status).toBe(200);
+    expect(joined.body).toMatchObject({ spaceId });
+    const listed = (yield* spacesOf(server, owner)).filter((space) => space.id === spaceId);
+    expect(listed).toEqual([expect.objectContaining({ role: "admin" })]);
+
+    // And leaves it like anyone else.
+    const left = yield* server.request(`/api/spaces/${spaceId}/leave`, {
+      body: {},
+      cookie: owner,
+    });
+    expect(left.status).toBe(200);
+    expect(yield* spacesOf(server, owner)).toContainEqual(
+      expect.objectContaining({ id: spaceId, role: null }),
+    );
+  }),
+);
+
 it.effect("backs off repeated failed accepts of one link", () =>
   Effect.gen(function* () {
     const { server, owner, acmeId } = yield* ownerWithOrganization();

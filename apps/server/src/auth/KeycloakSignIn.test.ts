@@ -1440,7 +1440,8 @@ describe("Keycloak admission (ticket 03)", () => {
         );
         assert.equal(yield* userCount(server), before + 1);
         const members = yield* server.sql`
-          SELECT user_id FROM space_memberships WHERE space_id = ${invitation.spaceId}
+          SELECT m.user_id FROM space_memberships m JOIN users u ON u.user_id = m.user_id
+          WHERE m.space_id = ${invitation.spaceId} AND u.is_owner = 0
         `;
         assert.equal(members.length, 1);
         assert.equal((yield* server.sql`SELECT * FROM user_identities`).length, 1);
@@ -1542,7 +1543,7 @@ describe("Keycloak admission (ticket 03)", () => {
         assert.equal(dead.location, "/invite?keycloak=invitation-invalid");
         assert.equal(yield* userOf(server, dead.cookie), member.id);
 
-        // The Owner sees every Organization already.
+        // The Owner made Acme, so is in it already, like anyone who is.
         const reauth = yield* passkeyReauth(server, authenticator);
         const ownerLinked = yield* roundTrip(
           server,
@@ -1554,7 +1555,7 @@ describe("Keycloak admission (ticket 03)", () => {
         assert.equal(ownerLinked.status, 303);
         const forOwner = yield* anotherInvite(server, ownerLinked.cookie ?? "", first.spaceId);
         const ownerAnswer = yield* acceptWith(forOwner.token, "kc-ada");
-        assert.equal(ownerAnswer.location, "/invite?keycloak=owner");
+        assert.equal(ownerAnswer.location, "/invite?keycloak=already-member");
         assert.isNull((yield* invitationRow(server, forOwner.invitationId))?.acceptedAt);
       }),
     );
@@ -2823,10 +2824,19 @@ describe("Keycloak groups → Memberships (ticket 05)", () => {
     }),
   );
 
-  it.effect("the Owner, who belongs to no Organization, is never put in one by a group", () =>
+  it.effect("a group never changes the Owner's Memberships", () =>
     Effect.gen(function* () {
       const { server, realm, owner, ownerId, authenticator } = yield* hub();
       yield* bezentiMapped(server, owner);
+      // The Owner made both Organizations, so runs them as their Admin.
+      const made = yield* groupMembershipsOf(server, ownerId);
+      assert.deepEqual(
+        made.map((row) => [row.role, row.managed, row.group]),
+        [
+          ["admin", 0, null],
+          ["admin", 0, null],
+        ],
+      );
       const linked = yield* roundTrip(
         server,
         realm,
@@ -2840,7 +2850,7 @@ describe("Keycloak groups → Memberships (ticket 05)", () => {
         claims: { ...STRONG, ...groups("bezenti") },
       });
       assert.equal(yield* userOf(server, again.cookie), ownerId);
-      assert.deepEqual(yield* groupMembershipsOf(server, ownerId), []);
+      assert.deepEqual(yield* groupMembershipsOf(server, ownerId), made);
     }),
   );
 

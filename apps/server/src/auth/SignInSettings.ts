@@ -200,7 +200,7 @@ export class SignInSettings extends Context.Service<
 
 /**
  * The Owner may map a group into Organization `s` only as its Steward (ADR 0008), never as a
- * Member: the Owner holds no Memberships. Steward is its creator; NULL counts as the Owner only
+ * Member: groups never change the Owner's Memberships. Steward is its creator; NULL counts as the Owner only
  * because those are single-user-era Organizations (migration 138). plans-and-limits 02 moves this
  * to `spaces.steward_user_id`.
  */

@@ -76,10 +76,10 @@ export class InvitationConflictError extends Schema.TaggedError<InvitationConfli
   {
     reason: Schema.String,
     /**
-     * For a caller that answers in codes: the Owner, someone already in the Organization, or a
-     * User who opened a Platform invitation (ticket 04), which stays unspent.
+     * For a caller that answers in codes: someone already in the Organization, or a User who
+     * opened a Platform invitation (ticket 04), which stays unspent.
      */
-    code: Schema.optionalKey(Schema.Literals(["owner", "already-member", "has-account"])),
+    code: Schema.optionalKey(Schema.Literals(["already-member", "has-account"])),
   },
 ) {
   override get message(): string {
@@ -875,12 +875,6 @@ const make = Effect.gen(function* () {
       return yield* new InvitationConflictError({ reason: HAS_ACCOUNT, code: "has-account" });
     }
     const principal = yield* spaces.principalOf(userId).pipe(storage);
-    if (principal.isOwner) {
-      return yield* new InvitationConflictError({
-        reason: "You're the Owner, who already sees every Organization.",
-        code: "owner",
-      });
-    }
     if (principal.roles.has(invitation.spaceId)) {
       return yield* new InvitationConflictError({
         reason: `You're already in ${invitation.organizationName}.`,

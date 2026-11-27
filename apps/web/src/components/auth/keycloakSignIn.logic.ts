@@ -74,8 +74,6 @@ export const keycloakResultMessage = (search: string): string | null => {
       return "This invitation is no longer valid. Ask whoever invited you for a new link.";
     case "already-member":
       return "You're already in this Organization.";
-    case "owner":
-      return "You're the Owner, who already sees every Organization.";
     case "has-account":
       return "You already have an account on this Hub. This invitation stays unused, so it can go to someone else.";
     case "strong-factor-required":

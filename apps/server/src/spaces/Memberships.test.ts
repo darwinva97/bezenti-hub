@@ -154,8 +154,10 @@ it.effect("an Admin invites Members and Guests and manages them, but never an Ad
     expect((yield* removal(server, admin, acmeId, linus.userId)).status).toBe(200);
     // A Member changes nobody.
     expect((yield* roleChange(server, grace.cookie, acmeId, ada.userId, "guest")).status).toBe(403);
+    // The Owner made Acme, so is one of its Admins too.
     expect(yield* membersOf(server, owner, acmeId)).toEqual([
       "ada:admin",
+      "Ada Lovelace:admin",
       "hedy:admin",
       "grace:guest",
     ]);
@@ -163,7 +165,11 @@ it.effect("an Admin invites Members and Guests and manages them, but never an Ad
     // The Owner names and removes Admins, both ways.
     expect((yield* roleChange(server, owner, acmeId, hedy.userId, "member")).status).toBe(200);
     expect((yield* removal(server, owner, acmeId, ada.userId)).status).toBe(200);
-    expect(yield* membersOf(server, owner, acmeId)).toEqual(["hedy:member", "grace:guest"]);
+    expect(yield* membersOf(server, owner, acmeId)).toEqual([
+      "Ada Lovelace:admin",
+      "hedy:member",
+      "grace:guest",
+    ]);
 
     // Someone outside the Organization learns nothing about it, not even that it exists.
     const outsider = yield* server.request("/api/spaces/organizations", {
@@ -375,13 +381,10 @@ it.effect(
       expect(yield* projectIds(grace.cookie)).toEqual([]);
       expect(yield* projectIds(linus.cookie)).toEqual(["graces-app"]);
       expect(yield* projectIds(owner)).toEqual(["graces-app"]);
-      // Leaving twice, or leaving as the Owner, has nothing to leave.
+      // Leaving twice has nothing to leave.
       expect(
         (yield* server.request(`/api/spaces/${acmeId}/leave`, { body: {}, cookie: grace.cookie }))
           .status,
-      ).toBe(403);
-      expect(
-        (yield* server.request(`/api/spaces/${acmeId}/leave`, { body: {}, cookie: owner })).status,
       ).toBe(403);
 
       // The way back in is a new Invitation, joined from her existing account.

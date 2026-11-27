@@ -1137,8 +1137,7 @@ const make = Effect.gen(function* () {
             INSERT INTO spaces (space_id, kind, name, created_at, created_by_user_id)
             VALUES (${spaceId}, 'organization', ${tidy}, ${now}, ${userId})
           `;
-          // The Owner runs every Organization without a Membership.
-          if (!principal.isOwner) yield* addMembership({ spaceId, userId, role: "admin" });
+          yield* addMembership({ spaceId, userId, role: "admin" });
           // Its Vault starts with its `default` group (owned-resources 03).
           yield* VaultGroups.ensureDefault(sql, { ownerKind: "organization", ownerId: spaceId });
           yield* audit.record({

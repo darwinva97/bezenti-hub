@@ -41,7 +41,7 @@ it.effect(
         server.request("/api/spaces/organizations", { body: { name }, cookie });
       const acme = yield* organization(owner, "Acme");
       expect(acme.status).toBe(200);
-      expect(acme.body).toMatchObject({ kind: "organization", name: "Acme" });
+      expect(acme.body).toMatchObject({ kind: "organization", name: "Acme", role: "admin" });
       // Grace makes her own. She signs in with no passkey or authenticator app, so she is its
       // Admin but acts as a Member until she adds one.
       const shadow = yield* organization(member, "Big   Team");
@@ -81,8 +81,8 @@ it.effect(
         (ownerAfter.body.spaces as ReadonlyArray<{ name: string }>).map((s) => s.name).toSorted(),
       ).toEqual(["Acme", "Big Team", "Grace Hopper", "Personal"]);
 
-      // The creator is stored with the Organization (the Steward to be) and in the audit log;
-      // the Owner holds no Membership of their own.
+      // The creator is stored with the Organization (the Steward to be) and in the audit log,
+      // and is its Admin, the Owner included.
       const stored = yield* server.sql<{ name: string; createdBy: string | null }>`
         SELECT name, created_by_user_id AS "createdBy" FROM spaces
         WHERE kind = 'organization' ORDER BY name
@@ -94,9 +94,13 @@ it.effect(
       const memberships = yield* server.sql<{ spaceId: string; userId: string; role: string }>`
         SELECT space_id AS "spaceId", user_id AS "userId", role FROM space_memberships
       `;
-      expect(memberships.map((row) => ({ ...row }))).toEqual([
-        { spaceId: shadowId, userId: "member-1", role: "admin" },
-      ]);
+      expect(memberships).toHaveLength(2);
+      expect(memberships.map((row) => ({ ...row }))).toEqual(
+        expect.arrayContaining([
+          { spaceId: acme.body.id, userId: ownerId, role: "admin" },
+          { spaceId: shadowId, userId: "member-1", role: "admin" },
+        ]),
+      );
       const audited = yield* server.sql<{ actor: string; spaceId: string }>`
         SELECT actor_user_id AS "actor", target_id AS "spaceId" FROM audit_log
         WHERE action = 'organization.create' ORDER BY audit_id

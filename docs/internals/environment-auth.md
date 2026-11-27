@@ -675,7 +675,7 @@ ends in the same transaction. A weak sign-in carrying such a group is still
 refused, but its mapping is committed first. A link refuses before its
 transaction, since the identity is not the User's until it commits. A new identity with a
 mapped group is admitted under «invitation only» (a permanent Invitation), never
-under «closed». The Owner holds no Memberships and is skipped.
+under «closed». Groups never change the Owner's Memberships.
 
 A mapping may point only into an Organization whose Steward the Owner is
 (today the creator, with a missing creator counting as the Owner for single-user-era

@@ -58,12 +58,9 @@ const hub = Effect.gen(function* () {
   });
   const acmeId = yield* organization("Acme");
   const globexId = yield* organization("Globex");
-  // The Owner runs Acme as one of its Admins; Ana works there, Adam runs it too, Linus is a
-  // Guest. Grecia shares no Space with anyone.
-  yield* server.sql`
-    INSERT OR IGNORE INTO space_memberships (space_id, user_id, role, created_at)
-    VALUES (${acmeId}, ${ownerId}, 'admin', ${at})
-  `;
+  // The Owner made both, so runs Acme as one of its Admins; Globex they left, and only see.
+  // Ana works in Acme, Adam runs it too, Linus is a Guest. Grecia shares no Space with anyone.
+  yield* server.request(`/api/spaces/${globexId}/leave`, { body: {}, cookie: owner });
   const person = Effect.fn(function* (id: string, role?: "admin" | "member" | "guest") {
     const cookie = yield* addMember(server, { id, displayName: id });
     if (role !== undefined) yield* joinOrganization(server, acmeId, id, role);
@@ -1113,6 +1110,58 @@ describe("Grants of Vault groups", () => {
 
 // Grants ticket 12: the Space directory tells whoever decides how many loans wait there.
 describe("Grants waiting in the Space directory", () => {
+  it.effect("the Owner decides on an Organization's loans once they join it as an Admin", () =>
+    Effect.gen(function* () {
+      const h = yield* hub;
+      const made = yield* h.server.request("/api/spaces/organizations", {
+        body: { name: "Initech" },
+        cookie: h.grecia.cookie,
+      });
+      const initechId = made.body.id as string;
+      const box = yield* h.machine("owner-box", h.ownerId);
+      const given = yield* h.give(h.owner, box, initechId);
+      assert.equal(given.body.state, "pending", JSON.stringify(given.body));
+      const grantId = given.body.id as string;
+      const spaces = Context.get(h.server.services, SpaceDirectory.SpaceDirectory);
+      const waiting = spaces
+        .view(h.ownerId)
+        .pipe(
+          Effect.map((view) => view.spaces.find((space) => space.id === initechId)?.pendingGrants),
+        );
+      const receivedIds = h.grants.listReceived({}).pipe(
+        CommandActor.actAs(h.ownerId),
+        Effect.map((received) => received.grants.map((grant) => grant.id)),
+      );
+
+      // Seeing every Organization is not deciding in one.
+      assert.isUndefined(yield* waiting);
+      assert.notInclude(yield* receivedIds, grantId);
+      assert.equal(
+        (yield* h.accept(h.owner, grantId, yield* passkeyReauth(h.server, h.authenticator))).status,
+        403,
+      );
+
+      const invitation = yield* h.server.request(`/api/spaces/${initechId}/invitations`, {
+        body: { role: "admin" },
+        cookie: h.owner,
+      });
+      const joined = yield* h.server.request("/api/invitations/join", {
+        body: { token: invitation.body.token },
+        cookie: h.owner,
+      });
+      assert.equal(joined.status, 200, JSON.stringify(joined.body));
+      assert.equal(yield* waiting, 1);
+      assert.include(yield* receivedIds, grantId);
+      const accepted = yield* h.accept(
+        h.owner,
+        grantId,
+        yield* passkeyReauth(h.server, h.authenticator),
+      );
+      assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+      assert.equal(accepted.body.state, "active");
+    }),
+  );
+
   it.effect("only whoever decides on a Space's loans is told how many wait there", () =>
     Effect.gen(function* () {
       const h = yield* hub;

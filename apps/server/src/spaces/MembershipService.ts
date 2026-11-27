@@ -250,8 +250,8 @@ const make = Effect.gen(function* () {
         spaces
           .authorizeMembership({ actor, action: "membership.leave", spaceId, target: actor })
           .pipe(
-            // Not a Member, or the Owner, who belongs to no Organization: nothing to leave. A
-            // Membership a Keycloak group gives is left by leaving the group (ticket 05).
+            // Not a Member: nothing to leave. A Membership a Keycloak group gives is left by
+            // leaving the group (ticket 05).
             Effect.mapError((error) =>
               error._tag === "SpaceAccessDeniedError" && error.reason !== "managed-by-keycloak"
                 ? refused("You're not in this Organization.")

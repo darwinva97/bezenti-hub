@@ -1,22 +1,22 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { AuthAccount, EnvironmentId, GrantOfferPreview } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { claimGrantOffer } from "../../environments/primary/grants";
-import { fetchAccount } from "../../environments/primary/userAccounts";
+import { fetchAccount, type StepUp } from "../../environments/primary/userAccounts";
 import { errorMessageOf } from "../../lib/errorMessage";
 import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { grantsEnvironment } from "../../state/grants";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { confirmWithKeycloak, takeKeycloakStepUp } from "../auth/keycloakStepUp";
 import {
   emptyStepUp,
   lacksStrongFactor,
   type StepUpState,
-  StepUpFields,
   toStepUp,
 } from "../settings/AccountSettingsSection";
-import { StrongFactorNotice } from "../settings/StrongFactorNotice";
+import { StrongFactorFields } from "../settings/StrongFactorFields";
 import {
   limitsText,
   offerSpaceLabel,
@@ -30,6 +30,7 @@ import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
 import { forgetGrantOfferToken, takeGrantOfferToken } from "./grantOfferLink";
 
 type Valid = Extract<GrantOfferPreview, { status: "valid" }>;
+type OfferSpace = Valid["spaces"][number];
 
 const DEAD = {
   title: "This lending link no longer works",
@@ -90,14 +91,40 @@ function GrantOffer({
   const navigate = useNavigate();
   // Right after a page load the session is not up yet: wait for it, then read.
   const connected = useEnvironment(environmentId)?.connection.phase === "connected";
+  // Back from «Confirm with Keycloak»: the Space it was left for, applied once with the proof.
+  const [resume] = useState(() => takeKeycloakStepUp("claim-offer"));
+  const resumed = useRef(false);
   const [preview, setPreview] = useState<GrantOfferPreview | null>(null);
-  const [spaceId, setSpaceId] = useState("");
+  const [spaceId, setSpaceId] = useState<string>(resume?.pending.spaceId ?? "");
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    resume !== null && "failure" in resume ? resume.failure : null,
+  );
   const [done, setDone] = useState<string | null>(null);
   // Grants ticket 15: a machine's link asks the decider's strong factor, as accepting one does.
   const [account, setAccount] = useState<AuthAccount | null>(null);
   const [stepUp, setStepUp] = useState<StepUpState | null>(null);
+
+  const claim = async (into: OfferSpace, machine: boolean, run: () => Promise<unknown>) => {
+    setPending(true);
+    setError(null);
+    try {
+      await run();
+      forgetGrantOfferToken();
+      setDone(
+        machine
+          ? `Lent to ${spaceLabel(into)}: its Threads can run in a Sandbox on it now.`
+          : `Lent to ${spaceLabel(into)}: its Threads can use it now.`,
+      );
+    } catch (cause) {
+      setError(errorMessageOf(cause, "The link did not apply."));
+    } finally {
+      setPending(false);
+    }
+  };
+  // Over HTTP, with the strong factor: applying a machine's link makes the loan active.
+  const claimMachine = (into: OfferSpace, proof: StepUp) =>
+    claim(into, true, () => claimGrantOffer({ token, spaceId: into.spaceId }, proof));
 
   const load = useEffectEvent(() => readOffer({ environmentId, input: { token } }));
   const show = useEffectEvent((read: Awaited<ReturnType<typeof readOffer>>) => {
@@ -107,6 +134,13 @@ function GrantOffer({
     }
     if (read.value.status === "invalid") forgetGrantOfferToken();
     setPreview(read.value);
+    if (read.value.status === "valid" && resume !== null && "proofId" in resume) {
+      if (resumed.current) return;
+      resumed.current = true;
+      const chosen = read.value.spaces.find((space) => space.spaceId === resume.pending.spaceId);
+      const proof = { method: "keycloak", proofId: resume.proofId } as const;
+      if (chosen !== undefined) void claimMachine(chosen, proof);
+    }
     if (read.value.status === "valid" && read.value.resource.kind === "environment") {
       void fetchAccount().then(
         (found) => {
@@ -152,29 +186,26 @@ function GrantOffer({
 
   const apply = async () => {
     if (chosen === undefined || chosen.alreadyGranted) return;
-    setPending(true);
-    setError(null);
-    try {
-      const input = { token, spaceId: chosen.spaceId };
-      if (machine) {
-        if (account === null || stepUp === null) return;
-        // Over HTTP, with the strong factor: applying it makes the loan active.
-        await claimGrantOffer(input, toStepUp(account, stepUp));
-      } else {
-        const claimed = await claimOffer({ environmentId, input });
-        if (claimed._tag !== "Success") throw squashAtomCommandFailure(claimed);
-      }
-      forgetGrantOfferToken();
-      setDone(
-        machine
-          ? `Lent to ${spaceLabel(chosen)}: its Threads can run in a Sandbox on it now.`
-          : `Lent to ${spaceLabel(chosen)}: its Threads can use it now.`,
+    if (machine) {
+      if (account === null || stepUp === null) return;
+      if (!stepUp.viaKeycloak) return claimMachine(chosen, toStepUp(account, stepUp));
+      setPending(true);
+      setError(null);
+      await confirmWithKeycloak({ kind: "claim-offer", spaceId: chosen.spaceId }).catch(
+        (cause: unknown) => {
+          setError(errorMessageOf(cause, "Could not start confirming with Keycloak."));
+          setPending(false);
+        },
       );
-    } catch (cause) {
-      setError(errorMessageOf(cause, "The link did not apply."));
-    } finally {
-      setPending(false);
+      return;
     }
+    await claim(chosen, false, async () => {
+      const claimed = await claimOffer({
+        environmentId,
+        input: { token, spaceId: chosen.spaceId },
+      });
+      if (claimed._tag !== "Success") throw squashAtomCommandFailure(claimed);
+    });
   };
 
   return (
@@ -224,19 +255,15 @@ function GrantOffer({
                 </SelectPopup>
               </Select>
             </label>
-            {machine && account !== null && lacksStrongFactor(account) ? (
-              <StrongFactorNotice
-                onOpenAccount={() =>
-                  void navigate({ to: "/settings/user/$section", params: { section: "account" } })
-                }
-              />
-            ) : null}
-            {machine && account !== null && stepUp !== null && !lacksStrongFactor(account) ? (
-              <StepUpFields
+            {machine && account !== null && stepUp !== null ? (
+              <StrongFactorFields
                 account={account}
                 disabled={pending}
                 value={stepUp}
                 onChange={setStepUp}
+                onOpenAccount={() =>
+                  void navigate({ to: "/settings/user/$section", params: { section: "account" } })
+                }
               />
             ) : null}
             <div>
@@ -244,7 +271,11 @@ function GrantOffer({
                 disabled={pending || chosen === undefined || chosen.alreadyGranted || factorMissing}
                 onClick={() => void apply()}
               >
-                {machine ? "Confirm and accept" : "Accept the loan"}
+                {!machine
+                  ? "Accept the loan"
+                  : stepUp?.viaKeycloak === true
+                    ? "Confirm with Keycloak"
+                    : "Confirm and accept"}
               </Button>
             </div>
           </>

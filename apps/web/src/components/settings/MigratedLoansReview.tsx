@@ -11,6 +11,7 @@ import { errorMessageOf } from "../../lib/errorMessage";
 import { grantsEnvironment } from "../../state/grants";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { peekKeycloakStepUp } from "../auth/keycloakStepUp";
 import { LendVaultGroupDialog } from "./LendVaultGroupDialog";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -155,7 +156,16 @@ export function MigratedVaultLoansReview({
   const [reviews, setReviews] = useState<ReadonlyArray<GrantVaultGroupMigrationReview> | null>(
     null,
   );
-  const [lending, setLending] = useState<GrantVaultGroupMigrationReview | null>(null);
+  // Back from «Confirm with Keycloak», the Lend dialog it left opens again to finish.
+  const [lending, setLending] = useState<Pick<
+    GrantVaultGroupMigrationReview,
+    "vaultGroupId" | "vaultGroupName" | "spaceId"
+  > | null>(() => {
+    const back = peekKeycloakStepUp("lend-vault-group");
+    return back?.fromReview === true
+      ? { vaultGroupId: back.group.id, vaultGroupName: back.group.name, spaceId: back.spaceId }
+      : null;
+  });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

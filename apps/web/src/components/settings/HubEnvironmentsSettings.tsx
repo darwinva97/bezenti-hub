@@ -35,6 +35,7 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { peekKeycloakStepUp } from "../auth/keycloakStepUp";
 import { LendMachineDialog } from "./GrantsSettings";
 import { machineInScope, sandboxOfScope, type OwnedResourceScope } from "./ownedResourceScope";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -218,7 +219,10 @@ export function HubEnvironmentsSettings({ scope }: { readonly scope?: OwnedResou
     environment.kind === "external" &&
     environment.mode === "personal" &&
     environment.ownerUserId === userId;
-  const [lending, setLending] = useState<HubEnvironmentSummary>();
+  // Back from «Confirm with Keycloak», the Lend dialog it left opens again to finish.
+  const [lending, setLending] = useState<Pick<HubEnvironmentSummary, "id" | "name"> | undefined>(
+    () => peekKeycloakStepUp("lend-machine")?.machine,
+  );
   // One machine may be lent to several Spaces, a Sandbox each: how many, by machine.
   const primaryId = usePrimaryEnvironmentId();
   const connected = useEnvironment(primaryId)?.connection.phase === "connected";

@@ -45,6 +45,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SecretValueArea } from "./SecretValueArea";
+import { peekKeycloakStepUp } from "../auth/keycloakStepUp";
 import { LendVaultGroupDialog } from "./LendVaultGroupDialog";
 import { MigratedVaultLoansReview } from "./MigratedLoansReview";
 import { borrowedInScope, ownerInScope, type OwnedResourceScope } from "./ownedResourceScope";
@@ -576,7 +577,11 @@ function VaultSection(props: {
     !vault.isDefault &&
     !vault.archived &&
     vault.borrowed === undefined;
-  const [lending, setLending] = useState(false);
+  // Back from «Confirm with Keycloak», the Lend dialog it left opens again to finish.
+  const [lending, setLending] = useState(() => {
+    const back = peekKeycloakStepUp("lend-vault-group");
+    return back !== null && !back.fromReview && back.group.id === vault.id;
+  });
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const act: Act = async (work, all = false) => {

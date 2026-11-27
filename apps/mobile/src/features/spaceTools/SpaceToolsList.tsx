@@ -1,3 +1,4 @@
+import { sourceText } from "@t3tools/client-runtime/space-tools-view";
 import {
   squashAtomCommandFailure,
   type AtomCommandResult,
@@ -17,6 +18,7 @@ import { Button } from "../../components/ui/Button";
 import { ListSection } from "../../components/ui/ListSection";
 import { spaceToolsEnvironment } from "../../state/spaceTools";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { McpRegistryAdd } from "./McpRegistryAdd";
 
 type Tool =
   | { readonly kind: "mcp"; readonly row: SpaceMcpSummary }
@@ -29,8 +31,9 @@ const messageOf = (result: AtomCommandResult<unknown, unknown>, fallback: string
 };
 
 /**
- * Space settings → MCP servers & Skills on a phone: names and state, turning one off or on and
- * deleting it. Adding and editing (a server's settings, a Skill's text) stay on web and desktop.
+ * Space settings → MCP servers & Skills on a phone: names and state, turning one off or on,
+ * deleting it, and adding an MCP server from the MCP Registry as it is. Writing a server's settings
+ * or a Skill's text stays on web and desktop.
  */
 export function SpaceToolsList(props: {
   readonly environmentId: EnvironmentId;
@@ -113,6 +116,9 @@ export function SpaceToolsList(props: {
                     : tool.row.description,
                   tool.row.enabled ? null : "Off",
                   tool.row.lent === undefined ? null : `Lent by ${tool.row.lent.lenderName}`,
+                  tool.kind === "mcp" && tool.row.source !== undefined
+                    ? sourceText(tool.row.source)
+                    : null,
                 ]
                   .filter((part) => part !== null)
                   .join(" · ")}
@@ -161,8 +167,15 @@ export function SpaceToolsList(props: {
         "Skills",
       )}
       {listed.canManage ? (
+        <McpRegistryAdd
+          environmentId={environmentId}
+          spaceId={spaceId}
+          onAdded={() => void list({ environmentId, input: { spaceId } }).then(show)}
+        />
+      ) : null}
+      {listed.canManage ? (
         <Text className="text-sm text-foreground-muted">
-          Add or edit MCP servers and Skills in Space settings on the web or desktop app.
+          Write or edit MCP servers and Skills in Space settings on the web or desktop app.
         </Text>
       ) : null}
     </View>

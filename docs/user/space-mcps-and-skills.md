@@ -17,6 +17,19 @@ typed in directly.
 
 Members and Guests see each server's name and whether it is on, never its settings.
 
+## Find one in the MCP Registry
+
+Instead of typing it in, search the official [MCP Registry](https://registry.modelcontextprotocol.io)
+from **Add MCP server** (on a phone, from **Add from the MCP Registry**). Choosing a result fills in
+its command or URL, arguments, variables and headers; nothing is saved or run until you check them
+and save. A server reached by URL is offered before one that runs a command, and a command is shown
+in full. Secret values arrive as `${NAME}` references, so add each named entry to a Vault group the
+Space receives before saving. The server's row says which registry entry it came from; turn it off
+or delete it like any other.
+
+The Hub asks the registry for you. An Owner who does not want the Hub to reach it starts the
+server with `T3CODE_MCP_REGISTRY_URL=off`.
+
 ## When a server is unavailable
 
 If a Thread does not receive an entry a server uses (the group is not chosen, a loan ended, a

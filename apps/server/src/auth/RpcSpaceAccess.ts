@@ -239,6 +239,7 @@ export const RPC_SPACE_ACCESS = {
   [WS_METHODS.spaceToolsList]: SPACE_TOOLS,
   [WS_METHODS.spaceToolsMcpGet]: SPACE_TOOLS,
   [WS_METHODS.spaceToolsMcpPut]: SPACE_TOOLS,
+  [WS_METHODS.spaceToolsMcpSearch]: SPACE_TOOLS,
   [WS_METHODS.spaceToolsSkillGet]: SPACE_TOOLS,
   [WS_METHODS.spaceToolsSkillPut]: SPACE_TOOLS,
   [WS_METHODS.spaceToolsSetEnabled]: SPACE_TOOLS,

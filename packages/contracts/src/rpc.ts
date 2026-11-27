@@ -515,6 +515,8 @@ import {
   SpaceMcp,
   SpaceMcpGetInput,
   SpaceMcpPutInput,
+  SpaceMcpSearch,
+  SpaceMcpSearchInput,
   SpaceSkill,
   SpaceSkillGetInput,
   SpaceSkillPutInput,
@@ -730,6 +732,7 @@ export const WS_METHODS = {
   spaceToolsList: "spaceTools.list",
   spaceToolsMcpGet: "spaceTools.mcp.get",
   spaceToolsMcpPut: "spaceTools.mcp.put",
+  spaceToolsMcpSearch: "spaceTools.mcp.search",
   spaceToolsSkillGet: "spaceTools.skill.get",
   spaceToolsSkillPut: "spaceTools.skill.put",
   spaceToolsSetEnabled: "spaceTools.setEnabled",
@@ -2604,6 +2607,11 @@ const WsSpaceToolsMcpPutRpc = Rpc.make(WS_METHODS.spaceToolsMcpPut, {
   success: SpaceMcp,
   error: SpaceToolError,
 });
+const WsSpaceToolsMcpSearchRpc = Rpc.make(WS_METHODS.spaceToolsMcpSearch, {
+  payload: SpaceMcpSearchInput,
+  success: SpaceMcpSearch,
+  error: SpaceToolError,
+});
 const WsSpaceToolsSkillGetRpc = Rpc.make(WS_METHODS.spaceToolsSkillGet, {
   payload: SpaceSkillGetInput,
   success: SpaceSkill,
@@ -2774,6 +2782,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSpaceToolsSetEnabledRpc,
   WsSpaceToolsDeleteRpc,
   WsSpaceToolsThreadStatusRpc,
+  WsSpaceToolsMcpSearchRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

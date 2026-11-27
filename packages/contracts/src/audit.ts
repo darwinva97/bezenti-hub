@@ -571,8 +571,11 @@ export const AUDIT_DETAIL_KEYS = {
   "provider_scope.update": ["provider", "paths", "writable", "broke"],
   "provider_scope.delete": ["provider", "broke"],
   "provider_scope.allow": ["vault", "vaultId", "allowed", "broke"],
-  /** Its transport, a stdio server's command (no arguments) and the Vault names it references. */
-  "space_mcp.create": ["transport", "command", "references"],
+  /**
+   * Its transport, a stdio server's command (no arguments), the Vault names it references and,
+   * when added from a registry search, the registry entry (`id@version`).
+   */
+  "space_mcp.create": ["transport", "command", "references", "source"],
   "space_mcp.update": ["transport", "command", "references"],
   "space_mcp.enable": [],
   "space_mcp.disable": [],

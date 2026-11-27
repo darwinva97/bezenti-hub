@@ -1,6 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { emptyMcpForm, mcpConfigOf, mcpFormOf, parsePairs } from "./spaceToolsView.ts";
+import {
+  commandLineOf,
+  emptyMcpForm,
+  mcpConfigOf,
+  mcpFormOf,
+  parsePairs,
+} from "./spaceToolsView.ts";
 
 describe("spaceToolsView", () => {
   it("reads headers and variables as lines, and says how when a line is malformed", () => {
@@ -21,6 +27,9 @@ describe("spaceToolsView", () => {
       env: { GITHUB_TOKEN: "${GITHUB_TOKEN}" },
     };
     expect(mcpConfigOf(mcpFormOf(config))).toEqual({ config });
+    expect(commandLineOf({ ...config, args: [...config.args, "a b; rm -rf ~"] })).toBe(
+      'github-mcp --read-only --toolsets=repos "a b; rm -rf ~"',
+    );
     expect(
       mcpConfigOf({ ...emptyMcpForm, transport: "http", url: " https://a.test/mcp " }),
     ).toEqual({ config: { transport: "http", url: "https://a.test/mcp", headers: {} } });

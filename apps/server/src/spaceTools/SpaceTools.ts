@@ -7,6 +7,7 @@ import {
   type SpaceId,
   SpaceMcpConfig,
   SpaceMcpId,
+  SpaceMcpSource,
   type SpaceMcp,
   type SpaceMcpGetInput,
   type SpaceMcpPutInput,
@@ -112,6 +113,7 @@ interface McpRow {
   readonly name: string;
   readonly transport: "stdio" | "http";
   readonly configJson: string;
+  readonly sourceJson: string | null;
   readonly enabled: number;
   readonly updatedAt: string;
   readonly grantId?: string | null;
@@ -135,6 +137,13 @@ const encodeConfig = Schema.encodeSync(Schema.fromJsonString(SpaceMcpConfig));
 const encodeFiles = Schema.encodeSync(Schema.fromJsonString(SpaceSkillFiles));
 const encodeNames = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const decodeConfig = Schema.decodeUnknownSync(Schema.fromJsonString(SpaceMcpConfig));
+const encodeSource = Schema.encodeSync(Schema.fromJsonString(SpaceMcpSource));
+const decodeSource = Schema.decodeUnknownOption(Schema.fromJsonString(SpaceMcpSource));
+
+const sourceOf = (row: McpRow) => {
+  const source = row.sourceJson === null ? Option.none() : decodeSource(row.sourceJson);
+  return Option.isSome(source) ? { source: source.value } : {};
+};
 const decodeFiles = Schema.decodeUnknownSync(Schema.fromJsonString(SpaceSkillFiles));
 const decodeNames = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 
@@ -151,6 +160,7 @@ const mcpSummary = (row: McpRow): SpaceMcpSummary => ({
   enabled: row.enabled === 1,
   updatedAt: row.updatedAt,
   ...loanOf(row),
+  ...sourceOf(row),
 });
 
 const mcpDetail = (row: McpRow): SpaceMcp => {
@@ -232,7 +242,7 @@ const make = Effect.gen(function* () {
   const mcpsOfSpace = (spaceId: string, onlyEnabled: boolean) =>
     sql<McpRow>`
       SELECT m.mcp_id AS id, m.space_id AS "spaceId", m.name, m.transport,
-        m.config_json AS "configJson", m.enabled, m.updated_at AS "updatedAt",
+        m.config_json AS "configJson", m.source_json AS "sourceJson", m.enabled, m.updated_at AS "updatedAt",
         g.grant_id AS "grantId", ${sql.literal(LENDER_NAME)} AS "lenderName"
       FROM space_mcps m
       LEFT JOIN grants g ON g.resource_kind = 'space-mcp' AND g.resource_id = m.mcp_id
@@ -269,7 +279,7 @@ const make = Effect.gen(function* () {
   const mcpRow = (id: string) =>
     sql<McpRow>`
       SELECT mcp_id AS id, space_id AS "spaceId", name, transport, config_json AS "configJson",
-        enabled, updated_at AS "updatedAt"
+        source_json AS "sourceJson", enabled, updated_at AS "updatedAt"
       FROM space_mcps WHERE mcp_id = ${id}
     `.pipe(
       Effect.map((rows) => rows[0]),
@@ -363,6 +373,8 @@ const make = Effect.gen(function* () {
     const id = existing?.id ?? (yield* newId("mcp"));
     const at = yield* now;
     const configJson = encodeConfig(input.config);
+    const sourceJson =
+      existing === undefined && input.source !== undefined ? encodeSource(input.source) : null;
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
@@ -375,10 +387,10 @@ const make = Effect.gen(function* () {
           }
           if (existing === undefined) {
             yield* sql`
-              INSERT INTO space_mcps (mcp_id, space_id, name, transport, config_json, enabled,
-                created_by, created_at, updated_at)
+              INSERT INTO space_mcps (mcp_id, space_id, name, transport, config_json, source_json,
+                enabled, created_by, created_at, updated_at)
               VALUES (${id}, ${space.id}, ${input.name}, ${input.config.transport}, ${configJson},
-                1, ${userId}, ${at}, ${at})
+                ${sourceJson}, 1, ${userId}, ${at}, ${at})
             `;
           } else {
             yield* sql`
@@ -394,6 +406,9 @@ const make = Effect.gen(function* () {
               transport: input.config.transport,
               ...commandOf(input.config),
               references: refs.names.join(","),
+              ...(sourceJson === null || input.source === undefined
+                ? {}
+                : { source: `${input.source.id}@${input.source.version}` }),
             },
           });
         }),

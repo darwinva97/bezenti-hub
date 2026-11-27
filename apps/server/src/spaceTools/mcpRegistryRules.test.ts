@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import { MCP_REGISTRY_MAX_RESULTS, registryResults } from "./mcpRegistryRules.ts";
 

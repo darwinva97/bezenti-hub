@@ -95,6 +95,7 @@ export const WS_DOOR_RULES: Record<string, DoorRule> = {
   "spaceTools.list": none("a Space's MCP and Skill names and state"),
   "spaceTools.mcp.get": none("an MCP's configuration, with Vault references, never values"),
   "spaceTools.mcp.put": none("an MCP's configuration, with Vault references, never values"),
+  "spaceTools.mcp.search": none("MCP Registry drafts, with Vault references, never values"),
   "spaceTools.skill.get": none("a Skill's files, as its managers wrote them"),
   "spaceTools.skill.put": none("a Skill's files, as its managers wrote them"),
   "spaceTools.setEnabled": none("nothing"),

@@ -124,6 +124,7 @@ import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as Vaults from "./vaults/Vaults.ts";
 import * as SecretProviderScopes from "./vaults/SecretProviderScopes.ts";
+import * as McpRegistry from "./spaceTools/McpRegistry.ts";
 import * as SpaceTools from "./spaceTools/SpaceTools.ts";
 import * as Grants from "./grants/Grants.ts";
 import * as EffectiveVaults from "./vaults/EffectiveVaults.ts";
@@ -882,6 +883,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(Vaults.Vaults)({}),
   Layer.mock(SecretProviderScopes.SecretProviderScopes)({}),
   Layer.mock(SpaceTools.SpaceTools)({}),
+  Layer.mock(McpRegistry.McpRegistry)({}),
   Layer.mock(Grants.Grants)({}),
   Layer.mock(EffectiveVaults.EffectiveVaults)({}),
   Layer.mock(SecretResolver.SecretResolver)({}),

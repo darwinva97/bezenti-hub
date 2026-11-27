@@ -42,7 +42,7 @@ export const make = Effect.fn("McpRegistry.make")(function* (baseUrl: string | u
         }),
       )
       .pipe(
-        Effect.flatMap((response) =>
+        Effect.flatMap((response): Effect.Effect<unknown, unknown> =>
           response.status >= 200 && response.status < 300
             ? response.json
             : Effect.fail(response.status),

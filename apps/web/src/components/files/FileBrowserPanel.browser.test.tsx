@@ -43,6 +43,15 @@ vi.mock("~/fileContextMenu", () => ({
   useFileContextMenu: () => ({ buildItems: () => [], activate: () => Promise.resolve() }),
 }));
 vi.mock("~/hooks/useWorkspaceMutationRefresh", () => ({ useWorkspaceMutationRefresh: () => {} }));
+const downloads = vi.hoisted(() => ({
+  requested: [] as Array<{ target: { cwd: string; paths: ReadonlyArray<string> }; label: string }>,
+}));
+vi.mock("./workspaceDownload", () => ({
+  useWorkspaceDownload:
+    () => (target: { cwd: string; paths: ReadonlyArray<string> }, label: string) => {
+      downloads.requested.push({ target, label });
+    },
+}));
 
 function findTreeRow(path: string): HTMLElement | null {
   for (const host of document.querySelectorAll("*")) {
@@ -97,6 +106,45 @@ describe("FileBrowserPanel", () => {
     await expect.element(action).toHaveFocus();
     await userEvent.keyboard("{Escape}");
     await vi.waitFor(() => expect((row.getRootNode() as ShadowRoot).activeElement).toBe(row));
+  });
+
+  it("downloads a file as it is and a folder as a .zip from the row menu", async () => {
+    downloads.requested.length = 0;
+    await using _screen = await render(
+      <FileBrowserPanel
+        environmentId={EnvironmentId.make("env-files")}
+        cwd="/repo"
+        projectName="repo"
+        selectedPath={null}
+        selectedPathRevealId={0}
+        onOpenFile={() => {}}
+        workspaceMutationId={null}
+      />,
+    );
+    using _menu = { [Symbol.dispose]: () => dismissContextMenu() };
+    for (const [row, label] of [
+      ["README.md", "Download"],
+      ["src/", "Download as .zip"],
+    ] as const) {
+      await vi.waitFor(() => expect(findTreeRow(row)).not.toBeNull());
+      findTreeRow(row)!.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          button: 2,
+        }),
+      );
+      const action = page.getByRole("menuitem", { name: label, exact: true });
+      await expect.element(action).toBeVisible();
+      await userEvent.click(action);
+    }
+    await vi.waitFor(() =>
+      expect(downloads.requested).toEqual([
+        { target: { cwd: "/repo", paths: ["README.md"] }, label: "README.md" },
+        { target: { cwd: "/repo", paths: ["src"] }, label: "src" },
+      ]),
+    );
   });
 
   it("dragging a file row carries a composer mention without opening it, and dragend releases it", async () => {

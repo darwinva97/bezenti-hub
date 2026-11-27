@@ -3,7 +3,11 @@ import type {
   ContextMenuItem as TreeContextMenuItem,
   ContextMenuOpenContext as TreeContextMenuOpenContext,
 } from "@pierre/trees";
-import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type ProjectEntry,
+  WORKSPACE_DOWNLOAD_MAX_SELECTION,
+} from "@t3tools/contracts";
 import { FileTree, useFileTree, useFileTreeSearch, useFileTreeSelector } from "@pierre/trees/react";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
@@ -39,6 +43,7 @@ import {
 import { buildFileTreePathUpdates, shouldRebuildFileTree } from "./fileTreePathReconciliation";
 import { loadFileAncestors } from "./loadFileAncestors";
 import { useDirectoryEntries } from "./useDirectoryEntries";
+import { useWorkspaceDownload } from "./workspaceDownload";
 import { useProjectPathSearch } from "~/state/queries";
 
 interface FileBrowserPanelProps {
@@ -155,6 +160,9 @@ export default function FileBrowserPanel({
   const { resolvedTheme } = useTheme();
   const composerRef = useComposerHandleContext();
   const fileContextMenu = useFileContextMenu(environmentId);
+  const downloadWorkspaceEntry = useWorkspaceDownload(environmentId, {
+    inThreadWorkspace: !hostFolder,
+  });
   const {
     entries: directoryEntries,
     load,
@@ -173,6 +181,7 @@ export default function FileBrowserPanel({
   const { entries, entryKinds, treePaths, directoryPaths, expandableDirectoryPaths } =
     buildTreeEntries(directoryEntries, pathSearch.entries, pathSearch.isPending, query);
   const entryKindsRef = useRef(entryKinds);
+  const selectedPathsRef = useRef<ReadonlyArray<string>>([]);
   const previousTreePathsRef = useRef<readonly string[] | null>(null);
   const syncingSelectionRef = useRef(false);
   const treeSelectionPathRef = useRef<string | null>(null);
@@ -189,6 +198,20 @@ export default function FileBrowserPanel({
         return;
       }
       const relativePath = item.path.replace(/\/$/, "");
+      const isDirectory =
+        item.path.endsWith("/") || entryKindsRef.current.get(relativePath) === "directory";
+      // Right-clicking inside a multi-selection downloads all of it, as one ZIP.
+      const selection = selectedPathsRef.current;
+      const downloadPaths: [string, ...Array<string>] =
+        selection.length > 1 && selection.includes(relativePath)
+          ? [relativePath, ...selection.filter((path) => path !== relativePath)]
+          : [relativePath];
+      const downloadLabel =
+        downloadPaths.length > 1
+          ? `Download ${downloadPaths.length} items as .zip`
+          : isDirectory
+            ? "Download as .zip"
+            : "Download";
       const mention = serializeComposerFileLink(panelPath(relativePath));
       const pointer = contextMenuPointerRef.current;
       const pointerIsFresh = pointer !== null && performance.now() - pointer.at < 1000;
@@ -206,6 +229,11 @@ export default function FileBrowserPanel({
             ...fileMenuItems,
             { id: "copy-mention", label: "Copy mention" },
             { id: "add-to-chat", label: "Add to chat" },
+            {
+              id: "download",
+              label: downloadLabel,
+              icon: "download",
+            },
           ],
           position,
         );
@@ -215,6 +243,23 @@ export default function FileBrowserPanel({
           fileMenuItems.some((entry) => entry.id === clicked) || clicked.startsWith("editor:");
         if (isFileMenuAction) {
           await fileContextMenu.activate(clicked as FileContextMenuAction, fileTarget);
+          return;
+        }
+        if (clicked === "download") {
+          if (downloadPaths.length > WORKSPACE_DOWNLOAD_MAX_SELECTION) {
+            toastManager.add({
+              type: "error",
+              title: "Too many items selected",
+              description: `Download at most ${WORKSPACE_DOWNLOAD_MAX_SELECTION} items at once, or download their folder.`,
+            });
+            return;
+          }
+          downloadWorkspaceEntry(
+            { cwd, paths: downloadPaths },
+            downloadPaths.length > 1
+              ? `${downloadPaths.length} items`
+              : relativePath.split("/").at(-1) || relativePath,
+          );
           return;
         }
         if (clicked === "copy-mention") {
@@ -281,6 +326,7 @@ export default function FileBrowserPanel({
     onSelectionChange: (selectedPaths) => {
       // Update drag selection even for reveals so subsequent drags cannot use stale paths.
       dragMention.handleSelectionChange(selectedPaths);
+      selectedPathsRef.current = selectedPaths.map((path) => path.replace(/\/$/, ""));
       if (syncingSelectionRef.current) return;
       if (dragMention.isDragInProgress()) {
         return;

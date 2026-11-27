@@ -39,6 +39,7 @@ import * as SpaceVisibility from "./spaces/SpaceVisibility.ts";
 import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveAsset } from "./assets/AssetAccess.ts";
 import { sourceControlMediaResponse } from "./assets/sourceControlMediaResponse.ts";
 import { machineAssetResponse } from "./assets/MachineAssetResponse.ts";
+import { folderZipResponse } from "./assets/FolderZip.ts";
 import * as ThreadWorkspace from "./environment/ThreadWorkspace.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
@@ -442,6 +443,20 @@ export const layerAssetRoute = HttpRouter.add(
           HttpServerResponse.text("Internal Server Error", { status: 500 }),
         ),
       );
+    }
+    if (asset.kind === "folder-zip") {
+      const session = yield* sessionUser;
+      return yield* folderZipResponse({
+        items: asset.items,
+        missing: asset.missing,
+        includeAll: asset.includeAll,
+        range: asset.range,
+        fileName: asset.fileName,
+        user: Option.orElse(session, () =>
+          asset.viewer === undefined ? Option.none() : Option.some(UserId.make(asset.viewer)),
+        ),
+        method: request.method === "HEAD" ? "HEAD" : "GET",
+      });
     }
     // Spec 5 ticket 05: a checkout's text file, masked for the User who asks (the session's;
     // the URL's own User for an embed without one). A URL with neither serves no text.

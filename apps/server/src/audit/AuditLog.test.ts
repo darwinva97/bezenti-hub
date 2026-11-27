@@ -700,6 +700,8 @@ it.effect(
         "space_skill.enable",
         "space_skill.disable",
         "space_skill.delete",
+        // assets/AssetAccess.test.ts (issue #24): a download from a workspace's files panel.
+        "workspace.download",
         // auth/SignInSettings.test.ts (Keycloak sign-in, ticket 01)
         "signIn.settings.update",
         // auth/KeycloakSignIn.test.ts (Keycloak sign-in, ticket 02)

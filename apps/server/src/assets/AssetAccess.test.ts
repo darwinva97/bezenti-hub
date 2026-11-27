@@ -10,6 +10,7 @@ import {
   SOURCE_CONTROL_MEDIA_ASSET,
   ThreadId,
   TurnItemId,
+  UserId,
 } from "@t3tools/contracts";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
 import { MCP_APP_MAX_HTML_BYTES } from "@t3tools/shared/mcpApp";
@@ -26,6 +27,7 @@ import { HttpClientRequest, HttpClientResponse, HttpServerResponse } from "effec
 import { vi } from "vite-plus/test";
 
 import * as AssetSigner from "./AssetSigner.ts";
+import * as AuditLog from "../audit/AuditLog.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -41,6 +43,7 @@ import {
   resolveAsset,
 } from "./AssetAccess.ts";
 import { LAPTOP, machineOver } from "./MachineAssets.testkit.ts";
+import { issueWorkspaceDownloadUrl } from "./ThreadAssets.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import { fakeSourceControlDriverInstance } from "@t3tools/source-control-testing/fakeSourceControlDriver";
@@ -329,6 +332,112 @@ describe("AssetAccess", () => {
       }).pipe(Effect.flip);
       expect(directoryError._tag).toBe("AssetWorkspaceAssetNotFoundError");
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.skipIf(!symlinksSupported)(
+    "downloads a workspace file as it is and a folder as a ZIP, never from outside the root",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-root-" });
+        const outside = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-outside-" });
+        yield* fs.makeDirectory(path.join(root, "out", "docs"), { recursive: true });
+        yield* fs.writeFileString(path.join(root, "out", "report.docx"), "report bytes");
+        yield* fs.writeFileString(path.join(outside, "secret.txt"), "outside");
+        yield* fs.symlink(path.join(outside, "secret.txt"), path.join(root, "secret-link.txt"));
+        yield* fs.symlink(outside, path.join(root, "outside-link"));
+        yield* fs.writeFileString(path.join(root, "notes.md"), "notes");
+        const audited: Array<AuditLog.AuditRecord> = [];
+        const download = (...paths: [string, ...Array<string>]) =>
+          issueAssetUrl({
+            resource: { _tag: "workspace-download", cwd: root, paths },
+            workspaceRoot: root,
+            viewer: "user-1",
+          }).pipe(
+            Effect.provideService(AuditLog.AuditLog, {
+              record: (entry) => Effect.sync(() => void audited.push(entry)),
+              list: () => Effect.die("unused"),
+            }),
+          );
+        const resolveUrl = (relativeUrl: string) => {
+          const suffix = relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+          const separator = suffix.indexOf("/");
+          return resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+        };
+
+        const file = yield* download("out/report.docx");
+        expect(yield* resolveUrl(file.relativeUrl)).toMatchObject({
+          kind: "file",
+          download: true,
+          fileName: "report.docx",
+        });
+
+        expect(file).not.toHaveProperty("download");
+
+        const folder = yield* download("out");
+        expect(folder.relativeUrl.endsWith("/out.zip")).toBe(true);
+        expect(folder.download).toMatchObject({ files: 1, bytes: 12, skipped: 0 });
+        expect(folder.download?.parts).toHaveLength(1);
+        const canonicalOut = yield* fs.realPath(path.join(root, "out"));
+        expect(yield* resolveUrl(folder.relativeUrl)).toMatchObject({
+          kind: "folder-zip",
+          items: [{ absolute: canonicalOut, name: "out" }],
+          missing: [],
+          fileName: "out.zip",
+        });
+
+        const selection = yield* download("out", "notes.md");
+        const rootName = path.basename(yield* fs.realPath(root));
+        expect(selection.download?.parts.map((part) => part.fileName)).toEqual([
+          `${rootName}-selection.zip`,
+        ]);
+        expect(selection.download).toMatchObject({ files: 2, bytes: 17 });
+        expect(audited.map((entry) => [entry.action, entry.target, entry.detail])).toEqual([
+          [
+            "workspace.download",
+            { kind: "workspace", id: root, name: path.basename(root) },
+            { paths: "out/report.docx", files: 1 },
+          ],
+          [
+            "workspace.download",
+            { kind: "workspace", id: root, name: path.basename(root) },
+            { paths: "out", files: 1, bytes: 12, parts: 1 },
+          ],
+          [
+            "workspace.download",
+            { kind: "workspace", id: root, name: path.basename(root) },
+            { paths: "out, notes.md", files: 2, bytes: 17, parts: 1 },
+          ],
+        ]);
+        expect(audited[0]?.actor).toEqual({ source: "user", userId: "user-1" });
+        expect(yield* resolveUrl(selection.relativeUrl)).toMatchObject({
+          kind: "folder-zip",
+          items: [
+            { absolute: canonicalOut, name: "out" },
+            { absolute: path.join(path.dirname(canonicalOut), "notes.md"), name: "notes.md" },
+          ],
+        });
+        const token = folder.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length).split("/")[0]!;
+        expect(yield* resolveAsset(token, "other.zip")).toBeNull();
+        yield* fs.remove(path.join(root, "out"), { recursive: true });
+        yield* fs.symlink(outside, path.join(root, "out"));
+        expect(yield* resolveAsset(token, "out.zip")).toBeNull();
+
+        for (const relativePath of [
+          "../outside",
+          path.join(outside, "secret.txt"),
+          "secret-link.txt",
+          "outside-link",
+          "missing",
+        ]) {
+          const error = yield* download("notes.md", relativePath).pipe(Effect.flip);
+          expect([
+            "AssetWorkspacePathValidationError",
+            "AssetWorkspaceAssetNotFoundError",
+          ]).toContain(error._tag);
+        }
+      }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("resolves relative media paths from the thread workspace, including outside it", () =>
@@ -1568,6 +1677,40 @@ describe("AssetAccess: a file of a Thread on another machine (ticket 15)", () =>
     const separator = suffix.indexOf("/");
     return { token: suffix.slice(0, separator), name: suffix.slice(separator + 1) };
   };
+
+  it.effect("downloads a Thread's file from its machine, never a folder from the Hub's copy", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-machine-download-" });
+      const hubCopy = yield* fs.makeTempDirectoryScoped({ prefix: "t3-hub-copy-" });
+      yield* fs.makeDirectory(`${root}/out`);
+      yield* fs.writeFileString(`${root}/out/report.docx`, "from the laptop");
+      yield* fs.makeDirectory(`${hubCopy}/out`);
+      yield* fs.writeFileString(`${hubCopy}/out/report.docx`, "stale hub copy");
+      const threadWorkspace = {
+        machineAsset: () => Effect.succeed({ _tag: "remote" as const, source: machineOver(root) }),
+      };
+      const download = (...paths: [string, ...Array<string>]) =>
+        issueWorkspaceDownloadUrl({
+          resource: { _tag: "workspace-download", cwd: hubCopy, paths, threadId },
+          viewer: UserId.make("owner"),
+          threadWorkspace,
+        });
+
+      const file = yield* download("out/report.docx");
+      const parts = partsOf(file.relativeUrl);
+      expect(yield* resolveAsset(parts.token, parts.name)).toMatchObject({
+        kind: "machine-file",
+        environmentId: LAPTOP,
+        relativePath: "out/report.docx",
+        download: true,
+      });
+      for (const refused of [download("out"), download("out/report.docx", "out")]) {
+        const error = yield* Effect.flip(refused);
+        expect(error).toMatchObject({ _tag: "AssetDownloadLimitError", reason: "remote-folder" });
+      }
+    }).pipe(Effect.provide(layerTest)),
+  );
 
   it.effect("signs the machine's own path, never a Hub path, and serves it until it expires", () =>
     Effect.gen(function* () {

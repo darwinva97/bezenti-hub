@@ -4572,12 +4572,16 @@ describe("Space visibility", () => {
             { _tag: "media-file", threadId: "grace-thread", path: "..\\..\\secrets.png" },
             { _tag: "draft-workspace-file", cwd: "/", path: "etc/passwd" },
             { _tag: "draft-workspace-file", cwd: "/work/acme-app", path: "../globex-app/.env" },
+            { _tag: "workspace-download", cwd: "/work/globex-app", paths: ["src"] },
+            { _tag: "workspace-download", cwd: "/work/acme-app", paths: ["docs", "../globex-app"] },
+            { _tag: "workspace-download", cwd: "/", paths: ["etc"] },
             { _tag: "project-favicon", cwd: "/work/globex-app" },
             { _tag: "github-media", cwd: "/work/globex-app", url: "https://example.com/a.png" },
           ];
           const inside = [
             { _tag: "media-file", threadId: "grace-thread", path: "/work/acme-app/shot.png" },
             { _tag: "draft-workspace-file", cwd: "/work/acme-app", path: "docs/shot.png" },
+            { _tag: "workspace-download", cwd: "/work/acme-app", paths: ["docs", "src"] },
           ];
           for (const userId of [grace.userId, ada.userId, gus.userId]) {
             const client = yield* connect(server, userId, Layer.empty, AuthStandardClientScopes);

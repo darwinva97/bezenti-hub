@@ -196,7 +196,7 @@ import * as HubPreviews from "./preview/HubPreviews.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
-import { issueThreadAssetUrl } from "./assets/ThreadAssets.ts";
+import { issueThreadAssetUrl, issueWorkspaceDownloadUrl } from "./assets/ThreadAssets.ts";
 import {
   attachmentRelativePath,
   chatAttachmentStableKey,
@@ -3245,6 +3245,13 @@ export const layerWsRpc = (
               input.resource._tag === SOURCE_CONTROL_MEDIA_ASSET
             ) {
               return yield* issueAssetUrl({ resource: input.resource, viewer: principal.userId });
+            }
+            if (input.resource._tag === "workspace-download") {
+              return yield* issueWorkspaceDownloadUrl({
+                resource: input.resource,
+                viewer: principal.userId,
+                threadWorkspace,
+              });
             }
             if (input.resource._tag === "draft-workspace-file") {
               return yield* issueAssetUrl({

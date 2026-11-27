@@ -14,7 +14,7 @@ import * as Option from "effect/Option";
 import * as SecretMasker from "./SecretMasker.ts";
 
 /** The largest text file read whole to be masked. */
-const MAX_MASKED_TEXT_BYTES = 16 * 1024 * 1024;
+export const MAX_MASKED_TEXT_BYTES = 16 * 1024 * 1024;
 /** How much of a file is read to tell text from binary. */
 export const SNIFF_BYTES = 8192;
 const NOT_STORED: Record<string, string> = {
@@ -36,7 +36,7 @@ const MEDIA_EXTENSIONS = new Set(
   ].flatMap((group) => group.split(" ")),
 );
 
-const isMedia = (filePath: string) =>
+export const isMedia = (filePath: string) =>
   MEDIA_EXTENSIONS.has(filePath.slice(filePath.lastIndexOf(".") + 1).toLowerCase());
 
 /** Masked files, by file, revision and User: a range request reads them once. */

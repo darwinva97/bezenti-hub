@@ -33,6 +33,7 @@ import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoo
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
+import { WorkspaceDownloadsHost } from "../components/files/WorkspaceDownloadsHost";
 import { Button } from "../components/ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { StandalonePage, StandalonePageHeader } from "../components/ui/standalone-page";
@@ -137,6 +138,7 @@ function RootRouteView() {
     <ToastProvider>
       <AnchoredToastProvider>
         <RootRouteBranch />
+        <WorkspaceDownloadsHost />
       </AnchoredToastProvider>
     </ToastProvider>
   );

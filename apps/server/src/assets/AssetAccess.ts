@@ -1,6 +1,10 @@
 import type { AssetResource } from "@t3tools/contracts";
 import {
   AssetAttachmentNotFoundError,
+  AssetDownloadLimitError,
+  WORKSPACE_DOWNLOAD_MAX_BYTES,
+  WORKSPACE_DOWNLOAD_MAX_ENTRIES,
+  WORKSPACE_DOWNLOAD_PART_BYTES,
   AssetSourceControlMediaUrlValidationError,
   AssetPreviewTypeValidationError,
   AssetProjectFaviconInspectionError,
@@ -16,6 +20,7 @@ import {
   AssetWorkspaceRootNormalizationError,
   SOURCE_CONTROL_MEDIA_ASSET,
   ThreadId,
+  UserId,
   ToolActivityNativeAppReference,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -50,6 +55,7 @@ import * as Stream from "effect/Stream";
 
 import { base64UrlDecodeUtf8, base64UrlEncode } from "../auth/utils.ts";
 import * as AssetSigner from "./AssetSigner.ts";
+import * as AuditLog from "../audit/AuditLog.ts";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -62,10 +68,179 @@ import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import { extractIcnsPng } from "./icns.ts";
 import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
+import { planArchive, type ArchiveItem, type ArchiveRange } from "./FolderZip.ts";
 import type { MachineAssetSource } from "./MachineAssets.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
+
+/** The folders and files a ZIP URL was signed for, each still itself inside the same root. */
+const resolveFolderZip = Effect.fnUntraced(function* (
+  claims: Extract<AssetClaims, { kind: "workspace-folder-zip" }>,
+  requestedName: string,
+) {
+  if (requestedName !== claims.fileName) return null;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const items: Array<ArchiveItem> = [];
+  const missing: Array<string> = [];
+  for (const item of claims.items) {
+    const absolute = path.join(claims.workspaceRoot, item.relativePath);
+    const canonical = yield* fileSystem.realPath(absolute).pipe(Effect.orElseSucceed(() => null));
+    if (canonical === absolute && isWithinRoot(path, canonical, claims.workspaceRoot)) {
+      items.push({ absolute, name: item.name });
+    } else {
+      missing.push(item.name);
+    }
+  }
+  if (items.length === 0) return null;
+  return {
+    kind: "folder-zip",
+    items,
+    missing,
+    includeAll: claims.includeAll === true,
+    range: { start: claims.start, end: claims.end },
+    fileName: claims.fileName,
+    ...(claims.viewer === undefined ? {} : { viewer: claims.viewer }),
+  } satisfies ResolvedAsset;
+});
+
+const signClaims = Effect.fnUntraced(function* (claims: AssetClaims, resource: AssetResource) {
+  const encodedPayload = base64UrlEncode(encodeAssetClaims(claims));
+  const signer = yield* AssetSigner.AssetSigner;
+  const signature = yield* signer
+    .sign(encodedPayload)
+    .pipe(Effect.mapError((cause) => new AssetSigningKeyLoadError({ resource, cause })));
+  return `${encodedPayload}.${signature}`;
+});
+
+const MAX_RELATIVE_URL_LENGTH = 4096;
+
+/** What `issueAssetUrl` gives, whichever resource: `AssetCreateUrlResult`'s fields. */
+interface IssuedAssetUrl {
+  readonly relativeUrl: string;
+  readonly expiresAt: number;
+  readonly sourcePath?: string;
+  readonly imageDimensions?: ImageDimensions;
+  readonly fileRevision?: string;
+  readonly download?: {
+    readonly files: number;
+    readonly bytes: number;
+    readonly skipped: number;
+    readonly parts: ReadonlyArray<{
+      readonly relativeUrl: string;
+      readonly fileName: string;
+      readonly bytes: number;
+      readonly files: number;
+    }>;
+  };
+}
+
+/** Issue #24: who downloaded what. A failed write is logged, never a refused download. */
+const recordDownload = Effect.fnUntraced(function* (input: {
+  readonly resource: Extract<AssetResource, { _tag: "workspace-download" }>;
+  readonly viewer: string | undefined;
+  readonly detail: { readonly files?: number; readonly bytes?: number; readonly parts?: number };
+}) {
+  const auditLog = yield* Effect.serviceOption(AuditLog.AuditLog);
+  if (Option.isNone(auditLog)) return;
+  const actor =
+    input.viewer === undefined
+      ? yield* AuditLog.currentActor
+      : AuditLog.userActor(UserId.make(input.viewer));
+  const name = input.resource.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? input.resource.cwd;
+  yield* auditLog.value
+    .record({
+      actor,
+      action: "workspace.download",
+      target: { kind: "workspace", id: input.resource.cwd, name },
+      detail: {
+        paths: input.resource.paths.join(", ").slice(0, 2000),
+        ...input.detail,
+        ...(input.resource.includeAll === true ? { includeAll: true } : {}),
+      },
+    })
+    .pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to audit a workspace download.", { cause }),
+      ),
+    );
+});
+
+/** Folders and selections: planned into parts, one signed ZIP URL each. */
+const issueArchiveDownload = Effect.fnUntraced(function* (input: {
+  readonly resource: Extract<AssetResource, { _tag: "workspace-download" }>;
+  readonly workspaceRoot: string;
+  readonly targets: ReadonlyArray<string>;
+  readonly expiresAt: number;
+  readonly viewer: string | undefined;
+}) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const used = new Set<string>();
+  const items = input.targets.map((target) => {
+    const base = path.basename(target) || "folder";
+    let name = base;
+    for (let copy = 2; used.has(name); copy++) name = `${base} (${copy})`;
+    used.add(name);
+    return { absolute: target, name, relativePath: path.relative(input.workspaceRoot, target) };
+  });
+  const includeAll = input.resource.includeAll === true;
+  const plan = yield* planArchive({
+    fileSystem,
+    path,
+    items,
+    includeAll,
+    partBytes: WORKSPACE_DOWNLOAD_PART_BYTES,
+    maxEntries: WORKSPACE_DOWNLOAD_MAX_ENTRIES,
+  });
+  const limitError = (reason: AssetDownloadLimitError["reason"]) =>
+    new AssetDownloadLimitError({ resource: input.resource, reason });
+  if (plan.truncated) return yield* limitError("too-many-entries");
+  if (plan.bytes > WORKSPACE_DOWNLOAD_MAX_BYTES) return yield* limitError("too-large");
+  const baseName =
+    items.length === 1
+      ? items[0]!.name
+      : `${path.basename(input.workspaceRoot) || "workspace"}-selection`;
+  const count = plan.parts.length;
+  const parts = [];
+  for (const [index, part] of plan.parts.entries()) {
+    const fileName =
+      count === 1 ? `${baseName}.zip` : `${baseName}-part-${index + 1}-of-${count}.zip`;
+    const end = plan.parts[index + 1]?.start;
+    const token = yield* signClaims(
+      {
+        version: 1,
+        kind: "workspace-folder-zip",
+        workspaceRoot: input.workspaceRoot,
+        items: items.map((item) => ({ relativePath: item.relativePath, name: item.name })),
+        ...(includeAll ? { includeAll: true } : {}),
+        ...(part.start === undefined ? {} : { start: [...part.start] }),
+        ...(end === undefined ? {} : { end: [...end] }),
+        fileName,
+        expiresAt: input.expiresAt,
+        ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
+      },
+      input.resource,
+    );
+    const relativeUrl = `${ASSET_ROUTE_PREFIX}/${token}/${encodeURIComponent(fileName)}`;
+    if (relativeUrl.length > MAX_RELATIVE_URL_LENGTH) {
+      return yield* limitError("selection-too-long");
+    }
+    parts.push({ relativeUrl, fileName, bytes: part.bytes, files: part.files });
+  }
+  yield* recordDownload({
+    resource: input.resource,
+    viewer: input.viewer,
+    detail: { files: plan.files, bytes: plan.bytes, parts: count },
+  });
+  const issued: IssuedAssetUrl = {
+    relativeUrl: parts[0]!.relativeUrl,
+    expiresAt: input.expiresAt,
+    download: { files: plan.files, bytes: plan.bytes, skipped: plan.skipped, parts },
+  };
+  return issued;
+});
 
 const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
 const PROJECT_FAVICON_TOKEN_BUCKET_MS = 30 * 60 * 1000;
@@ -188,6 +363,20 @@ const AssetClaimsSchema = Schema.Union([
   }),
   Schema.Struct({
     version: Schema.Literal(1),
+    kind: Schema.Literal("workspace-folder-zip"),
+    /** Symlink-resolved at mint time; each item is `relativePath` under it. */
+    workspaceRoot: Schema.String,
+    items: Schema.Array(Schema.Struct({ relativePath: Schema.String, name: Schema.String })),
+    includeAll: Schema.optionalKey(Schema.Boolean),
+    /** The part's range in archive order (`FolderZip.ts`); none: from the start, to the end. */
+    start: Schema.optionalKey(Schema.Array(Schema.String)),
+    end: Schema.optionalKey(Schema.Array(Schema.String)),
+    fileName: Schema.String,
+    expiresAt: Schema.Number,
+    viewer: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
     kind: Schema.Literal(SOURCE_CONTROL_MEDIA_ASSET),
     /** A host's `fetchUrl`, narrowed at mint time; the signature is what keeps it there. */
     url: Schema.String,
@@ -225,6 +414,16 @@ export type ResolvedAsset =
       readonly url: string;
       readonly cwd: string;
       readonly expiresAt: number;
+    }
+  | {
+      readonly kind: "folder-zip";
+      readonly items: ReadonlyArray<ArchiveItem>;
+      /** Names of items that are gone or no longer themselves. */
+      readonly missing: ReadonlyArray<string>;
+      readonly includeAll: boolean;
+      readonly range: ArchiveRange;
+      readonly fileName: string;
+      readonly viewer?: string;
     }
   | MachineFileAsset;
 
@@ -452,7 +651,8 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
       });
     }
     const download =
-      input.resource._tag === "media-file" && input.resource.disposition === "attachment";
+      (input.resource._tag === "media-file" && input.resource.disposition === "attachment") ||
+      input.resource._tag === "workspace-download";
     if (!download && hostPreviewMimeTypeFromExtension(path.extname(canonicalFile)) === null) {
       return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
     }
@@ -706,6 +906,59 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       fileRevision = finalized.fileRevision;
       break;
     }
+    case "workspace-download": {
+      const resource = input.resource;
+      const workspaceRoot = yield* workspacePaths
+        .normalizeWorkspaceRoot(resource.cwd)
+        .pipe(
+          Effect.mapError((cause) => new AssetWorkspaceRootNormalizationError({ resource, cause })),
+        );
+      const inspectionError = (cause: unknown) =>
+        new AssetWorkspaceAssetInspectionError({ resource, cause });
+      const canonicalRoot = yield* fileSystem
+        .realPath(workspaceRoot)
+        .pipe(Effect.mapError(inspectionError));
+      const targets: Array<{ readonly path: string; readonly type: string }> = [];
+      for (const relativePath of new Set(resource.paths)) {
+        const resolved = yield* workspacePaths
+          .resolveRelativePathWithinRoot({ workspaceRoot, relativePath })
+          .pipe(
+            Effect.mapError((cause) => new AssetWorkspacePathValidationError({ resource, cause })),
+          );
+        const canonical = yield* fileSystem
+          .realPath(resolved.absolutePath)
+          .pipe(Effect.orElseSucceed(() => null));
+        const info =
+          canonical !== null && isWithinRoot(path, canonical, canonicalRoot)
+            ? yield* fileSystem.stat(canonical).pipe(Effect.mapError(inspectionError))
+            : null;
+        if (canonical === null || (info?.type !== "File" && info?.type !== "Directory")) {
+          return yield* new AssetWorkspaceAssetNotFoundError({ resource });
+        }
+        targets.push({ path: canonical, type: info.type });
+      }
+      const [only] = targets;
+      if (targets.length === 1 && only?.type === "File") {
+        const finalized = yield* finalizeAbsoluteMediaFileAsset({
+          requestedPath: only.path,
+          expectedCanonicalPath: only.path,
+          workspaceRoot,
+          resource,
+          expiresAt,
+        });
+        claims = finalized.claims;
+        fileName = finalized.fileName;
+        yield* recordDownload({ resource, viewer: input.viewer, detail: { files: 1 } });
+        break;
+      }
+      return yield* issueArchiveDownload({
+        resource,
+        workspaceRoot: canonicalRoot,
+        targets: targets.map((target) => target.path),
+        expiresAt,
+        viewer: input.viewer,
+      });
+    }
     case "attachment": {
       const config = yield* ServerConfig.ServerConfig;
       const attachmentPath = resolveAttachmentPathById({
@@ -931,21 +1184,15 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   ) {
     claims = { ...claims, viewer: input.viewer };
   }
-  const encodedPayload = base64UrlEncode(encodeAssetClaims(claims));
-  const signer = yield* AssetSigner.AssetSigner;
-  const signature = yield* signer
-    .sign(encodedPayload)
-    .pipe(
-      Effect.mapError((cause) => new AssetSigningKeyLoadError({ resource: input.resource, cause })),
-    );
-  const token = `${encodedPayload}.${signature}`;
-  return {
+  const token = yield* signClaims(claims, input.resource);
+  const issued: IssuedAssetUrl = {
     relativeUrl: `${ASSET_ROUTE_PREFIX}/${token}/${encodeURIComponent(fileName)}`,
     expiresAt,
     ...(sourcePath !== undefined ? { sourcePath } : {}),
     ...(imageDimensions !== null ? { imageDimensions } : {}),
     ...(fileRevision !== undefined ? { fileRevision } : {}),
   };
+  return issued;
 });
 
 /**
@@ -1125,6 +1372,9 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
 
   const decodedPath = decodeRelativePath(relativePath);
   if (decodedPath === null) return null;
+  if (claims.kind === "workspace-folder-zip") {
+    return yield* resolveFolderZip(claims, decodedPath);
+  }
   if (claims.kind === "thread-machine-file") {
     let served: string;
     if (claims.mode === "exact") {

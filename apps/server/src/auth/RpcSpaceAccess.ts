@@ -482,6 +482,20 @@ const assetReadTargets = (payload: unknown): ReadonlyArray<string> | "refused" =
   if (tag === "draft-workspace-file") {
     return localWorkspaceTargets(WS_METHODS.assetsCreateUrl, { cwd, relativePath: path });
   }
+  if (tag === "workspace-download") {
+    const paths = Predicate.isObject(resource)
+      ? (resource as { paths?: unknown }).paths
+      : undefined;
+    if (!Array.isArray(paths) || paths.length === 0) return "refused";
+    const targets: Array<string> = [];
+    for (const relativePath of paths) {
+      if (typeof relativePath !== "string") return "refused";
+      const found = localWorkspaceTargets(WS_METHODS.assetsCreateUrl, { cwd, relativePath });
+      if (found === "refused") return "refused";
+      targets.push(...found);
+    }
+    return targets;
+  }
   if (tag === "project-favicon" || tag === SOURCE_CONTROL_MEDIA_ASSET) {
     return localWorkspaceTargets(WS_METHODS.assetsCreateUrl, { cwd });
   }

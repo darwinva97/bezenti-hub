@@ -162,6 +162,8 @@ export const AuditAction = Schema.Literals([
   "space_skill.enable",
   "space_skill.disable",
   "space_skill.delete",
+  // Issue #24: files or folders downloaded from a workspace's file browser.
+  "workspace.download",
 ]);
 export type AuditAction = typeof AuditAction.Type;
 
@@ -187,6 +189,7 @@ export const AuditTargetKind = Schema.Literals([
   "sign_in_settings",
   "space_mcp",
   "space_skill",
+  "workspace",
 ]);
 export type AuditTargetKind = typeof AuditTargetKind.Type;
 
@@ -586,6 +589,8 @@ export const AUDIT_DETAIL_KEYS = {
   "space_skill.enable": [],
   "space_skill.disable": [],
   "space_skill.delete": [],
+  /** The paths asked for (relative, `, `-joined), and for a ZIP its files, bytes and parts. */
+  "workspace.download": ["paths", "files", "bytes", "parts", "includeAll"],
   /** Its audience, subject, id and expiry, and the Thread it was signed for; never the token. */
   "identity.issue": ["aud", "sub", "jti", "exp", "thread"],
   /**

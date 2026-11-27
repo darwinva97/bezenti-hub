@@ -76,6 +76,8 @@ export const hubWith = Effect.fn(function* (
       body: { name },
       cookie: ownerCookie,
     });
+    // The Owner sees these Organizations and runs none of them.
+    yield* server.request(`/api/spaces/${made.body.id}/leave`, { body: {}, cookie: ownerCookie });
     return SpaceId.make(made.body.id as string);
   });
   const acmeId = yield* organization("Acme");

@@ -218,6 +218,30 @@ export function makeManualOnlyProviderMaintenanceCapabilities(input: {
   };
 }
 
+// Where apps/server/sandbox-image/Containerfile installs the CLIs. A change made inside a running
+// Sandbox is lost when it restarts, so only a rebuilt image updates them.
+const SANDBOX_IMAGE_CLIS = "/opt/t3/clis/node_modules/";
+
+export function resolveSandboxImageProviderMaintenance(input: {
+  readonly provider: ProviderDriverKind;
+  readonly packageName: string;
+  readonly context: ProviderMaintenanceResolutionContext;
+}): ProviderMaintenanceCapabilities | null {
+  const { context } = input;
+  const fromImage = [context.resolvedCommandPath, context.realCommandPath].some((commandPath) =>
+    normalizeCommandPath(commandPath).includes(SANDBOX_IMAGE_CLIS),
+  );
+  if (!fromImage) return null;
+  return {
+    ...makeManualOnlyProviderMaintenanceCapabilities({
+      provider: input.provider,
+      packageName: input.packageName,
+      installPath: context.realCommandPath,
+    }),
+    managedBySandboxImage: true,
+  };
+}
+
 export function normalizeCommandPath(commandPath: string): string {
   return commandPath.replaceAll("\\", "/").toLowerCase();
 }
@@ -482,6 +506,12 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
   });
   const commandPaths = [context.resolvedCommandPath, context.realCommandPath];
   const packageName = definition.npmPackageName;
+  const fromImage = resolveSandboxImageProviderMaintenance({
+    provider: definition.provider,
+    packageName,
+    context,
+  });
+  if (fromImage) return fromImage;
   // WinGet-managed claude update exits 0 without updating; T3 does not run winget upgrade.
   if (
     definition.provider === "claudeAgent" &&
@@ -895,7 +925,14 @@ export const makeCachedProviderMaintenanceResolution = Effect.fn(
     options?.fresh ? Cache.invalidate(cache, undefined).pipe(Effect.andThen(cached)) : cached;
 });
 
-function manualUpdateMessage(latestVersion: string, installPath: string | undefined): string {
+function manualUpdateMessage(
+  latestVersion: string,
+  capabilities: ProviderMaintenanceCapabilities,
+): string {
+  const installPath = capabilities.installPath;
+  if (capabilities.managedBySandboxImage) {
+    return `Version ${latestVersion} is out. This CLI comes with the Sandbox image and updates when the image is rebuilt.`;
+  }
   return installPath
     ? `Version ${latestVersion} is out. T3 Code runs ${installPath}; update it with the app or tool that installed it.`
     : `Version ${latestVersion} is out. Update it with the app or tool that installed it.`;
@@ -922,7 +959,7 @@ function deriveVersionAdvisory(input: {
       status: "behind_latest",
       message:
         input.capabilities.update === null
-          ? manualUpdateMessage(input.latestVersion, input.capabilities.installPath)
+          ? manualUpdateMessage(input.latestVersion, input.capabilities)
           : PROVIDER_UPDATE_ACTION_TOAST_MESSAGE,
     };
   }

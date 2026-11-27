@@ -19,6 +19,8 @@ export interface ProviderMaintenanceCapabilities {
   readonly installPath?: string;
   /** Displayed for manual updates; never executed by T3 Code. */
   readonly manualCommand?: string;
+  /** Installed by the Sandbox image: only a rebuilt image updates it. */
+  readonly managedBySandboxImage?: boolean;
 }
 
 export interface ProviderMaintenanceCommandAction {

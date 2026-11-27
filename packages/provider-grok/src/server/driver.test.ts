@@ -173,6 +173,31 @@ it.layer(layerTest)("GrokDriver", (it) => {
     });
   }
 
+  it.effect.skipIf(windowsHost)("leaves the Sandbox image's grok to the image", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-grok-image-" });
+      const binaryPath = path.join(root, "opt/t3/clis/node_modules/@xai-official/grok/bin/grok");
+      yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+      yield* fs.writeFileString(binaryPath, "#!/bin/sh\n");
+      yield* fs.chmod(binaryPath, 0o755);
+      const instance = yield* GrokDriver.create({
+        instanceId: ProviderInstanceId.make("grok-image"),
+        displayName: "Grok test",
+        enabled: false,
+        environment: [],
+        config: { ...GrokDriver.defaultConfig(), binaryPath },
+      });
+      const capabilities = yield* instance.snapshot.resolveMaintenance();
+      expect(capabilities.update).toBeNull();
+      expect(capabilities.managedBySandboxImage).toBe(true);
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
+      Effect.scoped,
+    ),
+  );
+
   it.effect("stays manual-only when the configured executable does not exist", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

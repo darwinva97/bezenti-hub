@@ -40,6 +40,20 @@ Cursor, Antigravity and OpenCode v2 do not yet.
 
 Turning a server off, changing it or rotating a Secret it uses reaches each Thread at its next turn.
 
+An agent can ask with `list_space_tools` what its Thread got. Each server is either available or
+unavailable with a reason:
+
+- **not-delivered**: the Thread does not receive the names listed.
+- **not-supported**: the Thread's agent does not take Space MCP servers.
+- **no-secrets**: the agent cannot receive Vault entries, and the server uses one.
+- **outdated-machine**: the Thread runs on a joined machine whose T3 Code is too old. Update it.
+- **not-in-session**: the Thread has not started a session yet, or the server changed after it
+  started. Its next turn decides.
+
+On Claude, an available server also shows how it connected: `connected`, `pending`, `needs-auth`
+(the server wants a sign-in the Hub cannot give it; use a token in a header instead) or `failed`.
+The error itself is not shown, because it can contain the server's address and credentials.
+
 ## Add a Skill
 
 A Skill is a `SKILL.md` (its frontmatter needs a `name` and a `description`) and any files it uses.

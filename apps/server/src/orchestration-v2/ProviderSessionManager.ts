@@ -2728,6 +2728,13 @@ export const layerWithOptions = (
               );
               yield* startEventPump(entry);
               yield* scheduleIdleRelease(input.providerSessionId);
+              if (spaceMcps !== undefined && Option.isSome(spaceTools)) {
+                yield* spaceTools.value.recordSession({
+                  threadId: input.threadId,
+                  decisions: spaceMcps.decisions,
+                  connections: openedRuntime.mcpServerConnections,
+                });
+              }
               return exposedRuntime;
             }),
           )

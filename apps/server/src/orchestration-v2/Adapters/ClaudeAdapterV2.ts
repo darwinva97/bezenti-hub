@@ -12098,6 +12098,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               message: { ...turnInput.message, text: "/compact" },
             }),
           steerTurn,
+          mcpServerConnections: Ref.get(queryContext).pipe(
+            Effect.flatMap((live) =>
+              live === null || live.stopping ? Effect.succeed([]) : live.query.mcpServerStatus,
+            ),
+            Effect.map((statuses) => statuses.map(({ name, status }) => ({ name, state: status }))),
+            Effect.timeout(Duration.seconds(5)),
+            Effect.orElseSucceed(() => []),
+          ),
           mcpApps: {
             listTools: Effect.fn("ClaudeAdapterV2.listMcpTools")(function* ({
               providerThread,

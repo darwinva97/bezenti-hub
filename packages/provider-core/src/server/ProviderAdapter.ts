@@ -2,6 +2,7 @@ import type {
   AiGatewayAccess,
   OrchestrationV2HistoricalMessage,
   SecretEnv,
+  SpaceMcpConnection,
   SpaceMcpLaunch,
   SpaceSkillLaunch,
 } from "@t3tools/contracts";
@@ -720,6 +721,10 @@ export interface ProviderAdapterV2SessionRuntime {
   }) => Effect.Effect<{ readonly feedbackId: string }, ProviderAdapterV2Error>;
   /** Absent means non-interactive apps with plain tool rows. */
   readonly mcpApps?: ProviderAdapterV2McpApps;
+  /** Each MCP server's connection state in the live process (no error text: it may hold a URL). */
+  readonly mcpServerConnections?: Effect.Effect<
+    ReadonlyArray<{ readonly name: string; readonly state: SpaceMcpConnection }>
+  >;
   readonly rollbackThread: (
     input: ProviderAdapterV2RollbackThreadInput,
   ) => Effect.Effect<ProviderAdapterV2ThreadSnapshot, ProviderAdapterV2Error>;

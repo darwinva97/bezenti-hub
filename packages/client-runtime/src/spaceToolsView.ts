@@ -95,12 +95,15 @@ const REASONS: Record<SpaceMcpUnavailableReason, string> = {
   "not-supported": "this agent does not take Space MCP servers",
   "no-secrets": "this agent cannot receive Vault entries",
   "outdated-machine": "this Thread's machine needs an update",
+  "not-in-session": "this Thread's session does not have it yet; its next turn decides",
 };
 
 /** Why a Space MCP server is not available to a Thread, in words. */
 export const unavailableText = (mcp: SpaceToolsThreadStatus["mcps"][number]) =>
   mcp.reason === undefined
-    ? "Available"
+    ? mcp.connection === undefined
+      ? "Available"
+      : `Available: ${mcp.connection}`
     : mcp.reason === "not-delivered"
       ? `Unavailable: ${REASONS[mcp.reason]} ${mcp.missing.join(", ")}`
       : `Unavailable: ${REASONS[mcp.reason]}`;

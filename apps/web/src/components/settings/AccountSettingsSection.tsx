@@ -134,20 +134,27 @@ export interface StepUpState {
   readonly usePasskey: boolean;
   readonly password: string;
   readonly code: string;
+  /** A strong factor confirmed through Keycloak rather than here (`confirmWithKeycloak`). */
+  readonly viaKeycloak: boolean;
 }
+
+/** A passkey, or a password with a code from an authenticator app: a password alone is refused. */
+export const hasLocalStrongFactor = (account: AuthAccount) =>
+  account.hasPasskey || account.totpEnrolled;
 
 export const emptyStepUp = (account: AuthAccount): StepUpState => ({
   usePasskey: account.hasPasskey,
   password: "",
   code: "",
+  viaKeycloak: account.identity !== undefined && !hasLocalStrongFactor(account),
 });
 
 /**
- * What a machine's loan asks for where the lender also decides: a passkey, or a password with a
- * code from an authenticator app. A password alone is refused by the Hub.
+ * What a machine's loan asks for where the lender also decides: a local strong factor, or, for
+ * who signs in with Keycloak, the second factor there.
  */
 export const lacksStrongFactor = (account: AuthAccount) =>
-  !account.hasPasskey && !account.totpEnrolled;
+  !hasLocalStrongFactor(account) && account.identity === undefined;
 
 export const toStepUp = (account: AuthAccount, state: StepUpState): StepUp => {
   if (!account.hasPasskey && !account.hasPassword) return { method: "none" };

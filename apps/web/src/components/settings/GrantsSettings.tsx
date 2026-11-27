@@ -14,10 +14,10 @@ import type {
 import { useAtomValue } from "@effect/atom-react";
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
-import { Fragment, useEffect, useEffectEvent, useState } from "react";
+import { Fragment, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { acceptGrant, giveGrant } from "../../environments/primary/grants";
-import { fetchAccount } from "../../environments/primary/userAccounts";
+import { fetchAccount, type StepUp } from "../../environments/primary/userAccounts";
 import { readHubLinkOrigin } from "../../hubLinks";
 import { errorMessageOf } from "../../lib/errorMessage";
 import { loadSpaces } from "../../state/currentSpace";
@@ -38,7 +38,8 @@ import {
 import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { emptyStepUp, lacksStrongFactor, StepUpFields, toStepUp } from "./AccountSettingsSection";
+import { confirmWithKeycloak, takeKeycloakStepUp } from "../auth/keycloakStepUp";
+import { emptyStepUp, lacksStrongFactor, toStepUp } from "./AccountSettingsSection";
 import {
   endingWarning,
   groupLenderSays,
@@ -62,7 +63,7 @@ import {
 import { ChangeCapsDialog } from "./LendAiAccountDialog";
 import { LoanUsage } from "./LoanUsage";
 import { BY_LINK, BY_LINK_LABEL, OfferLinkField } from "./OfferLinkField";
-import { StrongFactorNotice } from "./StrongFactorNotice";
+import { StrongFactorFields } from "./StrongFactorFields";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { VaultLoanUsage } from "./VaultLoanUsage";
 
@@ -156,28 +157,63 @@ export function LendMachineDialog({
   machine,
   onClose,
 }: {
-  readonly machine: HubEnvironmentSummary;
+  readonly machine: Pick<HubEnvironmentSummary, "id" | "name">;
   readonly onClose: () => void;
 }) {
   const environmentId = usePrimaryEnvironmentId();
   const navigate = useNavigate();
+  // Back from «Confirm with Keycloak»: the form as it was left, lent once with the proof.
+  const [resume] = useState(() => {
+    const back = takeKeycloakStepUp("lend-machine");
+    return back?.pending.machine.id === machine.id ? back : null;
+  });
+  const resumed = useRef(false);
   const targetsCommand = useAtomCommand(grantsEnvironment.targets, "list where you may lend");
   const givenCommand = useAtomCommand(grantsEnvironment.listGiven, "list your loans");
   const [targets, setTargets] = useState<ReadonlyArray<GrantTarget> | null>(null);
   const [host, setHost] = useState<SandboxHostReport | null>(null);
-  const [spaceId, setSpaceId] = useState<string>("");
-  const [cpus, setCpus] = useState("2");
-  const [memory, setMemory] = useState("4");
-  const [pids, setPids] = useState("4096");
-  const [disk, setDisk] = useState("20");
+  const [spaceId, setSpaceId] = useState<string>(resume?.pending.spaceId ?? "");
+  const [cpus, setCpus] = useState(resume?.pending.cpus ?? "2");
+  const [memory, setMemory] = useState(resume?.pending.memory ?? "4");
+  const [pids, setPids] = useState(resume?.pending.pids ?? "4096");
+  const [disk, setDisk] = useState(resume?.pending.disk ?? "20");
   const [account, setAccount] = useState<AuthAccount | null>(null);
   const [stepUp, setStepUp] = useState<StepUpState | null>(null);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    resume !== null && "failure" in resume ? resume.failure : null,
+  );
   // Grants ticket 15: a lending link for a Space not in the list, shown once.
   const createOffer = useAtomCommand(grantsEnvironment.createOffer, "make a lending link");
   const [link, setLink] = useState<string | null>(null);
 
+  const limits: EnvironmentGrantLimits = {
+    kind: "environment",
+    cpus: Number(cpus),
+    memoryBytes: Math.round(Number(memory) * GIB),
+    pids: Math.round(Number(pids)),
+    diskBytes: Math.round(Number(disk) * GIB),
+  };
+
+  const lend = async (into: GrantTarget, stepUp: StepUp | undefined) => {
+    setPending(true);
+    setError(null);
+    try {
+      await giveGrant(
+        {
+          resource: { kind: "environment", environmentId: machine.id },
+          spaceId: into.spaceId,
+          limits,
+        },
+        stepUp,
+      );
+      onClose();
+    } catch (cause) {
+      setError(errorMessageOf(cause, "The loan did not go through."));
+    } finally {
+      setPending(false);
+    }
+  };
   const loadTargets = useEffectEvent((target: EnvironmentId) =>
     Promise.all([
       targetsCommand({
@@ -202,8 +238,14 @@ export function LendMachineDialog({
               .map((grant) => grant.target?.spaceId)
           : [],
       );
-      setTargets(found.value.targets.filter((entry) => !lentTo.has(entry.spaceId)));
+      const open = found.value.targets.filter((entry) => !lentTo.has(entry.spaceId));
+      setTargets(open);
       setHost(found.value.host);
+      if (resume !== null && "proofId" in resume && !resumed.current) {
+        resumed.current = true;
+        const into = open.find((entry) => entry.spaceId === resume.pending.spaceId);
+        if (into !== undefined) void lend(into, { method: "keycloak", proofId: resume.proofId });
+      }
     } else {
       setError(errorMessageOf(squashAtomCommandFailure(found), "Could not list the Spaces."));
     }
@@ -222,13 +264,6 @@ export function LendMachineDialog({
 
   const target = targets?.find((entry) => entry.spaceId === spaceId);
   const byLink = spaceId === BY_LINK;
-  const limits: EnvironmentGrantLimits = {
-    kind: "environment",
-    cpus: Number(cpus),
-    memoryBytes: Math.round(Number(memory) * GIB),
-    pids: Math.round(Number(pids)),
-    diskBytes: Math.round(Number(disk) * GIB),
-  };
   const valid =
     (target !== undefined || byLink) &&
     [limits.cpus, limits.memoryBytes, limits.pids, limits.diskBytes].every(
@@ -255,32 +290,35 @@ export function LendMachineDialog({
       return;
     }
     if (target === undefined) return;
-    setPending(true);
-    setError(null);
-    try {
-      if (target.startsActive && account === null) {
-        // Lending where you also decide accepts it too: confirm with a strong factor first.
+    if (!target.startsActive) return lend(target, undefined);
+    if (account === null || stepUp === null) {
+      // Lending where you also decide accepts it too: confirm with a strong factor first.
+      setPending(true);
+      setError(null);
+      try {
         const read = await fetchAccount();
         setAccount(read);
         setStepUp(emptyStepUp(read));
-        return;
+      } catch (cause) {
+        setError(errorMessageOf(cause, "Could not read your account."));
+      } finally {
+        setPending(false);
       }
-      await giveGrant(
-        {
-          resource: { kind: "environment", environmentId: machine.id },
-          spaceId: target.spaceId,
-          limits,
-        },
-        target.startsActive && account !== null && stepUp !== null
-          ? toStepUp(account, stepUp)
-          : undefined,
-      );
-      onClose();
-    } catch (cause) {
-      setError(errorMessageOf(cause, "The loan did not go through."));
-    } finally {
-      setPending(false);
+      return;
     }
+    if (stepUp.viaKeycloak) {
+      setPending(true);
+      setError(null);
+      const form = { spaceId: target.spaceId, cpus, memory, pids, disk };
+      await confirmWithKeycloak({ kind: "lend-machine", machine, ...form }).catch(
+        (cause: unknown) => {
+          setError(errorMessageOf(cause, "Could not start confirming with Keycloak."));
+          setPending(false);
+        },
+      );
+      return;
+    }
+    return lend(target, toStepUp(account, stepUp));
   };
 
   const field = (id: string, label: string, value: string, set: (next: string) => void) => (
@@ -385,8 +423,12 @@ export function LendMachineDialog({
                   </p>
                 </>
               )}
-              {account !== null && stepUp !== null && lacksStrongFactor(account) ? (
-                <StrongFactorNotice
+              {account !== null && stepUp !== null ? (
+                <StrongFactorFields
+                  account={account}
+                  disabled={pending}
+                  value={stepUp}
+                  onChange={setStepUp}
                   onOpenAccount={() => {
                     onClose();
                     void navigate({
@@ -394,14 +436,6 @@ export function LendMachineDialog({
                       params: { section: "account" },
                     });
                   }}
-                />
-              ) : null}
-              {account !== null && stepUp !== null && !lacksStrongFactor(account) ? (
-                <StepUpFields
-                  account={account}
-                  disabled={pending}
-                  value={stepUp}
-                  onChange={setStepUp}
                 />
               ) : null}
               {error === null ? null : (
@@ -428,7 +462,9 @@ export function LendMachineDialog({
                 {byLink
                   ? "Make link"
                   : target?.startsActive === true && account !== null
-                    ? "Confirm and lend"
+                    ? stepUp?.viaKeycloak === true
+                      ? "Confirm with Keycloak"
+                      : "Confirm and lend"
                     : "Lend"}
               </Button>
             ) : null}
@@ -475,6 +511,9 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   // Right after a page load or a Hub restart the session is not up yet: wait for it, then load.
   const connected = useEnvironment(environmentId)?.connection.phase === "connected";
   const navigate = useNavigate();
+  // Back from «Confirm with Keycloak»: the loan it left to accept, accepted once with the proof.
+  const [resume] = useState(() => takeKeycloakStepUp("accept-grant"));
+  const resumed = useRef(false);
   const [accepting, setAccepting] = useState<{
     readonly grant: Grant;
     readonly account: AuthAccount;
@@ -539,18 +578,6 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
   const loadLoans = useEffectEvent(fetchLoans);
   const applyLoans = useEffectEvent(showLoans);
   const reload = async () => showLoans(await fetchLoans(environmentId));
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the User's loans from the Hub when the section opens.
-  useEffect(() => {
-    if (!connected) return;
-    let cancelled = false;
-    void loadLoans(environmentId).then((loans) => {
-      if (!cancelled) applyLoans(loans);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [environmentId, connected]);
-
   const run = async (change: () => Promise<unknown>) => {
     setPending(true);
     setError(null);
@@ -589,6 +616,42 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
       setPending(false);
     }
   };
+  const acceptMachine = async (target: NonNullable<typeof accepting>) => {
+    if (!target.stepUp.viaKeycloak) {
+      await run(() => acceptGrant(target.grant.id, toStepUp(target.account, target.stepUp)));
+      return;
+    }
+    setPending(true);
+    setError(null);
+    await confirmWithKeycloak({ kind: "accept-grant", grantId: target.grant.id }).catch(
+      (cause: unknown) => {
+        setError(errorMessageOf(cause, "Could not start confirming with Keycloak."));
+        setPending(false);
+      },
+    );
+  };
+  const resumeAccept = useEffectEvent(() => {
+    if (resume === null || resumed.current) return;
+    resumed.current = true;
+    if ("failure" in resume) setError(resume.failure);
+    else {
+      const proof = { method: "keycloak", proofId: resume.proofId } as const;
+      void run(() => acceptGrant(resume.pending.grantId, proof));
+    }
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the User's loans from the Hub when the section opens.
+  useEffect(() => {
+    if (!connected) return;
+    let cancelled = false;
+    void loadLoans(environmentId).then((loans) => {
+      if (cancelled) return;
+      applyLoans(loans);
+      resumeAccept();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [environmentId, connected]);
   const settle = async <A,>(result: Promise<AtomCommandResult<A, unknown>>) => {
     const done = await result;
     if (done._tag !== "Success") throw squashAtomCommandFailure(done);
@@ -815,9 +878,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
               className="flex min-h-0 flex-col"
               onSubmit={(event) => {
                 event.preventDefault();
-                void run(() =>
-                  acceptGrant(accepting.grant.id, toStepUp(accepting.account, accepting.stepUp)),
-                );
+                void acceptMachine(accepting);
               }}
             >
               <DialogHeader>
@@ -835,25 +896,19 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
                   {accepting.grant.machine?.host == null ? null : (
                     <HostState host={accepting.grant.machine.host} />
                   )}
-                  {lacksStrongFactor(accepting.account) ? (
-                    <StrongFactorNotice
-                      onOpenAccount={() => {
-                        setAccepting(null);
-                        void navigate({
-                          to: "/settings/user/$section",
-                          params: { section: "account" },
-                        });
-                      }}
-                    />
-                  ) : null}
-                  {lacksStrongFactor(accepting.account) ? null : (
-                    <StepUpFields
-                      account={accepting.account}
-                      disabled={pending}
-                      value={accepting.stepUp}
-                      onChange={(stepUp) => setAccepting({ ...accepting, stepUp })}
-                    />
-                  )}
+                  <StrongFactorFields
+                    account={accepting.account}
+                    disabled={pending}
+                    value={accepting.stepUp}
+                    onChange={(stepUp) => setAccepting({ ...accepting, stepUp })}
+                    onOpenAccount={() => {
+                      setAccepting(null);
+                      void navigate({
+                        to: "/settings/user/$section",
+                        params: { section: "account" },
+                      });
+                    }}
+                  />
                 </div>
               </DialogPanel>
               <DialogFooter>
@@ -866,7 +921,7 @@ function GrantsSection({ environmentId }: { readonly environmentId: EnvironmentI
                   Cancel
                 </Button>
                 <Button disabled={pending || lacksStrongFactor(accepting.account)} type="submit">
-                  Confirm and accept
+                  {accepting.stepUp.viaKeycloak ? "Confirm with Keycloak" : "Confirm and accept"}
                 </Button>
               </DialogFooter>
             </form>

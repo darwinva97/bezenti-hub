@@ -18,8 +18,13 @@ const loans = vi.hoisted(() => ({
   },
   failWith: null as unknown,
   listCalls: 0,
-  account: { hasPasskey: false, hasPassword: true, totpEnrolled: false } as Record<string, boolean>,
-  accepted: [] as Array<{ readonly grantId: string; readonly useAsDefault: boolean | undefined }>,
+  account: { hasPasskey: false, hasPassword: true, totpEnrolled: false } as Record<string, unknown>,
+  accepted: [] as Array<{
+    readonly grantId: string;
+    readonly useAsDefault: boolean | undefined;
+    readonly stepUp?: unknown;
+  }>,
+  keycloakStarts: [] as Array<unknown>,
   vaultUsage: { rows: [], truncated: false } as unknown,
   vaultUsageReads: [] as Array<unknown>,
   offers: [] as Array<unknown>,
@@ -47,10 +52,14 @@ vi.mock("../../environments/primary/grants", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../environments/primary/grants")>()),
   acceptGrant: (
     grantId: string,
-    _stepUp: unknown,
+    stepUp: unknown,
     options: { readonly useAsDefault?: boolean } = {},
   ) => {
-    loans.accepted.push({ grantId, useAsDefault: options.useAsDefault });
+    loans.accepted.push({
+      grantId,
+      useAsDefault: options.useAsDefault,
+      ...(stepUp === undefined ? {} : { stepUp }),
+    });
     return Promise.resolve({});
   },
 }));
@@ -61,6 +70,10 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("../../environments/primary/userAccounts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../environments/primary/userAccounts")>()),
   fetchAccount: () => Promise.resolve(loans.account),
+  startKeycloak: (input: unknown) => {
+    loans.keycloakStarts.push(input);
+    return Promise.resolve();
+  },
 }));
 vi.mock("../../state/grants", () => ({
   grantsEnvironment: {
@@ -189,7 +202,17 @@ const resetLoans = () => {
   loans.listCalls = 0;
   loans.account = { hasPasskey: false, hasPassword: true, totpEnrolled: false };
   loans.accepted = [];
+  loans.keycloakStarts = [];
+  window.sessionStorage.clear();
 };
+
+const clickInDialog = async (name: string) => {
+  const button = page.getByRole("dialog").getByRole("button", { name, exact: true });
+  await expect.element(button).toBeEnabled();
+  await act(async () => (button.element() as HTMLButtonElement).click());
+};
+
+const KEYCLOAK_IDENTITY = { username: "ana", email: null, accountUrl: "https://sso.test/account" };
 
 it("keeps the footer buttons inside the dialog popup, with the body scrolling", async () => {
   resetLoans();
@@ -273,6 +296,78 @@ it("tells an account with no passkey or authenticator app to add one, and disabl
   await expect.element(page.getByRole("button", { name: "Open Settings → Account" })).toBeVisible();
   await expect.element(page.getByRole("button", { name: "Confirm and accept" })).toBeDisabled();
   await expect.element(page.getByText("Current password")).not.toBeInTheDocument();
+});
+
+it("offers a Keycloak account Confirm with Keycloak, then accepts once with the proof it brings back", async () => {
+  resetLoans();
+  loans.account = {
+    hasPasskey: false,
+    hasPassword: false,
+    totpEnrolled: false,
+    identity: KEYCLOAK_IDENTITY,
+  };
+  loans.received = [machineGrant("g9", "pending", "Eijun")];
+  const here = `${window.location.pathname}${window.location.search}`;
+  {
+    await using _screen = await render(<GrantsSettings />);
+    await page.getByRole("button", { name: "Accept…" }).click();
+    await expect.element(page.getByText(/You will confirm it's you with Keycloak/)).toBeVisible();
+    await expect
+      .element(page.getByText(/add a passkey or an authenticator app/))
+      .not.toBeInTheDocument();
+    await clickInDialog("Confirm with Keycloak");
+    await vi.waitFor(() =>
+      expect(loans.keycloakStarts).toEqual([
+        { intent: "step-up", returnTo: here, strongFactor: true },
+      ]),
+    );
+    expect(loans.accepted).toEqual([]);
+  }
+
+  // Back from the realm: the page opens again with the proof in its fragment.
+  window.history.replaceState(window.history.state, "", `${here}#keycloakProof=proof-1`);
+  {
+    await using _screen = await render(<GrantsSettings />);
+    await vi.waitFor(() =>
+      expect(loans.accepted).toEqual([
+        {
+          grantId: "g9",
+          useAsDefault: undefined,
+          stepUp: { method: "keycloak", proofId: "proof-1" },
+        },
+      ]),
+    );
+    expect(window.location.hash).toBe("");
+  }
+  {
+    await using _screen = await render(<GrantsSettings />);
+    await expect.element(page.getByRole("heading", { name: "Waiting for you" })).toBeVisible();
+    expect(loans.accepted).toHaveLength(1);
+  }
+});
+
+it("lets the Owner with Keycloak and a passkey confirm either way", async () => {
+  resetLoans();
+  loans.account = {
+    hasPasskey: true,
+    hasPassword: false,
+    totpEnrolled: false,
+    identity: KEYCLOAK_IDENTITY,
+  };
+  loans.received = [machineGrant("g9", "pending", "Eijun")];
+  await using _screen = await render(<GrantsSettings />);
+  await page.getByRole("button", { name: "Accept…" }).click();
+  await expect.element(page.getByText(/You will confirm it's you with your passkey/)).toBeVisible();
+  await clickInDialog("Confirm with Keycloak instead");
+  await expect.element(page.getByText(/You will confirm it's you with Keycloak/)).toBeVisible();
+  await clickInDialog("Use your passkey or password instead");
+  await clickInDialog("Confirm and accept");
+  await vi.waitFor(() =>
+    expect(loans.accepted).toEqual([
+      { grantId: "g9", useAsDefault: undefined, stepUp: { method: "passkey" } },
+    ]),
+  );
+  expect(loans.keycloakStarts).toEqual([]);
 });
 
 // Grants ticket 06: lending links among the loans given, and a subscription's terms when deciding.

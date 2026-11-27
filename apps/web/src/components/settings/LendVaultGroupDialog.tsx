@@ -7,10 +7,10 @@ import type {
   VaultGroupId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { giveGrant } from "../../environments/primary/grants";
-import { fetchAccount } from "../../environments/primary/userAccounts";
+import { fetchAccount, type StepUp } from "../../environments/primary/userAccounts";
 import { errorMessageOf } from "../../lib/errorMessage";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { grantsEnvironment } from "../../state/grants";
@@ -27,7 +27,9 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { emptyStepUp, lacksStrongFactor, StepUpFields, toStepUp } from "./AccountSettingsSection";
+import { confirmWithKeycloak, takeKeycloakStepUp } from "../auth/keycloakStepUp";
+import { emptyStepUp, lacksStrongFactor, toStepUp } from "./AccountSettingsSection";
+import { StrongFactorFields } from "./StrongFactorFields";
 import { spaceLabel, vaultLendWarning } from "@t3tools/client-runtime/grants-view";
 
 type StepUpState = ReturnType<typeof emptyStepUp>;
@@ -51,15 +53,49 @@ export function LendVaultGroupDialog({
 }) {
   const environmentId = usePrimaryEnvironmentId();
   const navigate = useNavigate();
+  // Back from «Confirm with Keycloak»: the form as it was left, lent once with the proof.
+  const [resume] = useState(() => {
+    const back = takeKeycloakStepUp("lend-vault-group");
+    return back?.pending.group.id === group.id ? back : null;
+  });
+  const resumed = useRef(false);
   const targetsCommand = useAtomCommand(grantsEnvironment.targets, "list where you may lend");
   const [targets, setTargets] = useState<ReadonlyArray<GrantTarget> | null>(null);
-  const [spaceId, setSpaceId] = useState<string>(initialSpaceId ?? "");
-  const [useAsDefault, setUseAsDefault] = useState(true);
+  const [spaceId, setSpaceId] = useState<string>(resume?.pending.spaceId ?? initialSpaceId ?? "");
+  const [useAsDefault, setUseAsDefault] = useState(resume?.pending.useAsDefault ?? true);
   const [account, setAccount] = useState<AuthAccount | null>(null);
   const [stepUp, setStepUp] = useState<StepUpState | null>(null);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    resume !== null && "failure" in resume ? resume.failure : null,
+  );
   const [done, setDone] = useState<string | null>(null);
+
+  const lend = async (into: GrantTarget, proof: StepUp) => {
+    setPending(true);
+    setError(null);
+    try {
+      const grant = await giveGrant(
+        {
+          resource: { kind: "vault-group", vaultGroupId: group.id },
+          spaceId: into.spaceId,
+          limits: { kind: "vault-group" },
+          ...(into.startsActive ? { useAsDefault } : {}),
+        },
+        proof,
+      );
+      setDone(
+        grant.state === "active"
+          ? `Lent to ${spaceLabel(into)}.`
+          : `Waiting for ${spaceLabel(into)} to accept it.`,
+      );
+      onLent?.();
+    } catch (cause) {
+      setError(errorMessageOf(cause, "The loan did not go through."));
+    } finally {
+      setPending(false);
+    }
+  };
 
   const loadTargets = useEffectEvent((target: EnvironmentId) =>
     targetsCommand({
@@ -68,8 +104,17 @@ export function LendVaultGroupDialog({
     }),
   );
   const applyTargets = useEffectEvent((found: Awaited<ReturnType<typeof targetsCommand>>) => {
-    if (found._tag === "Success") setTargets(found.value.targets);
-    else setError(errorMessageOf(squashAtomCommandFailure(found), "Could not list the Spaces."));
+    if (found._tag !== "Success") {
+      setError(errorMessageOf(squashAtomCommandFailure(found), "Could not list the Spaces."));
+      return;
+    }
+    setTargets(found.value.targets);
+    if (resume !== null && "proofId" in resume && !resumed.current) {
+      resumed.current = true;
+      const into = found.value.targets.find((entry) => entry.spaceId === resume.pending.spaceId);
+      const proof = { method: "keycloak", proofId: resume.proofId } as const;
+      if (into !== undefined) void lend(into, proof);
+    }
   });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads where the group may be lent when the dialog opens.
   useEffect(() => {
@@ -87,36 +132,34 @@ export function LendVaultGroupDialog({
 
   const submit = async () => {
     if (target === undefined) return;
-    setPending(true);
-    setError(null);
-    try {
-      if (account === null || stepUp === null) {
-        // Lending a group always needs a strong factor: its Secrets reach another Space's agents.
+    if (account === null || stepUp === null) {
+      // Lending a group always needs a strong factor: its Secrets reach another Space's agents.
+      setPending(true);
+      setError(null);
+      try {
         const read = await fetchAccount();
         setAccount(read);
         setStepUp(emptyStepUp(read));
-        return;
+      } catch (cause) {
+        setError(errorMessageOf(cause, "Could not read your account."));
+      } finally {
+        setPending(false);
       }
-      const grant = await giveGrant(
-        {
-          resource: { kind: "vault-group", vaultGroupId: group.id },
-          spaceId: target.spaceId,
-          limits: { kind: "vault-group" },
-          ...(target.startsActive ? { useAsDefault } : {}),
-        },
-        toStepUp(account, stepUp),
-      );
-      setDone(
-        grant.state === "active"
-          ? `Lent to ${spaceLabel(target)}.`
-          : `Waiting for ${spaceLabel(target)} to accept it.`,
-      );
-      onLent?.();
-    } catch (cause) {
-      setError(errorMessageOf(cause, "The loan did not go through."));
-    } finally {
-      setPending(false);
+      return;
     }
+    if (!stepUp.viaKeycloak) return lend(target, toStepUp(account, stepUp));
+    setPending(true);
+    setError(null);
+    await confirmWithKeycloak({
+      kind: "lend-vault-group",
+      group,
+      spaceId: target.spaceId,
+      useAsDefault,
+      fromReview: initialSpaceId !== undefined,
+    }).catch((cause: unknown) => {
+      setError(errorMessageOf(cause, "Could not start confirming with Keycloak."));
+      setPending(false);
+    });
   };
 
   return (
@@ -182,32 +225,20 @@ export function LendVaultGroupDialog({
                   The loan waits until this Space accepts it.
                 </p>
               )}
-              {account !== null && stepUp !== null && lacksStrongFactor(account) ? (
-                <p className="text-xs text-warning" role="alert">
-                  To lend a Vault group, add a passkey or an authenticator app to your account
-                  first.{" "}
-                  <Button
-                    size="xs"
-                    type="button"
-                    variant="link"
-                    onClick={() => {
-                      onClose();
-                      void navigate({
-                        to: "/settings/user/$section",
-                        params: { section: "account" },
-                      });
-                    }}
-                  >
-                    Open Settings → Account
-                  </Button>
-                </p>
-              ) : null}
-              {account !== null && stepUp !== null && !lacksStrongFactor(account) ? (
-                <StepUpFields
+              {account !== null && stepUp !== null ? (
+                <StrongFactorFields
                   account={account}
+                  action="lend a Vault group"
                   disabled={pending || done !== null}
                   value={stepUp}
                   onChange={setStepUp}
+                  onOpenAccount={() => {
+                    onClose();
+                    void navigate({
+                      to: "/settings/user/$section",
+                      params: { section: "account" },
+                    });
+                  }}
                 />
               ) : null}
               {done === null ? null : (
@@ -235,7 +266,11 @@ export function LendVaultGroupDialog({
                 }
                 type="submit"
               >
-                {account === null ? "Lend…" : "Confirm and lend"}
+                {account === null
+                  ? "Lend…"
+                  : stepUp?.viaKeycloak === true
+                    ? "Confirm with Keycloak"
+                    : "Confirm and lend"}
               </Button>
             ) : null}
           </DialogFooter>

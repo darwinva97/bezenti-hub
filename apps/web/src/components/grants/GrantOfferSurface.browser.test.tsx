@@ -5,7 +5,8 @@ import { render } from "../../../test/render";
 import { GrantOfferSurface } from "./GrantOfferSurface";
 
 const offer = vi.hoisted(() => ({
-  account: { hasPasskey: false, hasPassword: true, totpEnrolled: false } as Record<string, boolean>,
+  account: { hasPasskey: false, hasPassword: true, totpEnrolled: false } as Record<string, unknown>,
+  keycloakStarts: [] as Array<unknown>,
   claims: [] as Array<{ readonly input: unknown; readonly stepUp: unknown }>,
   wsClaims: [] as Array<unknown>,
   navigations: [] as Array<unknown>,
@@ -51,6 +52,10 @@ vi.mock("../../state/use-atom-command", () => ({
 vi.mock("../../environments/primary/userAccounts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../environments/primary/userAccounts")>()),
   fetchAccount: () => Promise.resolve(offer.account),
+  startKeycloak: (input: unknown) => {
+    offer.keycloakStarts.push(input);
+    return Promise.resolve();
+  },
 }));
 vi.mock("../../environments/primary/grants", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../environments/primary/grants")>()),
@@ -114,4 +119,52 @@ it("applies a machine's link over HTTP with the passkey, never over the socket",
     { input: { token: "link-token", spaceId: "org-acme" }, stepUp: { method: "passkey" } },
   ]);
   expect(offer.wsClaims).toEqual([]);
+});
+
+it("applies a machine's link for a Keycloak account once, with the proof it comes back with", async () => {
+  offer.account = {
+    hasPasskey: false,
+    hasPassword: false,
+    totpEnrolled: false,
+    identity: { username: "ana", email: null, accountUrl: "https://sso.test/account" },
+  };
+  offer.claims = [];
+  offer.keycloakStarts = [];
+  window.sessionStorage.clear();
+  const here = `${window.location.pathname}${window.location.search}`;
+  {
+    await using _screen = await render(<GrantOfferSurface signedIn />);
+    await chooseAcme();
+    await expect.element(page.getByText(/You will confirm it's you with Keycloak/)).toBeVisible();
+    await expect
+      .element(page.getByText(/add a passkey or an authenticator app/))
+      .not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Confirm with Keycloak" }).click();
+    await vi.waitFor(() =>
+      expect(offer.keycloakStarts).toEqual([
+        { intent: "step-up", returnTo: here, strongFactor: true },
+      ]),
+    );
+    expect(offer.claims).toEqual([]);
+  }
+
+  window.history.replaceState(window.history.state, "", `${here}#keycloakProof=proof-2`);
+  {
+    await using _screen = await render(<GrantOfferSurface signedIn />);
+    await expect
+      .element(page.getByText(/Lent to Acme: its Threads can run in a Sandbox/))
+      .toBeVisible();
+    expect(offer.claims).toEqual([
+      {
+        input: { token: "link-token", spaceId: "org-acme" },
+        stepUp: { method: "keycloak", proofId: "proof-2" },
+      },
+    ]);
+    expect(window.location.hash).toBe("");
+  }
+  {
+    await using _screen = await render(<GrantOfferSurface signedIn />);
+    await expect.element(page.getByText(/Ana lends you Ana's box/)).toBeVisible();
+    expect(offer.claims).toHaveLength(1);
+  }
 });

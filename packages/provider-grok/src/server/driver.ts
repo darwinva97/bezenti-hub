@@ -38,6 +38,7 @@ import {
   type ProviderMaintenanceCapabilitiesResolver,
   resolveHomebrewProviderMaintenance,
   resolveProviderMaintenanceCapabilitiesEffect,
+  resolveSandboxImageProviderMaintenance,
 } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -61,6 +62,12 @@ const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
         packageName: GROK_NPM_PACKAGE,
       });
     }
+    const fromImage = resolveSandboxImageProviderMaintenance({
+      provider: DRIVER_KIND,
+      packageName: GROK_NPM_PACKAGE,
+      context,
+    });
+    if (fromImage) return fromImage;
     const homebrew = homebrewOwnershipFromCommandPath(context.realCommandPath);
     // Only a cask is Grok's: a formula keg such as `node` holding an npm global is not.
     if (homebrew?.kind === "cask") {

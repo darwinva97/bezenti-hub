@@ -667,6 +667,35 @@ it.layer(
     }),
   );
 
+  it.effect.each([
+    { definition: claudeUpdate, binary: "@anthropic-ai/claude-code/bin/claude.exe" },
+    { definition: otherProviderUpdate, binary: "@example/native-package-tool/bin/tool" },
+  ])("leaves a CLI of the Sandbox image to the image: $binary", ({ definition, binary }) =>
+    Effect.gen(function* () {
+      const capabilities = yield* resolveInstall({
+        definition,
+        resolved: "/usr/local/bin/tool",
+        real: `/opt/t3/clis/node_modules/${binary}`,
+        platform: "linux",
+      });
+
+      expect(
+        createProviderVersionAdvisory({
+          driver: definition.provider,
+          currentVersion: "2.1.319",
+          latestVersion: "2.1.332",
+          maintenanceCapabilities: capabilities,
+        }),
+      ).toMatchObject({
+        status: "behind_latest",
+        canUpdate: false,
+        updateCommand: null,
+        message:
+          "Version 2.1.332 is out. This CLI comes with the Sandbox image and updates when the image is rebuilt.",
+      });
+    }),
+  );
+
   // Chocolatey publishes behind npm, so comparing against the registry would
   // report an update `choco upgrade` cannot install yet.
   it.effect("compares a Chocolatey Claude install against choco search", () =>

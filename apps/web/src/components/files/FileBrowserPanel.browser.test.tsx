@@ -43,12 +43,14 @@ vi.mock("~/fileContextMenu", () => ({
   useFileContextMenu: () => ({ buildItems: () => [], activate: () => Promise.resolve() }),
 }));
 vi.mock("~/hooks/useWorkspaceMutationRefresh", () => ({ useWorkspaceMutationRefresh: () => {} }));
-const downloads = vi.hoisted(() => ({ requested: [] as Array<{ cwd: string; path: string }> }));
+const downloads = vi.hoisted(() => ({
+  requested: [] as Array<{ target: { cwd: string; paths: ReadonlyArray<string> }; label: string }>,
+}));
 vi.mock("./workspaceDownload", () => ({
-  useWorkspaceDownload: () => (target: { cwd: string; path: string }) => {
-    downloads.requested.push(target);
-    return Promise.resolve();
-  },
+  useWorkspaceDownload:
+    () => (target: { cwd: string; paths: ReadonlyArray<string> }, label: string) => {
+      downloads.requested.push({ target, label });
+    },
 }));
 
 function findTreeRow(path: string): HTMLElement | null {
@@ -139,8 +141,8 @@ describe("FileBrowserPanel", () => {
     }
     await vi.waitFor(() =>
       expect(downloads.requested).toEqual([
-        { cwd: "/repo", path: "README.md" },
-        { cwd: "/repo", path: "src" },
+        { target: { cwd: "/repo", paths: ["README.md"] }, label: "README.md" },
+        { target: { cwd: "/repo", paths: ["src"] }, label: "src" },
       ]),
     );
   });

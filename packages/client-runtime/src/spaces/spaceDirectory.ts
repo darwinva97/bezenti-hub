@@ -230,6 +230,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "space_skill.enable": "Turned on a Space's Skill",
   "space_skill.disable": "Turned off a Space's Skill",
   "space_skill.delete": "Deleted a Space's Skill",
+  "workspace.download": "Downloaded workspace files",
 };
 
 /** Where a client keeps its current Space, one per User so a shared browser does not mix them. */

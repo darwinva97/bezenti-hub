@@ -595,7 +595,7 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
       { _tag: "workspace-file", threadId: ThreadId.make("thread"), path: "file.txt" },
       { _tag: "media-file", threadId: ThreadId.make("thread"), path: "/repo/image.png" },
       { _tag: "draft-workspace-file", cwd: "/repo", path: "file.txt" },
-      { _tag: "workspace-download", cwd: "/repo", path: "docs" },
+      { _tag: "workspace-download", cwd: "/repo", paths: ["docs"] },
     ] as const) {
       expect(
         yield* client[WS_METHODS.assetsCreateUrl]({ resource }).pipe(Effect.flip),

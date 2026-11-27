@@ -447,8 +447,10 @@ export const layerAssetRoute = HttpRouter.add(
     if (asset.kind === "folder-zip") {
       const session = yield* sessionUser;
       return yield* folderZipResponse({
-        root: asset.path,
-        name: asset.name,
+        items: asset.items,
+        missing: asset.missing,
+        includeAll: asset.includeAll,
+        range: asset.range,
         fileName: asset.fileName,
         user: Option.orElse(session, () =>
           asset.viewer === undefined ? Option.none() : Option.some(UserId.make(asset.viewer)),

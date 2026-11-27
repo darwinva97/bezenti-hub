@@ -11,6 +11,16 @@ import { ToolActivityNativeAppReference } from "./providerRuntime.ts";
 
 const ASSET_PATH_MAX_LENGTH = 1024;
 
+export const WORKSPACE_DOWNLOAD_MAX_SELECTION = 50;
+/** A ZIP part holds files up to this many bytes; a larger file goes alone in its own part. */
+export const WORKSPACE_DOWNLOAD_PART_BYTES = 2 * 1024 ** 3;
+/** Above this, a folder download asks before it starts. */
+export const WORKSPACE_DOWNLOAD_CONFIRM_BYTES = 500 * 1024 ** 2;
+export const WORKSPACE_DOWNLOAD_MAX_BYTES = 200 * 1024 ** 3;
+export const WORKSPACE_DOWNLOAD_MAX_ENTRIES = 500_000;
+/** The largest file a Thread's machine serves through the Hub (`MAX_MACHINE_ASSET_BYTES`). */
+const REMOTE_DOWNLOAD_MAX_MB = 512;
+
 /**
  * The wire tag of a source control host's credentialed media. It names GitHub because GitHub had
  * it first, and servers and clients of different releases must keep understanding each other.
@@ -31,10 +41,16 @@ export const AssetResource = Schema.Union([
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
     path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
   }),
-  // A file under `cwd`, served as an attachment, or a folder, served as a streamed ZIP.
+  // One file under `cwd`, served as an attachment; folders or several entries, as ZIP parts.
   Schema.TaggedStruct("workspace-download", {
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
-    path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
+    paths: Schema.Array(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
+    ).check(Schema.isMinLength(1), Schema.isMaxLength(WORKSPACE_DOWNLOAD_MAX_SELECTION)),
+    /** Keep `.git` and `node_modules`, which are left out by default. */
+    includeAll: Schema.optionalKey(Schema.Boolean),
+    /** The Thread whose files panel asks: its files come from the machine it runs on. */
+    threadId: Schema.optionalKey(ThreadId),
   }),
   Schema.TaggedStruct("attachment", {
     attachmentId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
@@ -87,6 +103,23 @@ export const AssetCreateUrlResult = Schema.Struct({
   imageDimensions: Schema.optional(AssetImageDimensions),
   /** Changes only when the file's contents or identity change, unlike `relativeUrl`, which is re-signed on every mint. */
   fileRevision: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  /** A ZIP download: what it holds, and one URL per part (`relativeUrl` is the first). */
+  download: Schema.optional(
+    Schema.Struct({
+      files: NonNegativeInt,
+      bytes: NonNegativeInt,
+      /** Entries left out (`.git`, `node_modules`, symlinks, unreadable). */
+      skipped: NonNegativeInt,
+      parts: Schema.Array(
+        Schema.Struct({
+          relativeUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(8192)),
+          fileName: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+          bytes: NonNegativeInt,
+          files: NonNegativeInt,
+        }),
+      ),
+    }),
+  ),
 });
 export type AssetCreateUrlResult = typeof AssetCreateUrlResult.Type;
 
@@ -333,7 +366,34 @@ export class AssetRemoteEnvironmentError extends Schema.TaggedError<AssetRemoteE
   }
 }
 
+export class AssetDownloadLimitError extends Schema.TaggedError<AssetDownloadLimitError>()(
+  "AssetDownloadLimitError",
+  {
+    resource: AssetResource,
+    reason: Schema.Literals([
+      "too-large",
+      "too-many-entries",
+      "selection-too-long",
+      "remote-folder",
+    ]),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "too-large":
+        return `This download is larger than ${WORKSPACE_DOWNLOAD_MAX_BYTES / 1024 ** 3} GB. Download smaller folders.`;
+      case "too-many-entries":
+        return `This download holds more than ${WORKSPACE_DOWNLOAD_MAX_ENTRIES.toLocaleString("en-US")} files and folders. Download smaller folders.`;
+      case "selection-too-long":
+        return "These paths are too long to download together. Select fewer items.";
+      case "remote-folder":
+        return `This Thread runs on another machine. From there you can download single files up to ${REMOTE_DOWNLOAD_MAX_MB} MB; folders and selections can't be downloaded yet.`;
+    }
+  }
+}
+
 export const AssetAccessError = Schema.Union([
+  AssetDownloadLimitError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   AssetWorkspaceRootNormalizationError,

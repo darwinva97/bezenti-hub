@@ -933,6 +933,20 @@ open the file again. A machine on a release from before this says
 **<machine> needs an update to preview and download this Thread's files**:
 install the Hub's release of T3 on it and start it again.
 
+### Download files and folders
+
+Right-click a file in the Files panel and choose **Download** to save it as it is.
+For a folder, or several selected items, choose **Download as .zip**. Small
+downloads start at once. Above 500 MB, or when the download needs more than one
+.zip file, you confirm it first. Large folders are split into .zip files of up
+to 2 GB each (`name-part-1-of-3.zip`, and so on). The **Downloads** card in the
+corner shows each part's progress, and lets you cancel a part or retry it.
+
+`.git` and `node_modules` are left out unless you include them in the
+confirmation. Links to other places are never followed. Anything left out is
+listed in `SKIPPED.txt` inside the archive. For a Thread that runs on another
+machine, you can download single files up to 512 MB, but not folders yet.
+
 ### Run Threads in your Space's Sandbox
 
 Every Space has a **Sandbox**: a server of its own that the Hub runs for that

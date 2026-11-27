@@ -28,9 +28,20 @@
 - Es solo lectura: no escribe nada en el workspace ni en la base. Quitar el ítem del menú y el
   recurso del contrato lo revierte.
 
-## Pendiente (siguientes ramas)
+## Segunda parte (misma PR)
 
-- Pre-escaneo, umbrales, diálogo de confirmación y división en partes `-part-i-of-N`.
-- Panel de progreso persistente con cancelar/reintentar.
-- Límite de descargas concurrentes y entrada en el audit log.
-- Casilla para incluir `.git` / `node_modules`.
+- `workspace-download` lleva `paths` (hasta 50), `includeAll` y `threadId`. El servidor hace un
+  pre-escaneo (`planArchive`, sin seguir symlinks), lo parte en partes de hasta 2 GiB por orden de
+  archivo y firma una URL por parte con su rango (`start`/`end`); devuelve archivos, bytes y partes.
+- Límites: 200 GiB y 500 000 entradas por descarga; 3 ZIPs en curso por User (429).
+- Audit: `workspace.download` (rutas, archivos, bytes, partes) al firmar.
+- Un Thread en otra máquina: un archivo sale de esa máquina (ticket 15, hasta 512 MB); carpetas y
+  selecciones se rechazan con un mensaje claro, nunca se arma el ZIP con la copia del Hub.
+- Cliente: diálogo de confirmación (> 500 MiB o varias partes) y tarjeta de descargas con progreso,
+  cancelar y reintentar. Con File System Access (Chromium, escritorio) escribe en disco mientras
+  llega; si no, el navegador descarga la parte 1 y las demás tienen su botón.
+
+## Pendiente
+
+- ZIP de carpetas de un Thread en otra máquina (el issue lo deja como pregunta abierta).
+- Excluir archivos ignorados por `.gitignore` (hoy solo `.git` y `node_modules`).

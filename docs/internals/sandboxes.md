@@ -400,11 +400,12 @@ refuses `--allow-scripts` on a project's `rebuild` (`EALLOWSCRIPTS`). Only `Cont
 the build context (and the release archive), so nothing else left in that directory (a stray
 `clis/node_modules`, an `.npmrc`) ends up in a layer.
 
-To bump: Node, its `ARG` and this table. A CLI, its version in `clis/package.json`, then in that
-directory `npm install --package-lock-only --ignore-scripts` (with the repository's Node), check
-whether its install scripts changed (`npm view <pkg>@<version> scripts`, for every package the
-new lockfile marks `hasInstallScript`), update `allowScripts`, the paragraph above and this table,
-and rebuild.
+To bump: Node, its `ARG` and this table. The CLIs: `vp run bump:sandbox-clis` moves each to its
+latest npm release, regenerates the lockfile and this table, and names any newly locked package with
+an install script. For those, check what the script does (`npm view <pkg>@<version> scripts`) and
+update `allowScripts` and the paragraph above, then rebuild. A CLI updated inside a running Sandbox
+is lost when it restarts, so the server reports a CLI under `/opt/t3/clis` as behind with no update
+button (`resolveSandboxImageProviderMaintenance`).
 
 ### Browser
 

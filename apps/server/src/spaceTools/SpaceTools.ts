@@ -25,6 +25,7 @@ import {
   type SpaceToolSetEnabledInput,
   type SpaceToolsList,
   type SpaceToolsListInput,
+  type SpaceMcpConnection,
   type SpaceMcpLaunch,
   type SpaceSkillLaunch,
   type SpaceToolsThreadStatus,
@@ -58,6 +59,11 @@ import {
   secretLiteralIn,
   type SpaceMcpDecision,
 } from "./spaceToolRules.ts";
+
+/** What a session's provider reports of the MCP servers it started; empty once it stops. */
+export type SpaceMcpConnectionsReader = Effect.Effect<
+  ReadonlyArray<{ readonly name: string; readonly state: SpaceMcpConnection }>
+>;
 
 export class SpaceTools extends Context.Service<
   SpaceTools,
@@ -97,6 +103,12 @@ export class SpaceTools extends Context.Service<
       },
       SpaceToolError
     >;
+    /** A provider session opened with these decisions: what `threadStatus` reports from now on. */
+    readonly recordSession: (input: {
+      readonly threadId: ThreadId;
+      readonly decisions: ReadonlyArray<SpaceMcpDecision>;
+      readonly connections?: SpaceMcpConnectionsReader | undefined;
+    }) => Effect.Effect<void>;
   }
 >()("t3/spaceTools/SpaceTools") {}
 
@@ -596,13 +608,34 @@ const make = Effect.gen(function* () {
     };
   });
 
+  // In memory, as the sessions are: a restart forgets both.
+  const sessions = new Map<
+    ThreadId,
+    {
+      readonly decisions: ReadonlyMap<string, SpaceMcpDecision>;
+      readonly connections: SpaceMcpConnectionsReader | undefined;
+    }
+  >();
+
+  const recordSession = (input: {
+    readonly threadId: ThreadId;
+    readonly decisions: ReadonlyArray<SpaceMcpDecision>;
+    readonly connections?: SpaceMcpConnectionsReader | undefined;
+  }) =>
+    Effect.sync(() => {
+      sessions.set(input.threadId, {
+        decisions: new Map(input.decisions.map((decision) => [decision.name, decision])),
+        connections: input.connections,
+      });
+    });
+
   const threadStatus = Effect.fn("SpaceTools.threadStatus")(function* (
     input: SpaceToolsThreadStatusInput,
   ) {
     const names = yield* secretDelivery
       .turnNames(input.threadId)
       .pipe(Effect.catch(storage("read what the Thread receives")));
-    // What the Vaults allow; the provider and machine are decided when a session opens.
+    // What the Vaults allow now; the provider and machine were decided when its session opened.
     const delivered = new Set(names.map((entry) => entry.name));
     const { decisions, skills } = yield* forSession({
       threadId: input.threadId,
@@ -612,14 +645,32 @@ const make = Effect.gen(function* () {
       receivesSpaceSkills: true,
       contractVersion: SPACE_MCPS_CONTRACT_VERSION,
     });
+    const session = sessions.get(input.threadId);
+    const connections = new Map(
+      (session?.connections === undefined ? [] : yield* session.connections).map(
+        ({ name, state }) => [name, state],
+      ),
+    );
+    const decided = (current: SpaceMcpDecision): SpaceMcpDecision => {
+      if (!current.available) return current;
+      const opened = session?.decisions.get(current.name);
+      return opened !== undefined &&
+        JSON.stringify(opened.config) === JSON.stringify(current.config)
+        ? opened
+        : { ...current, available: false, reason: "not-in-session", missing: [] };
+    };
     return {
-      mcps: decisions.map(({ name, transport, available, reason, missing }) => ({
-        name,
-        transport,
-        available,
-        ...(reason === undefined ? {} : { reason }),
-        missing,
-      })),
+      mcps: decisions.map(decided).map(({ name, transport, available, reason, missing }) => {
+        const connection = available ? connections.get(name) : undefined;
+        return {
+          name,
+          transport,
+          available,
+          ...(reason === undefined ? {} : { reason }),
+          missing,
+          ...(connection === undefined ? {} : { connection }),
+        };
+      }),
       skills: skills.map(({ name, expects }) => ({
         name,
         missing: expects.filter((expected) => !delivered.has(expected)),
@@ -643,6 +694,7 @@ const make = Effect.gen(function* () {
     remove,
     threadStatus,
     forSession,
+    recordSession,
     threadHasMcps,
   });
 });

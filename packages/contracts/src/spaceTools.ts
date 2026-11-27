@@ -116,13 +116,25 @@ export const SpaceMcpUnavailableReason = Schema.Literals([
   "no-secrets",
   /** The Thread's machine runs an executor too old for Space MCPs. */
   "outdated-machine",
+  /** Not in the Thread's session: it has none yet, or the server changed after it opened. */
+  "not-in-session",
 ]);
 export type SpaceMcpUnavailableReason = typeof SpaceMcpUnavailableReason.Type;
+
+/** How a provider's process reports a Space MCP it started (Claude only). */
+export const SpaceMcpConnection = Schema.Literals([
+  "connected",
+  "pending",
+  "needs-auth",
+  "failed",
+  "disabled",
+]);
+export type SpaceMcpConnection = typeof SpaceMcpConnection.Type;
 
 export const SpaceToolsThreadStatusInput = Schema.Struct({ threadId: ThreadId });
 export type SpaceToolsThreadStatusInput = typeof SpaceToolsThreadStatusInput.Type;
 
-/** What a Thread's next session gets of its Space's MCP servers, decided as at a session's open. */
+/** What a Thread's current session got of its Space's MCP servers, as decided when it opened. */
 export const SpaceToolsThreadStatus = Schema.Struct({
   mcps: Schema.Array(
     Schema.Struct({
@@ -132,6 +144,8 @@ export const SpaceToolsThreadStatus = Schema.Struct({
       reason: Schema.optionalKey(SpaceMcpUnavailableReason),
       /** For `not-delivered`: the names the Thread does not receive. */
       missing: Schema.Array(Schema.String),
+      /** For an available one, when the provider reports it. */
+      connection: Schema.optionalKey(SpaceMcpConnection),
     }),
   ),
   /** Its enabled Skills, and the Vault names each expects that the Thread does not receive. */

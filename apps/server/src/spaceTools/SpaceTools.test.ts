@@ -3,9 +3,16 @@
  * Members and Guests read names and state; anyone else gets not-found. A Vault reference must be
  * held by a group reaching the Space, and nothing tells whether another Space holds it.
  */
-import { type SpaceMcpConfig, SpaceId, UserId } from "@t3tools/contracts";
+import {
+  type SpaceMcpConfig,
+  SPACE_MCPS_CONTRACT_VERSION,
+  SpaceId,
+  ThreadId,
+  UserId,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Redacted from "effect/Redacted";
@@ -179,6 +186,89 @@ it.effect("an Admin saves an MCP whose token is a Vault reference; no answer hol
       "space_mcp.disable",
       "space_mcp.enable",
       "space_mcp.delete",
+    ]);
+  }),
+);
+
+it.effect("a Thread's MCP status is what its session got, and nothing before it has one", () =>
+  Effect.gen(function* () {
+    const h = yield* hub;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    yield* h.server.sql`
+      INSERT INTO orchestration_v2_projection_threads (
+        thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+        created_at, updated_at, payload_json, space_id, owner_user_id
+      ) VALUES (
+        'thread:jira', 'project:none', 'jira', 'claudeAgent', 'full-access', 'default', ${now},
+        ${now}, '{}', ${h.acmeId}, ${h.admin}
+      )
+    `;
+    const threadId = ThreadId.make("thread:jira");
+    const jira = yield* h.tools
+      .putMcp({
+        spaceId: h.acmeId,
+        name: "jira",
+        config: { transport: "http", url: "https://mcp.example.test/jira", headers: {} },
+      })
+      .pipe(h.as(h.admin));
+    const statusOf = Effect.gen(function* () {
+      const status = yield* h.tools.threadStatus({ threadId });
+      assert.notInclude(JSON.stringify(status), "mcp.example.test");
+      return status.mcps.map(({ name, available, reason, connection }) => ({
+        name,
+        available,
+        ...(reason === undefined ? {} : { reason }),
+        ...(connection === undefined ? {} : { connection }),
+      }));
+    });
+    const open = (
+      session: { readonly receivesSpaceMcps?: boolean; readonly contractVersion?: number },
+      connections?: SpaceTools.SpaceMcpConnectionsReader,
+    ) =>
+      Effect.gen(function* () {
+        const decided = yield* h.tools.forSession({
+          threadId,
+          delivered: new Set(),
+          receivesSpaceMcps: session.receivesSpaceMcps ?? true,
+          receivesSecretEnv: true,
+          receivesSpaceSkills: true,
+          contractVersion: session.contractVersion ?? SPACE_MCPS_CONTRACT_VERSION,
+        });
+        yield* h.tools.recordSession({ threadId, decisions: decided.decisions, connections });
+      });
+
+    assert.deepEqual(yield* statusOf, [
+      { name: "jira", available: false, reason: "not-in-session" },
+    ]);
+    yield* open({ contractVersion: SPACE_MCPS_CONTRACT_VERSION - 1 });
+    assert.deepEqual(yield* statusOf, [
+      { name: "jira", available: false, reason: "outdated-machine" },
+    ]);
+    yield* open({ receivesSpaceMcps: false });
+    assert.deepEqual(yield* statusOf, [
+      { name: "jira", available: false, reason: "not-supported" },
+    ]);
+    yield* open(
+      {},
+      Effect.succeed([
+        { name: "jira", state: "needs-auth" },
+        { name: "t3-code", state: "connected" },
+      ]),
+    );
+    assert.deepEqual(yield* statusOf, [
+      { name: "jira", available: true, connection: "needs-auth" },
+    ]);
+    // Changed after its session opened: that session runs the old one until the next turn.
+    yield* h.tools
+      .putMcp({
+        spaceId: h.acmeId,
+        id: jira.id,
+        name: "jira",
+        config: { transport: "http", url: "https://mcp.example.test/jira2", headers: {} },
+      })
+      .pipe(h.as(h.admin));
+    assert.deepEqual(yield* statusOf, [
+      { name: "jira", available: false, reason: "not-in-session" },
     ]);
   }),
 );

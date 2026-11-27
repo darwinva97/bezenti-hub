@@ -515,7 +515,11 @@ export function providersOnEnvironment(
         availability: "available",
       };
     }
-    const reason = `Not installed on ${environment.name}.`;
+    // No Sandbox image carries Antigravity, and its Hub turns take only Gemini or Vertex keys.
+    const reason =
+      provider.driver === "antigravity"
+        ? `Not installed on ${environment.name}. Antigravity subscription models are under Claude Code, Codex, OpenCode and Pi.`
+        : `Not installed on ${environment.name}.`;
     return {
       ...rest,
       enabled: there?.enabled ?? false,

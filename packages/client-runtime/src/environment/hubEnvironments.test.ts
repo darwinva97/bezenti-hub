@@ -301,6 +301,22 @@ describe("a Space's Sandbox in the composer", () => {
     expect(providersOnEnvironment(hubProviders, hub)).toBe(hubProviders);
     expect(providersOnEnvironment(hubProviders, null)).toBe(hubProviders);
   });
+
+  it("says where an Antigravity subscription runs when the machine has no Antigravity", () => {
+    const vps = {
+      ...acme,
+      name: "hub-vps",
+      providers: [{ instanceId: ProviderInstanceId.make("codex"), enabled: true, installed: true }],
+    } as never;
+    const hubProviders = [
+      { instanceId: "antigravity", driver: "antigravity" },
+      { instanceId: "kiro", driver: "kiro" },
+    ] as never;
+    expect(providersOnEnvironment(hubProviders, vps).map((p) => p.unavailableReason)).toEqual([
+      "Not installed on hub-vps. Antigravity subscription models are under Claude Code, Codex, OpenCode and Pi.",
+      "Not installed on hub-vps.",
+    ]);
+  });
 });
 
 describe("moving a Thread", () => {

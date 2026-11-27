@@ -24,16 +24,18 @@ export interface ZipFileBody<R> {
 }
 
 export type ZipEntry<R> =
-  | { readonly kind: "directory"; readonly name: string; readonly modifiedAt: Date }
+  | { readonly kind: "directory"; readonly name: string; readonly modifiedAt: Date | undefined }
   | {
       readonly kind: "file";
       readonly name: string;
-      readonly modifiedAt: Date;
+      readonly modifiedAt: Date | undefined;
       /** Opened when the entry is written, in a scope that lasts until its body ends; null skips it. */
       readonly open: Effect.Effect<ZipFileBody<R> | null, never, R | Scope.Scope>;
     };
 
-const dosDateTime = (date: Date) => {
+/** DOS time of `date`; none: the format's earliest, 1980-01-01. */
+const dosDateTime = (date: Date | undefined) => {
+  if (date === undefined) return { time: 0, date: (1 << 5) | 1 };
   const year = Math.min(2107, Math.max(1980, date.getFullYear()));
   return {
     time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
@@ -45,7 +47,7 @@ const encoder = new TextEncoder();
 
 const localHeader = (input: {
   readonly name: Uint8Array;
-  readonly modifiedAt: Date;
+  readonly modifiedAt: Date | undefined;
   readonly flags: number;
   readonly zip64: boolean;
 }) => {
@@ -90,7 +92,7 @@ const dataDescriptor = (crc: number, size: number, zip64: boolean) => {
 
 const centralRecord = (input: {
   readonly name: Uint8Array;
-  readonly modifiedAt: Date;
+  readonly modifiedAt: Date | undefined;
   readonly flags: number;
   readonly versionNeeded: number;
   readonly crc: number;

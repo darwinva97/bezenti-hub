@@ -85,8 +85,10 @@ export const issueWorkspaceDownloadUrl = Effect.fn("ThreadAssets.issueWorkspaceD
       return yield* issueAssetUrl({ resource, workspaceRoot: resource.cwd, viewer: input.viewer });
     }
     const refused = new AssetDownloadLimitError({ resource, reason: "remote-folder" });
-    const [only, ...rest] = resource.paths;
-    if (resource.threadId === undefined || rest.length > 0) return yield* refused;
+    const only = resource.paths[0];
+    if (resource.threadId === undefined || only === undefined || resource.paths.length > 1) {
+      return yield* refused;
+    }
     return yield* issueMachineAssetUrl({
       resource: {
         _tag: "media-file",

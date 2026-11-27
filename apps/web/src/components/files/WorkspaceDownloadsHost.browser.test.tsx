@@ -157,7 +157,14 @@ describe("workspace downloads", () => {
     setup();
     using click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     await using _screen = await render(<WorkspaceDownloadsHost />, { router: false });
-    const pending = Promise.withResolvers<Awaited<ReturnType<MintWorkspaceDownload>>>();
+    type Minted = Awaited<ReturnType<MintWorkspaceDownload>>;
+    let resolveMint: (minted: Minted) => void = () => {};
+    const pending = {
+      promise: new Promise<Minted>((resolve) => {
+        resolveMint = resolve;
+      }),
+      resolve: (minted: Minted) => resolveMint(minted),
+    };
     const id = startWorkspaceDownload({
       environmentId,
       label: "docs",
@@ -166,7 +173,7 @@ describe("workspace downloads", () => {
     });
     await expect.element(page.getByText("Preparing…")).toBeVisible();
     cancelWorkspaceDownload(id);
-    pending.resolve({ result: archive([1]), resolveUrl: (relative) => relative });
+    pending.resolve({ result: archive([1]), resolveUrl: (relative: string) => relative });
     await expect.element(page.getByText("Cancelled")).toBeVisible();
     expect(click).not.toHaveBeenCalled();
   });

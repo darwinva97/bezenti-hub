@@ -64,13 +64,13 @@ const subtreeOutside = (key: ArchiveKey, range: ArchiveRange) =>
     !isPrefix(key, range.start));
 
 type WalkNode =
-  | { readonly kind: "directory"; readonly key: ArchiveKey; readonly modifiedAt: Date }
+  | { readonly kind: "directory"; readonly key: ArchiveKey; readonly modifiedAt: Date | undefined }
   | {
       readonly kind: "file";
       readonly key: ArchiveKey;
       readonly absolute: string;
       readonly size: number;
-      readonly modifiedAt: Date;
+      readonly modifiedAt: Date | undefined;
     }
   | { readonly kind: "skipped"; readonly key: ArchiveKey; readonly reason: string };
 
@@ -98,7 +98,7 @@ const walk = (input: WalkInput): Stream.Stream<WalkNode> => {
         if (subtreeOutside(key, range)) return Stream.empty;
         const info = yield* Effect.option(fileSystem.lstat(absolute));
         if (Option.isNone(info)) return skip("could not be read");
-        const modifiedAt = Option.getOrElse(info.value.mtime, () => new Date(0));
+        const modifiedAt = Option.getOrUndefined(info.value.mtime);
         switch (info.value.type) {
           case "Directory": {
             const self: Stream.Stream<WalkNode> = inRange(key, range)
@@ -276,7 +276,7 @@ export const folderZipStream = (
       return Stream.succeed<ZipEntry<never>>({
         kind: "file",
         name: FOLDER_ZIP_SKIPPED_FILE,
-        modifiedAt: new Date(),
+        modifiedAt: undefined,
         open: Effect.succeed({ size: body.byteLength, body: Stream.succeed(body) }),
       });
     });

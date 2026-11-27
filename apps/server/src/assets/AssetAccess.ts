@@ -116,6 +116,26 @@ const signClaims = Effect.fnUntraced(function* (claims: AssetClaims, resource: A
 
 const MAX_RELATIVE_URL_LENGTH = 4096;
 
+/** What `issueAssetUrl` gives, whichever resource: `AssetCreateUrlResult`'s fields. */
+interface IssuedAssetUrl {
+  readonly relativeUrl: string;
+  readonly expiresAt: number;
+  readonly sourcePath?: string;
+  readonly imageDimensions?: ImageDimensions;
+  readonly fileRevision?: string;
+  readonly download?: {
+    readonly files: number;
+    readonly bytes: number;
+    readonly skipped: number;
+    readonly parts: ReadonlyArray<{
+      readonly relativeUrl: string;
+      readonly fileName: string;
+      readonly bytes: number;
+      readonly files: number;
+    }>;
+  };
+}
+
 /** Issue #24: who downloaded what. A failed write is logged, never a refused download. */
 const recordDownload = Effect.fnUntraced(function* (input: {
   readonly resource: Extract<AssetResource, { _tag: "workspace-download" }>;
@@ -214,11 +234,12 @@ const issueArchiveDownload = Effect.fnUntraced(function* (input: {
     viewer: input.viewer,
     detail: { files: plan.files, bytes: plan.bytes, parts: count },
   });
-  return {
+  const issued: IssuedAssetUrl = {
     relativeUrl: parts[0]!.relativeUrl,
     expiresAt: input.expiresAt,
     download: { files: plan.files, bytes: plan.bytes, skipped: plan.skipped, parts },
   };
+  return issued;
 });
 
 const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
@@ -1164,13 +1185,14 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
     claims = { ...claims, viewer: input.viewer };
   }
   const token = yield* signClaims(claims, input.resource);
-  return {
+  const issued: IssuedAssetUrl = {
     relativeUrl: `${ASSET_ROUTE_PREFIX}/${token}/${encodeURIComponent(fileName)}`,
     expiresAt,
     ...(sourcePath !== undefined ? { sourcePath } : {}),
     ...(imageDimensions !== null ? { imageDimensions } : {}),
     ...(fileRevision !== undefined ? { fileRevision } : {}),
   };
+  return issued;
 });
 
 /**

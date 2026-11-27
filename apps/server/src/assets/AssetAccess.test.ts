@@ -1705,8 +1705,8 @@ describe("AssetAccess: a file of a Thread on another machine (ticket 15)", () =>
         relativePath: "out/report.docx",
         download: true,
       });
-      for (const paths of [["out"], ["out/report.docx", "out"]] as const) {
-        const error = yield* download(...paths).pipe(Effect.flip);
+      for (const refused of [download("out"), download("out/report.docx", "out")]) {
+        const error = yield* Effect.flip(refused);
         expect(error).toMatchObject({ _tag: "AssetDownloadLimitError", reason: "remote-folder" });
       }
     }).pipe(Effect.provide(layerTest)),
